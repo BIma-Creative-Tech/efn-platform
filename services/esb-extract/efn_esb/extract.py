@@ -76,6 +76,8 @@ class BrandRuntime:
     cfg: BrandConfig
     max_pages: int = 500
     include_inactive: bool = True
+    # G43 E6: stock opname ditarik untuk [hari - opname_window_days, hari] (CLI `snapshot --opname-window`).
+    opname_window_days: int = 3
     branch_rows: list[list[Any]] = field(default_factory=list)
     aliases: dict[str, str] = field(default_factory=dict)
     ratios: dict[int, BomRatio] = field(default_factory=dict)
@@ -306,8 +308,17 @@ EXTRACTORS: dict[str, Extractor] = {
 }
 
 
+def extractor_for(entity: str) -> Extractor:
+    """Extractor G41 atau entitas migrasi G43 (`efn_esb.extract_mig`, import tertunda: hindari import melingkar)."""
+    if entity in EXTRACTORS:
+        return EXTRACTORS[entity]
+    from efn_esb.extract_mig import MIG_EXTRACTORS
+
+    return MIG_EXTRACTORS[entity]
+
+
 def run_slice(rt: BrandRuntime, task: SliceTask, version: datetime, get: Getter) -> SliceResult:
     counter = CountingGetter(get)
-    result = EXTRACTORS[task.entity](rt, task, version, counter)
+    result = extractor_for(task.entity)(rt, task, version, counter)
     result.calls = counter.calls
     return result

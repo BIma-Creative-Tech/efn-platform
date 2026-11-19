@@ -308,6 +308,32 @@ describe('akrual harian GET /v1/pos/loyalty/accruals (§13.1 no. 6)', () => {
     expect((await ctx.accruals.accrual('GL', '2026-11-05')).expired_value_idr).toBe(10 * 80);
   });
 
+  it('G43: PT baru IMD/CUP — kebijakan diterima, earn/redeem lintas PT, akrual harian 200 (bukan 400)', async () => {
+    // Regresi: cron akrual efn_loyalty_accounting memanggil semua company berkode; sebelum G43 IMD/CUP → 400 setiap hari.
+    const ctx = setup();
+    await ctx.publish('EFN', {}, 80);
+    await ctx.publish('IMD');
+    await ctx.publish('CUP');
+    await ctx.earn(ORDER_B, 600_000, 'IMD'); // +60 lot IMD (5 Okt)
+    ctx.clock.advanceSeconds(DAY); // 6 Okt
+    await ctx.redeem(ORDER_A, 50, 'CUP'); // 50 poin lot IMD ditukar di CUP
+    expect(ctx.ledger((r) => r.source === 'pos_earn')).toEqual([{ delta: 60, company: 'IMD', issuer: 'IMD', reason: 'pos_sale' }]);
+    expect(ctx.ledger((r) => r.source === 'pos_redeem')).toEqual([{ delta: -50, company: 'CUP', issuer: 'IMD', reason: 'pos_redeem' }]);
+
+    expect(await ctx.accrualAfterClose('IMD', '2026-10-05')).toMatchObject({
+      company_code: 'IMD', earned_value_idr: 60 * 80, closing_liability_idr: 60 * 80,
+    });
+    const imd06 = await ctx.accrualAfterClose('IMD', '2026-10-06');
+    expect(imd06).toMatchObject({
+      earned_value_idr: 0, redeemed_value_idr_as_issuer: 50 * 80,
+      redeemed_value_idr_as_issuer_by_redeemer: { CUP: 50 * 80 }, closing_liability_idr: 10 * 80,
+    });
+    const cup06 = await ctx.accrualAfterClose('CUP', '2026-10-06');
+    expect(cup06).toMatchObject({ company_code: 'CUP', earned_value_idr: 0, redeemed_value_idr_by_issuer: { IMD: 50 * 80 }, closing_liability_idr: 0 });
+    // PT tanpa aktivitas tetap 200 dengan nol (cron memanggil setiap company setiap hari)
+    expect(await ctx.accrualAfterClose('CUP', '2026-10-05')).toMatchObject({ earned_value_idr: 0, closing_liability_idr: 0 });
+  });
+
   it('validasi: tanggal belum ditutup / masa depan → 422 date_not_closed; format/PT salah → 400', async () => {
     const ctx = setup();
     expect(await code(ctx.accruals.accrual('GL', '2026-10-05'))).toBe('422 date_not_closed'); // hari ini (WIB)

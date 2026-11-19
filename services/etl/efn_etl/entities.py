@@ -11,10 +11,11 @@ from typing import Final
 
 # Kode `res.company.efn_brand_code` (= `company_code` ledger BFF).
 # G24 (docs/04 §16.1, L-91): + WTZ (PT Wetzel's Pretzels, fnb).
-COMPANY_CODES: Final = frozenset({"EFN", "GL", "PB", "BCR", "BCF", "WTZ", "FARM"})
+# G43 (ADR-040/042): + IMD (PT Im Donut), CUP (PT Curry Up), keduanya fnb; data PT placeholder (Q-ESB5).
+COMPANY_CODES: Final = frozenset({"EFN", "GL", "PB", "BCR", "BCF", "WTZ", "IMD", "CUP", "FARM"})
 HOLDING_CODE: Final = "EFN"
 
-# docs/04 §12.1/§16.1: GL,BCR -> retail; PB,BCF,WTZ -> fnb; EFN -> holding; FARM -> farm.
+# docs/04 §12.1/§16.1: GL,BCR -> retail; PB,BCF,WTZ,IMD,CUP -> fnb; EFN -> holding; FARM -> farm.
 BUSINESS_TYPES: Final[dict[str, str]] = {
     "EFN": "holding",
     "GL": "retail",
@@ -22,6 +23,8 @@ BUSINESS_TYPES: Final[dict[str, str]] = {
     "BCR": "retail",
     "BCF": "fnb",
     "WTZ": "fnb",
+    "IMD": "fnb",
+    "CUP": "fnb",
     "FARM": "farm",
 }
 

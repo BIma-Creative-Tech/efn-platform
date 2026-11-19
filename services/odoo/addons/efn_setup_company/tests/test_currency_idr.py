@@ -22,6 +22,8 @@ class TestCurrencyIdr(TransactionCase):
             "company_bcr",
             "company_bcf",
             "company_wtz",
+            "company_imd",  # G43
+            "company_cup",  # G43
             "company_farm",
         ):
             with self.subTest(company=xmlid):

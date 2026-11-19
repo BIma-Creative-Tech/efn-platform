@@ -21,7 +21,7 @@ help:
 	@echo "make lint          - lint lokal (ruff, hadolint, shellcheck via docker)"
 	@echo "make lint-enc      - cek tidak ada koneksi plaintext (scripts/check-encryption.sh)"
 	@echo "make test          - unit test api-gateway"
-	@echo "make test-py       - pytest ai-ocr-worker, etl, text2sql, esb-extract"
+	@echo "make test-py       - pytest ai-ocr-worker, etl, text2sql, esb-extract, scripts/migration"
 	@echo "make backup        - base backup WAL-G sekarang (stack harus jalan)"
 	@echo "make restore-test  - pulihkan backup terakhir ke container sementara + verifikasi"
 
@@ -65,6 +65,7 @@ validate: env secrets
 	$(DEV) $(ALL_PROFILES) config -q
 	$(PROD) $(ALL_PROFILES) config -q
 	$(DEV) -f $(COMPOSE_DIR)/docker-compose.esb.yml $(ALL_PROFILES) config -q
+	$(DEV) -f $(COMPOSE_DIR)/docker-compose.esb.yml -f $(COMPOSE_DIR)/docker-compose.migration.yml $(ALL_PROFILES) --profile migrate config -q
 
 # Image linter dipin digest (SEC-47; sama dengan job CI infra; G13: hadolint v2.14.0). Dependabot tidak membaca Makefile:
 # perbarui manual bersama ci.yml. Shellcheck: daftar file sama dengan job CI `infra`.
@@ -74,7 +75,8 @@ SHELLCHECK_IMG := koalaman/shellcheck:v0.11.0@sha256:61862eba1fcf09a484ebcc6feea
 lint:
 	ruff check services/ai-ocr-worker services/etl services/odoo/addons
 	docker run --rm -i -v "$(PWD):/src" -w /src $(HADOLINT_IMG) hadolint --config .hadolint.yaml --failure-threshold warning \
-	  services/*/Dockerfile infra/backup/postgres/Dockerfile infra/minio/Dockerfile infra/metabase/Dockerfile
+	  services/*/Dockerfile infra/backup/postgres/Dockerfile infra/minio/Dockerfile infra/metabase/Dockerfile \
+	  scripts/migration/Dockerfile
 	docker run --rm -v "$(PWD):/src" -w /src $(SHELLCHECK_IMG) -x scripts/*.sh scripts/lib/*.sh scripts/host/efn-deploy scripts/host/*.sh \
 	  scripts/smoke/*.sh tests/load/*.sh infra/backup/postgres/*.sh infra/postgres/init/*.sh infra/wireguard/*.sh
 	docker run --rm -v "$(PWD):/src" -w /src $(SHELLCHECK_IMG) -s sh infra/minio/*.sh infra/redis/*.sh \
@@ -91,6 +93,7 @@ test-py:
 	@for s in ai-ocr-worker etl text2sql esb-extract; do \
 	  if [ -d services/$$s/tests ]; then (cd services/$$s && python -m pytest -q tests) || exit 1; fi; \
 	done
+	@if [ -d scripts/migration/tests ]; then (cd scripts/migration && python -m pytest -q tests) || exit 1; fi
 
 # Backup & restore test memakai container dev (secrets di ./secrets, metrik ke /tmp/efn-metrics)
 backup:

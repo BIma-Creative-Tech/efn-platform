@@ -1,0 +1,133 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- G43 (ADR-042): arsip read-only. Tanpa tombol tulis; label "arsip sistem lama ESB - bukan transaksi Odoo". -->
+<odoo>
+    <record id="efn_legacy_flow_daily_view_list" model="ir.ui.view">
+        <field name="name">efn.legacy.flow.daily.list</field>
+        <field name="model">efn.legacy.flow.daily</field>
+        <field name="arch" type="xml">
+            <list string="Arsip ESB - aliran produk (bukan transaksi Odoo)" create="0" edit="0" delete="0">
+                <field name="day"/>
+                <field name="company_id" groups="base.group_multi_company" optional="show"/>
+                <field name="warehouse_id"/>
+                <field name="esb_brand" optional="hide"/>
+                <field name="product_id"/>
+                <field name="esb_product_code" optional="hide"/>
+                <field name="uom_id" optional="hide"/>
+                <field name="sold" sum="Total"/>
+                <field name="ck_prod" sum="Total" optional="show"/>
+                <field name="store_prod" sum="Total" optional="hide"/>
+                <field name="ck_out" sum="Total" optional="show"/>
+                <field name="in_ck" sum="Total" optional="show"/>
+                <field name="in_other" sum="Total" optional="hide"/>
+                <field name="st_in" sum="Total" optional="hide"/>
+                <field name="st_out" sum="Total" optional="hide"/>
+                <field name="outflow" sum="Total"/>
+                <field name="run_id" optional="hide"/>
+            </list>
+        </field>
+    </record>
+
+    <record id="efn_legacy_flow_daily_view_form" model="ir.ui.view">
+        <field name="name">efn.legacy.flow.daily.form</field>
+        <field name="model">efn.legacy.flow.daily</field>
+        <field name="arch" type="xml">
+            <form string="Arsip ESB - aliran produk" create="0" edit="0" delete="0">
+                <div class="alert alert-warning mb-0" role="alert">
+                    Arsip sistem lama ESB - bukan transaksi Odoo. Tidak memengaruhi stok, valuasi, pajak, atau jurnal.
+                    Angka resmi histori = gudang data (Dashboard Insight).
+                </div>
+                <sheet>
+                    <group>
+                        <group>
+                            <field name="day"/>
+                            <field name="company_id" groups="base.group_multi_company"/>
+                            <field name="warehouse_id"/>
+                            <field name="product_id"/>
+                            <field name="uom_id"/>
+                        </group>
+                        <group>
+                            <field name="esb_brand"/>
+                            <field name="esb_branch_id"/>
+                            <field name="esb_product_code"/>
+                            <field name="esb_product_name"/>
+                            <field name="run_id"/>
+                        </group>
+                    </group>
+                    <group>
+                        <group string="Masuk">
+                            <field name="ck_prod"/>
+                            <field name="store_prod"/>
+                            <field name="in_ck"/>
+                            <field name="in_other"/>
+                            <field name="st_in"/>
+                        </group>
+                        <group string="Keluar">
+                            <field name="sold"/>
+                            <field name="ck_out"/>
+                            <field name="st_out"/>
+                            <field name="outflow"/>
+                        </group>
+                    </group>
+                </sheet>
+            </form>
+        </field>
+    </record>
+
+    <record id="efn_legacy_flow_daily_view_pivot" model="ir.ui.view">
+        <field name="name">efn.legacy.flow.daily.pivot</field>
+        <field name="model">efn.legacy.flow.daily</field>
+        <field name="arch" type="xml">
+            <pivot string="Arsip ESB - aliran produk (bukan transaksi Odoo)" sample="1">
+                <field name="warehouse_id" type="row"/>
+                <field name="day" interval="month" type="col"/>
+                <field name="outflow" type="measure"/>
+            </pivot>
+        </field>
+    </record>
+
+    <record id="efn_legacy_flow_daily_view_graph" model="ir.ui.view">
+        <field name="name">efn.legacy.flow.daily.graph</field>
+        <field name="model">efn.legacy.flow.daily</field>
+        <field name="arch" type="xml">
+            <graph string="Arsip ESB - aliran produk (bukan transaksi Odoo)" type="line" sample="1">
+                <field name="day" interval="month"/>
+                <field name="outflow" type="measure"/>
+            </graph>
+        </field>
+    </record>
+
+    <record id="efn_legacy_flow_daily_view_search" model="ir.ui.view">
+        <field name="name">efn.legacy.flow.daily.search</field>
+        <field name="model">efn.legacy.flow.daily</field>
+        <field name="arch" type="xml">
+            <search>
+                <field name="product_id"/>
+                <field name="warehouse_id"/>
+                <field name="esb_brand"/>
+                <field name="esb_product_code"/>
+                <field name="company_id" groups="base.group_multi_company"/>
+                <filter name="filter_day" string="Tanggal" date="day"/>
+                <separator/>
+                <filter name="with_outflow" string="Ada keluar stok" domain="[('outflow', '!=', 0)]"/>
+                <group>
+                    <filter name="by_company" string="Company" context="{'group_by': 'company_id'}"/>
+                    <filter name="by_warehouse" string="Outlet/Gudang" context="{'group_by': 'warehouse_id'}"/>
+                    <filter name="by_brand" string="Brand ESB" context="{'group_by': 'esb_brand'}"/>
+                    <filter name="by_product" string="Produk" context="{'group_by': 'product_id'}"/>
+                    <filter name="by_month" string="Bulan" context="{'group_by': 'day:month'}"/>
+                </group>
+            </search>
+        </field>
+    </record>
+
+    <record id="efn_legacy_flow_daily_action" model="ir.actions.act_window">
+        <field name="name">Aliran produk harian (arsip ESB)</field>
+        <field name="res_model">efn.legacy.flow.daily</field>
+        <field name="view_mode">pivot,graph,list,form</field>
+        <field name="help" type="html">
+            <p class="o_view_nocontent_empty_folder">Belum ada histori ESB.</p>
+            <p>Arsip sistem lama ESB - bukan transaksi Odoo. Diisi skrip migrasi (ADR-042) untuk forecast min/max
+                sebelum tanggal cutover; read-only.</p>
+        </field>
+    </record>
+</odoo>

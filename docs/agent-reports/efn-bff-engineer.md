@@ -982,3 +982,37 @@ Tabel baru `fnb_table_session` (order_uuid nullable, unique parsial satu sesi op
 - Consent dicek saat enqueue; penarikan consent dalam menit sebelum consumer mengirim belum dicek ulang.
 - SEC-166/169 tidak disentuh (Odoo / keputusan lead). Ringkasan sesi `fnb_table_session.earn_status` saat order campuran (`pos_member` lalu `skipped`) menyimpan hasil terakhir non-`earned` (hanya ringkasan; per kiriman akurat).
 - Butir laporan G22 di atas yang menyebut "`FNB_RL_EVENTS` belum dipasang" dan "consent `marketing` tidak dicek" kini usang.
+
+## Gelombang 43 — kode PT `IMD` (PT Im Donut) dan `CUP` (PT Curry Up) di BFF + CHECK platform (ADR-043 Proposed; 18 Nov 2026)
+
+> **Build/test/lint BELUM dijalankan lokal** (tanpa shell di sesi ini). Semua spec di bawah belum dieksekusi; migrasi SQL belum dijalankan ke PostgreSQL. Lead menjalankan `npm test` / lint / build api-gateway dan `psql -f 18-platform-g43.sql` (dua kali, uji idempoten) di container.
+
+### Masalah
+Cron akrual harian Odoo `efn_loyalty_accounting` memanggil `GET /v1/pos/loyalty/accruals?company_code=…` untuk semua company berkode. Setelah G43 menambah company `IMD`/`CUP` (F&B PB1, data PT placeholder, Q-ESB5), BFF `isCompanyCode` menolak → `400 invalid_request` setiap hari; publikasi kebijakan poin/MGM per PT IMD/CUP juga 400, dan CHECK platform Postgres akan menolak baris ledger IMD/CUP.
+
+### Perubahan (pola persis G24 / WTZ)
+- `services/api-gateway/src/loyalty/loyalty.service.ts` — `COMPANY_CODES = ['EFN','GL','PB','BCR','BCF','WTZ','IMD','CUP','FARM']` (urutan sama dengan `EFN_BRAND_CODES` `efn_core`). Satu sumber untuk semua validasi kode PT BFF: akrual (`pos/loyalty-accrual.service.ts`), kebijakan poin (`loyalty-policy.ts`), kebijakan MGM (`loyalty/mgm/mgm-policy.ts`), DTO POS/payment/migrasi, consumer earn, `catalog.service.ts` (`COMPANY_CODE_SET`), online points.
+- `services/api-gateway/src/common/metrics/metrics.service.ts` — label `issuer` `efn_loyalty_expired_points_total` + IMD/CUP (diuji sama dengan `COMPANY_CODES`).
+- `services/api-gateway/src/orders/invoice-request.ts` — komentar saja (IMD/CUP PB1 → `422 invoice_not_available`; allowlist `INVOICE_COMPANIES` = GL/BCR tidak berubah).
+- **Tidak diubah (sengaja):** `ONLINE_CHANNELS` (validasi format saja, default `GL`), `FNB_COMPANY_CODES` (QR meja/reservasi tetap PB/BCF), mock kanal `odoo-online.mock.ts`, `slotChannels`, secret/overlay kanal. Tidak ada kanal online/QR/booking baru untuk IMD/CUP.
+- **Migrasi baru `infra/postgres/init/18-platform-g43.sql`** — idempoten, satu transaksi, `SET LOCAL ROLE efn_platform_owner`; DROP IF EXISTS → ADD … NOT VALID → VALIDATE (WARNING + biarkan NOT VALID bila ada data di luar kontrak) untuk 11 CHECK `<tabel>_company_code_check` (`loyalty_ledger`, `payment_intent`, `loyalty_reservation`, `loyalty_pos_earn`, `online_order_part`, `payment_intent_portion`, `loyalty_pos_reverse`, `loyalty_policy`, + tabel MGM G31 `mgm_policy`, `mgm_source`, `mgm_reward` yang belum ada saat G24) dan `ck_loyalty_ledger_issuer`. Pengaman: CHECK lain di kolom yang memuat `'FARM'` tanpa `'IMD'` dibuang. Tabel `fnb_*`/`table_booking` (PB/BCF) dan `promo_*` (regex) tidak disentuh.
+- File init asli diperbarui agar volume baru konsisten: `02-platform-loyalty.sql`, `03-platform-v3.sql`, `05-platform-loyalty-pos.sql`, `07-platform-online.sql`, `08-platform-g18-privacy.sql`, `10-platform-g21.sql` (policy + issuer), `17-platform-g31.sql` (3 tabel MGM). `09-platform-g20.sql` dan `13-platform-g24.sql` juga memuat 9 kode (pola G24 atas 09) agar deploy berulang tidak menyempitkan CHECK sebelum 18 jalan.
+- `scripts/deploy.sh` — `18-platform-g43.sql` masuk daftar migrasi WAJIB (+ komentar).
+- README: `src/loyalty/README.md` (kode PT + catatan G43), `src/catalog/README.md` (daftar kode blok channel).
+
+### Test (Jest, belum dijalankan)
+- `src/loyalty/loyalty.spec.ts` — `COMPANY_CODES` = 9 kode; `isCompanyCode` IMD/CUP true, `imd`/`cup`/`IMDN`/`CURRY` false; consumer earn dengan `company_code` IMD/CUP diterima; seri metrik `issuer` = persis `COMPANY_CODES`.
+- `src/pos/loyalty-g21.spec.ts` — regresi cron: publikasi kebijakan poin IMD/CUP, earn di IMD, redeem lintas PT di CUP (issuer IMD), akrual `IMD`/`CUP` → 200 dengan nilai benar (termasuk `redeemed_value_idr_as_issuer_by_redeemer: { CUP }`), PT tanpa aktivitas → 200 nol.
+- `src/loyalty/mgm/mgm.spec.ts` — `parseMgmPolicy` IMD/CUP diterima; `XX`/`imd`/`RTL` → 400.
+
+### docs/04 yang perlu diperbarui (oleh efn-architect; tidak saya sunting)
+- §12.1 / §16.1: daftar kode entitas menjadi **EFN/GL/PB/BCR/BCF/WTZ/IMD/CUP/FARM** (9 entitas, root); baris tabel IMD/CUP (fnb, PB1, kanal online **tidak ada**); BFF `COMPANY_CODES` + label metrik `issuer`.
+- §16.2 (atau bagian G43 baru): IMD/CUP tidak termasuk daftar PT QR meja/reservasi (`FNB_COMPANY_CODES` tetap PB/BCF) dan tidak punya kanal online; faktur §13.5 tidak tersedia (PB1).
+- §16.3 (atau bagian G43 baru, mis. "Platform Postgres — migrasi `18-platform-g43.sql`"): 11 CHECK `company_code` (termasuk `mgm_policy`/`mgm_source`/`mgm_reward`) + `ck_loyalty_ledger_issuer`; 18 wajib di deploy.sh; tidak ada perubahan payload API.
+- §13.1 no. 6 (akrual) dan §20.1 (kebijakan MGM): kode PT yang diterima mengikuti daftar baru.
+
+### Sisa / belum terverifikasi
+- tsc/eslint/Jest dan eksekusi SQL belum dijalankan. Asumsi test g21: earn 600 000 IDR = 60 poin (BASE_PARAMS 10 000/poin), redeem lintas PT memakai satu lot → satu baris ledger.
+- Komponen di luar BFF yang juga memvalidasi kode PT tidak saya sentuh: ETL `COMPANY_CODES`/`dim_company`, ClickHouse, text2sql semantic layer, `infra/postgres` di stack `efn-data` (bila ada), smoke test, Odoo. Perlu dicek efn-data-ai-engineer/efn-odoo-engineer.
+- Volume dev lama: jalankan `18-platform-g43.sql` manual (perintah di header file) sebelum BFF baru start, atau lewat `scripts/deploy.sh`.
+- Data PT IMD/CUP placeholder (Q-ESB5); kebijakan poin/MGM per PT IMD/CUP belum dipublikasi — tanpa kebijakan PT, earn memakai fallback env/aturan §13.1 yang berlaku untuk PT lain.

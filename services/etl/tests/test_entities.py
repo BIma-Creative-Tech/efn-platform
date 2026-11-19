@@ -26,8 +26,8 @@ G20_SQL = ROOT.parents[1] / "infra" / "clickhouse" / "init" / "08-g20-entities.s
 
 
 def test_seven_entities_and_legacy_codes_removed() -> None:
-    # G20 §12.1 + G24 §16.1 (WTZ)
-    assert COMPANY_CODES == {"EFN", "GL", "PB", "BCR", "BCF", "WTZ", "FARM"}
+    # G20 §12.1 + G24 §16.1 (WTZ) + G43 (IMD, CUP)
+    assert COMPANY_CODES == {"EFN", "GL", "PB", "BCR", "BCF", "WTZ", "IMD", "CUP", "FARM"}
     assert set(BUSINESS_TYPES) == COMPANY_CODES
     assert set(BUSINESS_TYPES.values()) == {"holding", "retail", "fnb", "farm"}
     assert {"RTL", "FNB"}.isdisjoint(COMPANY_CODES)
@@ -41,6 +41,8 @@ def test_seven_entities_and_legacy_codes_removed() -> None:
         ("PB", "fnb"),
         ("BCF", "fnb"),
         ("WTZ", "fnb"),
+        ("IMD", "fnb"),
+        ("CUP", "fnb"),
         ("EFN", "holding"),
         ("FARM", "farm"),
     ],
@@ -82,14 +84,16 @@ def _expected_relation(a: str, b: str) -> str:
     return IC_NON_TP
 
 
-def test_ic_relation_all_42_directed_pairs() -> None:
+def test_ic_relation_all_72_directed_pairs() -> None:
     pairs = list(itertools.permutations(sorted(COMPANY_CODES), 2))
-    assert len(pairs) == 42  # 7 entitas (G24) x 6 arah
+    assert len(pairs) == 72  # 9 entitas (G43: + IMD, CUP) x 8 arah
     for a, b in pairs:
         assert ic_relation(a, b) == ic_relation(b, a) == _expected_relation(a, b), (a, b)
     tp = {frozenset(p) for p in pairs if ic_relation(*p) in (IC_TP_HOLDING, IC_TP_BACHA)}
-    # TP cost-plus hanya 6 pasangan Holding<->PT + 1 pasangan Bacha (18-3).
-    assert len(tp) == 7
+    # TP cost-plus hanya 8 pasangan Holding<->PT + 1 pasangan Bacha (18-3).
+    assert len(tp) == 9
+    assert frozenset({"IMD", "EFN"}) in tp and frozenset({"CUP", "EFN"}) in tp
+    assert frozenset({"IMD", "PB"}) not in tp and frozenset({"CUP", "WTZ"}) not in tp
     assert frozenset({"BCR", "BCF"}) in tp
     assert frozenset({"GL", "PB"}) not in tp and frozenset({"FARM", "PB"}) not in tp
     assert frozenset({"WTZ", "PB"}) not in tp and frozenset({"WTZ", "EFN"}) in tp

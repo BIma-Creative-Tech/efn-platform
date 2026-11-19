@@ -1,6 +1,8 @@
 # Inventaris Data Pribadi / RoPA (UU PDP No. 27/2022) — EFN Platform
 
 - **Status:** Draf teknis — **keputusan retensi & DPO ditetapkan pemilik proyek 10 Okt 2026** (v7); dasar pemrosesan & nomor pasal tetap wajib diverifikasi **Legal (DPO sementara)**.
+  - **v18 (2026-11-18, Gelombang 43 fase 2, ADR-042 Accepted — MENUNGGU DPO)**: §2.8.14 **bundel migrasi ESB** (terenkripsi, retensi ≤ 90 hari setelah berita acara) dan **arsip histori ESB di Odoo** (`efn.legacy.flow.daily`, `efn.legacy.sales.daily`, `efn.legacy.sales.line`: `sales_num` = ID transaksi, bukan data pribadi) + **pelanggan B2B** ESB di `res.partner` (data badan; PIC/alamat/telepon/email dibuang); baris retensi §3; Q-P32.
+  - **v17 (2026-11-18, ADR-043 — MENUNGGU DPO)**: §2.7 + §2.8.13 pemroses baru **Bima Creative (VPS)** — tahap A (dev, tanpa data/secret klien) dan tahap B (ekstraksi ESB, **diblokir** sampai persetujuan klien/DPO + DPA); pertanyaan Q-P30, Q-P31; draf `PERSETUJUAN_PEMROSESAN_VPS_BIMA.md`.
   - **v16 (2026-11-18, Supermarket Gelombang 0 — rencana, belum dibangun)**: §2.8.12 event perilaku & device ID (consent `tracking`), wishlist/notify-me/price alert, email (SMTP), nomor WA di `wa-unofficial` (transfer ke WhatsApp tanpa DPA), segmen & voucher kampanye, staf supermarket di Insight; baris retensi baru §3 (penanda **(v16)**). Semua menunggu DPO (Q-SM16..Q-SM19, Q-SM25, Q-SM26, `docs/04` §28.12); fitur terkait **OFF di production**.
   - **v15 (2026-11-18, Gelombang 41)**: §2.8.11 datamart ESB Core (data legacy klien, redaksi pelaku/teks bebas sebelum `raw_doc`, tanpa customer/member; prasyarat aktivasi production).
   - **v14 (2026-11-01, Gelombang 39)**: §2.8.10 asisten analisis "Analisis bertahap" (ringkasan AI, P8, agregat tanpa PII).
@@ -309,6 +311,7 @@ Akses umum: `metabase_reader` hanya view/tabel tanpa identitas (kolom `customer_
 | **(v4)** Sistem lama (sumber migrasi) | HP, consent, saldo, id lama | Pengendali asal | Indonesia (asumsi) | Pemusnahan data ekspor setelah migrasi & bukti consent = Q-P13, P-9 |
 | 3PL (Q-ON3, **v7**: pickup + 3PL + kurir internal) | Nama & HP penerima, alamat, titik lokasi, catatan kurir | Pemroses (3PL) / internal (kurir sendiri) | Indonesia (wajib, sama dengan Q-P20) | Vendor 3PL belum dipilih; **DPA wajib**; inventaris direvisi saat W-05 |
 | Vendor VPS (ADR-004) | Semua (terenkripsi LUKS) | Pemroses infrastruktur | Indonesia (syarat) | DPA wajib |
+| **(v17)** Bima Creative (VPS) — ADR-043, **MENUNGGU DPO** | Tahap A: **tidak ada** (kode + data sintetis). Tahap B (diblokir): kredensial API ESB read-only + datamart ESB (§2.8.11) | Pemroses (konsultan) + **sub-pemroses** penyedia VPS | **Belum diketahui** (Q-VPS1; di luar Indonesia → Q-T8) | Rinci §2.8.12; DPA + persetujuan tertulis klien wajib sebelum B |
 | GitHub | Kode & data sintetis | — | Lintas negara | Larang data produksi di fixture/log CI |
 | ALTCHA | Tidak ada pihak ketiga | — | — | ADR-028 |
 
@@ -487,6 +490,69 @@ Price Hunter meminta pengguna memotret label saja; DPIA ringkas untuk aliran P6.
   banner/consent; `WA_UNOFFICIAL_ENABLED` juga butuh `WA_UNOFFICIAL_RISK_ACCEPTANCE_REF` (Q-SM14). Wishlist/alert dan
   email boleh lebih dulu setelah entri terkait disetujui DPO (dan Q-SM19 untuk email).
 - **Simulasi G48:** member & event sintetis saja, tanpa data nyata.
+#### 2.8.13 (v17) Pemroses Bima Creative (VPS) — ADR-043 (Proposed) — status: **MENUNGGU DPO**
+- **Pihak:** Bima Creative (konsultan/pengembang, pihak ketiga) sebagai **pemroses** atas perintah pengendali (EFN
+  Holding dan/atau PT pemilik brand — penandatangan ditentukan Legal, Q-VPS4); penyedia VPS = **sub-pemroses** (nama &
+  lokasi belum diketahui, Q-VPS1).
+- **Tahap A — lingkungan pengembangan (boleh segera):** kode repo, data uji sintetis, secret dev yang dibuat baru.
+  **Bukan pemrosesan data pribadi klien.** Larangan: data hasil ekstraksi ESB, dump database, tangkapan layar data
+  nyata, secret klien (repo di-clone bersih dari GitHub; working copy laptop **tidak** disalin karena memuat
+  `secrets/esb_core_password_*`). Pelanggaran = near-miss/insiden (§6).
+- **Tahap B — ekstraksi ESB (DIBLOKIR):** data = isi §2.8.11 (cabang, produk, penjualan per baris tanpa
+  pelanggan/kasir, pembayaran agregat, produksi, pengiriman, transfer; residu data pribadi: nama supplier perorangan) +
+  kredensial user API ESB **read-only** per brand. Data bisnis rahasia lima brand → kerahasiaan dan PDP sama-sama
+  berlaku.
+- **Dasar:** pemrosesan oleh pemroses berdasarkan perjanjian tertulis dengan pengendali (UU PDP; rujukan kerja Pasal
+  51 tentang pemroses — **nomor pasal diverifikasi Legal**). Tanpa DPA + persetujuan tertulis → B tidak boleh jalan.
+- **Enkripsi/kontrol B:** L (LUKS/volume terenkripsi untuk ClickHouse, `secrets/`, backup lokal) · T (TLS verify-full CA
+  internal; WireGuard untuk operator; tanpa port publik selain WG) · egress hanya ESB + GitHub + registry · akun per
+  orang + audit 400 h · agen AI tidak berjalan di VM/user B dan hanya menerima angka agregat (ADR-043 §3.4).
+- **Retensi di VPS:** sementara — hapus (crypto-erase + berita acara) pada yang paling awal: pemindahan ke `efn-data`
+  milik EFN, akhir kontrak Bima Creative, cutover brand terakhir + 30 hari (usulan), atau permintaan klien (**Q-VPS6 /
+  Q-P31**). Retensi raw 36 bulan / mart 10 tahun (§2.8.11) hanya berlaku di infrastruktur EFN.
+- **Transfer lintas negara:** bergantung lokasi DC (Q-VPS1). Di luar Indonesia → `PDP_TRANSFER_LINTAS_NEGARA.md` P9,
+  keputusan DPO **Q-T8**. Rekomendasi architect: DC Indonesia sebagai syarat (selaras ADR-004, Q-P20).
+- **Insiden:** Bima Creative memberi tahu klien/DPO ≤ 24 jam setelah mengetahui (usulan, agar pengendali sempat memenuhi
+  3×24 jam).
+- **Prasyarat B:** persetujuan tertulis klien + DPO (`PERSETUJUAN_PEMROSESAN_VPS_BIMA.md`), DPA, Q-ESB1, Q-ESB7, Q-ESB9,
+  Q-VPS1..Q-VPS3, entri ini disetujui DPO, review security atas kontrol ADR-043 §3.4.
+
+#### 2.8.14 (v18) Migrasi ESB → Odoo — Gelombang 43 (docs/04 §27, ADR-042 Accepted 18 Nov 2026) — status: **MENUNGGU DPO**
+- **Tujuan & dasar:** memindahkan data induk, saldo awal, dan arsip histori penjualan lima brand F&B dari ESB Core ke
+  Odoo (pengendali = PT masing-masing brand). Dasar kerja: pelaksanaan kewajiban/kepentingan sah pengendali atas data
+  operasionalnya sendiri (**pasal diverifikasi Legal**). Sumber = datamart ESB (§2.8.11).
+
+**(a) "Bundel migrasi ESB"** (berkas antara, bukan sistem permanen)
+| Aspek | Isi |
+|---|---|
+| Isi | Master (cabang, produk, menu, resep, kategori, UoM, harga pokok), supplier & **pelanggan B2B** (kode, nama badan, NPWP badan bila ada, kategori, termin, status), saldo stok/AR/AP/neraca per dokumen (nomor dokumen ESB, partner = kode), agregat aliran & penjualan harian, **baris penjualan** (`sales_num`, `line_no`, tanggal, outlet, menu, qty, harga, total, diskon, HPP, `row_type`, takeaway) |
+| Data pribadi | **Tidak ada secara desain.** Residu: nama supplier/pelanggan B2B yang ternyata **perorangan**. Dibuang di ekstraktor dan ditolak validator (fail closed): alamat, PIC/contact person, telepon, email, pelaku dokumen (`creator*`/`editor*`/`authorizer*`/`*By`), teks bebas, lampiran |
+| Enkripsi | **At rest:** AES-256-GCM per bundel (kunci `migration_bundle_key` di `/run/secrets`, HKDF terpisah untuk enkripsi & HMAC manifest), SHA-256 per berkas; histori disegmentasi per company × bulan. Plaintext hanya di `tmpfs` container. **In transit:** salinan antar-mesin lewat WireGuard; ClickHouse TLS verify-full |
+| Lokasi | Volume `${MIG_OUT_DIR}` / `${MIG_EXCHANGE_DIR}` di disk terenkripsi (LUKS/BitLocker) host stack data & inti, hanya selama jendela migrasi. **Dilarang** di repo, tiket, chat, email, drive pribadi |
+| Akses | Operator migrasi (runbook `docs/runbooks/migrasi-esb-odoo.md`), container `esb-migrate` dan `odoo shell` |
+| Retensi | Dihapus **≤ 90 hari setelah berita acara rekonsiliasi brand ditandatangani** (Q-ESB24); tanggal hapus + metode (hapus berkas + rotasi `migration_bundle_key` setelah brand terakhir) dicatat di berita acara. Laporan validasi/rekonsiliasi (tanpa data pribadi) ikut berita acara (arsip keuangan 10 th) |
+| Risiko | R-L12 (bundel bocor), R-L01 |
+
+**(b) Arsip histori ESB di Odoo (`efn_legacy_history`, PostgreSQL `efn_odoo`)**
+| Model | Isi | Data pribadi? | Akses | Retensi (usulan) |
+|---|---|---|---|---|
+| `efn.legacy.flow.daily` | hari × PT × gudang × produk: qty aliran (jual, produksi, kirim, transfer) | Tidak | `stock.group_stock_user`, rule per PT | Selama dipakai forecast; usulan hapus/uninstall saat G44 menggantikan forecast v1 |
+| `efn.legacy.sales.daily` | hari × PT × outlet × menu: qty, gross, diskon, net, HPP, jumlah transaksi | Tidak (agregat) | grup `group_legacy_sales_reader` (di-imply POS Manager), rule per PT | 10 th sejak tanggal transaksi (ikut dokumen keuangan, Q-P2) — atau lebih pendek, keputusan Finance/DPO |
+| `efn.legacy.sales.line` | per baris struk ESB: `sales_num`, `line_no`, tanggal (tanpa jam), outlet, menu, qty, harga, total, diskon, HPP, jenis baris, takeaway | **Tidak**: `sales_num` = nomor transaksi ESB (ID dokumen), **tanpa** pelanggan, member, kasir, jam, atau data kartu → tidak dapat dihubungkan ke orang tanpa sistem lain (ESB POS) | idem | Rentang muat = `efn_mig_esb.sales_line_months` (default 24 bulan); retensi idem `sales.daily` |
+
+Catatan: `sales_num` menjadi **dapat dihubungkan ke orang** bila digabung dengan data ESB POS yang memuat
+member/pelanggan (di luar EFN). EFN tidak menarik data itu (§2.8.11); bila kelak ditarik, entri ini wajib ditinjau
+ulang. Enkripsi: disk/backup terenkripsi seperti seluruh DB Odoo (§2.5); tanpa enkripsi kolom (bukan PII).
+
+**(c) Pelanggan B2B & supplier ESB di `res.partner`**
+- `is_company=True` untuk badan usaha (data badan, **bukan** data pribadi). PIC, alamat, telepon, email **tidak**
+  dimigrasi (diisi Finance belakangan bila perlu, lewat proses standar). NPWP badan = data badan.
+- Partner yang ternyata **perorangan** (`is_company=False`) = data pribadi: otomatis terenkripsi ADR-036 (`efnpii2:`),
+  ikut retensi partner Odoo yang berlaku dan erasure standar (L-68).
+- **Member/poin ESB tidak** lewat jalur ini (Q-ESB19; jalur BFF `/internal/v1/migration/*` setelah DPO).
+
+- **Prasyarat run nyata production:** entri ini disetujui DPO; Q-ESB24 (retensi bundel & penandatangan); prasyarat
+  §2.8.11 (data ESB production) terpenuhi.
 
 ## 3. Matriks retensi ringkas (default → ditetapkan DPO)
 | Data | Default | Mekanisme (pemilik) | Status |
@@ -540,6 +606,9 @@ Price Hunter meminta pengguna memotret label saja; DPIA ringkas untuk aliran P6.
 | **(v8)** `loyalty_member_activity` | Selama subjek ada; dihapus saat erasure | Erasure BFF | G22 |
 | **(v8)** `loyalty_expiry_notice` | 400 h | Job retensi BFF | Usulan, Q-P26 |
 | **(v8)** Akun member tidak aktif 12 bulan | Anonimisasi setelah hangus (`LOYALTY_INACTIVE_ANONYMIZE`, **OFF prod**) | ErasureService (`dsar_request.type='retention'`) | **Q-P22** (meralat Q-P11 24 bln → 18-14 12 bln) |
+| **(v18)** Bundel migrasi ESB (+ hasil impor, laporan antara) | ≤ 90 h setelah berita acara brand | Manual operator (runbook migrasi) + rotasi `migration_bundle_key` setelah brand terakhir | **Q-ESB24 / Q-P32**; belum ada brand yang dimigrasi |
+| **(v18)** Odoo `efn.legacy.sales.daily` / `efn.legacy.sales.line` (bukan PII) | 10 th sejak tanggal transaksi (usulan); rentang muat baris = `sales_line_months` | Belum ada job (hapus per irisan oleh skrip) | Keputusan Finance/DPO (Q-P32) |
+| **(v18)** Odoo `efn.legacy.flow.daily` (bukan PII) | Selama forecast v1 dipakai | Uninstall/hapus saat G44 | — |
 | **(v16)** `behavior.event_raw` (staging) | 7 h (drop partisi harian) | Job BFF | Rencana; **Q-SM17** |
 | **(v16)** ClickHouse `fact_visitor_event` | 90 h | `TTL` + delete by `subject_key` (erasure) | Rencana; **Q-SM17** |
 | **(v16)** ClickHouse `agg_visitor_*` (anonim, k ≥ 10) | 2 th | `TTL` | Rencana; **Q-SM17** |
@@ -586,7 +655,27 @@ Default dipakai tim sampai dijawab; semua angka configurable (biaya ubah angka =
 - **Q-P28 — retensi data HR & rekening, erasure karyawan/vendor.** Retensi data pribadi karyawan setelah berhenti kerja (DPIA D-6) dan apakah `efn_privacy` perlu menangani `hr.*`/`res.partner.bank` (L-68 sisa K-36-4; ±1–2 hari odoo-engineer).
 - **Q-P29 — paket retensi QR meja.** Setujui: `fnb_*` 180 h, tautan member 30 h, Odoo `efn.pos.table.session` 400 h (usulan), dan **catatan baris QR** di `pos.order.line.note` dikosongkan setelah 90 h (selaras tiket KDS; ±0,5 hari odoo-engineer) alih-alih ikut 10 th.
 
+### (v17) Pertanyaan baru untuk Legal/DPO — ADR-043 (VPS Bima Creative)
+- **Q-P30 — pemroses Bima Creative.** (a) Setujui/tolak Bima Creative sebagai pemroses untuk tahap B (ekstraksi ESB)
+  dengan DPA; (b) siapa pengendali penandatangan (Holding atau tiap PT brand); (c) apakah kontrak ESB mengizinkan
+  pemrosesan data ESB oleh pihak ketiga (terkait Q-ESB9); (d) bila lokasi DC belum/tidak di Indonesia, lihat Q-T8.
+  Alternatif bila ditolak: mesin milik EFN (ADR-043 opsi 2, ±Rp6–15 juta sekali + 2–4 hari setup, asumsi) atau laptop
+  terenkripsi (opsi 1, Rp0, jadwal lebih lambat).
+- **Q-P32 (v18) — migrasi ESB (§2.8.14).** (a) Setujui klasifikasi `sales_num` (nomor transaksi ESB tanpa pelanggan/
+  kasir/jam) sebagai **bukan data pribadi** di arsip Odoo; (b) setujui retensi bundel migrasi ≤ 90 hari setelah berita
+  acara + bukti hapus di berita acara (selaras Q-ESB24); (c) retensi arsip penjualan Odoo: 10 tahun (usulan, ikut
+  dokumen keuangan) atau lebih pendek; (d) pelanggan B2B perorangan dimigrasi (terenkripsi ADR-036) atau dikecualikan.
+  Biaya semua opsi Rp0 kecuali job retensi arsip (±0,5 hari odoo-engineer bila dipilih angka < 10 th).
+- **Q-P31 — retensi & bukti penghapusan di VPS.** Setujui VPS sebagai tempat sementara dengan hapus pada yang paling
+  awal: pindah ke `efn-data` / akhir kontrak / cutover brand terakhir + 30 hari / permintaan klien; bukti = crypto-erase
+  kunci LUKS + berita acara (Q-VPS6). Biaya Rp0 selain waktu operasional ±0,5 hari.
+
 ## 5. Yang belum terverifikasi
+- **(v18)** Isi bundel migrasi & tabel arsip Odoo ditulis dari kontrak `docs/04` §27 v19.1, bukan dari kode (W1/W2 G43
+  fase 2 dibangun paralel); whitelist kunci pelanggan B2B (E4) belum diuji pada respons ESB nyata; ukuran tabel arsip
+  belum diukur (dry-run PB).
+- **(v17)** Penyedia, lokasi data center, spesifikasi, dan pemegang root VPS Bima Creative tidak diketahui architect
+  (Q-VPS1..Q-VPS3); nomor pasal pemroses (rujukan kerja Pasal 51) belum diverifikasi Legal.
 - Nomor pasal UU PDP (wajib Legal), termasuk dasar "efektivitas hak hapus" untuk `erasure_suppression`.
 - Fungsi retensi `loyalty_reservation`/`loyalty_pos_earn` dan autovacuum reservasi Odoo hanya terbukti di unit test, belum diamati berjalan di runtime (perlu data berumur > 30/400 hari).
 - Retensi riwayat query/aktivitas di Metabase v0.52.4 OSS dan apakah ada pengaturannya — belum diperiksa di dokumentasi primer Metabase.

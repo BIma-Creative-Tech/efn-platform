@@ -5,7 +5,8 @@ DDL: `infra/postgres/init/02-platform-loyalty.sql`.
 
 - Saldo = `SUM(delta_points)` entri dengan `expires_at IS NULL OR expires_at > now`.
 - `member_ref_hash` = member_hash (§1). `member_ref_enc` **wajib** (NOT NULL): AES-256-GCM, AAD `efn:loyalty_ledger.member_ref_enc:v1`.
-- `company_code` = PT penanggung liabilitas (CHECK EFN/GL/PB/BCR/BCF/FARM sejak G20 §12.1, + `WTZ` sejak G24 §16.1 (migrasi `13-platform-g24.sql`); kode lama RTL/FNB dihapus, migrasi `09-platform-g20.sql`), default `EFN`.
+- `company_code` = PT penanggung liabilitas (CHECK EFN/GL/PB/BCR/BCF/FARM sejak G20 §12.1, + `WTZ` sejak G24 §16.1 (migrasi `13-platform-g24.sql`), + `IMD` (PT Im Donut) dan `CUP` (PT Curry Up) sejak G43 / ADR-043 (migrasi `18-platform-g43.sql`, juga untuk CHECK `issuer_company_code`, `loyalty_policy`, dan tabel MGM `mgm_policy`/`mgm_source`/`mgm_reward`); kode lama RTL/FNB dihapus, migrasi `09-platform-g20.sql`), default `EFN`.
+- G43 (ADR-043, Proposed): IMD/CUP hanya ditambahkan ke daftar kode PT dasar ledger, kebijakan poin, MGM, dan akrual harian (`GET /v1/pos/loyalty/accruals`, cron `efn_loyalty_accounting` memanggil semua company berkode). Kanal online/QR meja/reservasi **tidak** dibuka (`ONLINE_CHANNELS`, `FNB_COMPANY_CODES` tetap); invoice tetap hanya PT PPN (`INVOICE_COMPANIES` = GL/BCR). Data legal PT masih placeholder (Q-ESB5). Risiko: R-T01 (kode PT konsisten antar-service). Daftar `COMPANY_CODES` wajib sama urutannya dengan `EFN_BRAND_CODES` Odoo `efn_core`; label metrik `efn_loyalty_expired_points_total{issuer}` diuji sama dengan `COMPANY_CODES`.
 - `expires_at`: `NULL` (kebijakan kedaluwarsa belum diputuskan).
 
 ## Consumer `loyalty.earn.requested` v2 (SEC-08)

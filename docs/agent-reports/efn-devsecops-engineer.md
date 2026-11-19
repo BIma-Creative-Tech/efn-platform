@@ -1,5 +1,130 @@
 # Laporan Agent: efn-devsecops-engineer
 
+## G43 fase 2 W3 (18 Nov 2026, branch feat/wave-43-esb-migration, belum di-commit) — secret migrasi, image/service `esb-migrate`, CI, check-encryption, runbook
+
+Kontrak: kontrak kerja G43 fase 2 (W3), docs/04 §27.2/§27.10, ADR-042 (Accepted), laporan W1 "Please forward → W3".
+Tidak ada yang dijalankan (sesi tanpa shell): compose config, check-encryption, shellcheck, hadolint, checkov, pytest,
+build image = tugas lead.
+
+### File
+| File | Perubahan |
+|---|---|
+| `scripts/secrets.list` | + `clickhouse_password_mig host:disabled`, `migration_bundle_key host:disabled [SA]` (komentar mount + siklus jendela) |
+| `scripts/gen-secrets.sh` | dev/CI membuat nilai NYATA untuk dua secret itu (`random` / `hex32`), pola `odoo_pii_*`; file `disabled` diganti, nilai lain tidak ditimpa |
+| `infra/compose/docker-compose.yml` | top-level secret `clickhouse_password_mig`, `migration_bundle_key`; `clickhouse_password_mig` di-mount ke `clickhouse-init`; komentar header overlay |
+| `scripts/migration/Dockerfile` (baru), `scripts/migration/.dockerignore` (baru) | image `esb-migrate`: `python:3.12-slim@sha256:05cd…` (= etl/esb-extract), apt/zlib1g `--only-upgrade` + `checkov:skip=CKV_DOCKER_9` + `hadolint ignore=DL3008` (pola G41), cek import `AESGCM`+`clickhouse_connect` saat build, COPY eksplisit (tanpa tests), `USER 65534:65534`, `CMD --help` |
+| `infra/compose/docker-compose.esb.yml` | service `esb-migrate` profil `migrate`; default `ESB_CK_BRANCHES=pb:4\|38,wtz:5\|6,imd:2,cup:4\|6`; dokumentasi override `bacha:6=BCR` (cabang 10 = Q-ESB10) |
+| `infra/compose/docker-compose.migration.yml` (baru) | sisi Odoo jendela migrasi: `migration_bundle_key`, `${MIG_EXCHANGE_DIR}`→`/mnt/efn-mig`, `scripts/migration`→`/opt/efn-migration:ro`, env `EFN_MIG_BUNDLE_KEY_FILE/EXCHANGE_DIR/CODE_DIR/USER_LOGIN` |
+| `infra/compose/.env.example` | `IMAGE_ESB_MIGRATE`, `ESB_CK_BRANCHES` baru + catatan Bacha, blok G43 (`MIG_EXCHANGE_DIR`, `MIG_MAPS_DIR`, `EFN_MIG_UID/GID`, `EFN_MIG_*`) |
+| `scripts/check-encryption.sh` | aturan G43 (6b3a) + render `prod-esb-migrate` dan `prod-migration`; network `esb` mengizinkan `esb-migrate` |
+| `.github/workflows/ci.yml` | filter `esb-migrate` + `python` mencakup `scripts/migration/**`; job `python` (ruff/compileall/pip-audit) mencakup `scripts/migration`; matriks `pytest` + `esb-migrate` (kolom `dir`); compose config dev/prod + `docker-compose.migration.yml --profile migrate`; diff secret menyertakan overlay migration + profil migrate |
+| `.github/workflows/build-push.yml` | `esb-migrate` (context `scripts/migration`) di `scan-pr` dan `build` (scan Trivy, SBOM, cosign); path PR `scripts/migration/**` |
+| `.github/dependabot.yml` | `/scripts/migration` di ekosistem `docker` dan `pip` |
+| `scripts/migration/ruff.toml` | `extend-per-file-ignores` `odoo_import_esb.py` = F821 (global `env` dari `odoo shell`) |
+| `Makefile` | `validate` render migrate, `test-py` + scripts/migration, `lint` hadolint Dockerfile baru |
+| `docs/runbooks/migrasi-esb-odoo.md` (baru), `docs/runbooks/README.md` | runbook + indeks + baris tabel hardening |
+
+### Keputusan
+1. **Secret berjenis `host:disabled`, bukan `random`/`hex32` di secrets.list** (menyimpang dari brief, alasan):
+   `clickhouse-init.sh` W1 sengaja menghapus `efn_mig` bila secret placeholder → desainnya "aktif hanya selama jendela".
+   Dengan `random`, staging/prod deploy butuh GitHub Environment `CLICKHOUSE_PASSWORD_MIG`/`MIGRATION_BUNDLE_KEY` (deploy
+   gagal bila kosong) dan user `efn_mig` + kunci bundel hidup permanen. `host:*` = tidak lewat GitHub/stdin efn-deploy,
+   deploy.sh mengisi `disabled` bila belum ada, operator mengisi di host saat jendela dibuka dan mengembalikan `disabled`
+   saat ditutup (= rotasi/crypto-erase PDP Q-ESB24). Dev/CI tetap nilai nyata (`random`, `hex32` = 64 hex untuk
+   `bytes.fromhex`) lewat gen-secrets.sh. Bila lead tetap ingin `random`/`hex32`: ganti 2 baris + tambah 2 GitHub
+   Environment secret, hapus loop khusus di gen-secrets.sh.
+2. **Lokasi image = `scripts/migration/Dockerfile`** (context = kode yang dikemas, matriks build-push `context`), bukan
+   `services/esb-migrate` (folder berisi Dockerfile saja tidak bisa menjangkau kode di luar context). §27.2 menyebut
+   "image esb-extract + mount kode": diganti image sendiri karena `cryptography` tidak ada di esb-extract dan image
+   mount-kode tidak tertandatangani. **Untuk W4**: perbarui §27.2 (image, overlay, memori).
+3. **Service di `docker-compose.esb.yml` profil `migrate`** (sesuai brief), sisi Odoo di **overlay terpisah**
+   `docker-compose.migration.yml` (sesuai §27.2 "hanya selama jendela"): bila kunci bundel ditaruh di esb.yml, Odoo akan
+   memegangnya permanen setiap kali overlay ESB aktif. check-encryption menolak `migration_bundle_key` di odoo tanpa
+   overlay migration.
+4. **uid/gid `esb-migrate` = user `odoo`** (`EFN_MIG_UID/GID`, default 65534): bundel ditulis 0600 (`bundle.write_bundle`)
+   sehingga importer di container Odoo hanya bisa membaca bila uid sama; hasil impor 0600 milik odoo dibaca balik
+   `writeback`. Alternatif (chmod 0640 + grup bersama) butuh ubah kode W1 — tidak dipilih.
+5. **Memori 1536M (bukan 1 GB §27.2)**: tmpfs `/work` 768m dihitung ke cgroup memori; + bundel dienkripsi di memori.
+   tmpfs `/work` `mode=1777` (+ `/tmp` 64m), `TMPDIR=/work`, `read_only`, `cap_drop ALL`, `no-new-privileges`,
+   `restart: "no"`, `healthcheck: disable` (sekali jalan; dicatat di README runbook tabel hardening).
+6. Bind mount `create_host_path: false` untuk `MIG_EXCHANGE_DIR`/`MIG_MAPS_DIR`: direktori hilang = gagal, bukan folder
+   root otomatis. Default path `/var/lib/efn/migration/*` (bukan `:?`) agar `docker compose config` di CI tetap lolos.
+7. `depends_on: clickhouse (service_healthy)` → perintah `run` wajib `--profile data --profile migrate` (runbook §1).
+8. `cryptography==46.0.3` (pin W1) dipertahankan; ikut gate `pip-audit --strict` di job `python`. **Belum diverifikasi**
+   ketersediaan di PyPI/advisori per Nov 2026 (tanpa akses) — lead: lihat hasil pip-audit; bila ada advisori naikkan ke
+   patch 46.x terbaru (API `AESGCM`/`HKDF` stabil).
+
+### Untuk agent lain (diteruskan lead)
+- **W2 (odoo-engineer)**: importer di container Odoo memakai env dari overlay migration: kunci
+  `EFN_MIG_BUNDLE_KEY_FILE=/run/secrets/migration_bundle_key`, berkas di `EFN_MIG_EXCHANGE_DIR=/mnt/efn-mig` (baca bundel
+  + `validation_*.json`, tulis `<run_id>.result.efnmig`), kode `efn_mig` di `EFN_MIG_CODE_DIR=/opt/efn-migration`
+  (`sys.path.insert`). Runbook §4.2 mengasumsikan `EFN_MIG_ARGV` JSON `{"bundle","validation","dry_run"}` — sesuaikan
+  runbook bila header importer berbeda. `scripts/migration/run-import.sh` (§27.2) belum ada (tidak saya buat agar
+  tidak bentrok); job CI `python` kini menjalankan ruff atas `odoo_import_esb.py` (F821 sudah dikecualikan).
+- **W1 (data-ai)**: `scripts/migration` kini di-gate ruff `check` + `format --check` dan pip-audit; laporan W1 menyebut
+  ruff belum dijalankan → kemungkinan perlu `ruff format .`.
+- **W4 (architect)**: §27.2 (image sendiri `scripts/migration/Dockerfile`, service di esb.yml profil `migrate`, overlay
+  migration untuk Odoo, memori 1536M, uid odoo, secret `host:disabled`); ADR-042 bagian keamanan bundel: siklus hidup secret (buka/tutup jendela) + PDP inventory
+  entri bundel menyebut penutupan jendela = `disabled` (runbook §7).
+
+### Belum terverifikasi
+- `docker compose config` semua render baru (khususnya bind `create_host_path: false` dengan path yang tidak ada di
+  runner CI — diharapkan tidak dicek saat `config`), check-encryption render `prod-esb-migrate`/`prod-migration`,
+  shellcheck gen-secrets/check-encryption, hadolint + checkov Dockerfile baru, build image (wheel `cryptography` /
+  `clickhouse-connect` untuk py3.12), Trivy image.
+- Opsi tmpfs `mode=1777` di short syntax compose; uid user `odoo` image 19.0 (runbook memakai `id -u`, tidak menebak).
+- Runbook §3–§5 belum pernah dijalankan; nama tabel Postgres `efn_legacy_*` diasumsikan dari nama model W2.
+
+## G43-VPS (18 Nov 2026, branch feat/wave-43-esb-migration, belum di-commit) — runbook VPS Bima Creative (ADR-043)
+
+Paket kerja: runbook operator dua bagian untuk VPS milik Bima Creative. ADR-043 ditulis efn-architect paralel; saat
+laporan ini ditulis file ADR-043 **belum ada** di `docs/decisions/` (runbook merujuknya sebagai Proposed). Tidak ada
+VPS/docker yang dijalankan; semua perintah dan skrip inline diperiksa manual.
+
+### File
+- **Baru** `docs/runbooks/vps-bima.md` — A (dev: akun `efnadmin`/`efndev`, sshd `00-efn-hardening.conf`, UFW +
+  WireGuard hub `10.90.0.1/24`, tabel nft `efn_vps` (peer WG hanya ke host + drop DNAT dari antarmuka publik),
+  unattended-upgrades tanpa reboot otomatis, chrony, fail2ban/sshguard, swap, Docker resmi rootful+grup docker atau
+  rootless, plafon memori `efndev.slice` 8 GiB, clone + PAT fine-grained/deploy key, secret DEV + cek "tanpa kredensial
+  klien", tunnel SSH, Claude Code di tmux, validasi CI lokal, backup repo). B (go/no-go 12 butir, host terpisah atau
+  varian satu host bersyarat, LUKS di block volume atau file, data-root Docker di LUKS + `containerd-snapshotter:false`,
+  image cosign, secret/CA dibuat di host B, nft `efn_esb` egress `172.30.8.0/24` → IP `services.esb.co.id:443` + DNS
+  dengan timer refresh, UFW outgoing host, compose `-p efn-esb` hanya `clickhouse clickhouse-init esb-extract`, backfill
+  per esb-extract.md §5, heartbeat systemd, backup logis `FORMAT Native` + `age` (dua penerima) + rclone, restore test
+  ke container sementara `--network none`, akun per orang + auditd + sudo log, crypto-erase + berita acara).
+- **Ubah** `docs/runbooks/README.md` — entri prosedur.
+- Tidak ada perubahan kode/compose/skrip repo.
+
+### Temuan yang memengaruhi desain
+1. **Traefik base mem-publish `${EFN_PUBLIC_BIND:-0.0.0.0}:80/443`** dan port publish Docker melewati UFW. Di VPS,
+   `.env` wajib `EFN_PUBLIC_BIND=127.0.0.1` + penjaga nft DNAT (runbook A3/A8/B7). Tanpa itu stack dev di VPS terbuka
+   ke internet.
+2. **`--profile data` saja tidak lolos validasi compose** (metabase/etl `depends_on: postgres` profil core). Host B
+   memakai `--profile core --profile data` tetapi hanya menyalakan service eksplisit; risiko operator `up -d` tanpa nama
+   service = seluruh core+data menyala. Runbook memberi larangan tertulis; usulan overlay di bawah menghilangkannya.
+3. **Batas memori profil `core` dev ±11,2 GiB** (> target K25-06 8 GB). Ditegakkan sementara lewat cgroup slice host.
+4. **Tidak ada backup ClickHouse di repo** (WAL-G hanya PostgreSQL). `BACKUP TO Disk/File` butuh config server baru →
+   dipakai ekspor logis; skrip inline di runbook (bukan di `scripts/`).
+5. Di A, grup `docker` = root host dan Claude Code berjalan sebagai `efndev` → alasan utama B di host terpisah.
+6. Memori Claude Code laptop memuat detail akun ESB → runbook melarang menyalinnya ke VPS A.
+
+### Usulan (belum dibuat; butuh keputusan lead)
+- `infra/compose/docker-compose.vps-esb.yml` (atau profil compose `esb` baru): clickhouse + clickhouse-init + esb-extract
+  tanpa ketergantungan core, sehingga host B cukup `--profile esb` dan tidak bisa menyalakan Odoo/BFF/Traefik tak sengaja.
+- Overlay dev ramping K25-06 (`docker-compose.dev-slim.yml`): odoo 1,5G, postgres 1G, api-gateway 1G, superapp-web 768M,
+  rabbitmq/minio 512M — lalu ukur.
+- Pindahkan skrip inline B7/B10/B11 ke `scripts/host/` (`efn-esb-egress-refresh`, `efn-esb-heartbeat`,
+  `efn-esb-backup`, `efn-esb-restore-test`) agar ikut shellcheck CI dan test.
+- Konfigurasi `backups` ClickHouse (`config.d/backups.xml`, disk terenkripsi) sebagai pengganti ekspor logis bila
+  volume besar.
+
+### Belum terverifikasi
+- Seluruh runbook di VPS nyata; skrip inline tanpa shellcheck/eksekusi.
+- Rootless Docker dengan stack EFN (IP sumber untuk middleware Traefik, `ulimits` ClickHouse, profil ops).
+- Default `containerd-snapshotter` pada versi Docker yang akan terpasang; jalur DNS embedded Docker (perlu tidaknya set
+  `dns_v4`); hak `SYSTEM STOP MERGES` untuk user admin `efn`; perilaku `SHOW CREATE TABLE` + kebijakan `encrypted` saat
+  restore ke container uji.
+
 ## G42 (18 Nov 2026, branch feat/wave-42-insight-web, belum di-commit) — infra dashboard Insight + SSO Odoo
 
 Kontrak: docs/04 §26 (terutama §26.10–§26.13), ADR-041 (Proposed). Kode `services/insight-web` (frontend) dan

@@ -19,5 +19,10 @@ bercentang *Ikut forecast mingguan*.
 **Prinsip:** di luar jalur transaksi — bila cron gagal, reorder rule terakhir tetap berlaku. Hanya Inventory
 Administrator yang bisa menerapkan.
 
+**G43 (19.0.1.1.0, ADR-042 §3.2, docs/04 §27.8):** hook `_efn_legacy_outflow(warehouse, product, date_from, date_to)`
+→ `(batas, {tanggal: qty})`, default `(None, {})` = perilaku lama persis. Bila `batas` terisi, hari `< batas` diambil
+dari histori legacy dan hari `≥ batas` dari `stock.move`. Override ada di `efn_legacy_history` (cutover ESB → Odoo per
+PT); modul ini tidak bergantung padanya.
+
 **Belum:** v2 (statsforecast/Prophet) di worker data setelah ada histori nyata; akurasi belum bisa dibuktikan
 sebelum ada data penjualan produksi.

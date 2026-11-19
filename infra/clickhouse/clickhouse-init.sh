@@ -57,6 +57,21 @@ until $CH --query "SELECT 1" > /dev/null 2>&1; do
   sleep 2
 done
 
+# G43 (docs/04 §27.10, L-130): map_esb_odoo kunci baru (brand, company_code, entity, esb_key) + odoo_model, run_id.
+# DDL baru = 14-g43-migration.sql (CREATE IF NOT EXISTS). Tabel versi G41 (kunci lama): KOSONG -> dihapus di sini lalu
+# dibuat ulang oleh 14; BERISI -> init gagal (tindakan manual: salin ke tabel baru/arsip, lalu hapus; bukan otomatis).
+MAP_NEW_KEY="brand, company_code, entity, esb_key"
+MAP_KEY="$($CH --query "SELECT sorting_key FROM system.tables WHERE database = 'efn_dwh' AND name = 'map_esb_odoo'")"
+if [ -n "$MAP_KEY" ] && [ "$MAP_KEY" != "$MAP_NEW_KEY" ]; then
+  MAP_ROWS="$($CH --query "SELECT count() FROM efn_dwh.map_esb_odoo")"
+  if [ "$MAP_ROWS" != "0" ]; then
+    echo "clickhouse-init: efn_dwh.map_esb_odoo kunci lama (${MAP_KEY}) berisi ${MAP_ROWS} baris; migrasi ke kunci (${MAP_NEW_KEY}) wajib manual (docs/04 §27.10)" >&2
+    exit 1
+  fi
+  echo "clickhouse-init: map_esb_odoo kunci lama (${MAP_KEY}) kosong -> dihapus, dibuat ulang oleh 14-g43-migration.sql"
+  $CH --query "DROP TABLE efn_dwh.map_esb_odoo SYNC" < /dev/null
+fi
+
 for f in /init/schema/*.sql; do
   [ -e "$f" ] || continue
   echo "clickhouse-init: skema $(basename "$f")"
@@ -214,6 +229,23 @@ create_user efn_esb /run/secrets/clickhouse_password_esb
 # G42 (kontrak G42 §B, ADR-041): user service insight-web. WAJIB seperti efn_text2sql (secret di-mount ke
 # clickhouse-init di base compose, devsecops) -> secret hilang = init gagal (fail closed, bukan user tanpa password).
 create_user efn_insight /run/secrets/clickhouse_password_insight
+# G43 (docs/04 §27.10): user mesin migrasi `efn_mig` HANYA selama program migrasi. Secret tidak di-mount / kosong /
+# placeholder (`disabled`, scripts/secrets.list) -> user dihapus (bukan gagal: stack normal tidak butuh migrasi).
+# Secret ada tetapi tidak valid (charset/panjang) -> init gagal (create_user, fail closed).
+MIG_SECRET=/run/secrets/clickhouse_password_mig
+MIG_PW=""
+[ -r "$MIG_SECRET" ] && MIG_PW="$(cat "$MIG_SECRET")"
+case "$(printf '%s' "$MIG_PW" | tr '[:upper:]' '[:lower:]')" in
+  ''|disabled|changeme|change-me|placeholder|xxx|todo|password) MIG_ENABLED=0 ;;
+  *) MIG_ENABLED=1 ;;
+esac
+unset MIG_PW
+if [ "$MIG_ENABLED" = "1" ]; then
+  create_user efn_mig "$MIG_SECRET"
+else
+  echo "clickhouse-init: secret clickhouse_password_mig tidak ada/placeholder -> user efn_mig dihapus (migrasi nonaktif)"
+  $CH --query "DROP USER IF EXISTS efn_mig" < /dev/null
+fi
 
 for f in /init/access/*.sql; do
   [ -e "$f" ] || continue
@@ -235,6 +267,15 @@ GRANT esb_writer TO efn_esb;
 SET DEFAULT ROLE esb_writer TO efn_esb;
 ALTER USER efn_esb SETTINGS PROFILE 'esb_writer_profile';
 EOF
+
+# G43: mig-access.sql membuat role mig_rw & profil mig_profile; pengikatan ke user di sini (hanya bila user ada).
+if [ "$MIG_ENABLED" = "1" ]; then
+  $CH --multiquery <<'EOF'
+GRANT mig_rw TO efn_mig;
+SET DEFAULT ROLE mig_rw TO efn_mig;
+ALTER USER efn_mig SETTINGS PROFILE 'mig_profile';
+EOF
+fi
 
 # G42: insight-access.sql membuat role insight_reader & profil insight_readonly; pengikatan ke user di sini.
 $CH --multiquery <<'EOF'
@@ -270,7 +311,7 @@ unset SIG
 # G42 (kontrak G42 §B): row policy cakupan PT pada SETIAP view efn_insight (semua ber-company_code). insight-web
 # mengirim SQL_efn_cids / SQL_efn_codes / SQL_efn_sig dengan format SAMA dengan text2sql, tetapi kunci = secret
 # insight_scope_key (hex, BEDA dari text2sql_scope_key -> tanda tangan satu service tidak berlaku di service lain).
-# Predikat hanya company_code (kode ESB: PB/WTZ/BCF/BCR/IMD/CUP; IMD/CUP belum punya company_id Odoo) + tanda tangan;
+# Predikat hanya company_code (kode ESB: PB/WTZ/BCF/BCR/IMD/CUP; IMD/CUP = company Odoo sejak G43, tetapi scope tetap per kode ESB) + tanda tangan;
 # cids tetap ikut ditandatangani. `company_code != ''` = defense in depth (C4 §26.13: splitByChar(',', '') = [''] akan
 # mencocokkan baris tanpa PT bila codes kosong ber-sig sah). WAJIB seperti text2sql_scope_key: secret hilang/tidak
 # valid = init gagal.
@@ -303,4 +344,4 @@ if [ -n "$INSIGHT_MISSING" ]; then
 fi
 
 rm -f "$CFG"
-echo "clickhouse-init: skema, user (efn_etl, efn_text2sql, efn_metabase, efn_esb, efn_insight) dan grant diterapkan"
+echo "clickhouse-init: skema, user (efn_etl, efn_text2sql, efn_metabase, efn_esb, efn_insight, efn_mig bila aktif) dan grant diterapkan"

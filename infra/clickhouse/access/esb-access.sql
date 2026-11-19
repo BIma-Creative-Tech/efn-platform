@@ -29,7 +29,9 @@ GRANT SELECT, INSERT ON efn_dwh.dim_esb_product TO esb_writer;
 GRANT SELECT, INSERT ON efn_dwh.dim_esb_menu TO esb_writer;
 GRANT SELECT, INSERT ON efn_dwh.dim_esb_product_alias TO esb_writer;
 GRANT SELECT, INSERT ON efn_dwh.dim_esb_supplier TO esb_writer;
--- map_esb_odoo: TANPA grant di G41 (SEC-188); penulisnya = migrasi G43, grant ditambah di gelombang itu.
+-- map_esb_odoo: TIDAK PERNAH di-grant ke esb_writer (SEC-188, docs/04 §27.10 L-130); penulis tunggal = user efn_mig
+-- (mig-access.sql). REVOKE = pertahanan berlapis bila grant lama pernah ada.
+REVOKE ALL ON efn_dwh.map_esb_odoo FROM esb_writer;
 GRANT SELECT, INSERT ON efn_dwh.fact_esb_sales_line TO esb_writer;
 GRANT SELECT, INSERT ON efn_dwh.fact_esb_payment_daily TO esb_writer;
 GRANT SELECT, INSERT ON efn_dwh.fact_esb_fin_sold_daily TO esb_writer;
@@ -37,6 +39,16 @@ GRANT SELECT, INSERT ON efn_dwh.fact_esb_production TO esb_writer;
 GRANT SELECT, INSERT ON efn_dwh.fact_esb_delivery TO esb_writer;
 GRANT SELECT, INSERT ON efn_dwh.fact_esb_transfer TO esb_writer;
 GRANT SELECT, INSERT ON efn_dwh.fact_esb_stock_snapshot TO esb_writer;
+-- G43 (14-g43-migration.sql, `python -m efn_esb snapshot`). Tidak di-grant ke metabase_reader (data keuangan/partner).
+GRANT SELECT, INSERT ON efn_dwh.dim_esb_bom TO esb_writer;
+GRANT SELECT, INSERT ON efn_dwh.dim_esb_bom_line TO esb_writer;
+GRANT SELECT, INSERT ON efn_dwh.dim_esb_menu_price TO esb_writer;
+GRANT SELECT, INSERT ON efn_dwh.dim_esb_customer TO esb_writer;
+GRANT SELECT, INSERT ON efn_dwh.dim_esb_location TO esb_writer;
+GRANT SELECT, INSERT ON efn_dwh.dim_esb_coa TO esb_writer;
+GRANT SELECT, INSERT ON efn_dwh.fact_esb_stock_opname TO esb_writer;
+GRANT SELECT, INSERT ON efn_dwh.fact_esb_ap_open TO esb_writer;
+GRANT SELECT, INSERT ON efn_dwh.fact_esb_ar_open TO esb_writer;
 
 -- Analis (opsional, §25.7): view v_esb_* + tabel dasarnya (view INVOKER; v_esb_data_quality membaca extract_run).
 -- Tanpa raw_doc (payload mentah) dan bom_ratio.

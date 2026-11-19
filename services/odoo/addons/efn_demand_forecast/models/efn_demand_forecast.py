@@ -66,7 +66,31 @@ class EfnDemandForecast(models.Model):
 
     # ------------------------------------------------------------------ perhitungan
     @api.model
+    def _efn_legacy_outflow(self, warehouse, product, date_from, date_to):
+        """Hook G43 (ADR-042 §3.2, docs/04 §27.8, L-136): histori keluar stok dari sistem lama (ESB).
+
+        Kembalikan ``(batas, {tanggal: qty_keluar})``. ``batas`` = tanggal cutover gudang (``date``) atau ``None``.
+        Bila ``batas`` terisi, hari ``< batas`` diambil HANYA dari dict ini dan hari ``>= batas`` dari ``stock.move``.
+        Default modul ini: ``(None, {})`` = tanpa histori legacy, perilaku lama persis. Di-override
+        ``efn_legacy_history`` (modul ini sengaja tidak bergantung padanya; tidak tahu kunci parameter migrasi).
+        """
+        return None, {}
+
+    @api.model
     def _efn_daily_outflow(self, warehouse, product, date_from, date_to):
+        """{tanggal: qty keluar} = histori legacy (hari < cutover, bila ada) + stock.move done (hari >= cutover)."""
+        boundary, legacy = self._efn_legacy_outflow(warehouse, product, date_from, date_to)
+        if boundary is None:
+            return self._efn_stock_outflow(warehouse, product, date_from, date_to)
+        result = {day: qty for day, qty in (legacy or {}).items() if date_from <= day <= date_to and day < boundary}
+        start = max(date_from, boundary)
+        if start <= date_to:
+            for day, qty in self._efn_stock_outflow(warehouse, product, start, date_to).items():
+                result[day] = result.get(day, 0.0) + qty
+        return result
+
+    @api.model
+    def _efn_stock_outflow(self, warehouse, product, date_from, date_to):
         """{tanggal: qty keluar} dari stock.move done yang keluar dari lokasi gudang (UoM produk)."""
         self.env["stock.move"].flush_model()
         self.env.cr.execute(

@@ -2,9 +2,12 @@
 
 import math
 from datetime import date, timedelta
+from unittest.mock import patch
 
 from odoo.exceptions import UserError, ValidationError
 from odoo.tests import TransactionCase, new_test_user, tagged
+
+from odoo.addons.efn_demand_forecast.models.efn_demand_forecast import EfnDemandForecast
 
 
 @tagged("post_install", "-at_install", "efn")
@@ -98,6 +101,53 @@ class TestEfnDemandForecast(TransactionCase):
         second = self._forecast(history_days=7)
         self.assertEqual(first.state, "superseded")
         self.assertEqual(second.state, "draft")
+
+    # ------------------------------------------------------------------ G43 hook histori legacy (ADR-042 §3.2)
+    def test_legacy_hook_default_is_noop(self):
+        """Implementasi dasar: tanpa histori legacy -> (None, {}) (dipanggil langsung, lepas dari override)."""
+        result = EfnDemandForecast._efn_legacy_outflow(
+            self.env["efn.demand.forecast"], self.wh, self.product, self.today - timedelta(days=7), self.today
+        )
+        self.assertEqual(result, (None, {}))
+
+    def test_legacy_hook_without_boundary_keeps_stock_outflow(self):
+        """Regresi: hook mengembalikan batas None -> hasil = stock.move persis seperti sebelum G43."""
+        for i in range(1, 8):
+            self._sell(self.today - timedelta(days=i), 4)
+        Forecast = self.env["efn.demand.forecast"]
+        d0, d1 = self.today - timedelta(days=7), self.today - timedelta(days=1)
+        with patch.object(type(Forecast), "_efn_legacy_outflow", lambda *a, **k: (None, {d0: 999.0})):
+            merged = Forecast._efn_daily_outflow(self.wh, self.product, d0, d1)
+        self.assertEqual(merged, Forecast._efn_stock_outflow(self.wh, self.product, d0, d1))
+        self.assertAlmostEqual(sum(merged.values()), 28)
+
+    def test_legacy_hook_boundary_splits_sources(self):
+        """Batas di tengah rentang: hari < batas dari legacy (stock.move sebelumnya diabaikan), >= batas dari stock."""
+        boundary = self.today - timedelta(days=3)
+        for i in range(1, 8):
+            self._sell(self.today - timedelta(days=i), 5)
+        legacy = {self.today - timedelta(days=i): 7.0 for i in range(1, 15)}  # termasuk hari >= batas: wajib diabaikan
+        Forecast = self.env["efn.demand.forecast"]
+        d0, d1 = self.today - timedelta(days=7), self.today - timedelta(days=1)
+        with patch.object(type(Forecast), "_efn_legacy_outflow", lambda *a, **k: (boundary, legacy)):
+            merged = Forecast._efn_daily_outflow(self.wh, self.product, d0, d1)
+            fc = self._forecast(history_days=7, lead_days=1, review_days=0)
+        for i in range(1, 8):
+            day = self.today - timedelta(days=i)
+            self.assertAlmostEqual(merged[day], 7.0 if day < boundary else 5.0, msg=str(day))
+        # 4 hari legacy (d-7..d-4) x 7 + 3 hari stock (d-3..d-1) x 5.
+        self.assertAlmostEqual(fc.history_qty, 4 * 7 + 3 * 5)
+
+    def test_legacy_hook_boundary_after_range_skips_stock_query(self):
+        Forecast = self.env["efn.demand.forecast"]
+        d0, d1 = self.today - timedelta(days=7), self.today - timedelta(days=1)
+        legacy = {d0: 2.0, d1: 3.0}
+        with (
+            patch.object(type(Forecast), "_efn_legacy_outflow", lambda *a, **k: (self.today, legacy)),
+            patch.object(type(Forecast), "_efn_stock_outflow", side_effect=AssertionError("tidak boleh dipanggil")),
+        ):
+            merged = Forecast._efn_daily_outflow(self.wh, self.product, d0, d1)
+        self.assertEqual(merged, legacy)
 
     def test_season_validation_and_month_wrap(self):
         Season = self.env["efn.forecast.season"]

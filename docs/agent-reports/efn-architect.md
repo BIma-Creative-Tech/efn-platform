@@ -866,6 +866,143 @@ kompromi insight-web = semua PT (diterima, sama text2sql). Juga: kontrak kerja m
 
 ---
 
+# ADR-043 — VPS Bima Creative: dev (A) dan ekstraksi ESB (B) (2026-11-18)
+Branch `feat/wave-43-esb-migration`, tanpa commit, hanya `docs/**`. Sumber: keputusan user 18 Nov 2026 (via efn-lead),
+`CLAUDE.md` K25-02/K25-06, ADR-004, ADR-040, ADR-041, `docs/04` §25, inventaris PDP §2.7/§2.8.11, transfer P1–P8.
+
+## Ringkasan (untuk manajemen)
+- Tahap A (tempat kerja pengembang di VPS Bima Creative, tanpa data/password klien) boleh segera.
+- Tahap B (penarikan data ESB dengan password klien di VPS) diblokir sampai persetujuan tertulis klien + DPO, perjanjian
+  pemrosesan data, akun ESB khusus baca, izin beban, dan konfirmasi hak data. Sebelum Q-ESB1/Q-ESB7 dijawab, backfill
+  penuh tidak boleh jalan di mesin mana pun, jadi VPS tidak mempercepat jadwal sebelum itu.
+- Biaya B: ±3–5 hari engineer + sewa VM/VPS terpisah (perkiraan ±Rp0,5–1,5 juta/bulan, asumsi).
+
+## File dibuat / diubah
+| File | Perubahan |
+|---|---|
+| `docs/decisions/ADR-043-vps-bima-creative-dev-dan-ekstraksi-esb.md` | **Baru (Proposed).** Pertentangan K25-06/K25-02/ADR-004/inventaris/ADR-040; opsi 1–6 (+5b VPS atas nama klien) dengan biaya; batas A (A-1..A-7); gerbang B (G-1..G-10); kontrol B; sizing; risiko usulan R-S19/R-S20/R-O11; Q-VPS1..9; tinjau ulang 28 Feb 2027 |
+| `docs/compliance/PDP_DATA_INVENTORY.md` | **v16 (MENUNGGU DPO)**: baris §2.7 Bima Creative, §2.8.12, Q-P30/Q-P31, butir belum terverifikasi |
+| `docs/compliance/PDP_TRANSFER_LINTAS_NEGARA.md` | P9 (lokasi belum diketahui) + Q-T8 |
+| `docs/compliance/PERSETUJUAN_PEMROSESAN_VPS_BIMA.md` | **Baru.** Draf lampiran persetujuan untuk klien/Legal (pihak, tujuan, data, lokasi, kontrol, akses, retensi & hapus, insiden 24 jam, berakhir, prasyarat, tanda tangan) |
+| `docs/decisions/README.md` | Catatan pembaruan + baris ADR-043 |
+| `docs/01_REVIEW_RISK_GAP_ANALYSIS.md` | §5.13 Q-VPS1..9 + catatan usulan risiko |
+
+## Keputusan yang butuh tanda tangan klien
+- Pemilik proyek: pengecualian K25-06 (lalu efn-lead mencatat di `CLAUDE.md`; architect tidak mengubahnya).
+- Direksi + Legal/DPO: persetujuan pemrosesan + DPA (Q-VPS4, Q-P30), retensi & hapus (Q-VPS6/Q-P31), Q-T8 bila DC di
+  luar Indonesia.
+- IT klien: Q-ESB1, Q-ESB7; Legal: Q-ESB9. Bima Creative: Q-VPS1..3, Q-VPS8.
+
+## Temuan untuk lead
+- Working copy laptop memuat `secrets/esb_core_password_<brand>.txt` (5 brand, hanya nama file yang dilihat). VPS A wajib
+  clone bersih dari GitHub; menyalin folder kerja = secret klien pindah ke pihak ketiga.
+- Satu daemon Docker bersama untuk A dan B tidak bisa mengisolasi: anggota grup `docker` setara root.
+- Runbook `vps-bima-dev.md` dan `vps-bima-esb.md` belum ada (devsecops).
+
+## Terverifikasi / belum terverifikasi
+- **Dibaca:** dokumen di atas dan `.gitignore` (`secrets/` diabaikan).
+- **Belum terverifikasi:** penyedia/lokasi/spesifikasi/pemegang root VPS; harga sewa & mini PC (asumsi); dukungan
+  Docker di Claude Code cloud; nomor pasal UU PDP (51 pemroses, 46 insiden, 56 transfer = rujukan kerja); sizing disk
+  ClickHouse (belum diukur); Mermaid tidak dirender.
+
+---
+
+# G43 — Migrasi ESB → Odoo: ADR-042, kontrak §27, IMD/CUP di daftar kode PT (2026-11-18)
+Branch `feat/wave-43-esb-migration`, tanpa commit, hanya `docs/**`. Sumber: kontrak kerja G43 bagian C, fit-gap
+`docs/fit-gap/G43_MIGRASI_ESB_ODOO.md` (efn-odoo-functional), ADR-040/041, `docs/04` §25–§26, kode
+`efn_demand_forecast`, `efn_setup_company` 19.0.1.9.0, pesan efn-lead (catatan BFF G43).
+
+## Ringkasan (untuk manajemen)
+- Data induk + saldo awal dipindah ke Odoo dengan fitur standar dan skrip yang bisa diulang serta diuji tanpa menyimpan.
+- Histori 24 bulan tetap di gudang data (Insight); Odoo hanya ringkasan harian aliran produk (400 hari) untuk forecast.
+  Membuat ulang struk/jurnal histori ditolak (stok, pajak, dan nomor dokumen jadi ganda).
+- Biaya fase 2 ±5–7 minggu-engineer (±3–4 minggu kalender); **fase 2 menunggu persetujuan user atas ADR-042**.
+
+## File dibuat / diubah
+| File | Perubahan |
+|---|---|
+| `docs/decisions/ADR-042-migrasi-esb-odoo-dan-histori.md` | **Baru (Proposed).** Opsi histori a-penuh/a-ramping/b/c + biaya; keputusan (c)+(a-ramping); (b) ditolak dengan 5 alasan; hook forecast; master & saldo awal tanpa kode baru; alur berkas + user CH `efn_mig`; keamanan bundel; cutover; dry-run; risiko usulan R-O12/R-O13/R-L12; tinjau ulang 31 Mar 2027 |
+| `docs/04_SERVICE_CONTRACTS.md` | **v19.0**: §27 (27.1 IMD/CUP + platform `18-platform-g43.sql`; 27.2 CLI; 27.3 bundel/manifest; 27.4 xmlid & field milik migrasi; 27.5 gerbang/dry-run/rekonsiliasi 7 butir; 27.6 cutover; 27.7 validator; 27.8 `efn_legacy_history` + hook; 27.9 parameter & user teknis; 27.10 ClickHouse `efn_mig` + kunci baru `map_esb_odoo`; 27.11 entitas esb-extract E1–E13; 27.12 L-127..L-138, Q-ESB10..24). Baris IMD/CUP di §12.1, catatan 9 entitas di §16.1, kode PT di §13.1 no. 6 dan §20.1, catatan §25.1 |
+| `docs/decisions/README.md` | Catatan pembaruan + baris ADR-042 (sisipan; baris ADR-043 tidak diubah) |
+
+## Penyesuaian atas fit-gap / kontrak kerja
+- Aturan hash key dibuat deterministik (hash bila kode bukan `^[A-Z0-9_]{1,48}$`), sehingga contoh fit-gap §3 diralat.
+- **`map_esb_odoo` G41 berkunci `(brand, entity, esb_key)` tanpa `company_code`** → produk kembar BCF/BCR saling menimpa.
+  Kontrak: kunci baru + `odoo_model`, `run_id`; DROP+CREATE hanya bila tabel kosong.
+- Hook forecast mengembalikan `(batas, dict)` agar `efn_demand_forecast` tidak tahu kunci parameter migrasi.
+- Upsert memakai `write_uid` user teknis `efn_migration` untuk mendeteksi suntingan pengguna (tanpa model status baru).
+
+## Keputusan yang butuh tanda tangan klien
+- **User/pemilik proyek: ADR-042** (syarat fase 2), Q-ESB20 (histori di Odoo?), Q-ESB23 (urutan brand, master IMD/CUP).
+- Finance: Q-ESB6 (cutover), Q-ESB16 (metode biaya, akun kliring), Q-ESB21 (TB/AR), Q-ESB24 (berita acara, retensi).
+- Ops: Q-ESB10..15, Q-ESB17, Q-ESB22. Legal/Finance: Q-ESB5. DPO: Q-ESB19, entri inventaris bundel migrasi.
+
+## Temuan untuk lead
+- `docs/01`: R-O12/R-O13/R-L12 dan Q-ESB10..24 (§5.12) belum ditambahkan (agen ADR-043 sedang mengedit §5.13).
+- `docs/08` §6.4 masih memakai kode PT `RTL/FNB` untuk validator.
+- ADR-040 §3.1/§4.4 masih menyebut "histori 24 bulan masuk `efn_legacy_history`" → perlu dipersempit (tidak saya ubah).
+- Inventaris PDP: entri "Bundel migrasi ESB" belum ada (file sedang diubah agen lain).
+
+## Terverifikasi / belum terverifikasi
+- **Dibaca:** dokumen sumber di atas; `_efn_daily_outflow` (stock.move 56 hari); keberadaan `18-platform-g43.sql`
+  (11 CHECK + issuer, hanya grep); IMD/CUP di ETL/BFF/ClickHouse `08-g20-entities.sql`.
+- **Belum terverifikasi:** fakta CE 19 dikutip dari fit-gap (tidak saya cek ulang di source); valuasi adjustment
+  bertanggal mundur, `ir.model.data` modul non-addon, penomoran jurnal valuasi saat dry-run = **[B]**; endpoint ESB paket/
+  AR/TB; ukuran data (perkiraan); estimasi biaya = perkiraan architect; kecocokan isi `18-platform-g43.sql` dengan
+  daftar 11 CHECK tidak saya baca baris per baris; Mermaid tidak dirender.
+
+---
+
+# G43 fase 2 (W4) — ADR-042 Accepted + amendemen, §27 v19.1, risk register, PDP v17 (2026-11-18)
+Branch `feat/wave-43-esb-migration`, tanpa commit, hanya `docs/**`. Sumber: kontrak kerja fase 2 efn-lead (keputusan
+user 18 Nov: ADR-042 disetujui, Q-ESB20 = histori penjualan di Odoo rinci, Q-ESB23 = pilot PB, supermarket di luar G43),
+DDL `12-g41-esb.sql` (`fact_esb_sales_line`, `v_esb_sales_daily`).
+
+## Ringkasan (untuk manajemen)
+- ADR-042 kini **Accepted**. Histori penjualan 24 bulan bisa dilihat di Odoo (harian per outlet × menu + per baris
+  struk) sebagai arsip baca-saja; tetap bukan transaksi, jadi stok/pajak/nomor dokumen aman. Pilot = Paris Baguette.
+- Dampak: DB Odoo **±2–2,7 GB untuk PB** (±4,5–6,5 GB lima brand, perkiraan) + backup ikut membesar; angka resmi dari
+  uji coba PB. Biaya fase 2 naik dari ±5–7 ke **±6,5–9 minggu-engineer**.
+
+## File diubah
+| File | Perubahan |
+|---|---|
+| `docs/decisions/ADR-042-migrasi-esb-odoo-dan-histori.md` | Status **Accepted 18 Nov 2026** + §0 amendemen A1–A3; §2.2 opsi S0–S3 (ukuran baris/GB, backup, biaya); §3.1 tiga model arsip + bulk load; menu arsip; segmentasi bundel; dry-run ukur `table_bytes`; biaya ±6,5–9; R-T08 ditambah; Q-ESB2/20/23 terjawab |
+| `docs/decisions/README.md` | Catatan pembaruan + baris ADR-042 → Accepted |
+| `docs/04_SERVICE_CONTRACTS.md` | **v19.1**: §27 status Accepted; §27.2 importer `odoo_import_esb.py`, langkah grup `history`, **tabel urutan impor 1–13**, env `EFN_MIG_SALES_LINE_MONTHS`/`EFN_MIG_SEGMENT_MAX_ROWS`, tmpfs ≥ 768 MB; §27.3 manifest `sales_line_months`/`parent_run_id`/`segment`; **§27.3a segmentasi**; §27.5 gerbang (5) + rekonsiliasi 5a–5d; §27.7 aturan validator baru; §27.8 model `sales.daily`/`sales.line` + grup `group_legacy_sales_reader`; **§27.8a bulk load** + perkiraan ukuran; §27.9 parameter `sales_line_months`; §27.10 DDL `14-g43-migration.sql`; L-139..L-143; Q-ESB2 (§25.9), Q-ESB20, Q-ESB23 terjawab |
+| `docs/01_REVIEW_RISK_GAP_ANALYSIS.md` | R-O12, R-O13 (§4.5), R-L12 (§4.3); §5.12 blok Q-ESB10..24 (Q-ESB2/20/23 terjawab). §5.13 tidak disentuh |
+| `docs/decisions/ADR-040-integrasi-esb-core-datamart.md` | §3.1 butir 1, diagram, §3.2, §4.4 dipersempit mengikuti ADR-042; Q-ESB2 terjawab; ADR-040 tetap Proposed |
+| `docs/compliance/PDP_DATA_INVENTORY.md` | **v17** §2.8.13 (bundel migrasi, arsip histori Odoo, partner B2B), 3 baris retensi §3, **Q-P32**, catatan §5 |
+| `docs/08_ODOO_FIT_GAP.md` | §6.4 kode PT `EFN/GL/PB/BCR/BCF/WTZ/IMD/CUP/FARM` (aturan 3 & 6) + rujukan `--source esb-bundle` |
+
+## Temuan/keputusan kontrak yang perlu diketahui W1/W2/W3 (lewat lead)
+1. **Segmentasi bundel histori (§27.3a, L-141)** — kontrak fase 1 satu bundel AES-GCM; PB ±8 juta baris tidak muat di
+   memori 1 GB. Export histori = satu bundel per company × bulan (+ pecah per gudang bila > 500 ribu baris), gzip di
+   dalam tar, batas dekompresi 50× / 512 MB.
+2. `sales.line`: **tanpa constraint unik dan tanpa `run_id` per baris**, `_log_access=False` disarankan; idempotensi =
+   ganti-per-irisan (DELETE + INSERT per company × gudang × bulan, satu transaksi). `product_id` boleh kosong
+   (`esb_menu_code` disimpan).
+3. Field `outflow` (flow.daily) dan `net` (sales.daily) diisi di SQL/export karena compute ORM tidak jalan pada bulk.
+4. Grup baca penjualan = `efn_legacy_history.group_legacy_sales_reader` (imply dari `point_of_sale.group_pos_manager`);
+   modul depends `point_of_sale` ditambahkan.
+5. DDL ClickHouse migrasi = `14-g43-migration.sql` (13 sudah dipakai G42) — §27.10 diralat.
+6. Nama flag pengaktif saldo awal di tabel urutan (`--enable-opening-balances`) = usulan; importer boleh memakai nama
+   lain asalkan default mati dan dicatat di README.
+
+## Keputusan yang butuh tanda tangan klien
+- **Sudah:** ADR-042 (user, 18 Nov), Q-ESB20, Q-ESB23 (pilot PB).
+- User: setelah dry-run PB — terima ukuran DB/backup aktual atau turunkan `sales_line_months`.
+- Finance: Q-ESB6 (cutover PB lebih dulu), Q-ESB16, Q-ESB21, Q-ESB24. Ops: Q-ESB10..15, 17, 22. Legal/Finance:
+  Q-ESB5. DPO: Q-ESB19, **Q-P32** (sales_num bukan PII, retensi bundel & arsip, partner B2B perorangan).
+- PO: urutan brand setelah PB dan master IMD/CUP sebelum Q-ESB5 (default ADR-042 §3.6).
+
+## Terverifikasi / belum terverifikasi
+- **Dibaca:** DDL `fact_esb_sales_line` (kunci, kolom) dan `v_esb_sales_daily` (agregat semua `row_type`) dari repo;
+  tidak ada modul `efn_legacy_history` di repo saat menulis (W2 paralel) → kontrak belum dicocokkan dengan kode.
+- **Belum terverifikasi:** semua angka ukuran (25 toko PB, ±450 baris/toko/hari dari prototipe G41, byte/baris PG =
+  hitungan architect, rasio kompresi WAL-G); akses `COPY` lewat cursor Odoo 19 **[B]**; perilaku Odoo saat model dengan
+  `_log_access=False` dipakai view pivot/list (diasumsikan normal); jumlah toko brand lain; nomor pasal UU PDP (Legal);
+  Mermaid tidak dirender.
 # Supermarket — Gelombang 0: ADR-044..048, revisi ADR-041, kontrak §28 (2026-11-18)
 
 Worktree `E:\Projects\efn-platform-g44`, branch `feat/wave-44-supermarket-foundation`. Dokumen saja, tanpa kode. Tidak di-commit.

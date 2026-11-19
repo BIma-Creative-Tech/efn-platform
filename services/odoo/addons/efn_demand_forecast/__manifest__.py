@@ -3,7 +3,9 @@
     "summary": "G28 (K25-12, Q-35): kalender musim (Ramadan, Lebaran, Natal, gajian, akhir pekan) yang diatur bisnis, "
     "forecast v1 dari histori keluar stok (rata-rata harian x faktor musim x lead time + safety stock), usulan "
     "min/max per gudang x produk yang wajib disetujui planner sebelum menimpa reorder rule.",
-    "version": "19.0.1.0.0",
+    # 19.0.1.1.0 (G43, ADR-042 §3.2, L-136): hook `_efn_legacy_outflow` (default tanpa histori legacy = perilaku lama),
+    # di-override efn_legacy_history untuk hari sebelum cutover ESB -> Odoo.
+    "version": "19.0.1.1.0",
     "category": "EFN/Inventory",
     "author": "Era Food and Nourishment",
     "license": "LGPL-3",

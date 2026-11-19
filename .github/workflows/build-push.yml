@@ -37,6 +37,7 @@ on:
     branches: [main]
     paths:
       - "services/**"
+      - "scripts/migration/**"
       - "infra/backup/postgres/**"
       - "infra/minio/**"
       - "infra/metabase/**"
@@ -68,7 +69,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        service: [odoo, api-gateway, superapp-web, insight-web, ai-ocr-worker, etl, text2sql, esb-extract, postgres, minio, metabase]
+        service: [odoo, api-gateway, superapp-web, insight-web, ai-ocr-worker, etl, text2sql, esb-extract, esb-migrate, postgres, minio, metabase]
         include:
           - { service: odoo, context: services/odoo }
           - { service: api-gateway, context: services/api-gateway }
@@ -78,6 +79,7 @@ jobs:
           - { service: etl, context: services/etl }
           - { service: text2sql, context: services/text2sql }   # G38 Text-to-SQL (docs/04 §23)
           - { service: esb-extract, context: services/esb-extract }   # G41 ekstraksi ESB Core (docs/04 §25)
+          - { service: esb-migrate, context: scripts/migration }   # G43 mesin migrasi ESB -> Odoo (docs/04 §27.2)
           - { service: postgres, context: infra/backup/postgres }
           - { service: minio, context: infra/minio }
           - { service: metabase, context: infra/metabase }
@@ -159,7 +161,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        service: [odoo, api-gateway, superapp-web, insight-web, ai-ocr-worker, etl, text2sql, esb-extract, postgres, minio, metabase]
+        service: [odoo, api-gateway, superapp-web, insight-web, ai-ocr-worker, etl, text2sql, esb-extract, esb-migrate, postgres, minio, metabase]
         include:
           - { service: odoo, context: services/odoo }
           - { service: api-gateway, context: services/api-gateway }
@@ -171,6 +173,9 @@ jobs:
           - { service: text2sql, context: services/text2sql }   # G38 Text-to-SQL (docs/04 §23)
           # G41 (docs/04 §25): image ditandatangani seperti service lain; BELUM dipakai deploy.yml (overlay esb, runbook §8)
           - { service: esb-extract, context: services/esb-extract }
+          # G43 (docs/04 §27.2): container sekali jalan esb-migrate; ditandatangani, TIDAK dipakai deploy.yml (operator
+          # menjalankan `docker compose run` dengan IMAGE_ESB_MIGRATE ber-digest, runbook migrasi-esb-odoo §2)
+          - { service: esb-migrate, context: scripts/migration }
           # PostgreSQL + WAL-G (R-T08): image infra, ikut scan/SBOM/sign seperti image aplikasi
           - { service: postgres, context: infra/backup/postgres }
           # MinIO server + mc dari source upstream (image minio/minio & minio/mc hilang dari Docker Hub, gelombang 7)

@@ -101,6 +101,24 @@ PII_SUBSTRINGS = (
 PII_SUFFIXES = ("by", "byname", "byid", "userid")
 # Supplier (L-110): hanya kode, nama perusahaan, status (+ ID teknis).
 SUPPLIER_FIELDS = ("supplierID", "supplierCode", "supplierName", "flagActive")
+# G43 (docs/04 §27.11) -- whitelist per entitas migrasi, diterapkan SEBELUM apa pun disimpan. Respons ESB memuat alamat,
+# PIC, telepon, rekening -> semua dibuang. NPWP tidak ada di daftar `/customer` dan sengaja tidak ditarik (§27.4: NPWP
+# diisi Finance di Odoo, bukan milik migrasi).
+CUSTOMER_FIELDS = (
+    "customerID", "customerCode", "customerName", "customerCategoryName", "paymentDueDays", "flagActive", "lockVat",
+)  # fmt: skip
+# COA: `description` = nama akun (bukan teks bebas) -> whitelist, bukan redact() (redact membuang `description`).
+COA_FIELDS = ("coaNo", "description", "coaLevel", "currency", "flagActive")
+# Piutang per faktur (`/customer-receivable?type=2`): kode pelanggan saja (tanpa nama/alamat).
+AR_FIELDS = (
+    "customerCode", "productSalesInvoiceNum", "invoiceDate", "dueDate", "currencyName", "receivableTotal",
+    "paymentTotal", "advanceTotal",
+)  # fmt: skip
+# Utang per faktur (`/supplier-payable/invoice-aging`): kode supplier saja (§27.11 "supplier = kode saja").
+AP_FIELDS = (
+    "supplierCode", "purchaseInvoiceNum", "supplierInvoiceNum", "invoiceDate", "dueDate", "currencyName",
+    "payableTotal", "paymentTotal",
+)  # fmt: skip
 
 
 def is_pii_key(key: str) -> bool:
@@ -121,8 +139,17 @@ def redact(value: Any) -> Any:
     return value
 
 
+def whitelist(row: Mapping[str, Any], fields: Iterable[str]) -> dict[str, Any]:
+    """Salinan `row` hanya dengan kunci di `fields` (nilai skalar; dict/list dibuang -> tidak ada kontak bersarang)."""
+    return {key: row.get(key) for key in fields if key in row and not isinstance(row.get(key), Mapping | list)}
+
+
 def redact_supplier(row: Mapping[str, Any]) -> dict[str, Any]:
-    return {key: row.get(key) for key in SUPPLIER_FIELDS if key in row}
+    return whitelist(row, SUPPLIER_FIELDS)
+
+
+def redact_customer(row: Mapping[str, Any]) -> dict[str, Any]:
+    return whitelist(row, CUSTOMER_FIELDS)
 
 
 def text(value: Any, limit: int = TEXT_MAX) -> str:

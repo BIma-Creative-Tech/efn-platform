@@ -25,7 +25,29 @@ REVOKE ALL ON efn_dwh.* FROM text2sql_reader;
 -- Definer view efn_t2s: tidak bisa login (HOST NONE, tanpa password). View SQL SECURITY DEFINER dieksekusi dengan
 -- hak user ini (diverifikasi ClickHouse 24.8: role text2sql_reader tanpa grant efn_dwh tetap bisa membaca view).
 CREATE USER IF NOT EXISTS efn_t2s_definer NOT IDENTIFIED HOST NONE;
-GRANT SELECT ON efn_dwh.* TO efn_t2s_definer;
+-- SEC-206 (G43): grant PER OBJEK, bukan efn_dwh.* -- definer tidak boleh membaca tabel ESB/migrasi (dim_esb_customer,
+-- fact_esb_ap_open/ar_open, map_esb_odoo), GL, atau salinan audit. Daftar = view efn_dwh yang dirujuk view efn_t2s di
+-- bawah + tabel dasarnya (view efn_dwh bertipe INVOKER, dieksekusi dengan hak definer ini); diuji
+-- scripts/migration/tests/test_t2s_access.py (penutupan rekursif). REVOKE mencabut wildcard deploy lama.
+REVOKE ALL ON efn_dwh.* FROM efn_t2s_definer;
+GRANT SELECT ON efn_dwh.v_pos_sales_daily TO efn_t2s_definer;
+GRANT SELECT ON efn_dwh.v_pos_outlet_daily TO efn_t2s_definer;
+GRANT SELECT ON efn_dwh.v_loyalty_daily TO efn_t2s_definer;
+GRANT SELECT ON efn_dwh.v_waste_daily TO efn_t2s_definer;
+GRANT SELECT ON efn_dwh.v_mo_yield_daily TO efn_t2s_definer;
+GRANT SELECT ON efn_dwh.v_mo_yield TO efn_t2s_definer;
+GRANT SELECT ON efn_dwh.v_competitor_prices TO efn_t2s_definer;
+GRANT SELECT ON efn_dwh.v_price_hunter_quality TO efn_t2s_definer;
+GRANT SELECT ON efn_dwh.fact_sales_line TO efn_t2s_definer;
+GRANT SELECT ON efn_dwh.dim_outlet TO efn_t2s_definer;
+GRANT SELECT ON efn_dwh.loyalty_events TO efn_t2s_definer;
+GRANT SELECT ON efn_dwh.fact_scrap TO efn_t2s_definer;
+GRANT SELECT ON efn_dwh.dim_product TO efn_t2s_definer;
+GRANT SELECT ON efn_dwh.dim_scrap_reason TO efn_t2s_definer;
+GRANT SELECT ON efn_dwh.dim_warehouse TO efn_t2s_definer;
+GRANT SELECT ON efn_dwh.fact_mo_yield TO efn_t2s_definer;
+GRANT SELECT ON efn_dwh.dim_ck_threshold TO efn_t2s_definer;
+GRANT SELECT ON efn_dwh.competitor_prices TO efn_t2s_definer;
 
 CREATE DATABASE IF NOT EXISTS efn_t2s;
 

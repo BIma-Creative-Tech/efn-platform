@@ -40,6 +40,11 @@
 #           (egress/internal/data), tanpa read_only/cap_drop ALL; insight-web-tls --allow-cn selain traefik/blackbox-exporter;
 #           CH_URL / EFN_INSIGHT_ODOO_URL / EFN_INSIGHT_URL bukan https://; INSIGHT_ENABLED bukan boolean, atau bukan
 #           default false di render prod (insight-web + odoo)
+#   - (G43) clickhouse_password_mig di luar clickhouse-init/esb-migrate; migration_bundle_key di luar esb-migrate/odoo,
+#           atau di odoo tanpa overlay docker-compose.migration.yml; esb-migrate di network selain esb (egress), dengan
+#           port/label Traefik, root, tanpa read_only/cap_drop ALL/tmpfs /work, di luar profil migrate, CH bukan https
+#           8443 + CA internal, env *_FILE tanpa secret ter-mount; overlay migration menambah network ke odoo atau
+#           me-mount kode migrasi read-write (render prod-esb-migrate, prod-migration)
 #   - (at rest) service metabase tanpa secret metabase_encryption_key / dengan MB_ENCRYPTION_SECRET_KEY di env /
 #     dengan override entrypoint apa pun termasuk `[]`/`''` / dengan image resmi metabase/metabase (G16b, SEC-86)
 # Pengecualian hanya lewat ADR-022; tambahkan di sini dengan komentar alasan.
@@ -304,8 +309,8 @@ check_compose() {
           | .key] - ["clickhouse-init", "esb-extract"] | length == 0' <<< "$json" > /dev/null \
     || err "[$label] secret clickhouse_password_esb di-mount ke service selain clickhouse-init/esb-extract (docs/04 §25)"
   jq -e '[.services | to_entries[] | select((.value.networks // {}) | has("esb")) | .key]
-         - ["clickhouse", "esb-extract"] | length == 0' <<< "$json" > /dev/null \
-    || err "[$label] network esb dipakai service selain clickhouse/esb-extract (docs/04 §25)"
+         - ["clickhouse", "esb-extract", "esb-migrate"] | length == 0' <<< "$json" > /dev/null \
+    || err "[$label] network esb dipakai service selain clickhouse/esb-extract/esb-migrate (docs/04 §25/§27.2)"
   jq -e '[.services | to_entries[] | select((.value.networks // {}) | has("egress-esb")) | .key]
          - ["esb-extract"] | length == 0' <<< "$json" > /dev/null \
     || err "[$label] network egress-esb dipakai service selain esb-extract (SEC-183)"
@@ -329,6 +334,59 @@ check_compose() {
       | (.key | capture("^ESB_PASSWORD_(?<k>[A-Z0-9]+)_FILE$") | .k) as $k
       | [$k, (.value // ""), (if ($m | index("esb_core_password_" + ($k | ascii_downcase))) != null then "1" else "0" end)]
       | @tsv' <<< "$json")
+  # 6b3a) G43 (docs/04 §27.2/§27.10, ADR-042): migrasi ESB -> Odoo. clickhouse_password_mig hanya clickhouse-init +
+  #       esb-migrate; migration_bundle_key hanya esb-migrate + odoo, dan odoo HANYA di render overlay
+  #       docker-compose.migration.yml (jendela migrasi). esb-migrate: hanya network esb (tanpa egress/data/internal),
+  #       tanpa port/label Traefik, non-root, read_only, cap_drop ALL, profil `migrate` saja (tidak ikut `up`),
+  #       ClickHouse https 8443 + CA internal, tmpfs /work, env *_FILE menunjuk secret yang DI-MOUNT. Overlay migration
+  #       me-mount kode scripts/migration ke odoo hanya-baca.
+  jq -e '[.services | to_entries[] | select([.value.secrets[]? | (.source // .)] | index("clickhouse_password_mig") != null)
+          | .key] - ["clickhouse-init", "esb-migrate"] | length == 0' <<< "$json" > /dev/null \
+    || err "[$label] secret clickhouse_password_mig di-mount ke service selain clickhouse-init/esb-migrate (docs/04 §27.10)"
+  jq -e '[.services | to_entries[] | select([.value.secrets[]? | (.source // .)] | index("migration_bundle_key") != null)
+          | .key] - ["esb-migrate", "odoo"] | length == 0' <<< "$json" > /dev/null \
+    || err "[$label] secret migration_bundle_key di-mount ke service selain esb-migrate/odoo (docs/04 §27.2)"
+  if [[ "$label" != prod-migration ]]; then
+    jq -e '(.services.odoo // null) as $o | $o == null
+           or (([$o.secrets[]? | (.source // .)] | index("migration_bundle_key")) == null
+               and (($o.environment // {}) | has("EFN_MIG_BUNDLE_KEY_FILE") | not))' <<< "$json" > /dev/null \
+      || err "[$label] odoo: migration_bundle_key / EFN_MIG_BUNDLE_KEY_FILE hanya lewat overlay docker-compose.migration.yml (jendela migrasi, docs/04 §27.2)"
+  fi
+  jq -e '(.services["esb-migrate"] // null) as $w | $w == null
+         or ((($w.networks // {}) | keys) == ["esb"]
+             and (($w.ports // []) | length == 0)
+             and ((($w.labels // {}) | keys | map(select(startswith("traefik."))) | length) == 0)
+             and ($w.read_only == true)
+             and ((($w.cap_drop // []) | index("ALL")) != null)
+             and ((($w.user // "") | tostring) | test("^[1-9][0-9]*:[1-9][0-9]*$"))
+             and (($w.profiles // []) == ["migrate"])
+             and (($w.environment.CH_SECURE // "") == "true")
+             and (($w.environment.CH_PORT // "") == "8443")
+             and (($w.environment.CH_CA_FILE // "") == "/run/secrets/efn_ca_crt")
+             and (($w.environment // {}) | has("EFN_ALLOW_PLAINTEXT") | not)
+             and ([$w.tmpfs[]? | tostring | select(startswith("/work"))] | length == 1))' <<< "$json" > /dev/null \
+    || err "[$label] esb-migrate: wajib hanya network esb (tanpa egress), tanpa port/Traefik, read_only, cap_drop ALL, user non-root uid:gid, profil migrate saja, CH https 8443 + CA internal, tanpa EFN_ALLOW_PLAINTEXT, tmpfs /work (docs/04 §27.2)"
+  local mig menv msec
+  for mig in CH_PASSWORD_FILE:clickhouse_password_mig MIG_BUNDLE_KEY_FILE:migration_bundle_key CH_CA_FILE:efn_ca_crt; do
+    IFS=: read -r menv msec <<< "$mig"
+    jq -e --arg e "$menv" --arg s "$msec" '
+        (.services["esb-migrate"] == null)
+        or (([.services["esb-migrate"].secrets[]? | (.source // .)] | index($s) != null)
+            and ((.services["esb-migrate"].environment // {})[$e] == ("/run/secrets/" + $s)))' <<< "$json" > /dev/null \
+      || err "[$label] esb-migrate: secret ${msec} tidak di-mount atau ${menv} != /run/secrets/${msec} (docs/04 §27.2)"
+  done
+  if [[ "$label" == prod-esb-migrate || "$label" == prod-migration ]]; then
+    jq -e '.services["esb-migrate"] != null' <<< "$json" > /dev/null \
+      || err "[$label] esb-migrate tidak ter-render (overlay docker-compose.esb.yml / --profile migrate)"
+  fi
+  if [[ "$label" == prod-migration ]]; then
+    jq -e '(([.services.odoo.secrets[]? | (.source // .)] | index("migration_bundle_key")) != null)
+           and ((.services.odoo.environment // {}).EFN_MIG_BUNDLE_KEY_FILE == "/run/secrets/migration_bundle_key")
+           and ([.services.odoo.volumes[]? | select(.target == "/opt/efn-migration") | select(.read_only != true)]
+                | length == 0)
+           and ((.services.odoo.networks // {}) | keys | sort) == ["data", "internal"]' <<< "$json" > /dev/null \
+      || err "[$label] odoo: overlay migration wajib me-mount migration_bundle_key (EFN_MIG_BUNDLE_KEY_FILE cocok), kode /opt/efn-migration hanya-baca, tanpa network tambahan (L-129)"
+  fi
   # 6b4) G42 (docs/04 §26.10/§26.11, ADR-041): dashboard insight-web + SSO Odoo. Least privilege secret (kunci SSO bocor =
   #      pemalsuan sesi semua brand, R-S18), secret wajib ter-mount dengan env *_FILE yang cocok, network khusus
   #      (insight-ingress: Traefik/blackbox; insight-data: ClickHouse), tanpa egress, https saja.
@@ -616,6 +674,12 @@ case "$MODE" in
       -f docker-compose.llm-text2sql.yml
     # G41 (docs/04 §25): render prod + overlay ekstraksi ESB (esb-extract: network esb + egress, password ESB per brand)
     check_compose prod-esb -f docker-compose.yml -f docker-compose.prod.yml -f docker-compose.esb.yml
+    # G43 (docs/04 §27.2): esb-migrate hanya ter-render dengan --profile migrate; render kedua + overlay sisi Odoo
+    # (migration_bundle_key + direktori pertukaran ke odoo selama jendela migrasi).
+    check_compose prod-esb-migrate -f docker-compose.yml -f docker-compose.prod.yml -f docker-compose.esb.yml \
+      --profile migrate
+    check_compose prod-migration -f docker-compose.yml -f docker-compose.prod.yml -f docker-compose.esb.yml \
+      -f docker-compose.migration.yml --profile migrate
     check_files
     ;;
   *) echo "pemakaian: $0 [all|files]" >&2; exit 2 ;;

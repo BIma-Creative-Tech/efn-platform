@@ -21,3 +21,5 @@ a28096a0d4f543563a7e865f3ba7466190a3855f:scripts/host/test-efn-deploy.sh:generic
 # anotasi inline gitleaks:allow (berlaku juga setelah squash merge).
 2641710b550c39d82e7bd059a4928be3dfcad8a2:services/insight-web/tests/helpers.ts:generic-api-key:10
 2641710b550c39d82e7bd059a4928be3dfcad8a2:services/odoo/addons/efn_insight/tests/test_insight_sso.py:generic-api-key:19
+# G43 (2026-11-18, efn-lead): kunci uji sintetis test_cross_side_validation.py (bukan secret nyata; kini non-literal).
+79a73460304c13fdd80ad0a330fdf1094dc9c7d5:scripts/migration/tests/test_cross_side_validation.py:generic-api-key:29

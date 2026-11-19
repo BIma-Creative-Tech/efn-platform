@@ -29,6 +29,8 @@ DAILY_ENTITIES = ("sales", "fin_sold", "payment", "production", "delivery", "tra
 # `stock` bersyarat (§25.4): default tidak aktif sampai parameter terbukti di production.
 DEFAULT_ENTITIES = ("branch", "master", "sales", "fin_sold", "payment", "production", "delivery", "transfer")
 BRANCH_SCOPED = frozenset({"sales", "fin_sold", "stock"})
+# docs/04 §27.11 (G43): CK per brand hasil prototipe migrasi. Bacha tanpa CK (Q-ESB8).
+DEFAULT_CK_BRANCHES = "pb:4|38,wtz:5|6,imd:2,cup:4|6"
 _BRAND_RE = re.compile(r"^[a-z0-9]{2,16}$")
 _CODE_RE = re.compile(r"^[A-Z0-9]{2,8}$")
 # `disabled` = isi secret `host:disabled` dari scripts/secrets.list (belum diisi operator) -> brand gagal start.
@@ -222,7 +224,7 @@ class EsbSettings:
     def from_env(cls, env: Mapping[str, str] | None = None) -> Self:
         e: Mapping[str, str] = os.environ if env is None else env
         base_url = validate_base_url(_str(e, "ESB_BASE_URL", DEFAULT_BASE_URL))
-        ck = parse_branch_sets(_str(e, "ESB_CK_BRANCHES", "pb:4|38"), "ESB_CK_BRANCHES")
+        ck = parse_branch_sets(_str(e, "ESB_CK_BRANCHES", DEFAULT_CK_BRANCHES), "ESB_CK_BRANCHES")
         non_store = parse_branch_sets(_str(e, "ESB_NON_STORE_BRANCHES", ""), "ESB_NON_STORE_BRANCHES")
         overrides = parse_company_overrides(_str(e, "ESB_BRANCH_COMPANY_OVERRIDES", ""))
         keys = tuple(dict.fromkeys(k.strip().lower() for k in _str(e, "ESB_BRANDS", "").split(",") if k.strip()))

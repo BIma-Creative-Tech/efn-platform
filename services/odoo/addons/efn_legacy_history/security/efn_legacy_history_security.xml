@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <!-- docs/04 §27.8 (v19.1): grup baca histori penjualan ESB; di-imply POS Manager. Analis PT tanpa hak POS manager
+         ditambahkan manual. Record rule tetap membatasi per PT. Tidak ada grup dengan hak tulis. -->
+    <record id="module_category_efn_legacy_history" model="ir.module.category">
+        <field name="name">EFN Histori ESB</field>
+        <field name="sequence">95</field>
+    </record>
+    <record id="res_groups_privilege_efn_legacy_history" model="res.groups.privilege">
+        <field name="name">EFN Histori ESB</field>
+        <field name="category_id" ref="module_category_efn_legacy_history"/>
+    </record>
+    <record id="group_legacy_sales_reader" model="res.groups">
+        <field name="name">Histori ESB — baca penjualan</field>
+        <field name="privilege_id" ref="res_groups_privilege_efn_legacy_history"/>
+        <field name="comment">Membaca arsip penjualan sistem lama ESB (harian per menu dan baris transaksi) untuk PT
+            yang diizinkan. Read-only; bukan transaksi Odoo.</field>
+    </record>
+    <record id="point_of_sale.group_pos_manager" model="res.groups">
+        <field name="implied_ids" eval="[Command.link(ref('group_legacy_sales_reader'))]"/>
+    </record>
+
+    <!-- Rule GLOBAL (tanpa groups): berlaku untuk semua user non-superuser; arsip PT lain tidak terlihat (ADR-042). -->
+    <data noupdate="1">
+        <record id="efn_legacy_flow_daily_rule_company" model="ir.rule">
+            <field name="name">EFN histori aliran ESB: multi-company</field>
+            <field name="model_id" ref="model_efn_legacy_flow_daily"/>
+            <field name="domain_force">[('company_id', 'in', company_ids)]</field>
+        </record>
+        <record id="efn_legacy_sales_daily_rule_company" model="ir.rule">
+            <field name="name">EFN histori penjualan harian ESB: multi-company</field>
+            <field name="model_id" ref="model_efn_legacy_sales_daily"/>
+            <field name="domain_force">[('company_id', 'in', company_ids)]</field>
+        </record>
+        <record id="efn_legacy_sales_line_rule_company" model="ir.rule">
+            <field name="name">EFN histori baris penjualan ESB: multi-company</field>
+            <field name="model_id" ref="model_efn_legacy_sales_line"/>
+            <field name="domain_force">[('company_id', 'in', company_ids)]</field>
+        </record>
+    </data>
+</odoo>
