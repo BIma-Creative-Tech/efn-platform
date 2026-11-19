@@ -8,7 +8,7 @@ version: 2
 # - Security update juga dikelompokkan (`applies-to: security-updates`).
 # - `open-pull-requests-limit` kecil; PR baru menunggu PR lama di-merge/ditutup.
 # - `cooldown`: versi baru baru diusulkan setelah 7 hari (mitigasi rilis berbahaya/supply chain, mis. insiden
-#   trivy-action Maret 2026); mayor 14 hari.
+#   trivy-action Maret 2026); mayor 14 hari (hanya ekosistem paket: npm, pip; actions/docker cukup 7 hari).
 # - Jadwal mingguan (Senin pagi WIB) agar CI PR Dependabot tidak bertumpuk dengan kerja harian.
 # - CI di PR Dependabot: concurrency cancel-in-progress (ci.yml, security.yml, codeql.yml) membatalkan run lama
 #   saat Dependabot me-rebase PR.
@@ -18,7 +18,7 @@ updates:
     directory: /
     schedule: { interval: weekly, day: monday, time: "02:00", timezone: Asia/Jakarta }
     open-pull-requests-limit: 1
-    cooldown: { default-days: 7, semver-major-days: 14 }
+    cooldown: { default-days: 7 }   # semver-major-days tidak didukung github-actions
     groups:
       actions:
         applies-to: version-updates
@@ -43,7 +43,7 @@ updates:
       - /infra/metabase
     schedule: { interval: weekly, day: monday, time: "02:30", timezone: Asia/Jakarta }
     open-pull-requests-limit: 2
-    cooldown: { default-days: 7, semver-major-days: 14 }
+    cooldown: { default-days: 7 }   # semver-major-days tidak didukung docker
     groups:
       base-images:
         applies-to: version-updates
@@ -56,7 +56,7 @@ updates:
     directory: /infra/compose
     schedule: { interval: weekly, day: monday, time: "02:30", timezone: Asia/Jakarta }
     open-pull-requests-limit: 1
-    cooldown: { default-days: 7, semver-major-days: 14 }
+    cooldown: { default-days: 7 }   # semver-major-days tidak didukung docker-compose
     groups:
       compose-images:
         applies-to: version-updates
