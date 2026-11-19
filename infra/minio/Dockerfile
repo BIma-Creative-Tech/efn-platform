@@ -5,7 +5,7 @@
 # Kompatibilitas (klaim SILO, diuji gelombang 9 di stack dev): env MINIO_*, format .minio.sys, route /minio/*,
 # metrik minio_*. SILO tidak memasang alias biner `minio` -> image ini membuat symlink agar compose/runbook lama jalan.
 # Tag di-pin + commit SHA diverifikasi (tag git bisa dipindah; commit tidak).
-# Versi Go: go.mod kedua repo menuntut go 1.27.1; builder 1.27.3 (patch stdlib; G16 1.27.2, G22 22 Okt 2026 CVE-2026-111943).
+# Versi Go: go.mod kedua repo menuntut go 1.27.1; builder 1.27.4 (patch stdlib; G16 1.27.2, G22 1.27.3 CVE-2026-111943, 19 Nov 2026 1.27.4 CVE-2026-97054).
 # G17 (Trivy PR #36): bump minimum golang.org/x/net 0.59.0 -> 0.60.0 (CVE-2026-78669, HTTP/2 SETTINGS DoS) sebelum
 # build; go.sum diverifikasi proxy/sumdb Go. Hapus `go get` ini bila tag SILO/mc berikutnya sudah memuat >= 0.60.0.
 # G30 (Trivy PR #76): SILO juga bump github.com/go-jose/go-jose/v4 4.1.4 -> 4.1.6 (CVE-2026-116587, DoS parsing JWK
@@ -13,7 +13,7 @@
 # G41 (Trivy PR #90): x/net 0.60.0 -> 0.62.0 (CVE-2026-78661) di SILO dan mc; runtime alpine: musl/musl-utils 1.2.6-r3
 # (CVE-2026-107891) + zlib 1.3.2-r1 (CVE-2026-85091) dinaikkan eksplisit. Hapus saat tag/digest berikutnya memuatnya.
 # SEC-47: base image dipin tag@digest (build reprodusibel); Dependabot `docker` memperbarui digest per tag.
-FROM golang:1.27.3-alpine@sha256:d530cf60723abf1ffae0cd16bb546b379ec0550d2f3815e5b16ed69dbc00fba4 AS build
+FROM golang:1.27.4-alpine@sha256:70bd7ddea8b6cbe5d6943cde279d6b67feb10cc924fb9100d1d8757c1575b280 AS build
 ARG SILO_TAG=RELEASE.2026-09-16T00-00-00Z
 ARG SILO_COMMIT=2a4d51406b7ed87af5fe6fe0f801f3290f96eb3c
 ARG MC_TAG=RELEASE.2026-09-16T00-00-00Z
