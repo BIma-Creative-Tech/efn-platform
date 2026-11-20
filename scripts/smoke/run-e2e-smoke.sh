@@ -26,7 +26,8 @@ command -v cygpath > /dev/null && DOCKER_BIN="$(cygpath -u "$DOCKER_BIN")"
 command -v docker > /dev/null || { echo "docker dibutuhkan" >&2; exit 2; }
 command -v openssl > /dev/null || { echo "openssl dibutuhkan" >&2; exit 2; }
 
-P="efn"
+# K25-06: project compose = EFN_STACK (container <stack>-<svc>-1, network <stack>_<network>, image dev <stack>/<svc>:dev)
+P="${EFN_STACK:-efn}"
 BFF="${P}-api-gateway-1"; ODOO="${P}-odoo-1"; PG="${P}-postgres-1"; CH="${P}-clickhouse-1"
 SCENARIOS=("$@"); [[ ${#SCENARIOS[@]} -eq 0 ]] && SCENARIOS=(a b c d f e g l p o q)
 
@@ -44,7 +45,7 @@ docker logs -f --since 1s "$BFF" > "${WORK}/bff.log" 2>&1 &
 LOGPID=$!
 trap 'kill $LOGPID 2>/dev/null || true' EXIT
 
-TRAEFIK_IP="$(docker inspect "${P}-traefik-1" --format '{{(index .NetworkSettings.Networks "efn_edge").IPAddress}}')"
+TRAEFIK_IP="$(docker inspect "${P}-traefik-1" --format "{{(index .NetworkSettings.Networks \"${P}_edge\").IPAddress}}")"
 rand8() { printf '%08d' $(( ( $(od -An -N4 -tu4 /dev/urandom | tr -d ' ') ) % 100000000 )); }
 newuuid() { local h; h="$(openssl rand -hex 16 | tr -d '\r\n')"; echo "${h:0:8}-${h:8:4}-4${h:13:3}-a${h:17:3}-${h:20:12}"; }
 PHONE="62812$(rand8)"          # akun Super-App (dipakai juga oleh partner Odoo E untuk DSAR lintas store)
@@ -57,7 +58,7 @@ check() { # nama ok(0/1) detail
 }
 
 py() { # subperintah bff_smoke.py
-  MSYS_NO_PATHCONV=1 docker run --rm --network efn_edge \
+  MSYS_NO_PATHCONV=1 docker run --rm --network "${P}_edge" \
     --add-host "api.efn.local:${TRAEFIK_IP}" --add-host "app.efn.local:${TRAEFIK_IP}" \
     -v "${WORK_W}:/work" -v efn-pip-cache:/root/.cache/pip \
     -e SMOKE_PHONE="$PHONE" -e SMOKE_CONSENT_VERSION="location@2026-10-06" \
@@ -75,7 +76,7 @@ odoo() { # -e K=V ... ; mencetak satu baris SMOKE_RESULT
 }
 
 obs() { # G13c: query Loki / Alertmanager nyata (mTLS, sertifikat klien Grafana read-only) -> satu baris SMOKE_RESULT
-  MSYS_NO_PATHCONV=1 docker run --rm --network efn_internal -v "${WORK_W}:/work:ro" \
+  MSYS_NO_PATHCONV=1 docker run --rm --network "${P}_internal" -v "${WORK_W}:/work:ro" \
     -v "${SECRETS_W}/efn_ca_crt.txt:/s/efn_ca_crt.txt:ro" -v "${SECRETS_W}/tls_grafana_crt.txt:/s/tls_grafana_crt.txt:ro" \
     -v "${SECRETS_W}/tls_grafana_key.txt:/s/tls_grafana_key.txt:ro" "$PY_IMAGE" python /work/obs_smoke.py "$@" 2>&1 \
     | grep '^SMOKE_RESULT' | tail -1 || true
@@ -84,7 +85,7 @@ obs() { # G13c: query Loki / Alertmanager nyata (mTLS, sertifikat klien Grafana 
 MIGRATION_ON=0
 docker inspect "$BFF" --format '{{range .Config.Env}}{{println .}}{{end}}' | grep -qx 'MIGRATION_ENABLED=true' && MIGRATION_ON=1
 migrate() { # G13c: <members|opening-balance> <json> -> "<body>|<http>" ; kunci migrasi dibaca DI DALAM container
-  MSYS_NO_PATHCONV=1 docker run --rm --network efn_internal -v "${SECRETS_W}/migration_api_key.txt:/s/k:ro" \
+  MSYS_NO_PATHCONV=1 docker run --rm --network "${P}_internal" -v "${SECRETS_W}/migration_api_key.txt:/s/k:ro" \
     -v "${SECRETS_W}/efn_ca_crt.txt:/s/ca:ro" --entrypoint /bin/sh \
     curlimages/curl:8.11.1@sha256:c1fe1679c34d9784c1b0d1e5f62ac0a79fca01fb6377cdd33e90473c6f9f9a69 -c \
     'printf "X-EFN-Migration-Key: %s\n" "$(cat /s/k)" > /tmp/h && curl -sS -m 10 --cacert /s/ca -H @/tmp/h \
@@ -156,7 +157,7 @@ scenario_b() {
   check "b.upload_via_s3_gateway" "$([[ -n "$repid" && "$gw" == *GET* && "$gw" == *PUT* ]] && echo 1 || echo 0)" "report=$repid metode 200 di log s3-gateway: $gw"
   local sw keys
   sw="$(cd "$ROOT/secrets" && pwd)"; command -v cygpath > /dev/null && sw="$(cygpath -w "$sw")"
-  keys="$(MSYS_NO_PATHCONV=1 docker run --rm --network efn_data -v "${sw}:/s:ro" --entrypoint /bin/sh "${P}/minio:dev" -c '
+  keys="$(MSYS_NO_PATHCONV=1 docker run --rm --network "${P}_data" -v "${sw}:/s:ro" --entrypoint /bin/sh "${P}/minio:dev" -c '
     export MC_CONFIG_DIR=/tmp/.mc; mkdir -p /tmp/.mc/certs/CAs && cp /s/efn_ca_crt.txt /tmp/.mc/certs/CAs/ca.crt
     t() { mc alias set --api S3v4 k https://s3-gateway:9000 "$1" "$(cat "/s/$2")" > /dev/null 2>&1
           r="$(mc ls k/market-scout/reports/ 2>&1 | tail -1)"
@@ -335,21 +336,21 @@ scenario_e() {
 scenario_g() {
   echo "== g. Negatif enkripsi (regresi)"
   local out
-  out="$(MSYS_NO_PATHCONV=1 docker run --rm --network efn_data postgres:16.15-bookworm@sha256:0ea6700a3b4f0ae6ce746519073558aed4d88a79d8d07622a9a644946c7319c4 psql "host=postgres dbname=efn_platform user=efn_bff sslmode=disable connect_timeout=5" -c 'select 1' 2>&1 || true)"
+  out="$(MSYS_NO_PATHCONV=1 docker run --rm --network "${P}_data" postgres:16.15-bookworm@sha256:0ea6700a3b4f0ae6ce746519073558aed4d88a79d8d07622a9a644946c7319c4 psql "host=postgres dbname=efn_platform user=efn_bff sslmode=disable connect_timeout=5" -c 'select 1' 2>&1 || true)"
   check "g.pg_plaintext_rejected" "$([[ "$out" == *"no encryption"* || "$out" == *"pg_hba"* ]] && echo 1 || echo 0)" "$(head -c 160 <<< "$out")"
-  out="$(MSYS_NO_PATHCONV=1 docker run --rm --network efn_internal curlimages/curl:8.11.1@sha256:c1fe1679c34d9784c1b0d1e5f62ac0a79fca01fb6377cdd33e90473c6f9f9a69 -sS -m 5 -o /dev/null -w '%{http_code}' https://odoo:8443/web/login --cacert /dev/null -k 2>&1 || true)"
+  out="$(MSYS_NO_PATHCONV=1 docker run --rm --network "${P}_internal" curlimages/curl:8.11.1@sha256:c1fe1679c34d9784c1b0d1e5f62ac0a79fca01fb6377cdd33e90473c6f9f9a69 -sS -m 5 -o /dev/null -w '%{http_code}' https://odoo:8443/web/login --cacert /dev/null -k 2>&1 || true)"
   check "g.odoo_tls_without_client_cert_rejected" "$([[ "$out" != 200 ]] && echo 1 || echo 0)" "$(head -c 160 <<< "$out")"
   # ADR-030 (gelombang 9): storage tidak terjangkau dari network klien; semua lewat filter L7 s3-gateway
-  out="$(MSYS_NO_PATHCONV=1 docker run --rm --network efn_data curlimages/curl:8.11.1@sha256:c1fe1679c34d9784c1b0d1e5f62ac0a79fca01fb6377cdd33e90473c6f9f9a69 -sS -m 5 -o /dev/null -w '%{http_code}' https://minio:9000/minio/health/live 2>&1 || true)"
+  out="$(MSYS_NO_PATHCONV=1 docker run --rm --network "${P}_data" curlimages/curl:8.11.1@sha256:c1fe1679c34d9784c1b0d1e5f62ac0a79fca01fb6377cdd33e90473c6f9f9a69 -sS -m 5 -o /dev/null -w '%{http_code}' https://minio:9000/minio/health/live 2>&1 || true)"
   # Lolos bila TIDAK ada respons HTTP sama sekali (nama tak ter-resolve / timeout / koneksi gagal)
   check "g.storage_not_reachable_from_data" "$([[ ! "$out" =~ ^[0-9]{3}$ || "$out" == 000 ]] && echo 1 || echo 0)" "$(head -c 160 <<< "$out")"
-  out="$(MSYS_NO_PATHCONV=1 docker run --rm --network efn_data curlimages/curl:8.11.1@sha256:c1fe1679c34d9784c1b0d1e5f62ac0a79fca01fb6377cdd33e90473c6f9f9a69 -sS -m 5 -o /dev/null -w '%{http_code}' http://s3-gateway:9000/minio/health/live 2>&1 || true)"
+  out="$(MSYS_NO_PATHCONV=1 docker run --rm --network "${P}_data" curlimages/curl:8.11.1@sha256:c1fe1679c34d9784c1b0d1e5f62ac0a79fca01fb6377cdd33e90473c6f9f9a69 -sS -m 5 -o /dev/null -w '%{http_code}' http://s3-gateway:9000/minio/health/live 2>&1 || true)"
   check "g.s3gw_http_rejected" "$([[ "$out" != 200 ]] && echo 1 || echo 0)" "$(head -c 160 <<< "$out")"
   cp "${ROOT}/secrets/efn_ca_crt.txt" "${WORK}/efn_ca.crt"
   s3gw() { # metode path [header...] -> "kode|potongan body"
     local m="$1" p="$2"; shift 2
     local h=(); for x in "$@"; do h+=(-H "$x"); done
-    MSYS_NO_PATHCONV=1 docker run --rm --network efn_data -v "${WORK_W}:/work" curlimages/curl:8.11.1@sha256:c1fe1679c34d9784c1b0d1e5f62ac0a79fca01fb6377cdd33e90473c6f9f9a69 -sS --path-as-is -m 10 \
+    MSYS_NO_PATHCONV=1 docker run --rm --network "${P}_data" -v "${WORK_W}:/work" curlimages/curl:8.11.1@sha256:c1fe1679c34d9784c1b0d1e5f62ac0a79fca01fb6377cdd33e90473c6f9f9a69 -sS --path-as-is -m 10 \
       --cacert /work/efn_ca.crt -X "$m" "${h[@]}" -w '|%{http_code}' "https://s3-gateway:9000${p}" 2>&1 | tr -d '\r\n' || true
   }
   out="$(s3gw GET /minio/health/live)"
@@ -394,13 +395,13 @@ scenario_g() {
   # Kontrol positif: request S3 biasa tanpa kredensial diteruskan ke storage (ditolak storage, bukan filter)
   out="$(s3gw GET '/market-scout/reports/x')"
   check "g.s3gw_forwards_normal_s3" "$([[ "$out" == *AccessDenied* && "$out" != *"$denied"* ]] && echo 1 || echo 0)" "$(tail -c 120 <<< "$out")"
-  out="$(MSYS_NO_PATHCONV=1 docker run --rm --network efn_data curlimages/curl:8.11.1@sha256:c1fe1679c34d9784c1b0d1e5f62ac0a79fca01fb6377cdd33e90473c6f9f9a69 -sS -m 5 telnet://rabbitmq:5672 2>&1 || true)"
+  out="$(MSYS_NO_PATHCONV=1 docker run --rm --network "${P}_data" curlimages/curl:8.11.1@sha256:c1fe1679c34d9784c1b0d1e5f62ac0a79fca01fb6377cdd33e90473c6f9f9a69 -sS -m 5 telnet://rabbitmq:5672 2>&1 || true)"
   check "g.amqp_plain_port_closed" "$([[ "$out" == *"Could not resolve"* || "$out" == *"refused"* || "$out" == *"Failed to connect"* ]] && echo 1 || echo 0)" "$(head -c 160 <<< "$out")"
   out="$(MSYS_NO_PATHCONV=1 docker exec "$PG" psql -U postgres -At -c "select usename||':'||ssl||':'||coalesce(version,'') from pg_stat_ssl join pg_stat_activity using(pid) where usename in ('efn_bff','efn_odoo','efn_ocr','efn_etl') group by 1 order by 1" | tr '\n' ' ')"
   check "g.pg_clients_tls" "$([[ "$out" != *":f:"* && "$out" == *efn_ocr* && "$out" == *efn_bff* ]] && echo 1 || echo 0)" "$out"
   out="$(MSYS_NO_PATHCONV=1 docker exec "${P}-rabbitmq-1" rabbitmqctl list_connections user ssl ssl_protocol -q --no-table-headers 2>/dev/null | sort -u | tr '\t\n' ': ')"
   check "g.amqp_clients_tls" "$([[ "$out" != *":false"* && "$out" == *efn-ocr* ]] && echo 1 || echo 0)" "$out"
-  out="$(MSYS_NO_PATHCONV=1 docker run --rm --network efn_edge --add-host "api.efn.local:${TRAEFIK_IP}" -v "${WORK_W}:/work" curlimages/curl:8.11.1@sha256:c1fe1679c34d9784c1b0d1e5f62ac0a79fca01fb6377cdd33e90473c6f9f9a69 -sS -o /dev/null -w '%{http_code}' --cacert /work/edge_ca.crt -X POST -H 'Content-Type: application/json' -H 'X-EFN-Signature: t=1,v1=00' -d '{}' https://api.efn.local/v1/webhooks/payments/mock 2>&1 || true)"
+  out="$(MSYS_NO_PATHCONV=1 docker run --rm --network "${P}_edge" --add-host "api.efn.local:${TRAEFIK_IP}" -v "${WORK_W}:/work" curlimages/curl:8.11.1@sha256:c1fe1679c34d9784c1b0d1e5f62ac0a79fca01fb6377cdd33e90473c6f9f9a69 -sS -o /dev/null -w '%{http_code}' --cacert /work/edge_ca.crt -X POST -H 'Content-Type: application/json' -H 'X-EFN-Signature: t=1,v1=00' -d '{}' https://api.efn.local/v1/webhooks/payments/mock 2>&1 || true)"
   check "g.webhook_bad_signature_rejected" "$([[ "$out" == 401 || "$out" == 400 || "$out" == 403 ]] && echo 1 || echo 0)" "http=$out"
 }
 
@@ -424,7 +425,7 @@ scenario_l() { # Gelombang 13: Poin EFN di POS (docs/04 §9) — Odoo efn_pos_lo
   local rpc who
   r="$(odoo -e SMOKE_STEP=rpc_users)"
   rpc="$(MSYS_NO_PATHCONV=1 docker exec "$ODOO" sh -c 'cat /tmp/efn_smoke_rpc.json; rm -f /tmp/efn_smoke_rpc.json' \
-    | MSYS_NO_PATHCONV=1 docker run --rm -i --network efn_edge --add-host "erp.efn.local:${TRAEFIK_IP}" \
+    | MSYS_NO_PATHCONV=1 docker run --rm -i --network "${P}_edge" --add-host "erp.efn.local:${TRAEFIK_IP}" \
         -v "${WORK_W}:/work:ro" "$PY_IMAGE" python /work/odoo_rpc_smoke.py 2>&1 | grep '^SMOKE_RESULT' || true)"
   for who in internal cashier; do
     r="$(grep -F "\"user\": \"smoke_rpc_${who}\"" <<< "$rpc" | head -1)"
@@ -614,7 +615,7 @@ scenario_o() { # Gelombang 17: penjualan online Fase 3 (docs/04 §10) — Super-
   }
   opy() { # <hp> <member> <subperintah> [arg...]  (klien publik via Traefik, state per member)
     local phone="$1" who="$2"; shift 2
-    MSYS_NO_PATHCONV=1 docker run --rm --network efn_edge \
+    MSYS_NO_PATHCONV=1 docker run --rm --network "${P}_edge" \
       --add-host "api.efn.local:${TRAEFIK_IP}" --add-host "app.efn.local:${TRAEFIK_IP}" \
       -v "${WORK_W}:/work" -e SMOKE_PHONE="$phone" -e SMOKE_STATE="/work/online_${who}.json" -e SMOKE_BFF_LOG=/work/bff.log \
       "$PY_IMAGE" python /work/online_smoke.py "$@" 2>&1 | grep '^SMOKE_RESULT' | tee -a "$RESULTS" || true
@@ -634,7 +635,7 @@ scenario_o() { # Gelombang 17: penjualan online Fase 3 (docs/04 §10) — Super-
   # 0b. Gateway + key nyata: 10 path sah -> jawaban APLIKASI Odoo (200 / galat bisnis), bukan 401/403 atau deny filter.
   #     Key dibaca DI DALAM container curl (header file), tidak lewat argv/log.
   cp "${ROOT}/secrets/efn_ca_crt.txt" "${WORK}/efn_ca.crt"
-  r="$(MSYS_NO_PATHCONV=1 docker run --rm --network efn_internal -v "${WORK_W}:/work:ro" \
+  r="$(MSYS_NO_PATHCONV=1 docker run --rm --network "${P}_internal" -v "${WORK_W}:/work:ro" \
       -v "${SECRETS_W}/odoo_api_key_online_gl.txt:/s/k:ro" -v "${SECRETS_W}/tls_api_gateway_crt.txt:/s/c:ro" \
       -v "${SECRETS_W}/tls_api_gateway_key.txt:/s/ck:ro" --entrypoint /bin/sh \
       curlimages/curl:8.11.1@sha256:c1fe1679c34d9784c1b0d1e5f62ac0a79fca01fb6377cdd33e90473c6f9f9a69 -c '
@@ -843,7 +844,7 @@ scenario_o() { # Gelombang 17: penjualan online Fase 3 (docs/04 §10) — Super-
       order by id limit 1" > /dev/null
   fi
   # 5. Event Odoo -> BFF: HMAC salah / tanpa tanda tangan / di luar window / body diubah -> 401; duplikat & seq lama
-  MSYS_NO_PATHCONV=1 docker run --rm --network efn_internal -v "${WORK_W}:/work" \
+  MSYS_NO_PATHCONV=1 docker run --rm --network "${P}_internal" -v "${WORK_W}:/work" \
     -v "${SECRETS_W}/efn_ca_crt.txt:/s/efn_ca_crt.txt:ro" -v "${SECRETS_W}/odoo_bff_api_key.txt:/s/odoo_bff_api_key.txt:ro" \
     -v "${SECRETS_W}/odoo_online_event_hmac.txt:/s/odoo_online_event_hmac.txt:ro" \
     -e SMOKE_BFF_LOG=/work/bff.log "$PY_IMAGE" python /work/online_smoke.py events "$part" "$main_oid" "$legacy" 2>&1 | grep '^SMOKE_RESULT' | tee -a "$RESULTS" || true
@@ -908,7 +909,7 @@ scenario_o() { # Gelombang 17: penjualan online Fase 3 (docs/04 §10) — Super-
     # ±30-40 s (404 tanpa origin), walau container sudah menjawab. Tunggu 5 jawaban 200 berturut-turut (jeda 3 s).
     local ok200=0
     for _ in $(seq 1 60); do
-      if [[ "$(MSYS_NO_PATHCONV=1 docker run --rm --network efn_edge --add-host "api.efn.local:${TRAEFIK_IP}" -v "${WORK_W}:/work" \
+      if [[ "$(MSYS_NO_PATHCONV=1 docker run --rm --network "${P}_edge" --add-host "api.efn.local:${TRAEFIK_IP}" -v "${WORK_W}:/work" \
         curlimages/curl:8.11.1@sha256:c1fe1679c34d9784c1b0d1e5f62ac0a79fca01fb6377cdd33e90473c6f9f9a69 -sS -o /dev/null \
         -w '%{http_code}' --cacert /work/edge_ca.crt https://api.efn.local/v1/auth/challenge 2>/dev/null)" == 200 ]]; then
         ok200=$((ok200 + 1)); [[ "$ok200" -ge 5 ]] && break
@@ -931,7 +932,7 @@ scenario_o() { # Gelombang 17: penjualan online Fase 3 (docs/04 §10) — Super-
   r="$(migrate members "{\"source_ref\":\"$(newuuid)\",\"member_ref\":\"62812$(rand8)\"}")"
   check "o.g18_source_ref_opaque_ok" "$([[ "$r" =~ \|20[01]$ ]] && echo 1 || echo 0)" "$(tail -c 120 <<< "$r")"
   kill_bff_recreate
-  r="$(MSYS_NO_PATHCONV=1 docker run --rm --network efn_edge --add-host "api.efn.local:${TRAEFIK_IP}" -v "${WORK_W}:/work" \
+  r="$(MSYS_NO_PATHCONV=1 docker run --rm --network "${P}_edge" --add-host "api.efn.local:${TRAEFIK_IP}" -v "${WORK_W}:/work" \
     curlimages/curl:8.11.1@sha256:c1fe1679c34d9784c1b0d1e5f62ac0a79fca01fb6377cdd33e90473c6f9f9a69 -sS -o /dev/null -w '%{http_code}' \
     --cacert /work/edge_ca.crt https://api.efn.local/v1/catalog/channels 2>&1 || true)"
   check "o.killswitch_restored" "$([[ "$r" == 200 && "$(docker inspect "$BFF" --format '{{range .Config.Env}}{{println .}}{{end}}' | grep -cx 'ONLINE_ENABLED=true')" == 1 ]] && echo 1 || echo 0)" "katalog=$r setelah recreate tanpa overlay"
@@ -1043,7 +1044,7 @@ scenario_p() { # Gelombang 18 (POS): Rupiah Rp1, poin = alat bayar dgn pajak tet
   local before; before="$(field payment_amount "$r")"
   check "p.member_locked_marker" "$([[ "$(field member_locked "$r")" == true ]] && echo 1 || echo 0)" "$r"
   r="$(MSYS_NO_PATHCONV=1 docker exec "$ODOO" sh -c 'cat /tmp/efn_smoke_rpc.json; rm -f /tmp/efn_smoke_rpc.json' \
-    | MSYS_NO_PATHCONV=1 docker run --rm -i --network efn_edge --add-host "erp.efn.local:${TRAEFIK_IP}" \
+    | MSYS_NO_PATHCONV=1 docker run --rm -i --network "${P}_edge" --add-host "erp.efn.local:${TRAEFIK_IP}" \
         -v "${WORK_W}:/work:ro" "$PY_IMAGE" python /work/odoo_rpc_smoke.py 2>&1 | grep '^SMOKE_RESULT' | grep -F '"user": "smoke_rpc_cashier"' | head -1 || true)"
   rj() { grep -oE "\"$1\": \\{\"rejected\": (true|false)" <<< "$r" | grep -oE '(true|false)$'; }
   check "p.rpc_cashier_payment_locked" "$([[ "$r" == *'"logged_in": true'* && "$(rj payment_write_amount)" == true && "$(rj payment_write_method)" == true && "$(rj payment_unlink)" == true ]] && echo 1 || echo 0)" "$(head -c 400 <<< "$r")"
@@ -1080,7 +1081,7 @@ scenario_q() { # Gelombang 20: bayar di kasir (docs/04 §12.2, L-50..L-58) — B
   }
   opy() { # <hp> <member> <subperintah> [arg...]
     local phone="$1" who="$2"; shift 2
-    MSYS_NO_PATHCONV=1 docker run --rm --network efn_edge \
+    MSYS_NO_PATHCONV=1 docker run --rm --network "${P}_edge" \
       --add-host "api.efn.local:${TRAEFIK_IP}" --add-host "app.efn.local:${TRAEFIK_IP}" \
       -v "${WORK_W}:/work" -e SMOKE_PHONE="$phone" -e SMOKE_STATE="/work/online_${who}.json" -e SMOKE_BFF_LOG=/work/bff.log \
       "$PY_IMAGE" python /work/online_smoke.py "$@" 2>&1 | grep '^SMOKE_RESULT' | tee -a "$RESULTS" || true
@@ -1224,7 +1225,7 @@ scenario_t() { # Gelombang 26: transfer bank + bukti (docs/04 §17, L-95..L-103)
   }
   opy() { # <hp> <member> <subperintah> [arg...] (Pillow untuk foto bukti sintetis)
     local phone="$1" who="$2"; shift 2
-    MSYS_NO_PATHCONV=1 docker run --rm --network efn_edge \
+    MSYS_NO_PATHCONV=1 docker run --rm --network "${P}_edge" \
       --add-host "api.efn.local:${TRAEFIK_IP}" --add-host "app.efn.local:${TRAEFIK_IP}" \
       -v "${WORK_W}:/work" -v efn-pip-cache:/root/.cache/pip -e SMOKE_PHONE="$phone" -e SMOKE_STATE="/work/online_${who}.json" \
       -e SMOKE_BFF_LOG=/work/bff.log "$PY_IMAGE" sh -c "pip install -q pillow==11.3.0 > /dev/null 2>&1; python /work/online_smoke.py $*" \

@@ -58,8 +58,11 @@ scrape_configs:
       - targets: ["traefik:8082"]
 
   # api-gateway bisa >1 replika (prod): dns_sd mengambil semua A record service compose.
-  # Container BFF ada di 4 network -> satu replika bisa muncul dengan beberapa IP (QA U8): hanya IP di subnet
-  # network `internal` (172.30.1.0/24) yang dipertahankan.
+  # Container BFF ada di 4 network -> satu replika bisa muncul dengan beberapa IP (QA U8). K25-06: nama yang di-resolve
+  # adalah alias `api-gateway-metrics` yang HANYA didaftarkan di network `internal` (docker-compose.yml, dicek
+  # check-encryption.sh) -> DNS Docker hanya mengembalikan IP `internal` setiap replika, tanpa menyebut nama network
+  # (`api-gateway.<stack>_internal` bergantung pada EFN_STACK). Relabel keep tetap dipertahankan sebagai lapisan kedua:
+  # hanya IP beroktet ketiga 1 = network `internal` untuk EFN_SUBNET_BASE apa pun (<base>.1.0/24, base selalu 2 oktet).
   # docs/04 §8.10/§8.11: /metrics BFF hanya di listener mTLS TERPISAH :9464 (METRICS_PORT), CN klien `prometheus`
   # (METRICS_TLS_CLIENT_ALLOWED_CN). Port API :3000 tidak lagi melayani /metrics (404).
   - job_name: api-gateway
@@ -71,14 +74,14 @@ scrape_configs:
       key_file: /run/secrets/tls_server_key
       server_name: api-gateway
     dns_sd_configs:
-      # <service>.<network>: DNS Docker mengembalikan IP di network itu (tanpa sufiks -> IP network `data`
-      # 172.30.2.x yang dibuang relabel di bawah -> target hilang; gelombang 7)
-      - names: ["api-gateway.efn_internal"]
+      # Alias ber-scope network `internal` (bukan `api-gateway`: tanpa sufiks DNS bisa mengembalikan IP network
+      # `data` <base>.2.x yang dibuang relabel di bawah -> target hilang; gelombang 7)
+      - names: ["api-gateway-metrics"]
         type: A
         port: 9464
     relabel_configs:
       - source_labels: [__address__]
-        regex: '172\.30\.1\.\d+:9464'
+        regex: '\d{1,3}\.\d{1,3}\.1\.\d{1,3}:9464'
         action: keep
 
   # ai-ocr-worker: metrik HTTPS :9100 = sidecar ghostunnel ocr-worker-metrics-tls (mTLS --allow-cn=prometheus, E12
@@ -92,12 +95,12 @@ scrape_configs:
       key_file: /run/secrets/tls_server_key
       server_name: ocr-worker
     dns_sd_configs:
-      - names: ["ocr-worker.efn_internal"]   # lihat job api-gateway
+      - names: ["ocr-worker-metrics"]   # alias network `internal` saja, lihat job api-gateway
         type: A
         port: 9100
     relabel_configs:
       - source_labels: [__address__]
-        regex: '172\.30\.1\.\d+:9100'
+        regex: '\d{1,3}\.\d{1,3}\.1\.\d{1,3}:9100'
         action: keep
 
   # G50 (docs/04 §28.9, ADR-044): wa-unofficial /metrics di server admin HTTPS :8443 (CA internal, SAN wa-unofficial),
@@ -105,7 +108,8 @@ scrape_configs:
   # wa-admin-relay (TLS passthrough, network wa-ingress) -> Prometheus tidak berbagi network dengan wa-unofficial;
   # server_name tetap wa-unofficial (verifikasi end-to-end). Service + secret + network HANYA ada di overlay
   # docker-compose.wa-unofficial.yml: tanpa overlay nama DNS tidak ada -> 0 target (tidak ada EfnServiceDown palsu).
-  # Hanya IP relay di subnet wa-ingress (172.30.21.0/24) yang dipertahankan.
+  # K25-06: nama = alias `wa-admin-relay-ingress` yang HANYA didaftarkan di network wa-ingress (bukan
+  # `wa-admin-relay.<stack>_wa-ingress`); relabel keep = IP statis relay <EFN_SUBNET_BASE>.21.10 untuk base apa pun.
   - job_name: wa-unofficial
     metrics_path: /metrics
     scheme: https
@@ -116,12 +120,12 @@ scrape_configs:
       ca_file: /run/secrets/efn_ca_crt
       server_name: wa-unofficial
     dns_sd_configs:
-      - names: ["wa-admin-relay.efn_wa-ingress"]
+      - names: ["wa-admin-relay-ingress"]
         type: A
         port: 8443
     relabel_configs:
       - source_labels: [__address__]
-        regex: '172\.30\.21\.\d+:8443'
+        regex: '\d{1,3}\.\d{1,3}\.21\.10:8443'
         action: keep
 
   # Metrik per-queue (ocr.requested, *.dlq): endpoint per-object plugin rabbitmq_prometheus (TLS 15691, mTLS)

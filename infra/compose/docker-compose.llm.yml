@@ -15,7 +15,12 @@ services:
       NINEROUTER_TIMEOUT_SECONDS: ${NINEROUTER_TIMEOUT_SECONDS:-45}
     secrets:
       - ninerouter_api_key
-    networks: [internal, data, egress]
+    # Bentuk map + alias sama dengan base (K25-06): alias scrape Prometheus `ocr-worker-metrics` hanya di `internal`.
+    networks:
+      internal:
+        aliases: [ocr-worker-metrics]
+      data:
+      egress:
 
 secrets:
   ninerouter_api_key: { file: ../../secrets/ninerouter_api_key.txt }

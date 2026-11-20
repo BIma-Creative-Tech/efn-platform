@@ -16,7 +16,9 @@
 #   wa-egress   (internal) : HANYA wa-unofficial <-> wa-egress-proxy (TLS passthrough allowlist SNI, IP statis)
 #   wa-internet (keluar)   : HANYA wa-egress-proxy (enable_icc=false) -> host WhatsApp (daftar BELUM DIVERIFIKASI)
 #   wa-admin    (internal) : HANYA wa-admin-relay <-> wa-unofficial :8443
-#   wa-ingress  (internal) : traefik + prometheus -> wa-admin-relay 172.30.21.10:8443 (TLS passthrough)
+#   wa-ingress  (internal) : traefik + prometheus -> wa-admin-relay <EFN_SUBNET_BASE>.21.10:8443 (TLS passthrough)
+#   K25-06: nama network `<EFN_STACK>_<key>`, subnet <EFN_SUBNET_BASE>.13-16/.21, IP statis relay (.21.10) dan proxy
+#   egress (.14.10) diturunkan dari EFN_SUBNET_BASE (default 172.30 = nilai lama).
 #   SEC-G50-06: network bridge Docker dua arah -> wa-unofficial TIDAK berbagi network dengan Traefik/Prometheus. Relay
 #   (infra/wa-egress/admin-relay.cfg) hanya listen di IP wa-ingress, jadi dari wa-unofficial tidak ada listener yang
 #   terjangkau lewat jalur admin. TLS tetap end-to-end ke wa-unofficial (sertifikat diverifikasi Traefik/Prometheus).
@@ -38,7 +40,7 @@
 #   efn_ca_crt                       bundle CA internal
 services:
   wa-unofficial:
-    image: ${IMAGE_WA_UNOFFICIAL:-ghcr.io/efn/wa-unofficial:dev}
+    image: ${IMAGE_WA_UNOFFICIAL:-ghcr.io/${EFN_STACK:-efn}/wa-unofficial:dev}
     build:
       context: ../../services/wa-unofficial
     profiles: ["wa-unofficial"]
@@ -100,7 +102,7 @@ services:
       - efn_ca_crt
     # Nama host WhatsApp -> IP statis wa-egress-proxy (BELUM DIVERIFIKASI: daftar host, lihat infra/wa-egress/haproxy.cfg)
     extra_hosts:
-      - "web.whatsapp.com:172.30.14.10"
+      - "web.whatsapp.com:${EFN_SUBNET_BASE:-172.30}.14.10"   # = ipv4_address wa-egress-proxy (dicek check-encryption)
     volumes:
       # Sesi Baileys + state (dedup, kuota, opt-out to_hash): AES-256-GCM di aplikasi (wa_unofficial_session_key) +
       # disk host LUKS (production). Backup hanya lewat backup terenkripsi; kunci salah = gagal muat (tanpa fallback).
@@ -138,11 +140,17 @@ services:
     security_opt:
       - no-new-privileges:true
     user: haproxy
+    # K25-06: admin-relay.cfg bind "${WA_RELAY_BIND_IP}:8443" (ekspansi env HAProxy; tanpa env = gagal start, bukan
+    # listen di semua interface). Nilai WAJIB = ipv4_address wa-ingress di bawah (dicek check-encryption).
+    environment:
+      WA_RELAY_BIND_IP: ${EFN_SUBNET_BASE:-172.30}.21.10
     volumes:
       - ../wa-egress/admin-relay.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
     networks:
       wa-ingress:
-        ipv4_address: 172.30.21.10
+        ipv4_address: ${EFN_SUBNET_BASE:-172.30}.21.10
+        # K25-06: nama scrape Prometheus (dns_sd) HANYA di network ini (dicek check-encryption)
+        aliases: [wa-admin-relay-ingress]
       wa-admin: {}
     read_only: true
     tmpfs: [/tmp]
@@ -158,7 +166,7 @@ services:
     labels:
       service: wa-admin-relay
       traefik.enable: "true"
-      traefik.docker.network: efn_wa-ingress
+      traefik.docker.network: ${EFN_STACK:-efn}_wa-ingress
       # ADR-044 / docs/04 §28.9: HANYA wg-https + subnet staf (internal-ops) + mTLS operator (efn-mtls) + token admin.
       # Sertifikat host: acme-dns (ACME_DOMAINS diperluas di bawah) / dev: edge self-signed *.efn.local.
       # serversTransport efn-wa-unofficial: serverName wa-unofficial -> TLS (passthrough relay) diverifikasi end-to-end.
@@ -194,7 +202,7 @@ services:
       - ../wa-egress/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
     networks:
       wa-egress:
-        ipv4_address: 172.30.14.10
+        ipv4_address: ${EFN_SUBNET_BASE:-172.30}.14.10
       wa-internet: {}
     read_only: true
     tmpfs: [/tmp]
@@ -242,26 +250,31 @@ volumes:
 
 networks:
   rmq:            # hanya rabbitmq <-> wa-unofficial (dicek scripts/check-encryption.sh)
+    name: ${EFN_STACK:-efn}_rmq
     internal: true
     ipam:
-      config: [{ subnet: 172.30.13.0/24 }]
+      config: [{ subnet: "${EFN_SUBNET_BASE:-172.30}.13.0/24" }]
   wa-egress:      # hanya wa-unofficial <-> wa-egress-proxy
+    name: ${EFN_STACK:-efn}_wa-egress
     internal: true
     ipam:
-      config: [{ subnet: 172.30.14.0/24 }]
+      config: [{ subnet: "${EFN_SUBNET_BASE:-172.30}.14.0/24" }]
   wa-internet:    # hanya wa-egress-proxy -> internet (pola egress-esb SEC-183)
+    name: ${EFN_STACK:-efn}_wa-internet
     driver_opts:
       com.docker.network.bridge.enable_icc: "false"
     ipam:
-      config: [{ subnet: 172.30.15.0/24 }]
+      config: [{ subnet: "${EFN_SUBNET_BASE:-172.30}.15.0/24" }]
   wa-admin:       # hanya wa-admin-relay <-> wa-unofficial :8443 (SEC-G50-06)
+    name: ${EFN_STACK:-efn}_wa-admin
     internal: true
     ipam:
-      config: [{ subnet: 172.30.16.0/24 }]
-  wa-ingress:     # traefik + prometheus -> wa-admin-relay (relay listen hanya di 172.30.21.10)
+      config: [{ subnet: "${EFN_SUBNET_BASE:-172.30}.16.0/24" }]
+  wa-ingress:     # traefik + prometheus -> wa-admin-relay (relay listen hanya di <EFN_SUBNET_BASE>.21.10)
+    name: ${EFN_STACK:-efn}_wa-ingress
     internal: true
     ipam:
-      config: [{ subnet: 172.30.21.0/24 }]
+      config: [{ subnet: "${EFN_SUBNET_BASE:-172.30}.21.0/24" }]
 
 secrets:
   rabbitmq_password_wa_unofficial: { file: ../../secrets/rabbitmq_password_wa_unofficial.txt }

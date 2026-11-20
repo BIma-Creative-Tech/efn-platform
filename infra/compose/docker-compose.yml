@@ -33,8 +33,15 @@
 #   cap_drop ALL bila image tidak butuh capability, read_only + tmpfs bila image tidak menulis di luar volume.
 #   Pengecualian dicatat sebagai komentar di service yang bersangkutan.
 # Secret: hanya lewat `secrets:` (file di /run/secrets/<nama>). Daftar sumber: scripts/secrets.list.
+#
+# IDENTITAS STACK (K25-06, docs/runbooks/multi-env-local.md): satu variabel EFN_STACK (default `efn`) menentukan nama
+# project compose, nama network (`<stack>_<network>`), label traefik.docker.network, filter discovery Traefik/Promtail
+# (label com.docker.compose.project), dan tag image lokal default (ghcr.io/<stack>/<svc>:dev). EFN_SUBNET_BASE (default
+# `172.30`, dua oktet) menentukan subnet IPAM semua network (<base>.<n>.0/24). Default keduanya = stack `efn` lama
+# (konfigurasi ter-render identik). Jangan memakai `-p <nama>` yang berbeda dari EFN_STACK: set EFN_STACK di .env.
+# Dicek scripts/check-encryption.sh (render tambahan EFN_STACK=efn-prod EFN_SUBNET_BASE=10.250).
 
-name: efn
+name: ${EFN_STACK:-efn}
 
 x-logging: &default-logging
   driver: json-file
@@ -60,52 +67,66 @@ x-ghostunnel: &ghostunnel
     resources:
       limits: { memory: 64M }
 
-# Subnet di-pin agar TRUSTED_PROXIES BFF (SEC-03) presisi. Bentrok dengan jaringan host -> ubah di sini + .env.
+# Subnet di-pin agar TRUSTED_PROXIES BFF (SEC-03) presisi. Prefix = EFN_SUBNET_BASE (default 172.30; bentrok dengan
+# jaringan host / stack EFN lain -> set di .env, mis. 10.250). Nama network eksplisit `<EFN_STACK>_<key>` (sama dengan
+# nama bawaan compose) agar label traefik.docker.network dan skrip uji tidak bergantung pada `-p`.
+# Peta oktet ketiga (TETAP, dipakai turunan): 0 edge, 1 internal (TRUSTED_PROXIES, relabel Prometheus), 2 data,
+# 3 egress, 4 socket-proxy, 5 cache, 6 objstore, 7-8 overlay ESB, 9-10 insight, 11-12 overlay forecast,
+# 13-16 + 21 overlay wa-unofficial, 17-19 overlay segment, 20 mail (dev).
+# PostgreSQL hanya di network `data` -> pg_hba memakai `samenet` (dicek check-encryption.sh), bukan CIDR literal.
 networks:
   edge:          # Traefik dan publik (80/443)
+    name: ${EFN_STACK:-efn}_edge
     ipam:
-      config: [{ subnet: 172.30.0.0/24 }]
+      config: [{ subnet: "${EFN_SUBNET_BASE:-172.30}.0.0/24" }]
   egress:        # akses keluar internet terkontrol: WhatsApp Cloud API, alert webhook, probe TLS, pull model
+    name: ${EFN_STACK:-efn}_egress
     ipam:
-      config: [{ subnet: 172.30.3.0/24 }]
+      config: [{ subnet: "${EFN_SUBNET_BASE:-172.30}.3.0/24" }]
   internal:      # semua service backend (Traefik -> app, Next.js -> BFF)
+    name: ${EFN_STACK:-efn}_internal
     internal: true
     ipam:
-      config: [{ subnet: 172.30.1.0/24 }]
+      config: [{ subnet: "${EFN_SUBNET_BASE:-172.30}.1.0/24" }]
   data:          # DB, broker, object storage; tidak bisa keluar
+    name: ${EFN_STACK:-efn}_data
     internal: true
     ipam:
-      config: [{ subnet: 172.30.2.0/24 }]
+      config: [{ subnet: "${EFN_SUBNET_BASE:-172.30}.2.0/24" }]
   cache:         # Redis hanya untuk BFF + exporter (SEC-05)
+    name: ${EFN_STACK:-efn}_cache
     internal: true
     ipam:
-      config: [{ subnet: 172.30.5.0/24 }]
+      config: [{ subnet: "${EFN_SUBNET_BASE:-172.30}.5.0/24" }]
   socket-proxy:  # hanya Traefik/Promtail/cAdvisor <-> docker-socket-proxy (mTLS)
+    name: ${EFN_STACK:-efn}_socket-proxy
     internal: true
     ipam:
-      config: [{ subnet: 172.30.4.0/24 }]
+      config: [{ subnet: "${EFN_SUBNET_BASE:-172.30}.4.0/24" }]
   objstore:      # hanya s3-gateway (filter L7) + minio-init <-> minio (ADR-030); klien aplikasi TIDAK ada di sini
+    name: ${EFN_STACK:-efn}_objstore
     internal: true
     ipam:
-      config: [{ subnet: 172.30.6.0/24 }]
+      config: [{ subnet: "${EFN_SUBNET_BASE:-172.30}.6.0/24" }]
   # G42 (docs/04 §26.11, ADR-041 C7): insight-web TIDAK di `internal` (RabbitMQ, sidecar Odoo, BFF) maupun `data`
   # (PostgreSQL, RabbitMQ, s3-gateway, Loki). Dua network khusus, dicek scripts/check-encryption.sh:
   #   insight-ingress : traefik (-> insight-web-tls :3443) + blackbox-exporter (probe health) + insight-web
   #   insight-data    : insight-web <-> clickhouse (HTTPS 8443) saja
   # Traefik dan ClickHouse sengaja tidak berbagi network (edge internet-facing tidak bisa menjangkau gudang data).
-  # Subnet 172.30.7.0/24 dan 172.30.8.0/24 dipakai overlay docker-compose.esb.yml (G41); 172.30.11.0/24 dan
-  # 172.30.12.0/24 dipakai overlay docker-compose.forecast.yml (G44). G50: 172.30.13-16.0/24 overlay
-  # docker-compose.wa-unofficial.yml (rmq, wa-egress, wa-internet, wa-admin), 172.30.17-19.0/24 overlay
-  # docker-compose.segment.yml (segment-ch, segment-rpc, segment-bff), 172.30.20.0/24 network `mail` dev (Mailpit),
-  # 172.30.21.0/24 wa-ingress (overlay wa-unofficial: traefik/prometheus -> relay admin, SEC-G50-06).
+  # Oktet 7 dan 8 dipakai overlay docker-compose.esb.yml (G41); 11 dan 12 dipakai overlay docker-compose.forecast.yml (G44).
+  # G50: oktet 13-16 overlay docker-compose.wa-unofficial.yml (rmq, wa-egress, wa-internet, wa-admin), 17-19 overlay
+  # docker-compose.segment.yml (segment-ch, segment-rpc, segment-bff), 20 network `mail` dev (Mailpit), 21 wa-ingress
+  # (overlay wa-unofficial: traefik/prometheus -> relay admin, SEC-G50-06; relay IP statis <base>.21.10).
   insight-ingress:
+    name: ${EFN_STACK:-efn}_insight-ingress
     internal: true
     ipam:
-      config: [{ subnet: 172.30.9.0/24 }]
+      config: [{ subnet: "${EFN_SUBNET_BASE:-172.30}.9.0/24" }]
   insight-data:
+    name: ${EFN_STACK:-efn}_insight-data
     internal: true
     ipam:
-      config: [{ subnet: 172.30.10.0/24 }]
+      config: [{ subnet: "${EFN_SUBNET_BASE:-172.30}.10.0/24" }]
 
 volumes:
   traefik-acme:          # acme.json resolver HTTP-01 host publik (Traefik)
@@ -388,16 +409,22 @@ services:
         condition: service_healthy
       acme-dns-init:   # titik mount base/ dev/ (milik root, sticky) di volume traefik-dynamic (SEC-37/SEC-53)
         condition: service_completed_successfully
+    # K25-06: konfigurasi statis Traefik tidak bisa membaca env (file XOR CLI XOR env). infra/stack/render-config.sh
+    # mengganti @EFN_STACK@ di traefik.yml (network default + constraint project compose: Traefik hanya menemukan
+    # container stack ini walau docker-socket-proxy melihat semua container host) ke /tmp/traefik.yml (tmpfs), lalu exec.
+    entrypoint: ["/bin/sh", "/efn/render-config.sh", "/etc/traefik/traefik.yml", "/tmp/traefik.yml", "traefik"]
     command:
-      - --configFile=/etc/traefik/traefik.yml
+      - --configFile=/tmp/traefik.yml
     # Publik (websecure, lewat Cloudflare) di IP publik host; `wg-https` (ADR-023, host internal erp./bi./ops./status.)
     # HANYA di IP WireGuard host. Prod: EFN_PUBLIC_BIND=<IP publik>, EFN_WG_BIND=10.88.0.1, EFN_WG_HTTPS_PORT=443
     # (ditulis deploy.sh). Dev: wg-https di 127.0.0.1:9443 (https://erp.efn.local:9443).
+    # K25-06: port host 80/443 bisa diganti (EFN_HTTP_PORT/EFN_HTTPS_PORT) agar stack EFN kedua tidak bentrok.
     ports:
-      - "${EFN_PUBLIC_BIND:-0.0.0.0}:80:80"
-      - "${EFN_PUBLIC_BIND:-0.0.0.0}:443:443"
+      - "${EFN_PUBLIC_BIND:-0.0.0.0}:${EFN_HTTP_PORT:-80}:80"
+      - "${EFN_PUBLIC_BIND:-0.0.0.0}:${EFN_HTTPS_PORT:-443}:443"
       - "${EFN_WG_BIND:-127.0.0.1}:${EFN_WG_HTTPS_PORT:-9443}:8443"
     environment:
+      - EFN_STACK=${EFN_STACK:-efn}
       - TRAEFIK_DOMAIN=${TRAEFIK_DOMAIN:-efn.local}
       # Allowlist WireGuard (dynamic/middlewares.yml, SEC-21): outlet vs staf back-office/IT (ADR-023 butir 3)
       - EFN_WG_OUTLET_CIDR=${EFN_WG_OUTLET_CIDR:-10.88.0.0/16}
@@ -409,6 +436,7 @@ services:
     secrets: [efn_ca_crt, tls_traefik_crt, tls_traefik_key]
     volumes:
       - ../traefik/traefik.yml:/etc/traefik/traefik.yml:ro
+      - ../stack/render-config.sh:/efn/render-config.sh:ro
       # SEC-37/SEC-53: volume traefik-dynamic = direktori provider file itu sendiri (read-only). Watch Traefik
       # (fsnotify) TIDAK rekursif -> acme-dns.yml harus di puncak agar sertifikat baru dimuat tanpa restart (diuji
       # scripts/test-acme-dns.sh). Konfigurasi statis di subdirektori (dibaca rekursif saat start/reload):
@@ -429,7 +457,7 @@ services:
     labels:
       service: traefik
     healthcheck:
-      test: ["CMD", "traefik", "healthcheck", "--configFile=/etc/traefik/traefik.yml"]
+      test: ["CMD", "traefik", "healthcheck", "--configFile=/tmp/traefik.yml"]   # hasil render (K25-06)
       interval: 30s
       timeout: 5s
       retries: 3
@@ -577,7 +605,7 @@ services:
   # Non-root (USER postgres di image) -> cap_drop ALL aman. Tidak read_only: socket/lock di /var/run/postgresql.
   postgres:
     <<: *common
-    image: ${IMAGE_POSTGRES:-ghcr.io/efn/postgres:dev}
+    image: ${IMAGE_POSTGRES:-ghcr.io/${EFN_STACK:-efn}/postgres:dev}
     build:
       context: ../backup/postgres
     profiles: ["core"]
@@ -788,7 +816,7 @@ services:
     <<: *common
     # Dibangun dari source tag SILO (infra/minio/Dockerfile): image minio/minio & minio/mc sudah hilang dari Docker Hub
     # dan upstream diarsipkan.
-    image: ${IMAGE_MINIO:-ghcr.io/efn/minio:dev}
+    image: ${IMAGE_MINIO:-ghcr.io/${EFN_STACK:-efn}/minio:dev}
     build:
       context: ../minio
     profiles: ["core"]
@@ -861,7 +889,7 @@ services:
   # Idempoten; dijalankan ulang setiap `up`. Juga dipakai untuk rotasi password user MinIO.
   minio-init:
     <<: *common
-    image: ${IMAGE_MINIO:-ghcr.io/efn/minio:dev}   # image yang sama dengan minio (berisi mc)
+    image: ${IMAGE_MINIO:-ghcr.io/${EFN_STACK:-efn}/minio:dev}   # image yang sama dengan minio (berisi mc)
     build:
       context: ../minio
     profiles: ["core"]
@@ -911,7 +939,7 @@ services:
   # Tidak read_only: entrypoint merender /etc/odoo/odoo.conf saat start. User odoo (non-root).
   odoo:
     <<: *common
-    image: ${IMAGE_ODOO:-ghcr.io/efn/odoo:dev}
+    image: ${IMAGE_ODOO:-ghcr.io/${EFN_STACK:-efn}/odoo:dev}
     build:
       context: ../../services/odoo
     profiles: ["core"]
@@ -966,7 +994,7 @@ services:
     labels:
       service: odoo
       traefik.enable: "true"
-      traefik.docker.network: efn_internal
+      traefik.docker.network: ${EFN_STACK:-efn}_internal
       # ADR-023: HANYA entrypoint wg-https (IP WireGuard) + allowlist outlet/staf (SEC-01, SEC-21). Sertifikat publik
       # ACME DNS-01 (browser POS tidak perlu CA internal). Tidak ada router erp. di websecure (publik).
       traefik.http.routers.odoo.rule: Host(`erp.${TRAEFIK_DOMAIN:-efn.local}`)
@@ -1116,7 +1144,7 @@ services:
   # HTTPS native di :3000 (TLS_CERT_FILE/TLS_KEY_FILE). Network `egress` untuk WhatsApp Cloud API & payment.
   api-gateway:
     <<: *common
-    image: ${IMAGE_API_GATEWAY:-ghcr.io/efn/api-gateway:dev}
+    image: ${IMAGE_API_GATEWAY:-ghcr.io/${EFN_STACK:-efn}/api-gateway:dev}
     build:
       context: ../../services/api-gateway
     profiles: ["core"]
@@ -1146,8 +1174,8 @@ services:
       HEALTHCHECK_CA_FILE: /run/secrets/efn_ca_crt
       HEALTHCHECK_SERVERNAME: api-gateway
       # SEC-03: subnet Docker internal (Traefik, Next.js) + rentang Cloudflare (scripts/deploy.sh dari
-      # infra/traefik/cloudflare-ips.txt). Dev: hanya subnet internal.
-      TRUSTED_PROXIES: ${TRUSTED_PROXIES:-172.30.1.0/24}
+      # infra/traefik/cloudflare-ips.txt). Dev: hanya subnet internal (= <EFN_SUBNET_BASE>.1.0/24, K25-06).
+      TRUSTED_PROXIES: ${TRUSTED_PROXIES:-${EFN_SUBNET_BASE:-172.30}.1.0/24}
       # PostgreSQL (docs/04 §7.1/§7.3)
       PG_HOST: postgres
       PG_PORT: "5432"
@@ -1445,7 +1473,14 @@ services:
       - email_smtp_password
       - email_unsubscribe_key
       - odoo_api_key_campaign_smd
-    networks: [internal, data, cache, egress]
+    # K25-06: alias `api-gateway-metrics` HANYA di network `internal` -> dns_sd Prometheus mendapat IP internal setiap
+    # replika tanpa menyebut nama network (`api-gateway.<stack>_internal`). Dicek check-encryption.sh.
+    networks:
+      internal:
+        aliases: [api-gateway-metrics]
+      data:
+      cache:
+      egress:
     read_only: true
     tmpfs: [/tmp]
     cap_drop: [ALL]
@@ -1455,7 +1490,7 @@ services:
     labels:
       service: api-gateway
       traefik.enable: "true"
-      traefik.docker.network: efn_internal
+      traefik.docker.network: ${EFN_STACK:-efn}_internal
       # Tidak lewat router publik (docs/04 §1-2, ADR-002):
       #   /metrics    -> tidak ada di :3000 lagi; Prometheus scrape https://api-gateway:9464 (mTLS, tidak lewat Traefik)
       #   /v1/pos/*   -> server-to-server Odoo (efn.bff_url = https://api-gateway:3000)
@@ -1493,7 +1528,7 @@ services:
   # Next.js standalone listen 127.0.0.1:3001; TLS oleh sidecar superapp-web-tls (:3443).
   superapp-web:
     <<: *common
-    image: ${IMAGE_SUPERAPP_WEB:-ghcr.io/efn/superapp-web:dev}
+    image: ${IMAGE_SUPERAPP_WEB:-ghcr.io/${EFN_STACK:-efn}/superapp-web:dev}
     build:
       context: ../../services/superapp-web
     profiles: ["core"]
@@ -1521,7 +1556,7 @@ services:
     labels:
       service: superapp-web
       traefik.enable: "true"
-      traefik.docker.network: efn_internal
+      traefik.docker.network: ${EFN_STACK:-efn}_internal
       traefik.http.routers.web.rule: >-
         Host(`app.${TRAEFIK_DOMAIN:-efn.local}`) || Host(`${TRAEFIK_DOMAIN:-efn.local}`)
         || Host(`grandlucky.${TRAEFIK_DOMAIN:-efn.local}`) || Host(`parisbaguette.${TRAEFIK_DOMAIN:-efn.local}`)
@@ -1631,7 +1666,11 @@ services:
       # SEC-215 (G44): user efn_forecast_reader hanya boleh login dari subnet network forecast-ch (overlay
       # docker-compose.forecast.yml). WAJIB sama dengan ipam forecast-ch (dicek scripts/check-encryption.sh); antar-mesin
       # (K25-02, belum dibangun) = subnet WireGuard mesin data. Divalidasi clickhouse-init (CIDR privat /24../32, SEC-223).
-      CH_FORECAST_READER_HOST_CIDR: ${CH_FORECAST_READER_HOST_CIDR:-172.30.11.0/24}
+      # K25-06: default = <EFN_SUBNET_BASE>.11.0/24 (ipam forecast-ch).
+      CH_FORECAST_READER_HOST_CIDR: ${CH_FORECAST_READER_HOST_CIDR:-${EFN_SUBNET_BASE:-172.30}.11.0/24}
+      # K25-06 + pola SEC-215: user efn_segment_reader hanya dari subnet network segment-ch (overlay
+      # docker-compose.segment.yml, <EFN_SUBNET_BASE>.17.0/24). WAJIB sama dengan ipam segment-ch (check-encryption).
+      CH_SEGMENT_READER_HOST_CIDR: ${CH_SEGMENT_READER_HOST_CIDR:-${EFN_SUBNET_BASE:-172.30}.17.0/24}
     secrets:
       - clickhouse_password
       - clickhouse_password_etl
@@ -1677,7 +1716,7 @@ services:
     <<: *common
     # G13/G16: image sendiri = metabase v0.58.41 LTS (digest; driver ClickHouse bawaan) - infra/metabase/Dockerfile.
     # Staging/prod: by digest dari manifest rilis bertanda tangan (IMAGE_METABASE, SEC-42).
-    image: ${IMAGE_METABASE:-ghcr.io/efn/metabase:dev}
+    image: ${IMAGE_METABASE:-ghcr.io/${EFN_STACK:-efn}/metabase:dev}
     build:
       context: ../metabase
     profiles: ["data"]
@@ -1710,7 +1749,7 @@ services:
     labels:
       service: metabase
       traefik.enable: "true"
-      traefik.docker.network: efn_internal
+      traefik.docker.network: ${EFN_STACK:-efn}_internal
       traefik.http.routers.bi.rule: Host(`bi.${TRAEFIK_DOMAIN:-efn.local}`)
       # ADR-023/SEC-21: hanya wg-https + subnet staf (bukan LAN outlet)
       traefik.http.routers.bi.entrypoints: wg-https
@@ -1762,7 +1801,7 @@ services:
   # Non-root: USER image (services/insight-web/Dockerfile target runtime; gate Trivy DS-0002 di build-push).
   insight-web:
     <<: *common
-    image: ${IMAGE_INSIGHT_WEB:-ghcr.io/efn/insight-web:dev}
+    image: ${IMAGE_INSIGHT_WEB:-ghcr.io/${EFN_STACK:-efn}/insight-web:dev}
     build:
       context: ../../services/insight-web
       target: runtime
@@ -1805,7 +1844,7 @@ services:
     labels:
       service: insight-web
       traefik.enable: "true"
-      traefik.docker.network: efn_insight-ingress
+      traefik.docker.network: ${EFN_STACK:-efn}_insight-ingress
       # ADR-023/ADR-041: HANYA wg-https + subnet staf (internal-ops) sampai Q-INS4 dijawab (docs/04 §26.11/§26.12).
       # secure-headers-insight = secure-headers + Referrer-Policy no-referrer (§26.6); CSP dari Next.js sendiri.
       traefik.http.routers.insight.rule: Host(`insight.${TRAEFIK_DOMAIN:-efn.local}`)
@@ -1890,7 +1929,7 @@ services:
 
   etl:
     <<: *common
-    image: ${IMAGE_ETL:-ghcr.io/efn/etl:dev}
+    image: ${IMAGE_ETL:-ghcr.io/${EFN_STACK:-efn}/etl:dev}
     build:
       context: ../../services/etl
     profiles: ["data"]
@@ -2067,7 +2106,7 @@ services:
   # metrik Prometheus HTTPS di :9100.
   ocr-worker:
     <<: *common
-    image: ${IMAGE_AI_OCR_WORKER:-ghcr.io/efn/ai-ocr-worker:dev}
+    image: ${IMAGE_AI_OCR_WORKER:-ghcr.io/${EFN_STACK:-efn}/ai-ocr-worker:dev}
     build:
       context: ../../services/ai-ocr-worker
     profiles: ["ai"]
@@ -2123,7 +2162,11 @@ services:
       - efn_ca_crt
       - tls_ocr_worker_crt
       - tls_ocr_worker_key
-    networks: [internal, data]
+    # K25-06: alias `ocr-worker-metrics` HANYA di network `internal` (dns_sd Prometheus, lihat api-gateway).
+    networks:
+      internal:
+        aliases: [ocr-worker-metrics]
+      data:
     read_only: true
     tmpfs: [/tmp]
     cap_drop: [ALL]
@@ -2145,7 +2188,7 @@ services:
   # Kill switch TEXT2SQL_ENABLED (default false). Tanpa egress di base (ADR-014).
   text2sql:
     <<: *common
-    image: ${IMAGE_TEXT2SQL:-ghcr.io/efn/text2sql:dev}
+    image: ${IMAGE_TEXT2SQL:-ghcr.io/${EFN_STACK:-efn}/text2sql:dev}
     build:
       context: ../../services/text2sql
     profiles: ["ai"]
@@ -2350,10 +2393,17 @@ services:
     <<: *common
     image: grafana/promtail:3.2.1@sha256:bf617e9d67e80247a59f717f9c1ad388d7d32dc0a1d29abd5799516d15e0a9b5
     profiles: ["observability"]
-    command: -config.file=/etc/promtail/promtail.yml
+    # K25-06: docker_sd melihat SEMUA container host (lewat docker-socket-proxy); filter label project compose
+    # (@EFN_STACK@ di promtail.yml) dirender infra/stack/render-config.sh ke /tmp (tmpfs) agar log stack lain (dev/stg,
+    # project non-EFN) tidak masuk Loki stack ini. Bukan -config.expand-env: itu mengubah backslash regex redaksi.
+    entrypoint: ["/bin/sh", "/efn/render-config.sh", "/etc/promtail/promtail.yml", "/tmp/promtail.yml", "/usr/bin/promtail"]
+    command: -config.file=/tmp/promtail.yml
+    environment:
+      EFN_STACK: ${EFN_STACK:-efn}
     secrets: [efn_ca_crt, tls_promtail_crt, tls_promtail_key]
     volumes:
       - ../observability/promtail.yml:/etc/promtail/promtail.yml:ro
+      - ../stack/render-config.sh:/efn/render-config.sh:ro
       - promtail-positions:/var/lib/promtail
     networks: [internal, socket-proxy]
     read_only: true
@@ -2400,7 +2450,7 @@ services:
     labels:
       service: grafana
       traefik.enable: "true"
-      traefik.docker.network: efn_internal
+      traefik.docker.network: ${EFN_STACK:-efn}_internal
       traefik.http.routers.ops.rule: Host(`ops.${TRAEFIK_DOMAIN:-efn.local}`)
       traefik.http.routers.ops.entrypoints: wg-https
       traefik.http.routers.ops.tls: "true"   # sertifikat dari acme-dns (SEC-37), bukan resolver Traefik
@@ -2429,7 +2479,7 @@ services:
     labels:
       service: uptime-kuma
       traefik.enable: "true"
-      traefik.docker.network: efn_internal
+      traefik.docker.network: ${EFN_STACK:-efn}_internal
       traefik.http.routers.status.rule: Host(`status.${TRAEFIK_DOMAIN:-efn.local}`)
       traefik.http.routers.status.entrypoints: wg-https
       traefik.http.routers.status.tls: "true"   # sertifikat dari acme-dns (SEC-37), bukan resolver Traefik

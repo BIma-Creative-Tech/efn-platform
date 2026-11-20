@@ -5,7 +5,8 @@
 # Dijalankan DI HOST oleh systemd timer infra/backup/systemd/efn-restore-test.timer (bulanan) atau manual.
 #
 # Env (opsional):
-#   COMPOSE_PROJECT=efn                 project compose (untuk menemukan container postgres hidup & network)
+#   COMPOSE_PROJECT=${EFN_STACK:-efn}   project compose (untuk menemukan container postgres hidup & network
+#                                       <project>_data; K25-06: project = EFN_STACK, network bernama <stack>_data)
 #   SECRETS_DIR=/opt/efn/secrets        lokasi file secret (dev: ./secrets)
 #   BACKUP_NAME=LATEST                  nama backup WAL-G (atau LATEST)
 #   RESTORE_TIMEOUT=10800               batas waktu recovery (detik); RTO target 4 jam
@@ -17,7 +18,7 @@
 #   TEXTFILE_DIR=/var/lib/efn/node-exporter
 set -euo pipefail
 
-COMPOSE_PROJECT="${COMPOSE_PROJECT:-efn}"
+COMPOSE_PROJECT="${COMPOSE_PROJECT:-${EFN_STACK:-efn}}"
 SECRETS_DIR="${SECRETS_DIR:-/opt/efn/secrets}"
 BACKUP_NAME="${BACKUP_NAME:-LATEST}"
 RESTORE_TIMEOUT="${RESTORE_TIMEOUT:-10800}"

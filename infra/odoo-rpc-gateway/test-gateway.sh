@@ -15,7 +15,8 @@ set -euo pipefail
 
 # Git Bash: MSYS_NO_PATHCONV hanya untuk `docker` (bukan global: openssl native butuh konversi path /tmp).
 CURL_IMAGE="curlimages/curl:8.11.1@sha256:c1fe1679c34d9784c1b0d1e5f62ac0a79fca01fb6377cdd33e90473c6f9f9a69"
-NETWORK="${EFN_TEST_NETWORK:-efn_internal}"
+STACK="${EFN_STACK:-efn}"   # K25-06: network <stack>_internal, container <stack>-odoo-rpc-gateway-1
+NETWORK="${EFN_TEST_NETWORK:-${STACK}_internal}"
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 sec="${root}/secrets"
@@ -274,5 +275,5 @@ MSYS_NO_PATHCONV=1 docker run --rm --network "$NETWORK" -v "$(hostpath "$work"):
 rc=$?
 set -e
 echo "--- log gateway (alasan penolakan, tanpa body/header) 20 baris terakhir:"
-docker logs --tail 20 efn-odoo-rpc-gateway-1 2>&1 | grep -E ' why=' || true
+docker logs --tail 20 "${STACK}-odoo-rpc-gateway-1" 2>&1 | grep -E ' why=' || true
 exit "$rc"
