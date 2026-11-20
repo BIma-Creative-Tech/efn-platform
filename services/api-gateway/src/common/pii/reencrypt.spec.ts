@@ -82,7 +82,18 @@ describe('re-encrypt PII (U2)', () => {
       'online_order_part.pickup_code_enc',
       'online_order_part.counter_code_enc',
       'push_token.token_enc',
+      'member_email.email_enc',
+      'member_voucher.code_enc',
     ]);
+    // G50: AAD sama dengan yang dipakai email-sender (MEMBER_EMAIL_AAD) dan campaign-sync (VOUCHER_CODE_AAD)
+    expect(findPiiColumns('member_email.email_enc')[0]).toMatchObject({
+      pk: 'member_id',
+      aad: 'efn:member_email.email_enc:v1',
+    });
+    expect(findPiiColumns('member_voucher.code_enc')[0]).toMatchObject({
+      pk: 'id',
+      aad: 'efn:member_voucher.code_enc:v1',
+    });
     expect(PII_AAD.PUSH_TOKEN).toBe('efn:push_token.token_enc:v1');
     expect(PII_AAD.ONLINE_COUNTER_CODE).toBe('efn:online_order_part.counter_code_enc:v1');
     expect(findPiiColumns('online_order_part.counter_code_enc')[0].rowAad!('AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA')).toBe(

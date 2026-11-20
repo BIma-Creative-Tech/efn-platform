@@ -94,9 +94,15 @@ export function WishlistView({ channels }: { channels: ChannelInfo[] }) {
     setDetails(Object.fromEntries(entries));
   }, [channels, features.wishlist, features.restock, features.priceAlert]);
 
+  // Muat awal: state awal sudah `loading`; load() dijalankan dari callback async agar setState tidak terjadi sinkron
+  // di badan effect (react-hooks/set-state-in-effect, pola DeletionStatus). `active` mencegah muat setelah unmount.
   useEffect(() => {
     if (!ready) return;
-    void load();
+    let active = true;
+    void Promise.resolve().then(() => (active ? load() : undefined));
+    return () => {
+      active = false;
+    };
   }, [ready, load]);
 
   if (!ready) return <p className="muted">Memuat…</p>;

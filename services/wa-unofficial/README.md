@@ -74,7 +74,7 @@ kuota, opt-out berupa `to_hash`) — semua AES-256-GCM, AAD = nama logis berkas,
 ## Dependency
 | Paket | Versi | Lisensi | Catatan |
 |---|---|---|---|
-| `@whiskeysockets/baileys` | **6.7.18 (exact)** | MIT | library tidak resmi; versi BELUM diverifikasi terhadap npm/perubahan protokol 2026 — pilih rilis terbaru yang dibaca manusia saat `npm install` (garis 7.x masih RC menurut ADR-044). 6.x menarik `libsignal` dari GitHub (git dep) |
+| `@whiskeysockets/baileys` | **6.7.24 (exact)** | MIT | library tidak resmi; dist-tag `legacy` npm per 20 Nov 2026 (7.x masih RC). Minimal 6.7.22: < 6.7.22 terkena GHSA-qvv5-jq5g-4cgg (spoofing pesan, critical). 6.x menarik `libsignal` dari GitHub (git dep) |
 | `amqplib` | ^0.10.5 | MIT | |
 | `https-proxy-agent` | ^7.0.6 | MIT | hanya bila `WA_UNOFFICIAL_PROXY_URL` |
 | dev: `typescript`, `jest`, `ts-jest`, `@types/*` | lihat package.json | Apache-2.0 / MIT | |

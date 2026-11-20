@@ -41,9 +41,12 @@ export class AmqpLink implements ResultSink {
     this.closing = true;
     if (this.timer) clearTimeout(this.timer);
     const c = this.conn;
+    const s = this.sub;
     this.conn = null;
     this.pub = null;
     this.sub = null;
+    // Tutup channel konsumen dulu (berhenti menerima pesan baru, unacked dikembalikan broker) baru koneksinya.
+    if (s) await s.close().catch(() => undefined);
     if (c) await c.close().catch(() => undefined);
   }
 

@@ -113,7 +113,7 @@ export function PriceAlert({ channelCode, productId, productName, currentPrice, 
     }
   }
 
-  const active = existing !== null && existing !== 'loading' && existing !== 'off' ? existing : null;
+  const active = existing !== null && typeof existing === 'object' ? existing : null;
 
   return (
     <div className={styles.panel}>

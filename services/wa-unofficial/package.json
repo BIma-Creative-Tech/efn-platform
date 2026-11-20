@@ -13,7 +13,7 @@
     "test": "jest"
   },
   "dependencies": {
-    "@whiskeysockets/baileys": "6.7.18",
+    "@whiskeysockets/baileys": "6.7.24",
     "amqplib": "^0.10.5",
     "https-proxy-agent": "^7.0.6"
   },
