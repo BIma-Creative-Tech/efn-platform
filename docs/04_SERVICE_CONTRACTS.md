@@ -3820,8 +3820,11 @@ forecast v2 tidak mulai dari `category_mean` (histori < 56 hari). Status: **diba
 - **Event server `purchase` (L-185, keputusan lead 20 Nov 2026):** BFF menerbitkan `purchase` saat pesanan online lunas
   (`order.paid`), satu event per baris (`product_id`, `qty`, `price_idr` = harga satuan, `channel_code`, `outlet_code`,
   `company_code`), lewat jalur behavior yang sama (`behavior.event` → `event_raw`), **hanya bila consent `tracking` akun
-  aktif** (subject = member); `event_id` deterministik per baris pesanan (idempoten); tipe ini **tidak** diterima dari
-  klien di `POST /v1/events`. CHECK `behavior.event_raw.type` ditambah `purchase`. ETL `behavior.py` dan view
+  aktif** (subject = member); `event_id` deterministik per baris pesanan, idempoten lewat `behavior.purchase_emitted`
+  (`part_id`, retensi 30 hari); tipe ini **tidak** diterima dari klien di `POST /v1/events`. **Konsekuensi PDP
+  (SEC-G50-17):** riwayat pembelian online masuk profil perilaku pseudonim → **teks consent `tracking` wajib menyebut
+  pencatatan pembelian dan penautan ke akun sebelum production** (bagian DPIA tracking; teks final = keputusan DPO,
+  Q-SM33); inventaris PDP §2.8.12a v19. CHECK `behavior.event_raw.type` ditambah `purchase`. ETL `behavior.py` dan view
   `efn_segment.*` sudah mengenalinya. **Batasan:** pembelian **POS belum tercakup** (member yang membeli di kasir tetap
   bisa masuk segmen "belum beli"). **Sampai L-185 dibangun**, segmen "sudah beli" (`viewed_not_bought`,
   `wishlist_idle`, `oos_viewed`, `price_sensitive`) hanya berbasis `checkout_start` (bukan pembayaran lunas), sehingga
@@ -3874,7 +3877,7 @@ consumer BFF hanya didaftarkan bila flag fiturnya aktif.
 | `notify.restock` | BFF **`AlertWatcherService`** (`efn-bff`, L-173; hanya produk dengan alert aktif) | BFF `bff.alert-dispatcher` (`efn-bff`) | `restock:<channel_code>:<outlet_code>:<product_id>:<restock_seq>` | `{ schema_version: 1, idempotency_key, channel_code, outlet_code, product_id, detected_at }` |
 | `notify.price_alert` | BFF **`AlertWatcherService`** (`efn-bff`) | BFF `bff.alert-dispatcher` (`efn-bff`) | `price:<channel_code>:<product_id>:<price_version>` | `{ schema_version: 1, idempotency_key, channel_code, product_id, new_price_idr, detected_at }` |
 | `notify.email` | BFF `EmailNotifier` lewat outbox platform (`efn-bff`) | BFF email-sender (`efn-bff`) | `email:<source>:<source_ref>:<member_hash>` | `{ schema_version: 1, idempotency_key, member_hash, source: "campaign"|"restock"|"price_alert"|"transactional", source_ref, template, params }` — **tanpa alamat email** (didekripsi saat kirim, ADR-048). `transactional` belum punya template (ditolak sebagai kesalahan pemanggil) |
-| `notify.wa_unofficial` | BFF `WaUnofficialNotifier` (`efn-bff`, hanya bila `WA_UNOFFICIAL_ENABLED=true`) | wa-unofficial (`efn-wa-unofficial`) | `wa:<source>:<source_ref>:<to_hash>` | `{ schema_version: 1, idempotency_key, to_e164, to_hash, category: "promo"|"notify_restock"|"price_alert", template, params, expires_at }`; properti AMQP `expiration` ≤ 24 jam (pesan kedaluwarsa di-dead-letter ke `.dlq`, wajar; DLQ WA dikecualikan dari alert DLQ generik). **`notify.wa_unofficial.dlq` wajib policy broker `message-ttl` (≤ 24–48 jam) + `max-length`** karena `expiration` dicabut saat dead-letter dan pesan memuat `to_e164` (SEC-G50-04, pemblokir production WA); usulan sama untuk `behavior.event.dlq` (TTL ≤ 7 hari = retensi staging) |
+| `notify.wa_unofficial` | BFF `WaUnofficialNotifier` (`efn-bff`, hanya bila `WA_UNOFFICIAL_ENABLED=true`) | wa-unofficial (`efn-wa-unofficial`) | `wa:<source>:<source_ref>:<to_hash>` | `{ schema_version: 1, idempotency_key, to_e164, to_hash, category: "promo"|"notify_restock"|"price_alert", template, params, expires_at }`; properti AMQP `expiration` ≤ 24 jam (pesan kedaluwarsa di-dead-letter ke `.dlq`, wajar; DLQ WA dikecualikan dari alert DLQ generik). **`notify.wa_unofficial.dlq` wajib policy broker `message-ttl` 24 jam + `max-length`** karena `expiration` dicabut saat dead-letter dan pesan memuat `to_e164` (SEC-G50-04, pemblokir production WA); `behavior.event.dlq` TTL 7 hari (= retensi staging); inventaris PDP §3 v19 |
 | `notify.wa_unofficial.result` | wa-unofficial (`efn-wa-unofficial`) | BFF `bff.wa-unofficial-result` (`efn-bff`) | `warslt:<idempotency_key asal>:<status>` (L-175) atau `waoptout:<to_hash>:<ts>` | `{ schema_version: 1, ref_idempotency_key|null, kind: "result"|"opt_out", status?: "sent"|"failed"|"rate_limited"|"banned"|"disconnected", reason?: string, to_hash, at }` |
 
 Catatan:
@@ -4016,10 +4019,15 @@ hari setelah berakhir, kode 90 hari.
   `SEGMENT_TLS_CLIENT_ALLOWED_CN`=`segment-worker`, CA `SEGMENT_CLIENT_CA_FILE`; tanpa TLS listener tidak dibuka; hanya
   dibuka bila `PROMO_CAMPAIGN_ENABLED=true`. Network compose `segment-bff` (internal) hanya api-gateway ↔ segment-worker;
   `SEGMENT_BFF_URL=https://api-gateway:9466`.
-- Body: `{ schema_version: 1, run_id (UUIDv4), segment_code, subject_keys: [1..5000 hex64, unik, terurut], chunk_no ≥ 0 }`
-  (`additionalProperties: false`), body ≤ 512 KB, `Content-Type: application/json`.
+- Body: `{ schema_version: 1, company_code, run_id (UUIDv4), segment_code, subject_keys: [1..5000 hex64, unik, terurut], chunk_no ≥ 0 }`
+  (`additionalProperties: false`), body ≤ 512 KB, `Content-Type: application/json`. **`company_code` wajib** (PT run,
+  `^[A-Z][A-Z0-9]{1,9}$` ∈ `CAMPAIGN_COMPANIES`; SEC-G50-16/SEC-08): **satu run = satu PT** — chunk berikutnya dengan
+  `run_id` sama tetapi PT lain → `409 run_company_mismatch`; dispatcher hanya memakai anggota segmen yang PT-nya sama
+  dengan `company_code` kampanye. `schema_version` ≠ 1 → `400 unsupported_schema`.
+  **Contoh normatif:** fixture bersama `services/segment-worker/tests/fixtures/segment_members_v1.json` (dipakai test
+  worker dan BFF; *belum ada di worktree saat v20.2 ditulis*).
 - Respons `200 { ok: true, run_id, segment_code, chunk_no, accepted, duplicate_chunk }`; chunk sama → `duplicate_chunk:
-  true`; kunci sama isi beda → `409 chunk_conflict`; `400 invalid_request`, `403 forbidden` (CN), `404`, `405`, `413
+  true`; kunci sama isi beda → `409 chunk_conflict`; `409 run_company_mismatch`; `400 invalid_request` / `unsupported_schema`, `403 forbidden` (CN), `404`, `405`, `413
   payload_too_large`, `415 unsupported_media_type`, `503 service_unavailable` — semua `{ error: { code, message } }`.
   Subjek di `behavior.erased_subject` tidak disimpan.
 - Urutan worker: semua anggota satu segmen ke BFF **sebelum** ringkasan ke Odoo; segmen yang gagal di BFF tidak
@@ -4266,13 +4274,15 @@ Q-SM11 jadwal kirim & cut-off · Q-SM12 markdown di online · Q-SM13 izin alkoho
 - **Q-SM32** (Marketing + Finance, lanjutan Q-SM24) Ambang anggaran 4-eyes: di bawah ambang boleh satu orang (pembuat =
   penyetuju)? Default G50: semua kampanye butuh penyetuju kedua.
 - **Q-SM33** (DPO + Legal) Teks final banner consent `tracking` (web & app) dan versinya; web memakai teks DRAFT
-  `tracking@2026-11-20`. Setiap perubahan teks = versi baru + `CONSENT_TRACKING_TEXT_SHA256` baru di BFF.
+  `tracking@2026-11-20`. Setiap perubahan teks = versi baru + `CONSENT_TRACKING_TEXT_SHA256` baru di BFF. Teks wajib
+  menyebut pencatatan **pembelian online** dan **penautan ke akun** (L-185, SEC-G50-17).
 - **Q-SM34** (Pemilik proyek + DPO, lalu lead) Alur isi & verifikasi email member (`PUT /v1/me/email` + tautan/OTP
   verifikasi, kontrak §8) belum ada → kanal email selalu `skipped_no_email`. Apakah dibangun di gelombang berikut,
   dan apakah email boleh diwajibkan/ditawarkan saat registrasi?
 - **Q-SM35** — *diputuskan lead 20 Nov 2026 → L-185* (event server `purchase` dari `order.paid`, hanya dengan consent
   `tracking` akun; POS belum tercakup). Tetap dicatat untuk DPO dalam DPIA tracking (Q-SM16/Q-SM26): penautan
-  transaksi online ke profil perilaku.
+  transaksi online ke profil perilaku. **Syarat production (SEC-G50-17):** teks consent `tracking` menyebut pencatatan
+  pembelian dan penautan ke akun (teks final Q-SM33).
 - **Q-SM36** (IT klien/Security, saat PoC) Daftar host egress WhatsApp untuk allowlist SNI (saat ini `web.whatsapp.com`
   saja, media diblok) — perlu diverifikasi dengan trafik nyata Baileys 6.7.24 di nomor uji.
 - **Q-SM37** (Data + Ops, lalu lead untuk kontrak G47) Pemetaan `outlet_code` event perilaku → `stock.warehouse.id`

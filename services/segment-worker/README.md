@@ -24,6 +24,18 @@ hari yang sudah selesai (as_of = kemarin WIB). Semua anggota satu segmen dikirim
 segmen yang gagal di BFF tidak dikirim ke Odoo. Retry = chunk identik (anggota diurutkan + dedup), idempoten per
 `(run_id, segment_code, chunk_no)`. Run baru selalu `run_id` baru.
 
+Body anggota (SEC-G50-16, = BFF `src/campaign/segment-ingest.service.ts`, urutan field sama):
+
+```json
+{ "schema_version": 1, "company_code": "SMD", "run_id": "<uuid4>", "segment_code": "viewed_not_bought",
+  "subject_keys": ["<hex64>", "..."], "chunk_no": 0 }
+```
+
+`company_code` = PT run (wajib, ∈ COMPANY_CODES, ikut hash idempotensi BFF; satu `run_id` = satu PT). Respons BFF:
+`200 {ok, run_id, segment_code, chunk_no, accepted, duplicate_chunk}` (duplikat = sukses); `400 invalid_request`,
+`409 chunk_conflict`, `409 run_company_mismatch` -> segmen gagal, tidak diulang. Contoh valid/invalid bersama BFF (Jest)
+dan worker (pytest): `tests/fixtures/segment_members_v1.json`, diuji `tests/test_members_fixture.py`.
+
 ## Segmen
 
 | Kode | Aturan (default) |

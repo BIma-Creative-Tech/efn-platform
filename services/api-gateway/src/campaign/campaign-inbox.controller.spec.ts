@@ -37,15 +37,16 @@ describe('CampaignInboxService (GET /v1/me/inbox, usulan kontrak G50-A)', () => 
             rows: [
               row('anonymous_code', user.memberId, 'MINE-0001'),
               row('anonymous_code', randomUUID(), 'OTHER-0001'),
-              row('public_code', null, 'PUBLIC10', 'v1'), // format lama tetap terbaca
+              row('public_code', null, 'PUBLIC10'),
               row('anonymous_code', user.memberId, 'SWAP-0001', 'swapped'), // ciphertext baris lain → tidak terbaca
+              row('public_code', null, 'OLDV1', 'v1'), // tanpa cadangan v1 (re-review SEC-G50-11) → tidak terbaca
             ],
-            rowCount: 4,
+            rowCount: 5,
           }
         : undefined,
     );
     const res = await new CampaignInboxService(config, db, cipher).list(user);
-    expect(res.items.map((i) => i.voucher?.code ?? null)).toEqual(['MINE-0001', null, 'PUBLIC10', null]);
+    expect(res.items.map((i) => i.voucher?.code ?? null)).toEqual(['MINE-0001', null, 'PUBLIC10', null, null]);
     expect(db.queries[0]!.params).toEqual([user.memberId]);
   });
 
@@ -56,6 +57,8 @@ describe('CampaignInboxService (GET /v1/me/inbox, usulan kontrak G50-A)', () => 
     const blob = cipher.encrypt('CODE-A', voucherCodeAad(a));
     expect(decryptVoucherCode(cipher, a.toUpperCase(), blob)).toBe('CODE-A');
     expect(() => decryptVoucherCode(cipher, randomUUID(), blob)).toThrow();
+    // tanpa cadangan v1 kolom
+    expect(() => decryptVoucherCode(cipher, a, cipher.encrypt('CODE-A', VOUCHER_CODE_AAD))).toThrow();
   });
 });
 

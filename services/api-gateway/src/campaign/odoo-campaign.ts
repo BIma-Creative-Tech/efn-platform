@@ -102,6 +102,8 @@ function req<T>(v: T | null | undefined | false, reason: string): T {
  */
 export function parseCampaignPayload(rawInput: unknown, company: string): { payload: CampaignPayload; codes: string[] } {
   const o = req(obj(rawInput), 'payload');
+  // SEC-G50-20: versi skema wajib 1 (tidak ada/berbeda → ditolak, tidak di-ack; Odoo mencatat `failed` setelah 5×)
+  if (o.schema_version !== 1) throw new Invalid('unsupported_schema');
   const campaignId = req(posInt(o.campaign_id), 'campaign_id');
   const companyCode = req(typeof o.company_code === 'string' && CODE_RE.test(o.company_code) ? o.company_code : null, 'company_code');
   if (companyCode !== company) throw new Invalid('company_mismatch');

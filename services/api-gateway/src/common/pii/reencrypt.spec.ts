@@ -96,7 +96,7 @@ describe('re-encrypt PII (U2)', () => {
       pk: 'id',
       aad: 'efn:member_voucher.code_enc:v1',
     });
-    // SEC-G50-11: AAD per baris = voucherCodeAad (campaign-sync menulis v2, inbox membaca v2 lalu v1)
+    // SEC-G50-11: AAD per baris = voucherCodeAad (campaign-sync menulis v2, inbox membaca v2 saja)
     expect(findPiiColumns('member_voucher.code_enc')[0].rowAad!('BBBBBBBB-BBBB-4BBB-8BBB-BBBBBBBBBBBB')).toBe(
       'efn:member_voucher.code_enc:v2:bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
     );

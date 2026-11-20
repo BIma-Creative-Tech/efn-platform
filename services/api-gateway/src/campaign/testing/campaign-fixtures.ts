@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 
 /** Fixture test kampanye (bukan runtime). Tanpa data member; kode voucher sintetis. */
 export const campaignPayload = (extra: Record<string, unknown> = {}): Record<string, unknown> => ({
+  schema_version: 1,
   campaign_id: 7,
   company_code: 'SMD',
   kind: 'segment',

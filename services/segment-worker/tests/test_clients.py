@@ -38,6 +38,7 @@ def _policy() -> RetryPolicy:
 def _members() -> dict[str, Any]:
     return {
         "schema_version": 1,
+        "company_code": "SMD",
         "run_id": RUN,
         "segment_code": "wishlist_idle",
         "subject_keys": [key(1), key(2)],

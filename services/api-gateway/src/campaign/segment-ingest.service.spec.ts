@@ -14,7 +14,7 @@ const chunk = (extra: Record<string, unknown> = {}): Record<string, unknown> => 
   run_id: RUN,
   segment_code: 'oos_viewed',
   chunk_no: 0,
-  subject_keys: [K2, K1, K1],
+  subject_keys: [K2, K1],
   ...extra,
 });
 
@@ -64,16 +64,28 @@ describe('SegmentIngestService (POST /internal/v1/segments/{run_id}/members, §2
     expect(await conflict.svc.ingest(RUN, chunk())).toMatchObject({ status: 409, body: { error: { code: 'chunk_conflict' } } });
   });
 
-  it('validasi: run_id ≠ path, > 5000 subjek, subjek bukan hex, field asing → 400 tanpa query', async () => {
+  it('validasi → 400 dengan kode spesifik (SEC-G50-16) tanpa query', async () => {
     const ctx = setup();
-    for (const [path, body] of [
-      [randomUUID(), chunk()],
-      [RUN, chunk({ subject_keys: Array.from({ length: 5001 }, (_, i) => i.toString(16).padStart(64, '0')) })],
-      [RUN, chunk({ subject_keys: ['628123456789'] })],
-      [RUN, chunk({ member_ids: [1] })],
-      [RUN, chunk({ segment_code: 'DROP TABLE' })],
-    ] as [string, Record<string, unknown>][]) {
-      expect((await ctx.svc.ingest(path, body)).status).toBe(400);
+    const noKeys = chunk();
+    delete noKeys.chunk_no;
+    for (const [path, body, code] of [
+      [RUN, [1], 'invalid_body'],
+      [RUN, chunk({ schema_version: 2 }), 'unsupported_schema'],
+      [RUN, chunk({ schema_version: undefined }), 'unsupported_schema'],
+      [RUN, chunk({ member_ids: [1] }), 'members_keys'],
+      [RUN, noKeys, 'members_keys'],
+      [RUN, chunk({ company_code: 'ZZZ' }), 'invalid_company_code'],
+      [RUN, chunk({ run_id: 'x' }), 'invalid_run_id'],
+      [randomUUID(), chunk(), 'run_id_mismatch'],
+      [RUN, chunk({ segment_code: 'DROP TABLE' }), 'invalid_segment_code'],
+      [RUN, chunk({ segment_code: 'unknown_segment' }), 'invalid_segment_code'],
+      [RUN, chunk({ chunk_no: -1 }), 'invalid_chunk_no'],
+      [RUN, chunk({ subject_keys: [] }), 'subject_keys_size'],
+      [RUN, chunk({ subject_keys: Array.from({ length: 5001 }, (_, i) => i.toString(16).padStart(64, '0')) }), 'subject_keys_size'],
+      [RUN, chunk({ subject_keys: [K1, K1] }), 'subject_keys_duplicate'],
+      [RUN, chunk({ subject_keys: ['628123456789'] }), 'invalid_subject_key'],
+    ] as [string, unknown, string][]) {
+      expect({ code, out: await ctx.svc.ingest(path, body) }).toEqual({ code, out: { status: 400, body: { error: { code, message: expect.any(String) } } } });
     }
     expect(ctx.db.queries).toHaveLength(0);
   });

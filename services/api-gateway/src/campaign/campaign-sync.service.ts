@@ -7,7 +7,10 @@ import { PiiCipher, piiAad } from '../common/pii/crypto';
 import { CampaignRequestedMessage, PROMO_CAMPAIGN_REQUESTED_QUEUE, campaignKey } from './campaign-message';
 import { CLAIM_LIMIT, ClaimResult, ClaimedCampaign, ODOO_CAMPAIGN, OdooCampaignApi, OdooCampaignError } from './odoo-campaign';
 
-/** AAD kolom v1 kode voucher (hanya dibaca sebagai cadangan; registry `pii-columns.ts`). */
+/**
+ * AAD kolom v1 (format lama). Tidak dipakai menulis/membaca kode voucher; hanya `aad` wajib entri registry
+ * `pii-columns.ts` (job re-encrypt) dan asersi test bahwa v1 TIDAK membuka ciphertext.
+ */
 export const VOUCHER_CODE_AAD = piiAad('member_voucher', 'code_enc');
 /**
  * SEC-G50-11 (pola SEC-102): AAD per baris — ciphertext terikat `member_voucher.id`, sehingga `code_enc` tidak bisa
@@ -17,13 +20,12 @@ export function voucherCodeAad(id: string): string {
   return `efn:member_voucher.code_enc:v2:${id.toLowerCase()}`;
 }
 
-/** Dekripsi kode voucher: v2 (per baris) lalu v1 (kolom) sebagai cadangan. Melempar bila keduanya gagal. */
+/**
+ * Dekripsi kode voucher HANYA dengan AAD v2 per baris (re-review SEC-G50-11: tidak ada data v1 karena fitur belum pernah
+ * aktif → tanpa cadangan v1). Melempar bila AAD tidak cocok (mis. ciphertext ditukar antar-baris).
+ */
 export function decryptVoucherCode(cipher: PiiCipher, id: string, blob: Buffer): string {
-  try {
-    return cipher.decrypt(blob, voucherCodeAad(id));
-  } catch {
-    return cipher.decrypt(blob, VOUCHER_CODE_AAD);
-  }
+  return cipher.decrypt(blob, voucherCodeAad(id));
 }
 /** Retensi (PLACEHOLDER DPO/Finance): inbox 30 hari setelah berakhir, kode voucher 90 hari setelah berakhir. */
 const INBOX_RETENTION_DAYS = 30;

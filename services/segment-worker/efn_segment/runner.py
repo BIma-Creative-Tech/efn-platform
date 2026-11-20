@@ -126,7 +126,7 @@ def run_company(
             if seg.member_count < params.min_segment_size:
                 reports.append(SegmentReport(seg.code, "skipped_small", seg.member_count))
                 continue
-            members = members_payloads(run_id, seg.code, seg.members, params.chunk_size)
+            members = members_payloads(company, run_id, seg.code, seg.members, params.chunk_size)
             if total_members(members) != seg.member_count:  # defensif: chunking tidak boleh kehilangan anggota
                 raise ContractError("member_count_mismatch")
             proposal = proposal_payload(company, run_id, seg, sp, as_of, params.k_min, params.top_n, now)

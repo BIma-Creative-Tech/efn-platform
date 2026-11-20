@@ -68,6 +68,17 @@ describe('parse klaim kampanye Odoo (allowlist, §28.7)', () => {
     expect(() => parseCampaignPayload(nested, 'SMD')).toThrow('voucher_codes');
   });
 
+  it('SEC-G50-20: schema_version ≠ 1 / tidak ada → unsupported_schema (baris klaim ditolak, tidak di-ack)', () => {
+    expect(() => parseCampaignPayload(campaignPayload({ schema_version: 2 }), 'SMD')).toThrow('unsupported_schema');
+    expect(() => parseCampaignPayload(campaignPayload({ schema_version: '1' }), 'SMD')).toThrow('unsupported_schema');
+    const missing = campaignPayload();
+    delete missing.schema_version;
+    expect(() => parseCampaignPayload(missing, 'SMD')).toThrow('unsupported_schema');
+    const res = parseClaim({ items: [{ id: 3, approval_rev: 0, payload: campaignPayload({ schema_version: 2 }) }] }, 'SMD');
+    expect(res.rejected).toEqual([{ outboxId: 3, reason: 'unsupported_schema' }]);
+    expect(parseCampaignPayload(campaignPayload(), 'SMD').payload).not.toHaveProperty('schema_version');
+  });
+
   it('respons bukan {items: []} → invalid_response', () => {
     expect(() => parseClaim({ rows: [] }, 'SMD')).toThrow(OdooCampaignError);
   });

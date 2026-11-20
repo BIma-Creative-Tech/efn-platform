@@ -14,8 +14,8 @@ publish ke RabbitMQ (L-155, L-156).
 1. **campaign-sync** (`CAMPAIGN_SYNC_SECONDS`=60, `CAMPAIGN_COMPANIES`=SMD): `efn.campaign/efn_campaign_claim` (limit 20,
    tidak di-retry) per PT dengan API key `odoo_api_key_campaign_<pt>` → validasi allowlist (`parseClaim`) → **satu
    transaksi**: `platform.campaign` + kode voucher terenkripsi (`member_voucher.code_enc` AES-256-GCM key ring PII, AAD
-   per baris `efn:member_voucher.code_enc:v2:<id>` — SEC-G50-11, pola SEC-102; dekripsi menerima v1 kolom sebagai
-   cadangan; terdaftar di `pii-columns.ts` dengan `rowAad` — `code_hash` HMAC) + outbox `promo.campaign.requested`
+   per baris `efn:member_voucher.code_enc:v2:<id>` — SEC-G50-11, pola SEC-102; dekripsi HANYA v2, tanpa cadangan
+   v1 karena belum ada data v1; terdaftar di `pii-columns.ts` dengan `rowAad` — `code_hash` HMAC) + outbox `promo.campaign.requested`
    (`campaign:<pt>:<id>:<rev>`, payload **tanpa kode**) → `efn_campaign_ack(ids)`. Baris invalid tidak di-ack.
 2. **segment-worker** → `POST /internal/v1/segments/{run_id}/members` di listener HTTPS **mTLS terpisah**
    (`SEGMENT_INTERNAL_PORT`=9466, CN `SEGMENT_TLS_CLIENT_ALLOWED_CN`=segment-worker, CA `SEGMENT_CLIENT_CA_FILE`;
@@ -23,7 +23,13 @@ publish ke RabbitMQ (L-155, L-156).
    ≤ 5000 `subject_key`/chunk, body ≤ 512 KB, subjek ter-erasure dikecualikan. **SEC-G50-08:** body wajib
    `company_code` (∈ `COMPANY_CODES`, ikut hash idempotensi), satu PT per `run_id` (PT lain → `409 run_company_mismatch`);
    disimpan di `segment_chunk`/`segment_member` dan dispatcher hanya memilih anggota `company_code` = PT kampanye.
-   Body lengkap: `{schema_version: 1, company_code, run_id, segment_code, chunk_no, subject_keys[≤5000]}`.
+   Body lengkap: `{schema_version: 1, company_code, run_id, segment_code, chunk_no, subject_keys[1..5000, unik]}`.
+   Galat 400 berkode spesifik (SEC-G50-16, urutan cek = worker `validate_members`): `invalid_body`, `unsupported_schema`
+   (SEC-G50-20), `members_keys`, `invalid_company_code`, `invalid_run_id`, `run_id_mismatch`, `invalid_segment_code`
+   (allowlist 5 kode §28.7), `invalid_chunk_no`, `subject_keys_size`, `subject_keys_duplicate`, `invalid_subject_key`;
+   409 `run_company_mismatch` / `chunk_conflict`. Fixture bersama `services/segment-worker/tests/fixtures/
+   segment_members_v1.json` diuji `segment-members-fixture.spec.ts` (file hilang = gagal).
+   Payload klaim Odoo juga wajib `schema_version: 1` (lainnya → `unsupported_schema`, SEC-G50-20).
 3. **campaign-dispatcher** (`bff.campaign-dispatcher` via status `platform.campaign` + PK `campaign_delivery`):
    target segmen (`segment_member` → `subject_member` → member, consent `tracking` **dan** `marketing`) atau markdown
    tanpa segmen (wishlist produk + consent `marketing`); per halaman 500: cap frekuensi (bila aktif) → delivery →

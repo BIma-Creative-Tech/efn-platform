@@ -123,7 +123,7 @@ L-175, L-178..L-180.
 | 4 flag | `deploy-validate` menolak tanpa ref | Ref **dan** izin Superadmin `EFN_ALLOW_FEATURE_ON`; service exit 78 di production tanpa ref; secret WA `host:disabled` di production | Dua lapis; pemegang akses CI saja tidak cukup. |
 | §3.1 payload | `to (didekripsi per pesan)` | `to_e164` = digit E.164 **tanpa `+`**; `to_hash` HMAC atas string itu; hasil punya `reason` opsional dan `message_id` `warslt:<key>:<status>` | Konsistensi kedua paket (kontrak disalin di dua tempat, diubah bersamaan). |
 | 8 consent | STOP mencabut `marketing` | Tetap; consent per **purpose** — STOP mencabut `marketing` untuk semua kanal promo (email ikut berhenti) | Consent per kanal butuh revisi `docs/04` §8.4 (belum diminta). |
-| DLQ | — | `notify.wa_unofficial.dlq` wajib policy broker `message-ttl` (≤ 24–48 jam) + `max-length`: `expiration` dicabut saat dead-letter sehingga `to_e164` bisa tertahan tanpa batas (SEC-G50-04, pemblokir production WA) | Minimisasi & retensi PDP untuk nomor HP. |
+| DLQ | — | `notify.wa_unofficial.dlq` wajib policy broker `message-ttl` 24 jam + `max-length`: `expiration` dicabut saat dead-letter sehingga `to_e164` bisa tertahan tanpa batas (SEC-G50-04, pemblokir production WA) | Minimisasi & retensi PDP untuk nomor HP. |
 | Uji | — | Service **tidak pernah dijalankan terhadap WhatsApp nyata**; perilaku pairing, reconnect, kode putus, STOP dari alamat `@lid` belum terverifikasi | Wajib PoC dengan nomor uji sebelum Q-SM14 ditandatangani. |
 
 ## 4. Konsekuensi

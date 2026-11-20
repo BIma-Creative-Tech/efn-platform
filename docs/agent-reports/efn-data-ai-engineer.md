@@ -1643,9 +1643,14 @@ lock ada (sengaja, fail closed).
    top_product_count, top_product_subjects, reason_market?, reason_habit?} (angka saja), summary (<= 256, tanpa angka
    >= 6 digit), generated_at (RFC3339 UTC)}`; idempoten per `(company, run_id, segment_code)`; galat
    `efn_campaign:<kode>`; konstanta dicek terhadap source Odoo di `tests/test_odoo_contract_parity.py`.
-6. **BFF members**: body persis §28.7; sukses 2xx; chunk ulang boleh 2xx atau `409 duplicate_chunk`; header tambahan
-   `Idempotency-Key: segment:<run_id>:<segment_code>:<chunk_no>`. Usul kontrak: field `chunk_total` (sekarang BFF bisa
-   mencocokkan Σ anggota dengan `member_count` dari Odoo).
+6. **BFF members** (diperbaiki SEC-G50-16, sesuai `src/campaign/segment-ingest.service.ts`): body
+   `{schema_version:1, company_code, run_id, segment_code, subject_keys[<= 5000], chunk_no (0..100000)}` dalam urutan
+   itu; `company_code` = PT run (∈ COMPANY_CODES), ikut hash idempotensi BFF, satu run = satu PT. Respons
+   `200 {ok, run_id, segment_code, chunk_no, accepted, duplicate_chunk}`; `400 invalid_request`,
+   `409 chunk_conflict`, `409 run_company_mismatch` tidak diulang. Contoh bersama worker/BFF:
+   `services/segment-worker/tests/fixtures/segment_members_v1.json` (valid 1 chunk, chunk terakhir, duplikat, invalid
+   dengan kode galat, konflik), diuji `tests/test_members_fixture.py` (termasuk paritas KEYS & COMPANY_CODES dengan
+   source BFF). Usul kontrak: field `chunk_total`; docs/04 §28.7 perlu menambah `company_code` (architect).
 7. `outlet_code` di mart belum dipetakan ke `warehouse_id` (row policy Insight `v_sm_*` G47 butuh `warehouse_id`).
 
 ### Belum terverifikasi

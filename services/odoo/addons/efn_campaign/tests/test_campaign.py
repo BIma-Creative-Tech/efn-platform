@@ -330,6 +330,28 @@ class TestEfnCampaign(TransactionCase):
         self.assertEqual((made.state, made.approval_rev, made.origin), ("draft", 0, "manual"))
         self.assertEqual(made.maker_id, self.marketer)
 
+    def test_sec_g50_19_user_ir_default_ignored_for_system_fields(self):
+        """SEC-G50-19: ir.default milik user Marketing tidak mengisi field sistem saat create."""
+        Default = self.env["ir.default"].sudo()
+        for fname, value in (
+            ("approved_by_id", self.approver.id),
+            ("origin", "worker"),
+            ("segment_code", "palsu_segmen"),
+            ("segment_member_count", 9999),
+            ("approval_rev", 3),
+        ):
+            Default.set("efn.campaign", fname, value, user_id=self.marketer.id)
+        camp = (
+            self.env["efn.campaign"]
+            .with_user(self.marketer)
+            .create({"name": "Uji ir.default", "company_id": self.company.id})
+        )
+        self.assertFalse(camp.approved_by_id)
+        self.assertEqual((camp.origin, camp.state, camp.approval_rev), ("manual", "draft", 0))
+        self.assertFalse(camp.segment_code)
+        self.assertEqual(camp.segment_member_count, 0)
+        self.assertEqual((camp.maker_id, camp.editor_ids), (self.marketer, self.marketer))
+
     def test_sec_g50_03_marketing_cannot_read_card_codes(self):
         camp = self.approve(self.proposed(code_qty=2))
         Card = self.env["loyalty.card"].with_user(self.marketer)

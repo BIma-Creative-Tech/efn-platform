@@ -2,11 +2,14 @@
 
 - HTTPS + verifikasi CA internal + sertifikat klien CN `segment-worker` (mTLS; satu-satunya autentikasi menurut
   kontrak).
-- Body PERSIS kontrak (`additionalProperties: false` di BFF): `schema_version, run_id, segment_code, subject_keys,
-  chunk_no`. Header tambahan `Idempotency-Key: segment:<run_id>:<segment_code>:<chunk_no>` (informasi; kunci idempotensi
-  tetap tuple body).
-- Sukses = 2xx. ASUMSI G50 (respons belum ditetapkan kontrak): chunk yang sudah diterima boleh dijawab 2xx (mis.
-  `{ "duplicate": true }`) ATAU `409` dengan kode `duplicate_chunk` -> keduanya sukses. 4xx lain tidak diulang.
+- Body = BFF `src/campaign/segment-ingest.service.ts` (kunci tak dikenal ditolak): `schema_version, company_code,
+  run_id, segment_code, subject_keys, chunk_no` (SEC-G50-08/16: `company_code` wajib, ikut hash idempotensi, satu run =
+  satu PT). Header tambahan `Idempotency-Key: segment:<run_id>:<segment_code>:<chunk_no>` (informasi; kunci
+  idempotensi tetap tuple body). Contoh bersama: `tests/fixtures/segment_members_v1.json`.
+- Respons BFF: `200 {ok, run_id, segment_code, chunk_no, accepted, duplicate_chunk}` (chunk ulang dengan isi sama =
+  `duplicate_chunk: true`, sukses). `400 invalid_request` (body tidak valid), `409 chunk_conflict` (isi berbeda untuk
+  kunci sama), `409 run_company_mismatch` (run sudah milik PT lain) -> tidak diulang. `409 duplicate_chunk` tetap
+  diterima sebagai sukses (toleransi bila BFF berubah).
 """
 
 from __future__ import annotations

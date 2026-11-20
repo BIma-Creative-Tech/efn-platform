@@ -10,6 +10,7 @@ from conftest import key
 
 from efn_segment.contract import (
     MAX_SUBJECTS_PER_CHUNK,
+    MEMBERS_FIELDS,
     MEMBERS_KEYS,
     PII_RE,
     PROPOSAL_KEYS,
@@ -50,19 +51,24 @@ def test_chunk_size_bounds_and_invalid_keys() -> None:
 
 
 def test_members_payloads_exact_contract_shape() -> None:
-    payloads = members_payloads(RUN, "oos_viewed", [key(i) for i in range(7)], 3)
+    payloads = members_payloads("SMD", RUN, "oos_viewed", [key(i) for i in range(7)], 3)
     assert [p["chunk_no"] for p in payloads] == [0, 1, 2]
     assert all(set(p) == MEMBERS_KEYS for p in payloads)
+    assert all(list(p) == list(MEMBERS_FIELDS) for p in payloads)  # urutan = BFF
     assert payloads[0]["schema_version"] == 1 and payloads[0]["run_id"] == RUN
+    assert {p["company_code"] for p in payloads} == {"SMD"}
     assert total_members(payloads) == 7
-    assert members_payloads(RUN, "oos_viewed", [key(i) for i in range(7)], 3) == payloads
-    assert members_payloads(RUN, "oos_viewed", [], 3) == []
+    assert members_payloads("SMD", RUN, "oos_viewed", [key(i) for i in range(7)], 3) == payloads
+    assert members_payloads("SMD", RUN, "oos_viewed", [], 3) == []
+    with pytest.raises(ContractError):
+        members_payloads("XYZ", RUN, "oos_viewed", [key(1)], 3)
     assert idempotency_key(RUN, "oos_viewed", 2) == f"segment:{RUN}:oos_viewed:2"
 
 
 def _members(**over: Any) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "schema_version": 1,
+        "company_code": "SMD",
         "run_id": RUN,
         "segment_code": "viewed_not_bought",
         "subject_keys": [key(1), key(2)],
@@ -72,10 +78,19 @@ def _members(**over: Any) -> dict[str, Any]:
     return payload
 
 
+def test_validate_members_accepts_valid() -> None:
+    validate_members(_members())
+
+
 @pytest.mark.parametrize(
     "over",
     [
         {"schema_version": 2},
+        {"company_code": "XYZ"},
+        {"company_code": "smd"},
+        {"company_code": ["SMD"]},
+        {"company_code": None},
+        {"chunk_no": 100_001},
         {"run_id": "not-uuid"},
         {"run_id": str(uuid.uuid1())},  # bukan v4
         {"run_id": RUN.upper()},
@@ -94,9 +109,10 @@ def test_validate_members_rejects(over: dict[str, Any]) -> None:
         validate_members(_members(**over))
 
 
-def test_validate_members_missing_key() -> None:
+@pytest.mark.parametrize("missing", ["chunk_no", "company_code"])
+def test_validate_members_missing_key(missing: str) -> None:
     payload = _members()
-    del payload["chunk_no"]
+    del payload[missing]
     with pytest.raises(ContractError):
         validate_members(payload)
 

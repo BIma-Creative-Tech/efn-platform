@@ -2919,3 +2919,14 @@ generated_at +07:00, metrics list), test voucher per mode memakai key payload ba
 Belum diverifikasi: `discount_max_amount` di `loyalty.reward` 19.0 (dipakai hanya bila field ada); posting chatter /
 lampiran oleh Marketing tidak menulis field record sebagai user (asumsi: CE menulis `message_main_attachment_id` lewat
 sudo) — bila tidak, tambahkan field itu ke allowlist; ACL `loyalty.card` dari `sale_loyalty`/`pos_loyalty`.
+
+### SEC-G50-19 (Low, re-review 20 Nov 2026) — BELUM DIJALANKAN
+- `efn_campaign/models/efn_campaign.py`: override privat `_add_missing_default_values` (ada di `odoo/orm/models.py`
+  19.0, dicek WebFetch) — untuk non-sudo, field sistem yang tidak ada di vals tidak memakai `ir.default`/context; hanya
+  default bawaan field (`state=draft`, `origin=manual`) atau dibuang. Sengaja bukan override `default_get` (metode
+  publik → menambah permukaan RPC SEC-58). Lapis kedua: setelah `create` non-sudo, semua `SYSTEM_FIELDS` ditulis ulang
+  ke `INITIAL_SYSTEM_VALUES` (+ `maker_id`/`editor_ids` = pembuat) lewat `_efn_sys_write`.
+- Test `test_sec_g50_19_user_ir_default_ignored_for_system_fields`: `ir.default` user Marketing untuk
+  `approved_by_id`, `origin`, `segment_code`, `segment_member_count`, `approval_rev` → kampanye baru tetap kosong/awal.
+- Catatan: form "Baru" di web client masih bisa MENAMPILKAN default user untuk field sistem (onchange `default_get`),
+  tetapi nilai itu tidak tersimpan (field readonly tidak dikirim; bila dikirim → `field_not_writable`).

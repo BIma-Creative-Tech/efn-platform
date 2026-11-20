@@ -58,7 +58,7 @@ export class CampaignInboxService {
         const owned = r.mode === 'public_code' || (r.mode === 'anonymous_code' && r.v_member === user.memberId);
         if (r.code_enc && r.mode && r.v_id && owned) {
           try {
-            // SEC-G50-11: AAD per baris (v2, terikat id voucher) lalu v1 kolom sebagai cadangan
+            // SEC-G50-11: hanya AAD per baris (v2, terikat id voucher); tanpa cadangan v1
             voucher = { code: decryptVoucherCode(this.cipher, r.v_id, r.code_enc), mode: r.mode };
           } catch {
             this.logger.warn(`Kode voucher inbox ${r.id} tidak dapat didekripsi`);

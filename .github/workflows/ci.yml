@@ -69,18 +69,19 @@ jobs:
         # Perubahan ci.yml sendiri menjalankan SEMUA job di PR: workflow baru terbukti sebelum merge manual.
         with:
           filters: |
-            api:    ['services/api-gateway/**', '.github/workflows/ci.yml']
+            # G50 SEC-G50-20: test paritas lintas service membaca fixture/source sisi lain -> ikut memicu job terkait.
+            api:    ['services/api-gateway/**', 'services/odoo/addons/efn_campaign/tests/fixtures/**', 'services/segment-worker/tests/fixtures/**', '.github/workflows/ci.yml']
             web:    ['services/superapp-web/**', '.github/workflows/ci.yml']
             insight: ['services/insight-web/**', '.github/workflows/ci.yml']   # G42 dashboard Insight (docs/04 §26)
             wa-unofficial: ['services/wa-unofficial/**', '.github/workflows/ci.yml']   # G50 WA tidak resmi (ADR-044)
             odoo:   ['services/odoo/**', 'scripts/check-odoo-deps.sh', '.github/workflows/ci.yml']
-            python: ['services/ai-ocr-worker/**', 'services/etl/**', 'services/text2sql/**', 'services/esb-extract/**', 'services/forecast-worker/**', 'services/segment-worker/**', 'scripts/migration/**', '.github/workflows/ci.yml']
+            python: ['services/ai-ocr-worker/**', 'services/etl/**', 'services/text2sql/**', 'services/esb-extract/**', 'services/forecast-worker/**', 'services/segment-worker/**', 'scripts/migration/**', 'services/odoo/addons/efn_campaign/**', 'services/api-gateway/src/behavior/dto/**', 'infra/postgres/init/20-platform-g50a.sql', '.github/workflows/ci.yml']
             ai-ocr-worker: ['services/ai-ocr-worker/**', '.github/workflows/ci.yml']
-            etl:           ['services/etl/**', '.github/workflows/ci.yml']
+            etl:           ['services/etl/**', 'services/api-gateway/src/behavior/dto/**', 'infra/postgres/init/20-platform-g50a.sql', '.github/workflows/ci.yml']
             text2sql:      ['services/text2sql/**', '.github/workflows/ci.yml']
             esb-extract:   ['services/esb-extract/**', '.github/workflows/ci.yml']   # G41 (docs/04 §25)
             forecast-worker: ['services/forecast-worker/**', '.github/workflows/ci.yml']   # G44 (docs/04 §28.2, ADR-046)
-            segment-worker: ['services/segment-worker/**', '.github/workflows/ci.yml']     # G50 (docs/04 §28.7, ADR-047)
+            segment-worker: ['services/segment-worker/**', 'services/odoo/addons/efn_campaign/**', '.github/workflows/ci.yml']     # G50 (docs/04 §28.7, ADR-047)
             esb-migrate:   ['scripts/migration/**', '.github/workflows/ci.yml']      # G43 (docs/04 §27.2)
             infra:  ['infra/**', 'services/**/Dockerfile', '.github/workflows/**', 'scripts/**', 'Makefile']
 

@@ -1112,6 +1112,15 @@ hari-engineer). Sembilan pertanyaan klien baru (Q-SM30..Q-SM39; Q-SM35 sudah dip
   tanpa kanal, `kind=segment` wajib segmen saat approval; Q-SM35 → **L-185** (event `purchase` dari `order.paid`, consent
   `tracking` akun, POS belum tercakup); `features.notify_channels` di §28.8a; layar `/inbox` Super-App (sedang dibuat);
   normalizer payload lama di BFF dihapus (satu format + fixture normatif).
+- **Re-review security (putaran 3, 20 Nov 2026), sudah diterapkan:** §28.7c body segmen wajib `company_code` (satu run =
+  satu PT, `409 run_company_mismatch`, `400 unsupported_schema`, fixture `services/segment-worker/tests/fixtures/
+  segment_members_v1.json`; SEC-G50-16/SEC-08); §28.6 + Q-SM33/Q-SM35: teks consent `tracking` wajib menyebut pembelian
+  online & penautan akun sebelum production (SEC-G50-17); DLQ WA TTL 24 jam + max-length, `behavior.event.dlq` 7 hari.
+  `docs/compliance/PDP_DATA_INVENTORY.md` **v19**: §2.8.12a baru (member_email, email_outbound, email_unsubscribe_used,
+  wa_unofficial_recipient/outbound, antrean WA, purchase_emitted, event `purchase`, subject_erasure, segment_member,
+  inbox/delivery, member_voucher — tujuan, dasar, kolom PII, enkripsi, retensi dari kode, penerima SMTP/WhatsApp) +
+  9 baris retensi §3 (SEC-G50-18). Temuan: `member_email.email_enc` dan `member_voucher.code_enc` belum terdaftar di
+  registry rotasi kunci; email & jejak WA belum ikut DSAR export.
 - ADR-044 §3.2, ADR-047 §6a, ADR-048 §3.1: bagian "Revisi G50"; status tetap Proposed.
 
 ## Temuan (untuk lead)

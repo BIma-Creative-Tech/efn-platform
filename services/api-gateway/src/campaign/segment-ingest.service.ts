@@ -14,7 +14,28 @@ export type SegmentIngestResult =
   | { status: 200; body: { ok: true; run_id: string; segment_code: string; chunk_no: number; accepted: number; duplicate_chunk: boolean } }
   | { status: 400 | 409; body: { error: { code: string; message: string } } };
 
-const bad = (): SegmentIngestResult => ({ status: 400, body: { error: { code: 'invalid_request', message: 'Permintaan tidak valid.' } } });
+/**
+ * Kode galat 400 (SEC-G50-16; endpoint internal mTLS → kode spesifik membantu worker, tanpa data subjek). Nama selaras
+ * `services/segment-worker/efn_segment/contract.py` dan fixture bersama `tests/fixtures/segment_members_v1.json`.
+ */
+export const SEGMENT_ERROR_CODES = [
+  'invalid_body',
+  'members_keys',
+  'unsupported_schema',
+  'invalid_run_id',
+  'run_id_mismatch',
+  'invalid_company_code',
+  'invalid_segment_code',
+  'invalid_chunk_no',
+  'subject_keys_size',
+  'subject_keys_duplicate',
+  'invalid_subject_key',
+] as const;
+export type SegmentErrorCode = (typeof SEGMENT_ERROR_CODES)[number];
+/** = kode segmen kontrak §28.7 (proposal_upsert) dan `efn_segment.segments.SEGMENT_CODES`. */
+export const SEGMENT_CODES: ReadonlySet<string> = new Set(['viewed_not_bought', 'wishlist_idle', 'oos_viewed', 'price_sensitive', 'search_no_result']);
+
+const bad = (code: SegmentErrorCode): SegmentIngestResult => ({ status: 400, body: { error: { code, message: 'Permintaan tidak valid.' } } });
 
 /**
  * `POST /internal/v1/segments/{run_id}/members` (docs/04 §28.7): anggota segmen dari `segment-worker` (mTLS, lihat
@@ -23,26 +44,50 @@ const bad = (): SegmentIngestResult => ({ status: 400, body: { error: { code: 'i
  * (`behavior.erased_subject`) tidak disimpan (mart ClickHouse bisa terlambat menghapusnya). Hanya `subject_key`
  * (pseudonim) — tanpa data member lain. Retensi 30 hari (BehaviorJobsService).
  */
+export interface ValidSegmentMembers {
+  runId: string;
+  company: string;
+  segment: string;
+  chunkNo: number;
+  /** Terurut naik, unik. */
+  keys: string[];
+}
+
+/**
+ * Validasi body (urutan cek = urutan worker `validate_members`, kode galat persis). Fungsi murni → dipakai juga spec
+ * fixture bersama. SEC-G50-20: `schema_version` ≠ 1 → `unsupported_schema` (dicek sebelum field lain).
+ */
+export function validateSegmentMembers(pathRunId: string, body: unknown): ValidSegmentMembers | { error: SegmentErrorCode } {
+  if (typeof body !== 'object' || body === null || Array.isArray(body)) return { error: 'invalid_body' };
+  const o = body as Record<string, unknown>;
+  if (o.schema_version !== 1) return { error: 'unsupported_schema' };
+  const keysOk = Object.keys(o).every((k) => KEYS.has(k)) && [...KEYS].every((k) => k in o);
+  if (!keysOk) return { error: 'members_keys' };
+  // SEC-G50-08: PT wajib dan konsisten per run_id (dispatcher hanya memakai anggota ber-PT sama dengan kampanye)
+  if (!isCompanyCode(o.company_code)) return { error: 'invalid_company_code' };
+  const runId = typeof o.run_id === 'string' ? o.run_id : '';
+  if (!UUID_RE.test(runId)) return { error: 'invalid_run_id' };
+  if (runId !== pathRunId.toLowerCase()) return { error: 'run_id_mismatch' };
+  if (typeof o.segment_code !== 'string' || !SEGMENT_RE.test(o.segment_code) || !SEGMENT_CODES.has(o.segment_code)) {
+    return { error: 'invalid_segment_code' };
+  }
+  const chunkNo = o.chunk_no;
+  if (typeof chunkNo !== 'number' || !Number.isSafeInteger(chunkNo) || chunkNo < 0 || chunkNo > 100_000) return { error: 'invalid_chunk_no' };
+  const list = o.subject_keys;
+  if (!Array.isArray(list) || list.length < 1 || list.length > MAX_SUBJECTS_PER_CHUNK) return { error: 'subject_keys_size' };
+  if (new Set(list).size !== list.length) return { error: 'subject_keys_duplicate' };
+  if (!list.every((k) => typeof k === 'string' && HEX64.test(k))) return { error: 'invalid_subject_key' };
+  return { runId, company: o.company_code, segment: o.segment_code, chunkNo, keys: [...(list as string[])].sort() };
+}
+
 @Injectable()
 export class SegmentIngestService {
   constructor(@Inject(DB) private readonly db: Db) {}
 
   async ingest(pathRunId: string, body: unknown): Promise<SegmentIngestResult> {
-    if (typeof body !== 'object' || body === null || Array.isArray(body)) return bad();
-    const o = body as Record<string, unknown>;
-    if (!Object.keys(o).every((k) => KEYS.has(k)) || o.schema_version !== 1) return bad();
-    const runId = typeof o.run_id === 'string' ? o.run_id.toLowerCase() : '';
-    if (!UUID_RE.test(runId) || runId !== pathRunId.toLowerCase()) return bad();
-    if (typeof o.segment_code !== 'string' || !SEGMENT_RE.test(o.segment_code)) return bad();
-    const chunkNo = o.chunk_no;
-    if (typeof chunkNo !== 'number' || !Number.isSafeInteger(chunkNo) || chunkNo < 0 || chunkNo > 100_000) return bad();
-    if (!Array.isArray(o.subject_keys) || o.subject_keys.length > MAX_SUBJECTS_PER_CHUNK) return bad();
-    if (!o.subject_keys.every((k) => typeof k === 'string' && HEX64.test(k))) return bad();
-    // SEC-G50-08: PT wajib dan konsisten per run_id (dispatcher hanya memakai anggota ber-PT sama dengan kampanye)
-    if (!isCompanyCode(o.company_code)) return bad();
-    const company = o.company_code;
-    const keys = [...new Set(o.subject_keys as string[])].sort();
-    const segment = o.segment_code;
+    const v = validateSegmentMembers(pathRunId, body);
+    if ('error' in v) return bad(v.error);
+    const { runId, company, segment, chunkNo, keys } = v;
     const sha = createHash('sha256').update(`${company}\n${segment}\n${chunkNo}\n${keys.join(',')}`, 'utf8').digest('hex');
     return this.db.tx(async (q): Promise<SegmentIngestResult> => {
       await q.query(`SELECT pg_advisory_xact_lock(hashtext('efn:segment_run:' || $1::text))`, [runId]);

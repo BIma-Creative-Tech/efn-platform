@@ -1,8 +1,11 @@
 """Payload & validasi lokal (docs/04 §28.7). Semua payload divalidasi SEBELUM panggilan pertama ke BFF/Odoo.
 
-1. BFF `POST /internal/v1/segments/{run_id}/members` — PERSIS kontrak §28.7:
-   `{ schema_version: 1, run_id, segment_code, subject_keys: [<= 5000], chunk_no }`; idempoten per
-   `(run_id, segment_code, chunk_no)`. Anggota diurutkan + dedup sebelum dipotong -> retry menghasilkan chunk identik.
+1. BFF `POST /internal/v1/segments/{run_id}/members` — kontrak §28.7 + SEC-G50-08/16 (BFF
+   `src/campaign/segment-ingest.service.ts`): `{ schema_version: 1, company_code, run_id, segment_code,
+   subject_keys: [<= 5000], chunk_no }`. `company_code` = PT run (∈ COMPANY_CODES), ikut hash idempotensi BFF; satu
+   `run_id` = satu PT (`409 run_company_mismatch`). Idempoten per `(run_id, segment_code, chunk_no)`; anggota diurutkan
+   + dedup sebelum dipotong -> retry menghasilkan chunk identik. Contoh bersama BFF/worker:
+   `tests/fixtures/segment_members_v1.json`.
 2. Odoo `efn.campaign/efn_campaign_proposal_upsert` (/json/2) — bentuk = validator Odoo
    (`efn_campaign/models/efn_campaign.py` + `campaign_api.py`, QA G50 #1):
    `{ schema_version: 1, company_code, run_id, segment_code, member_count, metrics: {<kunci>: angka},
@@ -27,13 +30,18 @@ from efn_segment.segments import SEGMENT_CODES, Segment, SegmentParams, top_prod
 
 SCHEMA_VERSION = 1
 MAX_SUBJECTS_PER_CHUNK = 5000
+MAX_CHUNK_NO = 100_000  # = batas BFF segment-ingest.service.ts
 MAX_PROPOSAL_BYTES = 64 * 1024
 # = efn_campaign.py MAX_METRICS / MAX_SUMMARY / MAX_MEMBER_COUNT (diuji test_odoo_contract_parity.py).
 MAX_METRICS = 20
 MAX_SUMMARY = 256
 MAX_MEMBER_COUNT = 10_000_000
 MAX_METRIC_ABS = 1e12
-MEMBERS_KEYS = frozenset({"schema_version", "run_id", "segment_code", "subject_keys", "chunk_no"})
+# Urutan = KEYS BFF segment-ingest.service.ts (urutan dict = urutan JSON yang dikirim).
+MEMBERS_FIELDS = ("schema_version", "company_code", "run_id", "segment_code", "subject_keys", "chunk_no")
+MEMBERS_KEYS = frozenset(MEMBERS_FIELDS)
+# = COMPANY_CODES BFF (src/loyalty/loyalty.service.ts) dan ETL (efn_etl/entities.py); diuji test_members_fixture.py.
+COMPANY_CODES = frozenset({"EFN", "GL", "PB", "BCR", "BCF", "WTZ", "IMD", "CUP", "FARM", "SMD"})
 PROPOSAL_KEYS = frozenset(
     {"schema_version", "company_code", "run_id", "segment_code", "member_count", "metrics", "summary", "generated_at"}
 )
@@ -80,10 +88,13 @@ def chunk_subjects(keys: Iterable[str], size: int = MAX_SUBJECTS_PER_CHUNK) -> l
     return [ordered[i : i + size] for i in range(0, len(ordered), size)]
 
 
-def members_payloads(run_id: str, segment_code: str, keys: Iterable[str], size: int) -> list[dict[str, Any]]:
+def members_payloads(
+    company: str, run_id: str, segment_code: str, keys: Iterable[str], size: int
+) -> list[dict[str, Any]]:
     payloads = [
         {
             "schema_version": SCHEMA_VERSION,
+            "company_code": company,
             "run_id": run_id,
             "segment_code": segment_code,
             "subject_keys": part,
@@ -101,10 +112,13 @@ def validate_members(payload: Mapping[str, Any]) -> None:
         raise ContractError("members_keys")
     if payload["schema_version"] != SCHEMA_VERSION:
         raise ContractError("schema_version")
+    if not isinstance(payload["company_code"], str) or payload["company_code"] not in COMPANY_CODES:
+        raise ContractError("invalid_company_code")
     _uuid4(payload["run_id"])
-    if payload["segment_code"] not in SEGMENT_CODES:
+    if not isinstance(payload["segment_code"], str) or payload["segment_code"] not in SEGMENT_CODES:
         raise ContractError("invalid_segment_code")
-    _nonneg_int(payload["chunk_no"], "invalid_chunk_no")
+    if _nonneg_int(payload["chunk_no"], "invalid_chunk_no") > MAX_CHUNK_NO:
+        raise ContractError("invalid_chunk_no")
     keys = payload["subject_keys"]
     if not isinstance(keys, list) or not 1 <= len(keys) <= MAX_SUBJECTS_PER_CHUNK:
         raise ContractError("subject_keys_size")

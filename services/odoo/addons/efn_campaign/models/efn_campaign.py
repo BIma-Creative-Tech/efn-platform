@@ -110,6 +110,26 @@ SYSTEM_FIELDS = (
     "source_ref_model",
     "source_ref_id",
 )
+# SEC-G50-19: nilai awal field sistem kampanye buatan Marketing (maker_id/editor_ids = uid pembuat, diisi terpisah).
+INITIAL_SYSTEM_VALUES = {
+    "state": "draft",
+    "origin": "manual",
+    "approval_rev": 0,
+    "approved_by_id": False,
+    "approved_at": False,
+    "sent_at": False,
+    "cancelled_by_id": False,
+    "cancelled_at": False,
+    "cancel_reason": False,
+    "segment_run_id": False,
+    "segment_code": False,
+    "segment_member_count": 0,
+    "segment_metrics": False,
+    "segment_summary": False,
+    "segment_generated_at": False,
+    "source_ref_model": False,
+    "source_ref_id": 0,
+}
 
 
 def _wib_iso(day, end_of_day):
@@ -348,6 +368,22 @@ class EfnCampaign(models.Model):
         }
         return self.with_env(self.env(context=ctx))
 
+    @api.model
+    def _add_missing_default_values(self, values):
+        """SEC-G50-19: saat create non-sudo, field sistem tidak mengambil nilai ``ir.default``/context; hanya default
+        bawaan field (``state=draft``, ``origin=manual``) atau kosong. Privat (bukan override ``default_get`` publik,
+        agar permukaan RPC SEC-58 tidak bertambah); ``create`` juga menulis ulang semua field sistem sesudahnya."""
+        res = super()._add_missing_default_values(values)
+        if self.env.su:
+            return res
+        for fname in (set(res) - set(values)) & set(SYSTEM_FIELDS):
+            field = self._fields[fname]
+            if field.default:
+                res[fname] = field.default(self)
+            else:
+                res.pop(fname)
+        return res
+
     @api.model_create_multi
     def create(self, vals_list):
         if self.env.su:
@@ -361,8 +397,10 @@ class EfnCampaign(models.Model):
         clean = self._efn_clean_default_context()
         records = super(EfnCampaign, clean).create(vals_list)
         # Jejak sistem ditulis setelah record dibuat sebagai user (ACL create + record rule company sudah berlaku).
+        # SEC-G50-19: SEMUA field sistem dikembalikan ke nilai awal (lapis kedua selain default_get; ir.default
+        # milik user tidak boleh mengisi approved_by_id/origin/ringkasan segmen).
         records._efn_sys_write(
-            {"state": "draft", "maker_id": self.env.uid, "editor_ids": [Command.set([self.env.uid])]}
+            dict(INITIAL_SYSTEM_VALUES, maker_id=self.env.uid, editor_ids=[Command.set([self.env.uid])])
         )
         return records
 
