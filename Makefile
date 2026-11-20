@@ -5,10 +5,12 @@ PROD := docker compose -f $(COMPOSE_DIR)/docker-compose.yml -f $(COMPOSE_DIR)/do
 ALL_PROFILES := --profile core --profile data --profile ai --profile observability --profile ops
 PROFILES ?= --profile core
 
-.PHONY: help secrets pki pki-rotate pki-root pki-intermediate env up down logs ps build validate lint lint-enc test test-py clean backup restore-test
+.PHONY: help setup dev secrets pki pki-rotate pki-root pki-intermediate env up down logs ps build validate lint lint-enc test test-py clean backup restore-test
 
 help:
-	@echo "make secrets       - buat secrets dev + PKI internal di ./secrets (daftar: scripts/secrets.list)"
+	@echo "make setup         - persiapan pertama: .env + secrets dev + PKI (alias env + secrets)"
+	@echo "make dev           - jalankan stack dev (alias up; Node/Python tidak di host, semua di container)"
+	@echo "make secrets      - buat secrets dev + PKI internal di ./secrets (daftar: scripts/secrets.list)"
 	@echo "make pki           - (ulang) periksa/terbitkan sertifikat leaf dev (root+intermediate DEV otomatis)"
 	@echo "make pki-rotate    - terbitkan ulang SEMUA sertifikat leaf dev, lalu recreate stack"
 	@echo "make pki-root      - [SUPERADMIN, mesin offline] buat ROOT CA (kunci terenkripsi passphrase)"
@@ -48,6 +50,11 @@ env:
 
 up: env secrets
 	$(DEV) $(PROFILES) up -d --build
+
+# Alias kontrak standar (setup | dev | lint | test | build | up | down) agar perintah sama di semua repo.
+setup: env secrets
+
+dev: up
 
 down:
 	$(DEV) $(ALL_PROFILES) down
