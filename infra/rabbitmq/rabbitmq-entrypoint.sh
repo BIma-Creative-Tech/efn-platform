@@ -28,6 +28,29 @@ BFF_HASH="$(hash_pw /run/secrets/rabbitmq_password_bff)"
 OCR_HASH="$(hash_pw /run/secrets/rabbitmq_password_ocr)"
 ETL_HASH="$(hash_pw /run/secrets/rabbitmq_password_etl)"
 
+# G50 (docs/04 §28.7/§28.9, ADR-044 Proposed): user efn-wa-unofficial HANYA bila secret rabbitmq_password_wa_unofficial
+# di-mount (overlay docker-compose.wa-unofficial.yml) dan bukan placeholder `disabled` (scripts/secrets.list host:disabled;
+# production OFF). Tanpa secret = user TIDAK ada di broker (bukan user tanpa password). Izin selalu ketat (tanpa fallback
+# RABBITMQ_STRICT_PERMISSIONS=false): configure kosong, read hanya notify.wa_unofficial, write hanya amq.default.
+# Batas: write ke default exchange tidak bisa dibatasi per routing key -> publish ke queue lain (mis. order.paid) ditolak
+# consumer lewat verifikasi user_id (SEC-08); BFF menerima notify.wa_unofficial.result hanya dari efn-wa-unofficial.
+WA_USER_JSON=""
+WA_PERM_JSON=""
+WA_SECRET=/run/secrets/rabbitmq_password_wa_unofficial
+if [ -s "$WA_SECRET" ]; then
+  case "$(tr -d '\n' < "$WA_SECRET" | tr '[:upper:]' '[:lower:]')" in
+    disabled|changeme|change-me|placeholder|xxx|todo|password)
+      echo "rabbitmq-entrypoint: rabbitmq_password_wa_unofficial placeholder -> user efn-wa-unofficial tidak dibuat" ;;
+    *)
+      WA_HASH="$(hash_pw "$WA_SECRET")"
+      WA_USER_JSON=",
+    {\"name\": \"efn-wa-unofficial\", \"password_hash\": \"${WA_HASH}\", \"hashing_algorithm\": \"rabbit_password_hashing_sha256\", \"tags\": []}"
+      WA_PERM_JSON=",
+    {\"user\": \"efn-wa-unofficial\", \"vhost\": \"/\", \"configure\": \"^\$\", \"write\": \"^amq\\\\.default\$\", \"read\": \"^notify\\\\.wa_unofficial\$\"}"
+      unset WA_HASH ;;
+  esac
+fi
+
 # Queue kontrak docs/04 §4 + §8.4 (+ DLQ). Publish lewat default exchange = izin write pada `amq.default`.
 #
 # SEC-25 - permission dipersempit sejauh kode klien mengizinkan:
@@ -47,13 +70,20 @@ ETL_HASH="$(hash_pw /run/secrets/rabbitmq_password_etl)"
 #   x-delivery-limit 10 (quorum: setelah 10 kali redelivery pesan di-dead-letter ke DLQ, bukan loop poison message).
 #   Diverifikasi di RabbitMQ 3.13.7 (image dipin) - laporan devsecops G17.
 # G31 (docs/04 §20.3): mgm.reward.requested (+ .dlq) pola yang sama (publisher & consumer BFF, x-delivery-limit 10).
-Q='^(ocr\\.requested|loyalty\\.earn\\.requested|notify\\.push|privacy\\.erasure\\.completed|order\\.(paid|unpaid_closed|compensate|refund\\.requested)|mgm\\.reward\\.requested)(\\.dlq)?$'
+# G50 (docs/04 §28.7, ADR-044/047/048 Proposed): 7 queue baru (+ .dlq), quorum + x-delivery-limit 10 (pola G17/G31;
+#   tanpa batas, pesan racun di quorum queue diredeliver tanpa henti). Semua flag G50 default false; queue tetap
+#   dideklarasikan broker agar menyalakan flag tidak butuh perubahan broker (BFF hanya passive declare).
+#   - behavior.event, promo.campaign.requested, notify.restock, notify.price_alert, notify.email: publisher & consumer BFF
+#   - notify.wa_unofficial: publisher BFF, consumer efn-wa-unofficial (per-message TTL <= 24 jam -> kedaluwarsa = DLQ)
+#   - notify.wa_unofficial.result: publisher efn-wa-unofficial, consumer BFF (verifikasi user_id efn-wa-unofficial)
+Q='^(ocr\\.requested|loyalty\\.earn\\.requested|notify\\.push|privacy\\.erasure\\.completed|order\\.(paid|unpaid_closed|compensate|refund\\.requested)|mgm\\.reward\\.requested|behavior\\.event|promo\\.campaign\\.requested|notify\\.(restock|price_alert|email|wa_unofficial|wa_unofficial\\.result))(\\.dlq)?$'
 W='^amq\\.default$'
 # G6 QA (SEC-25): default STRICT. Passive queue.declare tidak memeriksa izin configure di RabbitMQ (handler passive
 # rabbit_channel tidak memanggil check_configure_permitted) - PLAUSIBLE, verifikasi di staging. Bila klien gagal
 # start dengan ACCESS_REFUSED saat checkQueue, set RABBITMQ_STRICT_PERMISSIONS=false (fallback lama).
+# G50: read efn-bff = queue yang DIKONSUMSI BFF saja (bukan notify.wa_unofficial: dikonsumsi efn-wa-unofficial).
 if [ "${RABBITMQ_STRICT_PERMISSIONS:-true}" != "false" ]; then
-  BFF_CONF='^$'; BFF_READ='^(loyalty\\.earn\\.requested|notify\\.push|privacy\\.erasure\\.completed|order\\.(paid|unpaid_closed|compensate|refund\\.requested)|mgm\\.reward\\.requested)$'
+  BFF_CONF='^$'; BFF_READ='^(loyalty\\.earn\\.requested|notify\\.push|privacy\\.erasure\\.completed|order\\.(paid|unpaid_closed|compensate|refund\\.requested)|mgm\\.reward\\.requested|behavior\\.event|promo\\.campaign\\.requested|notify\\.(restock|price_alert|email|wa_unofficial\\.result))$'
   OCR_CONF='^$'; OCR_READ='^ocr\\.requested$'
 else
   BFF_CONF="$Q"; BFF_READ="$Q"
@@ -73,20 +103,27 @@ queue_defs_limited() {
   printf '    {"name": "%s", "vhost": "/", "durable": true, "auto_delete": false, "arguments": {"x-queue-type": "quorum", "x-dead-letter-exchange": "", "x-dead-letter-routing-key": "%s.dlq", "x-delivery-limit": %s}}' "$1" "$1" "$2"
 }
 
+# SEC-G50-04 (security review 20 Nov 2026, UU PDP Pasal 16(2)): RabbitMQ MENGHAPUS properti `expiration` saat pesan
+# di-dead-letter -> tanpa policy, pesan notify.wa_unofficial (berisi to_e164 plaintext) yang kedaluwarsa/di-nack tertahan
+# selamanya di .dlq. Policy broker (bukan argumen queue: argumen quorum tidak bisa diubah setelah queue ada; policy bisa):
+#   - notify.wa_unofficial.dlq : TTL 24 jam + maks 1000 pesan (drop-head, tanpa DLX -> dibuang). Replay hanya < 24 jam.
+#   - notify.wa_unofficial     : TTL 24 jam (backstop per-message expiration BFF) + maks 5000 (drop-head -> DLQ -> TTL).
+#   - behavior.event.dlq       : TTL 7 hari (= retensi staging behavior.event_raw, L-153) + maks 100000.
+# Satu queue hanya dikenai SATU policy (prioritas tertinggi); jangan menambah policy operator yang cocok pola ini.
 cat > "$WORK/defs.json" <<EOF
 {
   "users": [
     {"name": "${ADMIN_USER}", "password_hash": "${ADMIN_HASH}", "hashing_algorithm": "rabbit_password_hashing_sha256", "tags": ["administrator"]},
     {"name": "efn-bff", "password_hash": "${BFF_HASH}", "hashing_algorithm": "rabbit_password_hashing_sha256", "tags": []},
     {"name": "efn-ocr", "password_hash": "${OCR_HASH}", "hashing_algorithm": "rabbit_password_hashing_sha256", "tags": []},
-    {"name": "efn-etl", "password_hash": "${ETL_HASH}", "hashing_algorithm": "rabbit_password_hashing_sha256", "tags": []}
+    {"name": "efn-etl", "password_hash": "${ETL_HASH}", "hashing_algorithm": "rabbit_password_hashing_sha256", "tags": []}${WA_USER_JSON}
   ],
   "vhosts": [{"name": "/"}],
   "permissions": [
     {"user": "${ADMIN_USER}", "vhost": "/", "configure": ".*", "write": ".*", "read": ".*"},
     {"user": "efn-bff", "vhost": "/", "configure": "${BFF_CONF}", "write": "${W}", "read": "${BFF_READ}"},
     {"user": "efn-ocr", "vhost": "/", "configure": "${OCR_CONF}", "write": "${W}", "read": "${OCR_READ}"},
-    {"user": "efn-etl", "vhost": "/", "configure": "^\$", "write": "${W}", "read": "^\$"}
+    {"user": "efn-etl", "vhost": "/", "configure": "^\$", "write": "${W}", "read": "^\$"}${WA_PERM_JSON}
   ],
   "queues": [
 $(queue_defs ocr.requested),
@@ -97,12 +134,27 @@ $(queue_defs_limited order.paid 10),
 $(queue_defs_limited order.unpaid_closed 10),
 $(queue_defs_limited order.compensate 10),
 $(queue_defs_limited order.refund.requested 10),
-$(queue_defs_limited mgm.reward.requested 10)
+$(queue_defs_limited mgm.reward.requested 10),
+$(queue_defs_limited behavior.event 10),
+$(queue_defs_limited promo.campaign.requested 10),
+$(queue_defs_limited notify.restock 10),
+$(queue_defs_limited notify.price_alert 10),
+$(queue_defs_limited notify.email 10),
+$(queue_defs_limited notify.wa_unofficial 10),
+$(queue_defs_limited notify.wa_unofficial.result 10)
+  ],
+  "policies": [
+    {"name": "efn-wa-unofficial-dlq-retention", "vhost": "/", "pattern": "^notify\\\\.wa_unofficial\\\\.dlq\$", "apply-to": "queues", "priority": 10,
+     "definition": {"message-ttl": 86400000, "max-length": 1000, "overflow": "drop-head"}},
+    {"name": "efn-wa-unofficial-retention", "vhost": "/", "pattern": "^notify\\\\.wa_unofficial\$", "apply-to": "queues", "priority": 10,
+     "definition": {"message-ttl": 86400000, "max-length": 5000, "overflow": "drop-head"}},
+    {"name": "efn-behavior-dlq-retention", "vhost": "/", "pattern": "^behavior\\\\.event\\\\.dlq\$", "apply-to": "queues", "priority": 10,
+     "definition": {"message-ttl": 604800000, "max-length": 100000, "overflow": "drop-head"}}
   ]
 }
 EOF
 install -m 0600 -o rabbitmq -g rabbitmq "$WORK/defs.json" "$OUT"
-unset ADMIN_HASH BFF_HASH OCR_HASH ETL_HASH
+unset ADMIN_HASH BFF_HASH OCR_HASH ETL_HASH WA_USER_JSON WA_PERM_JSON
 rm -rf "$WORK"
 trap - EXIT
 

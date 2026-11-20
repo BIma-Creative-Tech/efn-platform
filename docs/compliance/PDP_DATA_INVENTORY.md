@@ -1,6 +1,7 @@
 # Inventaris Data Pribadi / RoPA (UU PDP No. 27/2022) — EFN Platform
 
 - **Status:** Draf teknis — **keputusan retensi & DPO ditetapkan pemilik proyek 10 Okt 2026** (v7); dasar pemrosesan & nomor pasal tetap wajib diverifikasi **Legal (DPO sementara)**.
+  - **v19 (2026-11-20, Gelombang 50 kampanye supermarket — dibangun, OFF di production, MENUNGGU DPO)**: §2.8.12a entri tabel yang benar-benar dibangun (`member_email`, `email_outbound`, `email_unsubscribe_used`, `wa_unofficial_recipient`, `wa_unofficial_outbound`, `behavior.purchase_emitted`, `behavior.subject_erasure`, `behavior.segment_member`, inbox & voucher kampanye) + event server `purchase` (riwayat pembelian online masuk profil perilaku, L-185, SEC-G50-17); baris retensi §3 (penanda **(v19)**), termasuk DLQ `notify.wa_unofficial.dlq` (TTL 24 jam + max-length) dan `behavior.event.dlq` (7 hari) (SEC-G50-04/18). Pertanyaan DPO baru di `docs/04` §28.12: Q-SM33, Q-SM34, Q-SM38, Q-SM39.
   - **v18 (2026-11-18, Gelombang 43 fase 2, ADR-042 Accepted — MENUNGGU DPO)**: §2.8.14 **bundel migrasi ESB** (terenkripsi, retensi ≤ 90 hari setelah berita acara) dan **arsip histori ESB di Odoo** (`efn.legacy.flow.daily`, `efn.legacy.sales.daily`, `efn.legacy.sales.line`: `sales_num` = ID transaksi, bukan data pribadi) + **pelanggan B2B** ESB di `res.partner` (data badan; PIC/alamat/telepon/email dibuang); baris retensi §3; Q-P32.
   - **v17 (2026-11-18, ADR-043 — MENUNGGU DPO)**: §2.7 + §2.8.13 pemroses baru **Bima Creative (VPS)** — tahap A (dev, tanpa data/secret klien) dan tahap B (ekstraksi ESB, **diblokir** sampai persetujuan klien/DPO + DPA); pertanyaan Q-P30, Q-P31; draf `PERSETUJUAN_PEMROSESAN_VPS_BIMA.md`.
   - **v16 (2026-11-18, Supermarket Gelombang 0 — rencana, belum dibangun)**: §2.8.12 event perilaku & device ID (consent `tracking`), wishlist/notify-me/price alert, email (SMTP), nomor WA di `wa-unofficial` (transfer ke WhatsApp tanpa DPA), segmen & voucher kampanye, staf supermarket di Insight; baris retensi baru §3 (penanda **(v16)**). Semua menunggu DPO (Q-SM16..Q-SM19, Q-SM25, Q-SM26, `docs/04` §28.12); fitur terkait **OFF di production**.
@@ -492,6 +493,36 @@ Price Hunter meminta pengguna memotret label saja; DPIA ringkas untuk aliran P6.
   banner/consent; `WA_UNOFFICIAL_ENABLED` juga butuh `WA_UNOFFICIAL_RISK_ACCEPTANCE_REF` (Q-SM14). Wishlist/alert dan
   email boleh lebih dulu setelah entri terkait disetujui DPO (dan Q-SM19 untuk email).
 - **Simulasi G48:** member & event sintetis saja, tanpa data nyata.
+
+#### 2.8.12a (v19) Supermarket G50 — tabel yang dibangun (docs/04 §28.6a/§28.7–§28.9, migrasi `20-platform-g50a.sql`, `21-platform-g50b.sql`) — **dibangun, OFF di production, MENUNGGU DPO**
+> **Ringkasan manajemen.** Fitur kampanye supermarket sudah dibangun dan mati di production. Dibanding rencana v16 ada
+> dua tambahan yang perlu diketahui DPO: (1) **riwayat pembelian online** member ikut dicatat ke profil perilaku (hanya
+> bila member menyetujui "pelacakan"), sehingga teks persetujuan wajib menyebut pembelian dan penautan ke akun; (2) tabel
+> pendukung email dan WhatsApp tidak resmi menyimpan jejak kirim (tanpa alamat/nomor terbuka) 90 hari.
+
+Legenda kolom enkripsi seperti §0: **K** = kolom terenkripsi aplikasi (AES-256-GCM key ring PII), **H** = HMAC/pseudonim,
+T = TLS saat transit, L = log di-mask. Semua tabel di PG `efn_platform`, pemilik `efn_platform_owner`, DML `efn_bff`.
+Erasure akun = FK `ON DELETE CASCADE` + hook `src/privacy` kecuali disebut lain.
+
+| Tabel / data | Tujuan | Dasar pemrosesan (usulan, verifikasi Legal) | Kolom PII | Enkripsi / minimisasi | Retensi (kode G50) | Penerima pihak ketiga |
+|---|---|---|---|---|---|---|
+| `platform.member_email` | Alamat untuk kanal email (promo, alert) | Persetujuan `marketing` (promo; notify-me sesuai Q-SM25) | `email_enc` (alamat), `member_id` | **K** (AAD `efn:member_email.email_enc:v1`; **belum terdaftar di registry rotasi kunci** `pii-columns.ts`), L (`a***@d***.com`); alamat tidak pernah di queue | Selama akun; `status='invalid'` setelah SMTP 5xx. **Alur isi & verifikasi alamat belum dibangun** (Q-SM34) — tabel kosong | **Penyedia SMTP** (belum dipilih; DPA & lokasi Q-SM19) — menerima alamat + isi email saat kirim |
+| `platform.email_outbound` | Jejak & idempotensi kirim email | Sama dengan kanal | `member_id`, `source`, `source_ref`, `template` (tanpa alamat/isi) | — (tanpa PII langsung) | **90 hari** (`email-retention.job`) | — |
+| `platform.email_unsubscribe_used` | Mencegah token berhenti berlangganan dipakai ulang | Kewajiban hukum/hak menarik persetujuan | `jti` (tanpa tautan member) | — | Hingga `expires_at` + 1 hari | — |
+| `platform.wa_unofficial_recipient` | Memetakan `to_hash` → member untuk opt-out "STOP" | Persetujuan `marketing` / hak menarik persetujuan | `to_hash`, `member_id` | **H** (`to_hash` = HMAC `wa_unofficial_hash_key`); nomor tidak disimpan | **180 hari** sejak antre terakhir | — |
+| `platform.wa_unofficial_outbound` | Status kirim WA unofficial (tanpa nomor/isi) | Persetujuan `marketing` | `member_id`, `to_hash`, kategori, template, status | **H**; tanpa nomor/isi | **90 hari** | Pesan sendiri (nomor + isi) dikirim ke **WhatsApp/Meta** lewat `wa-unofficial` — lintas negara, tanpa DPA (Q-SM18, ADR-044) |
+| Antrean `notify.wa_unofficial` (+ `.dlq`) | Membawa nomor E.164 (tanpa `+`) + parameter template ke service terisolasi | Sama | `to_e164`, `params` (judul/isi promo, nama produk/outlet) | T (AMQPS + kredensial per user); log di-mask | Pesan ≤ 24 jam (`expiration`); **DLQ: policy broker TTL 24 jam + max-length** (SEC-G50-04) | — |
+| `behavior.purchase_emitted` | Idempotensi event server `purchase` (satu kali per bagian pesanan) | Persetujuan `tracking` | `part_id` (ID bagian pesanan, tanpa member) | — | **30 hari** (`behavior-jobs`) | — |
+| Event `purchase` di `behavior.event_raw` → `fact_visitor_event` (L-185) | Dasar segmen "sudah beli": **riwayat pembelian online** (produk, qty, harga satuan, kanal, outlet) ditautkan ke `subject_key` member | Persetujuan `tracking` **akun** (hanya diterbitkan bila aktif) | `subject_key`, `product_id`, `qty`, `price_idr` | **H**; tanpa nama/HP/alamat/nomor pesanan | Staging 7 h; ClickHouse 90 h | — . **Teks consent `tracking` wajib menyebut pencatatan pembelian & penautan ke akun sebelum production** (SEC-G50-17, Q-SM33). Pembelian POS tidak tercakup |
+| `behavior.subject_erasure` | Antrean kunci erasure untuk ETL (`request_id` DSAR) | Kewajiban hukum (hak hapus) | `subject_key`, `request_id` | **H** | ≥ **100 hari** (`BEHAVIOR_ERASED_SUBJECT_RETENTION_DAYS`, minimum 100) | — |
+| `behavior.segment_member` (+ `segment_chunk`) | Anggota segmen untuk penargetan kampanye disetujui Marketing | Persetujuan `tracking` (bangun segmen) + `marketing` (kirim) | `subject_key`, `segment_code`, `run_id` | **H**; subjek ter-erasure ditolak saat ingest | **30 hari** (`SEGMENT_RETENTION_DAYS`) | — |
+| `platform.member_inbox`, `platform.campaign_delivery` | Inbox in-app & jejak pengiriman kampanye per member | Persetujuan `marketing` | `member_id`, judul/isi kampanye (tanpa PII), status | — | Inbox **30 hari setelah kampanye berakhir** (placeholder) | — |
+| `platform.member_voucher` | Penugasan kode voucher `anonymous_code` ke member; kode `public_code` | Perjanjian (syarat promo) | `member_id`, `code_enc`, `code_hash` | **K** (AAD `efn:member_voucher.code_enc:v1`; **belum terdaftar di registry rotasi**), **H**; kode tidak pernah dikirim lewat email/WA | Kode **90 hari** (placeholder); erasure melepas tautan member (kode tidak kembali ke pool) | — (`member_bound`: kartu ber-`partner_id` di Odoo, erasure kartu belum ada hook — Q-SM30) |
+
+- DSAR export memuat wishlist/alert, inbox, voucher (tanpa kode), tautan device (tanpa `device_key`), event staging;
+  **email & jejak WA belum** ikut export (usulan BFF G50-B no. 5).
+- Pertanyaan DPO terkait: Q-SM33 (teks banner, wajib menyebut pembelian), Q-SM34 (alur email), Q-SM38 (consent
+  `marketing` per purpose vs kanal), Q-SM39 (re-grant `tracking` menautkan data lama) — `docs/04` §28.12.
 #### 2.8.13 (v17) Pemroses Bima Creative (VPS) — ADR-043 (Proposed) — status: **MENUNGGU DPO**
 - **Pihak:** Bima Creative (konsultan/pengembang, pihak ketiga) sebagai **pemroses** atas perintah pengendali (EFN
   Holding dan/atau PT pemilik brand — penandatangan ditentukan Legal, Q-VPS4); penyedia VPS = **sub-pemroses** (nama &
@@ -619,7 +650,15 @@ ulang. Enkripsi: disk/backup terenkripsi seperti seluruh DB Odoo (§2.5); tanpa 
 | **(v16)** `behavior.device_link` | Cabut consent / erasure / 180 h tanpa aktivitas | Job BFF | Rencana; **Q-SM16** |
 | **(v16)** `segment_member` | 30 h | Job BFF / `TTL` | Rencana |
 | **(v16)** `restock_alert` / `price_alert` / `member_wishlist` | 30 h (atau setelah terkirim) / 90 h / selama akun | Job BFF + erasure | Rencana; **Q-SM25** |
-| **(v16)** Pesan `notify.wa_unofficial` (nomor + isi) | ≤ 24 jam (TTL pesan AMQP) | RabbitMQ `expiration` | Rencana; **Q-SM18** |
+| **(v16→v19)** Pesan `notify.wa_unofficial` (nomor + isi) **dan `notify.wa_unofficial.dlq`** | Queue ≤ 24 jam (`expiration`); **DLQ: TTL 24 jam + max-length** (policy broker; `expiration` dicabut saat dead-letter) | RabbitMQ `expiration` + policy `^notify\.wa_unofficial\.dlq$` | **SEC-G50-04**; **Q-SM18** |
+| **(v19)** `behavior.event.dlq` (subject_key pseudonim) | **7 hari** (selaras staging) | Policy broker TTL | SEC-G50-04/18 |
+| **(v19)** `platform.email_outbound` / `wa_unofficial_outbound` | 90 h | Job retensi BFF (kanal) | Usulan, **Q-SM19 / Q-SM18** |
+| **(v19)** `platform.wa_unofficial_recipient` | 180 h sejak antre terakhir | Job retensi BFF | Usulan |
+| **(v19)** `platform.email_unsubscribe_used` | `expires_at` + 1 h | Job retensi BFF | — |
+| **(v19)** `platform.member_email` | Selama akun | Erasure (CASCADE) | **Q-SM34** (alur belum ada) |
+| **(v19)** `behavior.purchase_emitted` | 30 h | Job BFF `behavior-jobs` | — |
+| **(v19)** `behavior.subject_erasure` / `erased_subject` | ≥ 100 h | Job BFF | — |
+| **(v19)** `member_inbox` / `member_voucher` (kode) | 30 h setelah kampanye berakhir / 90 h | Job BFF | PLACEHOLDER, **Q-SM17** |
 
 ## 4. Pertanyaan untuk Legal/DPO — **(v7) semua Q-P1..Q-P21 dijawab pemilik proyek 10 Okt 2026, lihat §0a**
 Daftar asli dipertahankan sebagai jejak. Yang **masih terbuka** setelah v7: (1) nomor pasal UU PDP untuk setiap dasar pemrosesan (Legal); (2) dasar hukum menyimpan nama/NPWP pembeli di faktur setelah erasure (Q-P21, Legal); (3) DPIA (Q-T6) sebelum go-live publik; (4) penafsiran Q-P7 vs Q-6 (§0a); (5) syarat hangus poin saat anonimisasi (Q-P11, Finance); (6) teks pelanggan untuk penundaan hapus akun ≤ 14 hari (Q-P18); (7) pertanyaan portal Q-PT1..Q-PT6 (ADR-035).

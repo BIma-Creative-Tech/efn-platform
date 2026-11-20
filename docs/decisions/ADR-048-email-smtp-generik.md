@@ -46,6 +46,24 @@
    (pola `notify.push` §4) — **tidak** membawa alamat email.
 7. Log: alamat di-mask (`a***@d***.com`), tanpa isi pesan.
 
+### 3.1 Revisi G50 (20 Nov 2026) — penyesuaian setelah implementasi
+Status tetap **Proposed**. Kontrak rinci: `docs/04` §28.7 (`notify.email`), §28.9, §28.10, L-178.
+- **Library:** `nodemailer` **^10.6.1** (keputusan lead), minimal 8.0.4 karena **GHSA-c7w3-x93f-qmm8** (rendah, CVSS v4
+  2,3: injeksi CRLF lewat `envelope.size`; hanya bila envelope kustom berisi `size`) — diverifikasi architect di
+  github.com/advisories 20 Nov 2026. Lisensi MIT-0 belum dicek ulang untuk 10.x (cek saat pip/npm audit).
+- **Gate production** (keputusan lead dari security review 20 Nov 2026): `EMAIL_ENABLED=true` di production butuh
+  `EMAIL_DPA_APPROVAL_REF` (nomor DPA penyedia, Q-SM19) **dan** izin Superadmin `EFN_ALLOW_FEATURE_ON` — implementasi
+  devsecops menyusul.
+- **Konsumen** = BFF dengan user RMQ `efn-bff` (opsi "proses terpisah" di no. 1 belum dipakai).
+- **Unsubscribe:** token HMAC `eu1.` sekali pakai di **fragmen URL** (`#t=`), halaman web mem-POST ke
+  `POST /v1/email/unsubscribe`; berfungsi walau `EMAIL_ENABLED=false`. One-click RFC 8058 (`List-Unsubscribe-Post`)
+  **tidak didukung** (butuh token di URL/log) — keputusan DPO; dampak: sebagian penyedia kotak surat besar menilai
+  pengirim massal tanpa one-click lebih buruk (keterkiriman).
+- **Consent per purpose:** berhenti berlangganan email mencabut consent `marketing` untuk semua kanal promo (WA ikut).
+- **Belum ada alur isi & verifikasi alamat email member** (`PUT /v1/me/email` + verifikasi): semua kirim berakhir
+  `skipped_no_email` sampai dibangun (Q-SM34, `docs/04` §28.12). Estimasi ±2–3 hari-engineer (BFF + web + kontrak §8),
+  tanpa biaya lisensi. Template `transactional` juga belum ada.
+
 ## 4. Konsekuensi
 - Positif: bebas vendor; dev aman (Mailpit).
 - Negatif: tanpa webhook bounce standar, alamat tidak valid dideteksi dari kode respons SMTP saja (5xx → tandai

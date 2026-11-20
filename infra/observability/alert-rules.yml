@@ -126,8 +126,10 @@ groups:
           runbook_url: https://github.com/efn/efn-platform/blob/main/docs/runbooks/rabbitmq-ocr-backlog.md
 
       - alert: EfnDeadLetterNotEmpty
-        # DLQ order.* (penjualan online, G17) ditangani EfnOnlineDlqNotEmpty (runbook online-orders.md)
-        expr: sum by (queue) (rabbitmq_queue_messages{queue=~".+\\.dlq", queue!~"order\\..+"}) > 0
+        # DLQ order.* (penjualan online, G17) ditangani EfnOnlineDlqNotEmpty (runbook online-orders.md).
+        # G50: notify.wa_unofficial.dlq dikecualikan - pesan promo kedaluwarsa (TTL <= 24 jam) dan sesi terputus/banned
+        # memang di-dead-letter (bukan kegagalan yang perlu replay); kondisi sesi ditangani EfnWaUnofficialDown/Banned.
+        expr: sum by (queue) (rabbitmq_queue_messages{queue=~".+\\.dlq", queue!~"order\\..+", queue!="notify.wa_unofficial.dlq"}) > 0
         for: 5m
         labels:
           severity: warning
@@ -231,6 +233,34 @@ groups:
           summary: "Poin hangus: {{ $value | humanize }} notifikasi WA T-30 gagal dalam 26 jam"
           description: "Pesan pengingat hangus (template efn_loyalty_inactivity_notice) gagal permanen (DLQ notify.push). Member tetap akan kehilangan poin pada due_at; tinjau DLQ/template Meta dan informasikan CRM/Legal."
           runbook_url: https://github.com/efn/efn-platform/blob/main/docs/runbooks/loyalty-inactivity-expiry.md#efnloyaltyexpirynoticefailed
+
+  # ─────────────────────────── WhatsApp tidak resmi (G50, ADR-044 Proposed, docs/04 §28.9) ───────────────────────────
+  # Metrik services/wa-unofficial/src/metrics.ts (scrape job wa-unofficial, hanya ada bila overlay
+  # docker-compose.wa-unofficial.yml dipakai). Kanal promo/notify-me, BUKAN jalur transaksi (OTP/pesanan/pembayaran tetap
+  # Cloud API resmi) -> warning, jam kerja. Mode idle (WA_UNOFFICIAL_ENABLED bukan true) = efn_wa_unofficial_enabled 0
+  # -> EfnWaUnofficialDown diam. Production: kanal OFF (deploy-validate), alert ini praktis hanya staging/dev.
+  - name: efn-wa-unofficial
+    rules:
+      - alert: EfnWaUnofficialDown
+        expr: max(efn_wa_unofficial_enabled{job="wa-unofficial"}) == 1 and max(efn_wa_unofficial_session_up{job="wa-unofficial"}) == 0
+        for: 15m
+        labels:
+          severity: warning
+          team: ops
+        annotations:
+          summary: "WA tidak resmi: kanal aktif tetapi sesi WhatsApp terputus > 15 menit"
+          description: "Pesan promo/notify-me WA tidak resmi masuk DLQ (disconnected). Notifikasi push/email tetap berjalan; transaksi tidak terdampak. Cek status sesi lewat endpoint admin; pairing ulang hanya non-production."
+          runbook_url: https://github.com/efn/efn-platform/blob/main/docs/runbooks/supermarket-campaign-channels.md#efnwaunofficialdown
+      - alert: EfnWaUnofficialBanned
+        expr: max(efn_wa_unofficial_session_banned{job="wa-unofficial"}) == 1
+        for: 1m
+        labels:
+          severity: warning
+          team: ops
+        annotations:
+          summary: "WA tidak resmi: nomor diblokir WhatsApp (banned)"
+          description: "Risiko R-B16 terjadi. Matikan kanal (WA_UNOFFICIAL_ENABLED=false) dan JANGAN pairing nomor pengganti tanpa keputusan pemilik risiko (ADR-044). Kanal resmi tidak terdampak (nomor terpisah)."
+          runbook_url: https://github.com/efn/efn-platform/blob/main/docs/runbooks/supermarket-campaign-channels.md#efnwaunofficialbanned
 
   # ─────────────────────────── Penjualan online (G17, docs/04 §10.11) ───────────────────────────
   # Metrik BFF (services/api-gateway/src/odoo-rpc/online-metrics.ts), scrape job api-gateway (mTLS :9464). Selama

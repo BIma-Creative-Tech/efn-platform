@@ -522,6 +522,36 @@ DOTENV=(
   "ETL_ENABLE_WASTE=${ETL_ENABLE_WASTE:-false}"
   "ETL_ENABLE_FORECAST=${ETL_ENABLE_FORECAST:-false}"
   "ETL_ENABLE_FORECAST_LEGACY=${ETL_ENABLE_FORECAST_LEGACY:-false}"
+  # G50 (docs/04 §28.10): kampanye supermarket; kosong = default compose (SEMUA MATI). Production true = ref persetujuan
+  # + EFN_ALLOW_FEATURE_ON (deploy-validate efn_validate_g50_config). Overlay wa-unofficial/segment TIDAK disertakan.
+  "BEHAVIOR_TRACKING_ENABLED=${BEHAVIOR_TRACKING_ENABLED:-false}"
+  "BEHAVIOR_TRACKING_DPO_APPROVAL_REF=${BEHAVIOR_TRACKING_DPO_APPROVAL_REF:-}"
+  "CONSENT_TRACKING_VERSION=${CONSENT_TRACKING_VERSION:-}"
+  "CONSENT_TRACKING_TEXT_SHA256=${CONSENT_TRACKING_TEXT_SHA256:-}"
+  "BEHAVIOR_EVENT_RETENTION_DAYS=${BEHAVIOR_EVENT_RETENTION_DAYS:-}"
+  "WISHLIST_ENABLED=${WISHLIST_ENABLED:-false}"
+  "RESTOCK_ALERT_ENABLED=${RESTOCK_ALERT_ENABLED:-false}"
+  "PRICE_ALERT_ENABLED=${PRICE_ALERT_ENABLED:-false}"
+  "ALERT_WATCH_INTERVAL_SECONDS=${ALERT_WATCH_INTERVAL_SECONDS:-}"
+  "PROMO_CAMPAIGN_ENABLED=${PROMO_CAMPAIGN_ENABLED:-false}"
+  "PROMO_CAMPAIGN_APPROVAL_REF=${PROMO_CAMPAIGN_APPROVAL_REF:-}"
+  "CAMPAIGN_FREQUENCY_CAP_ENABLED=${CAMPAIGN_FREQUENCY_CAP_ENABLED:-false}"
+  "CAMPAIGN_BUDGET_CAP_ENABLED=${CAMPAIGN_BUDGET_CAP_ENABLED:-false}"
+  "CAMPAIGN_MAX_PER_MEMBER_PER_WEEK=${CAMPAIGN_MAX_PER_MEMBER_PER_WEEK:-}"
+  "CAMPAIGN_COMPANIES=${CAMPAIGN_COMPANIES:-}"
+  "CAMPAIGN_SYNC_SECONDS=${CAMPAIGN_SYNC_SECONDS:-}"
+  "EMAIL_ENABLED=${EMAIL_ENABLED:-false}"
+  "EMAIL_SMTP_HOST=${EMAIL_SMTP_HOST:-}"
+  "EMAIL_SMTP_PORT=${EMAIL_SMTP_PORT:-}"
+  "EMAIL_SMTP_TLS_MODE=${EMAIL_SMTP_TLS_MODE:-}"
+  "EMAIL_SMTP_USER=${EMAIL_SMTP_USER:-}"
+  "EMAIL_FROM=${EMAIL_FROM:-}"
+  "EMAIL_UNSUBSCRIBE_URL=${EMAIL_UNSUBSCRIBE_URL:-}"
+  "EMAIL_RATE_PER_MIN=${EMAIL_RATE_PER_MIN:-}"
+  "EMAIL_DPA_APPROVAL_REF=${EMAIL_DPA_APPROVAL_REF:-}"   # SEC-G50-10 (hanya dibaca deploy-validate, tidak ke container)
+  "WA_UNOFFICIAL_ENABLED=${WA_UNOFFICIAL_ENABLED:-false}"
+  "WA_UNOFFICIAL_RISK_ACCEPTANCE_REF=${WA_UNOFFICIAL_RISK_ACCEPTANCE_REF:-}"
+  "ETL_ENABLE_BEHAVIOR=${ETL_ENABLE_BEHAVIOR:-false}"
   # G44 (docs/04 §28.10): forecast-worker; kosong = default compose (MATI, 23:30 WIB, ...). Cron memuat spasi/'*' ->
   # dikutip tunggal (nilai sudah divalidasi regex tanpa kutip/'$'; compose membaca literal).
   "FORECAST_ENABLED=${FORECAST_ENABLED:-false}"
@@ -673,10 +703,12 @@ echo "==> Migrasi skema idempoten (infra/postgres/init/[0-9][0-9]-*.sql >= 04)"
 # tabel mgm_*; earn/reverse POS & online menulis mgm_source/mgm_reversal). 18 = G43 (ADR-043: CHECK kode PT + IMD/CUP;
 # tanpa 18 akrual/kebijakan/poin PT IMD & CUP ditolak CHECK). 19 = G44 (docs/04 §12.1 revisi 18 Nov 2026: CHECK kode
 # PT + SMD; tanpa 19 ledger/kebijakan/MGM PT SMD ditolak CHECK). Urutan wajib: 18 lalu 19 (pagar merge di 19).
+# 20 = G50-A (docs/04 §28.6-28.8: consent purpose tracking, skema behavior, wishlist/alert, campaign, voucher, inbox).
+# 21 = G50-B (docs/04 §28.9: member_email, outbound email/WA unofficial). Urutan wajib: 20 lalu 21.
 for req in 04-platform-v3-6.sql 05-platform-loyalty-pos.sql 06-platform-loyalty-guard.sql 07-platform-online.sql \
            08-platform-g18-privacy.sql 09-platform-g20.sql 10-platform-g21.sql 11-platform-g22.sql 12-platform-g23.sql \
            13-platform-g24.sql 14-platform-g26.sql 15-platform-g27.sql 16-platform-g27b.sql \
-           17-platform-g31.sql 18-platform-g43.sql 19-platform-g44.sql; do
+           17-platform-g31.sql 18-platform-g43.sql 19-platform-g44.sql 20-platform-g50a.sql 21-platform-g50b.sql; do
   [[ -s "$BASE/postgres/init/$req" ]] || die "migrasi wajib $req tidak ada di $BASE/postgres/init (bundel rilis tidak lengkap)"
 done
 for mig in "$BASE"/postgres/init/[0-9][0-9]-*.sql; do

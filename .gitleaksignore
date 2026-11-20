@@ -23,3 +23,5 @@ a28096a0d4f543563a7e865f3ba7466190a3855f:scripts/host/test-efn-deploy.sh:generic
 2641710b550c39d82e7bd059a4928be3dfcad8a2:services/odoo/addons/efn_insight/tests/test_insight_sso.py:generic-api-key:19
 # G43 (2026-11-18, efn-lead): kunci uji sintetis test_cross_side_validation.py (bukan secret nyata; kini non-literal).
 79a73460304c13fdd80ad0a330fdf1094dc9c7d5:scripts/migration/tests/test_cross_side_validation.py:generic-api-key:29
+# G50 (diperiksa efn-lead 2026-11-20): UUID acak sebagai subject_key tidak valid di test negatif ETL perilaku. Bukan secret.
+05acd9233e6be249ab90720ba02fafdf20a2394e:services/etl/tests/test_behavior.py:generic-api-key:150

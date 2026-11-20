@@ -12,6 +12,7 @@ from psycopg.conninfo import make_conninfo
 from psycopg.rows import dict_row
 
 from efn_etl.audit import ChainHead, ChainRow, CopiedLog, EpochRecord
+from efn_etl.behavior import SQL_LAST_AGG, erasure_count_sql, erasure_delete_sql
 from efn_etl.config import PgTarget, Settings
 from efn_etl.erasure import count_sql, delete_sql
 from efn_etl.heartbeat import JobRun
@@ -128,6 +129,37 @@ class ClickHouseErasureStore:
             delete_sql(self._database, table, column, member_hash),
             settings={"mutations_sync": 2, "max_execution_time": self._timeout},
         )
+
+
+class ClickHouseBehaviorStore:
+    """G50: erasure per subject_key di `fact_visitor_event` (ALTER DELETE, grant etl-access.sql) + agregat harian
+    `agg_visitor_*` (INSERT ... SELECT server-side). `mutations_sync=2`: tunggu mutation; timeout -> exception."""
+
+    def __init__(self, client: Client, database: str, mutation_timeout_seconds: int) -> None:
+        self._client = client
+        self._database = database
+        self._timeout = int(mutation_timeout_seconds)
+
+    def count(self, keys: Sequence[str]) -> int:
+        if not keys:
+            return 0
+        rows = self._client.query(erasure_count_sql(self._database, keys)).result_rows
+        return int(rows[0][0]) if rows else 0
+
+    def delete(self, keys: Sequence[str]) -> None:
+        self._client.command(
+            erasure_delete_sql(self._database, keys),
+            settings={"mutations_sync": 2, "max_execution_time": self._timeout},
+        )
+
+    def last_agg_at(self) -> datetime | None:
+        rows = self._client.query(SQL_LAST_AGG).result_rows
+        if not rows or not rows[0][1]:
+            return None
+        return normalize_watermark(rows[0][0])
+
+    def execute(self, sql: str, parameters: dict[str, Any]) -> None:
+        self._client.command(sql, parameters=parameters, settings={"max_execution_time": 600})
 
 
 class ClickHouseWatermarkStore:

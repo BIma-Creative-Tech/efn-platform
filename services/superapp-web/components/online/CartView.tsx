@@ -37,6 +37,7 @@ import {
 } from '@/lib/cart-client';
 import { companyDisplayName, type CatalogChannel } from '@/lib/catalog';
 import { formatNumber, formatRupiah } from '@/lib/format';
+import { trackEvent } from '@/lib/tracking-client';
 import { onlineErrorMessage, REQUOTE_CODES } from '@/lib/orders';
 import { COUNTER_UNAVAILABLE_REASON, paymentOptions, resolvePaymentMethod, type PaymentMethod } from '@/lib/payment';
 import {
@@ -314,6 +315,8 @@ export function CartView({ loggedIn, channels }: { loggedIn: boolean; channels: 
       setTimeout(() => document.querySelector<HTMLElement>('[data-points-input][aria-invalid="true"]')?.focus(), 0);
       return;
     }
+    // G50: satu `checkout_start` per kelompok PT (kanal) di keranjang; no-op tanpa consent tracking.
+    for (const grp of view.quote.groups) trackEvent({ type: 'checkout_start', channelCode: grp.channel_code });
     setPaying(true);
     setMsg(null);
     try {
@@ -506,7 +509,10 @@ export function CartView({ loggedIn, channels }: { loggedIn: boolean; channels: 
                           type="button"
                           disabled={busy || paying}
                           aria-label={l.qty <= 1 ? `Hapus ${name}` : `Kurangi ${name}`}
-                          onClick={() => mutate((gs) => setQty(gs, g.channel_code, l.product_id, l.qty - 1, undefined, l.attribute_value_ids))}
+                          onClick={() => {
+                            trackEvent({ type: 'cart_remove', channelCode: g.channel_code, outletCode: g.outlet_code, productId: l.product_id, qty: 1 });
+                            mutate((gs) => setQty(gs, g.channel_code, l.product_id, l.qty - 1, undefined, l.attribute_value_ids));
+                          }}
                         >
                           −
                         </button>
@@ -515,7 +521,10 @@ export function CartView({ loggedIn, channels }: { loggedIn: boolean; channels: 
                           type="button"
                           disabled={busy || paying || l.qty >= 99}
                           aria-label={`Tambah ${name}`}
-                          onClick={() => mutate((gs) => setQty(gs, g.channel_code, l.product_id, l.qty + 1, undefined, l.attribute_value_ids))}
+                          onClick={() => {
+                            trackEvent({ type: 'cart_add', channelCode: g.channel_code, outletCode: g.outlet_code, productId: l.product_id, qty: 1 });
+                            mutate((gs) => setQty(gs, g.channel_code, l.product_id, l.qty + 1, undefined, l.attribute_value_ids));
+                          }}
                         >
                           +
                         </button>
@@ -524,7 +533,10 @@ export function CartView({ loggedIn, channels }: { loggedIn: boolean; channels: 
                         type="button"
                         className="btn btn-secondary btn-small"
                         disabled={busy || paying}
-                        onClick={() => mutate((gs) => setQty(gs, g.channel_code, l.product_id, 0, undefined, l.attribute_value_ids))}
+                        onClick={() => {
+                          trackEvent({ type: 'cart_remove', channelCode: g.channel_code, outletCode: g.outlet_code, productId: l.product_id, qty: l.qty });
+                          mutate((gs) => setQty(gs, g.channel_code, l.product_id, 0, undefined, l.attribute_value_ids));
+                        }}
                       >
                         Hapus
                       </button>

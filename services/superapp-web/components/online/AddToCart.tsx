@@ -7,6 +7,8 @@ import { addItem, lineKey } from '@/lib/cart';
 import { addToServerCart, apiFetch, goToLogin, readGuestCart, writeGuestCart } from '@/lib/cart-client';
 import { STOCK_LABEL, type CatalogOutlet, type StockStatus } from '@/lib/catalog';
 import { AttributePicker } from '@/components/fnb/AttributePicker';
+import { NotifyMe } from '@/components/engage/NotifyMe';
+import { trackEvent } from '@/lib/tracking-client';
 import styles from './online.module.css';
 
 interface Props {
@@ -114,6 +116,7 @@ export function AddToCart({ product, channelCode, outlets, deliveryAvailable, lo
           setMsg({ kind: 'error', text: 'Keranjang tidak bisa disimpan di perangkat ini. Silakan masuk untuk berbelanja.' });
           return;
         }
+        trackEvent({ type: 'cart_add', channelCode, outletCode: outlet, productId: product.product_id, qty });
         setMsg({
           kind: 'success',
           text: `Ditambahkan ke keranjang.${r.outletChanged ? ` Semua barang dari kanal ini akan diambil di ${outletName}.` : ''}`,
@@ -130,6 +133,7 @@ export function AddToCart({ product, channelCode, outlets, deliveryAvailable, lo
         return;
       }
       const dropped = r.data.warnings?.some((w) => w.product_id === product.product_id);
+      if (!dropped) trackEvent({ type: 'cart_add', channelCode, outletCode: outlet, productId: product.product_id, qty });
       setMsg(
         dropped
           ? { kind: 'error', text: 'Produk ini sedang tidak tersedia dan tidak ditambahkan.' }
@@ -144,6 +148,7 @@ export function AddToCart({ product, channelCode, outlets, deliveryAvailable, lo
   }
 
   return (
+    <>
     <form
       className="card stack"
       onSubmit={(e) => {
@@ -227,5 +232,19 @@ export function AddToCart({ product, channelCode, outlets, deliveryAvailable, lo
         </p>
       )}
     </form>
+    {/* G50: "Kabari saya bila tersedia" hanya untuk toko yang statusnya habis; tersembunyi bila flag restock mati. */}
+    {soldOut && outlet && (
+      <NotifyMe
+        key={outlet}
+        channelCode={channelCode}
+        outletCode={outlet}
+        outletName={pickupOutlets.find((o) => o.outlet_code === outlet)?.public_name ?? outlet}
+        productId={product.product_id}
+        productName={product.name}
+        returnPath={returnPath}
+        onAlreadyInStock={() => setStock((s) => ({ ...s, [outlet]: 'in_stock' }))}
+      />
+    )}
+    </>
   );
 }

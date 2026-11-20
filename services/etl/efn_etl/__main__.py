@@ -16,6 +16,7 @@ from typing import Any
 
 from efn_etl.adapters import (
     ClickHouseAuditStore,
+    ClickHouseBehaviorStore,
     ClickHouseErasureStore,
     ClickHouseRunStore,
     ClickHouseSink,
@@ -25,8 +26,17 @@ from efn_etl.adapters import (
 )
 from efn_etl.amqp import PikaPublisher, build_connection_params
 from efn_etl.audit_job import AuditSettings, SinkCheck, recon_due, run_audit_copy, run_audit_recon
+from efn_etl.behavior import (
+    JOB_AGG,
+    JOB_ERASURE,
+    JOB_EVENTS,
+    BehaviorDsarHook,
+    agg_due,
+    run_behavior_agg,
+    run_behavior_erasure,
+)
 from efn_etl.config import Settings
-from efn_etl.erasure import SQL_PENDING_ERASURES, excluded_hashes, parse_requests, run_erasure
+from efn_etl.erasure import SQL_PENDING_ERASURES, SubjectHook, excluded_hashes, parse_requests, run_erasure
 from efn_etl.forecast import ACCURACY_JOB, ClickHouseForecastStore, accuracy_due, run_forecast_accuracy
 from efn_etl.gl import GL_JOBS
 from efn_etl.heartbeat import Heartbeat, JobRun, make_heartbeat
@@ -140,6 +150,63 @@ def run_forecast_accuracy_cycle(
         return
     log.info("job=%s weeks=%s..%s rows=%d", ACCURACY_JOB, result.start, result.end, result.rows)
     heartbeat(JobRun(ACCURACY_JOB, datetime.now(UTC), "ok", rows=result.rows, duration_ms=_ms(started)))
+
+
+def run_behavior_erasure_cycle(
+    source: PgSource,
+    store: ClickHouseBehaviorStore,
+    watermarks: ClickHouseWatermarkStore,
+    recheck: timedelta,
+    batch_size: int,
+    max_pages: int,
+    heartbeat: Heartbeat,
+) -> frozenset[str] | None:
+    """G50 erasure perilaku per subject_key. None = gagal (pemanggil melewati job behavior_events siklus ini: fail
+    closed, subjek yang sedang dihapus tidak boleh dimuat ulang)."""
+    started = time.monotonic()
+    try:
+        result = run_behavior_erasure(source, store, watermarks, recheck, batch_size, max_pages)
+    except Exception as exc:
+        log.error("job=%s gagal: %s", JOB_ERASURE, type(exc).__name__)
+        heartbeat(JobRun(JOB_ERASURE, datetime.now(UTC), "error", duration_ms=_ms(started)))
+        return None
+    log.info(
+        "job=%s subjects=%d rows_deleted=%d invalid=%d",
+        JOB_ERASURE,
+        result.subjects,
+        result.rows_deleted,
+        result.invalid,
+    )
+    heartbeat(
+        JobRun(
+            JOB_ERASURE,
+            datetime.now(UTC),
+            "ok" if not result.invalid else "partial",
+            rows=result.rows_deleted,
+            pages=result.pages,
+            duration_ms=_ms(started),
+            watermark=result.watermark,
+        )
+    )
+    return result.excluded
+
+
+def run_behavior_agg_cycle(
+    store: ClickHouseBehaviorStore, days: int, k_min: int, interval: timedelta, heartbeat: Heartbeat
+) -> None:
+    """G50 agregat harian anonim bila jatuh tempo. Gagal = heartbeat error; diulang siklus berikutnya."""
+    started = time.monotonic()
+    now = datetime.now(UTC)
+    try:
+        if not agg_due(store.last_agg_at(), now, interval):
+            return
+        result = run_behavior_agg(store, now, days, k_min)
+    except Exception as exc:
+        log.error("job=%s gagal: %s", JOB_AGG, type(exc).__name__)
+        heartbeat(JobRun(JOB_AGG, datetime.now(UTC), "error", duration_ms=_ms(started)))
+        return
+    log.info("job=%s days=%s..%s tables=%s", JOB_AGG, result.start, result.end, list(result.tables))
+    heartbeat(JobRun(JOB_AGG, datetime.now(UTC), "ok", rows=len(result.tables), duration_ms=_ms(started)))
 
 
 def make_sink_check(
@@ -264,8 +331,16 @@ def main() -> None:
         waste=settings.waste_enabled,
         forecast=settings.forecast_enabled,
         forecast_legacy=settings.forecast_legacy_enabled,
+        behavior=settings.behavior_enabled,
     )
     forecast_store = ClickHouseForecastStore(client) if settings.forecast_enabled else None
+    behavior_store: ClickHouseBehaviorStore | None = None
+    erasure_hooks: list[SubjectHook] = []
+    if settings.behavior_enabled:
+        mutation_timeout = settings.erasure_mutation_timeout_seconds
+        behavior_store = ClickHouseBehaviorStore(client, settings.ch_database, mutation_timeout)
+        dsar_hook = BehaviorDsarHook(sources["platform"], behavior_store, settings.behavior_erasure_batch_size)
+        erasure_hooks.append(dsar_hook)
     if settings.gl_enabled:
         jobs.extend(GL_JOBS)
     overlap = timedelta(seconds=settings.overlap_seconds)
@@ -300,9 +375,23 @@ def main() -> None:
             else:
                 requests = parse_requests(rows)
                 excluded = excluded_hashes(requests)
-                erased = run_erasure(requests, erasure_store, publisher)
+                erased = run_erasure(requests, erasure_store, publisher, erasure_hooks)
                 status = "partial" if any(r.status == "error" for r in erased) else "ok"
                 heartbeat(JobRun("privacy_erasure", datetime.now(UTC), status, rows=len(requests)))
+        if behavior_store is not None:
+            behavior_excluded = run_behavior_erasure_cycle(
+                sources["platform"],
+                behavior_store,
+                store,
+                timedelta(hours=settings.behavior_erasure_recheck_hours),
+                settings.behavior_erasure_batch_size,
+                settings.max_pages_per_run,
+                heartbeat,
+            )
+            if behavior_excluded is None:
+                cycle_jobs = [j for j in cycle_jobs if j.name != JOB_EVENTS]
+            else:
+                excluded = excluded | behavior_excluded
         results = run_once(
             cycle_jobs,
             sources,
@@ -322,6 +411,14 @@ def main() -> None:
                 timedelta(seconds=settings.stock_snapshot_interval_seconds),
                 settings.batch_size,
                 settings.max_pages_per_run,
+                heartbeat,
+            )
+        if behavior_store is not None:
+            run_behavior_agg_cycle(
+                behavior_store,
+                settings.behavior_agg_days,
+                settings.behavior_k_min,
+                timedelta(seconds=settings.behavior_agg_interval_seconds),
                 heartbeat,
             )
         if forecast_store is not None:

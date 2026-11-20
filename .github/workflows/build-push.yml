@@ -70,12 +70,14 @@ jobs:
       fail-fast: false
       matrix:
         service: [odoo, api-gateway, superapp-web, insight-web, ai-ocr-worker, etl, text2sql, esb-extract, forecast-worker, esb-migrate,
-                  postgres, minio, metabase]
+                  segment-worker, wa-unofficial, postgres, minio, metabase]
         include:
           - { service: odoo, context: services/odoo }
           - { service: api-gateway, context: services/api-gateway }
           - { service: superapp-web, context: services/superapp-web }
           - { service: insight-web, context: services/insight-web }   # G42 dashboard Insight (docs/04 §26)
+          - { service: segment-worker, context: services/segment-worker }   # G50 segmen perilaku (docs/04 §28.7)
+          - { service: wa-unofficial, context: services/wa-unofficial }     # G50 WA tidak resmi (ADR-044)
           - { service: ai-ocr-worker, context: services/ai-ocr-worker }
           - { service: etl, context: services/etl }
           - { service: text2sql, context: services/text2sql }   # G38 Text-to-SQL (docs/04 §23)
@@ -164,11 +166,15 @@ jobs:
       fail-fast: false
       matrix:
         service: [odoo, api-gateway, superapp-web, insight-web, ai-ocr-worker, etl, text2sql, esb-extract, forecast-worker, esb-migrate,
-                  postgres, minio, metabase]
+                  segment-worker, wa-unofficial, postgres, minio, metabase]
         include:
           - { service: odoo, context: services/odoo }
           - { service: api-gateway, context: services/api-gateway }
           - { service: superapp-web, context: services/superapp-web }
+          # G50 (docs/04 §28.7/§28.9): ditandatangani seperti service lain; BELUM dipakai deploy.yml (overlay segment /
+          # wa-unofficial; wa-unofficial OFF di production, ADR-044)
+          - { service: segment-worker, context: services/segment-worker }
+          - { service: wa-unofficial, context: services/wa-unofficial }
           # G44 (docs/04 §28.2): rantai rilis bertanda tangan (deploy.yml / efn-deploy IMAGE_FORECAST_WORKER); compose
           # memakainya hanya bila FORECAST_ENABLED=true (overlay forecast, deploy.sh). SEC-214: build GAGAL selama
           # services/forecast-worker/requirements.lock masih placeholder (pip --require-hashes).

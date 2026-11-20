@@ -1,0 +1,277 @@
+{
+  "contract": "segment_members_v1",
+  "description": "Fixture BERSAMA segment-worker (pytest) <-> BFF (Jest): POST /internal/v1/segments/{run_id}/members (docs/04 §28.7 + SEC-G50-08/16). Data sintetis, tanpa data nyata. subject_key = hex sha256 huruf kecil (pseudonim).",
+  "endpoint": "POST /internal/v1/segments/{run_id}/members",
+  "auth": "mTLS CN segment-worker (tanpa Authorization)",
+  "field_order": [
+    "schema_version",
+    "company_code",
+    "run_id",
+    "segment_code",
+    "subject_keys",
+    "chunk_no"
+  ],
+  "limits": {
+    "max_subject_keys_per_chunk": 5000,
+    "max_chunk_no": 100000
+  },
+  "valid": [
+    {
+      "name": "single_chunk",
+      "path_run_id": "6f1c2d4e-5a6b-4c7d-8e9f-0a1b2c3d4e5f",
+      "generated_from": {
+        "company_code": "SMD",
+        "run_id": "6f1c2d4e-5a6b-4c7d-8e9f-0a1b2c3d4e5f",
+        "segment_code": "viewed_not_bought",
+        "subject_keys": [
+          "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        ],
+        "chunk_size": 5000,
+        "chunk_no": 0
+      },
+      "body": {
+        "schema_version": 1,
+        "company_code": "SMD",
+        "run_id": "6f1c2d4e-5a6b-4c7d-8e9f-0a1b2c3d4e5f",
+        "segment_code": "viewed_not_bought",
+        "subject_keys": [
+          "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+        ],
+        "chunk_no": 0
+      },
+      "expect": {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "run_id": "6f1c2d4e-5a6b-4c7d-8e9f-0a1b2c3d4e5f",
+          "segment_code": "viewed_not_bought",
+          "chunk_no": 0,
+          "accepted": 3,
+          "duplicate_chunk": false
+        }
+      }
+    },
+    {
+      "name": "last_chunk",
+      "path_run_id": "0d9e8f7a-6b5c-4d3e-9f2a-1b0c9d8e7f6a",
+      "generated_from": {
+        "company_code": "SMD",
+        "run_id": "0d9e8f7a-6b5c-4d3e-9f2a-1b0c9d8e7f6a",
+        "segment_code": "oos_viewed",
+        "subject_keys": [
+          "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+        ],
+        "chunk_size": 2,
+        "chunk_no": 2
+      },
+      "body": {
+        "schema_version": 1,
+        "company_code": "SMD",
+        "run_id": "0d9e8f7a-6b5c-4d3e-9f2a-1b0c9d8e7f6a",
+        "segment_code": "oos_viewed",
+        "subject_keys": [
+          "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+        ],
+        "chunk_no": 2
+      },
+      "expect": {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "run_id": "0d9e8f7a-6b5c-4d3e-9f2a-1b0c9d8e7f6a",
+          "segment_code": "oos_viewed",
+          "chunk_no": 2,
+          "accepted": 1,
+          "duplicate_chunk": false
+        }
+      }
+    }
+  ],
+  "duplicate": {
+    "name": "resend_single_chunk_same_body",
+    "precondition": "valid[single_chunk] sudah diterima",
+    "path_run_id": "6f1c2d4e-5a6b-4c7d-8e9f-0a1b2c3d4e5f",
+    "body_ref": "single_chunk",
+    "expect": {
+      "status": 200,
+      "body": {
+        "ok": true,
+        "run_id": "6f1c2d4e-5a6b-4c7d-8e9f-0a1b2c3d4e5f",
+        "segment_code": "viewed_not_bought",
+        "chunk_no": 0,
+        "accepted": 0,
+        "duplicate_chunk": true
+      }
+    },
+    "worker": "sukses (tidak diulang)"
+  },
+  "invalid": [
+    {
+      "name": "missing_company_code",
+      "path_run_id": "6f1c2d4e-5a6b-4c7d-8e9f-0a1b2c3d4e5f",
+      "body": {
+        "schema_version": 1,
+        "run_id": "6f1c2d4e-5a6b-4c7d-8e9f-0a1b2c3d4e5f",
+        "segment_code": "viewed_not_bought",
+        "subject_keys": [
+          "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        ],
+        "chunk_no": 0
+      },
+      "expect": {
+        "status": 400,
+        "error_code": "members_keys"
+      },
+      "worker_error": "members_keys"
+    },
+    {
+      "name": "unknown_company_code",
+      "path_run_id": "6f1c2d4e-5a6b-4c7d-8e9f-0a1b2c3d4e5f",
+      "body": {
+        "schema_version": 1,
+        "company_code": "XYZ",
+        "run_id": "6f1c2d4e-5a6b-4c7d-8e9f-0a1b2c3d4e5f",
+        "segment_code": "viewed_not_bought",
+        "subject_keys": [
+          "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        ],
+        "chunk_no": 0
+      },
+      "expect": {
+        "status": 400,
+        "error_code": "invalid_company_code"
+      },
+      "worker_error": "invalid_company_code"
+    },
+    {
+      "name": "lowercase_company_code",
+      "path_run_id": "6f1c2d4e-5a6b-4c7d-8e9f-0a1b2c3d4e5f",
+      "body": {
+        "schema_version": 1,
+        "company_code": "smd",
+        "run_id": "6f1c2d4e-5a6b-4c7d-8e9f-0a1b2c3d4e5f",
+        "segment_code": "viewed_not_bought",
+        "subject_keys": [
+          "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        ],
+        "chunk_no": 0
+      },
+      "expect": {
+        "status": 400,
+        "error_code": "invalid_company_code"
+      },
+      "worker_error": "invalid_company_code"
+    },
+    {
+      "name": "extra_field",
+      "path_run_id": "6f1c2d4e-5a6b-4c7d-8e9f-0a1b2c3d4e5f",
+      "body": {
+        "schema_version": 1,
+        "company_code": "SMD",
+        "run_id": "6f1c2d4e-5a6b-4c7d-8e9f-0a1b2c3d4e5f",
+        "segment_code": "viewed_not_bought",
+        "subject_keys": [
+          "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        ],
+        "chunk_no": 0,
+        "member_id": "m-1"
+      },
+      "expect": {
+        "status": 400,
+        "error_code": "members_keys"
+      },
+      "worker_error": "members_keys"
+    },
+    {
+      "name": "subject_key_not_hex64",
+      "path_run_id": "6f1c2d4e-5a6b-4c7d-8e9f-0a1b2c3d4e5f",
+      "body": {
+        "schema_version": 1,
+        "company_code": "SMD",
+        "run_id": "6f1c2d4e-5a6b-4c7d-8e9f-0a1b2c3d4e5f",
+        "segment_code": "viewed_not_bought",
+        "subject_keys": [
+          "62812****789"
+        ],
+        "chunk_no": 0
+      },
+      "expect": {
+        "status": 400,
+        "error_code": "invalid_subject_key"
+      },
+      "worker_error": "invalid_subject_key"
+    },
+    {
+      "name": "schema_version_2",
+      "path_run_id": "6f1c2d4e-5a6b-4c7d-8e9f-0a1b2c3d4e5f",
+      "body": {
+        "schema_version": 2,
+        "company_code": "SMD",
+        "run_id": "6f1c2d4e-5a6b-4c7d-8e9f-0a1b2c3d4e5f",
+        "segment_code": "viewed_not_bought",
+        "subject_keys": [
+          "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        ],
+        "chunk_no": 0
+      },
+      "expect": {
+        "status": 400,
+        "error_code": "unsupported_schema"
+      },
+      "worker_error": "schema_version"
+    },
+    {
+      "name": "path_run_id_mismatch",
+      "path_run_id": "0d9e8f7a-6b5c-4d3e-9f2a-1b0c9d8e7f6a",
+      "body": {
+        "schema_version": 1,
+        "company_code": "SMD",
+        "run_id": "6f1c2d4e-5a6b-4c7d-8e9f-0a1b2c3d4e5f",
+        "segment_code": "viewed_not_bought",
+        "subject_keys": [
+          "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        ],
+        "chunk_no": 0
+      },
+      "expect": {
+        "status": 400,
+        "error_code": "run_id_mismatch"
+      },
+      "worker_error": null,
+      "note": "worker selalu membentuk path dari body.run_id -> tidak bisa terjadi di worker"
+    }
+  ],
+  "conflict": [
+    {
+      "name": "run_company_mismatch",
+      "precondition": "run_id 6f1c2d4e-... sudah punya chunk dengan company_code PB",
+      "path_run_id": "6f1c2d4e-5a6b-4c7d-8e9f-0a1b2c3d4e5f",
+      "body_ref": "single_chunk",
+      "expect": {
+        "status": 409,
+        "error_code": "run_company_mismatch"
+      },
+      "worker": "galat rejected, tidak diulang; segmen gagal, ringkasan Odoo tidak dikirim"
+    },
+    {
+      "name": "chunk_conflict",
+      "precondition": "(run_id, segment_code, chunk_no) sudah diterima dengan subject_keys berbeda",
+      "path_run_id": "6f1c2d4e-5a6b-4c7d-8e9f-0a1b2c3d4e5f",
+      "body_ref": "single_chunk",
+      "expect": {
+        "status": 409,
+        "error_code": "chunk_conflict"
+      },
+      "worker": "galat rejected, tidak diulang"
+    }
+  ]
+}

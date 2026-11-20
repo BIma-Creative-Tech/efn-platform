@@ -38,6 +38,15 @@ export const KNOWN_SECRET_FILES: Readonly<Record<string, string>> = {
   // G23 docs/04 §15.5/§15.8: HMAC event reservasi Odoo → BFF `/v1/pos/booking/events`. Wajib hanya bila BOOKING_ENABLED=true.
   // `ODOO_API_KEY_BOOKING_<PT>` bernama dinamis per PT (pola QR) → tidak di daftar ini.
   ODOO_BOOKING_EVENT_HMAC: 'odoo_booking_event_hmac',
+  // G50 docs/04 §28.6 / ADR-047 §3.3: pepper HMAC subject_key (member) dan device_key (perangkat). Wajib hanya bila
+  // BEHAVIOR_TRACKING_ENABLED=true; keduanya harus berbeda. `ODOO_API_KEY_CAMPAIGN_<PT>` bernama dinamis (pola promo).
+  BEHAVIOR_SUBJECT_PEPPER: 'behavior_subject_pepper',
+  BEHAVIOR_DEVICE_PEPPER: 'behavior_device_pepper',
+  // G50-B (dibaca `src/notification/email|wa-unofficial` lewat konfigurasi kanalnya sendiri). Didaftarkan di sini agar
+  // `assertStartupSecrets` menolak env literal di luar APP_ENV=dev (SEC-29). Tidak wajib saat start.
+  EMAIL_SMTP_PASSWORD: 'email_smtp_password',
+  EMAIL_UNSUBSCRIBE_KEY: 'email_unsubscribe_key',
+  WA_UNOFFICIAL_HASH_KEY: 'wa_unofficial_hash_key',
   // Kredensial per service (docs/04 §7.3, SEC-02) — bukan lagi kredensial bersama/superuser
   PG_PASSWORD: 'pg_password_bff',
   RABBITMQ_PASSWORD: 'rabbitmq_password_bff',

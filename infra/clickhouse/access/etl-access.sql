@@ -66,6 +66,12 @@ GRANT SELECT, INSERT ON efn_dwh.fact_forecast_accuracy TO etl_writer;
 -- G46 (L-165): histori penjualan ESB pra-cutover dari Odoo efn_legacy_sales_daily (ETL_ENABLE_FORECAST_LEGACY).
 GRANT SELECT, INSERT ON efn_dwh.fact_legacy_sales_daily TO etl_writer;
 GRANT SELECT ON efn_dwh.v_fc_sales_daily TO etl_writer;
+-- G50 (16-g50-behavior.sql, ADR-047): event perilaku visitor (TTL 90 h) + agregat harian anonim (TTL 2 th). Agregat
+-- dihitung ETL lewat INSERT ... SELECT dari fact_visitor_event (butuh SELECT fakta + INSERT agregat).
+GRANT SELECT, INSERT ON efn_dwh.fact_visitor_event TO etl_writer;
+GRANT SELECT, INSERT ON efn_dwh.agg_visitor_product_daily TO etl_writer;
+GRANT SELECT, INSERT ON efn_dwh.agg_visitor_funnel_daily TO etl_writer;
+GRANT SELECT, INSERT ON efn_dwh.agg_visitor_search_daily TO etl_writer;
 -- Salinan audit tamper-evident: HANYA SELECT + INSERT. Sengaja TANPA ALTER DELETE/UPDATE, TRUNCATE, DROP, OPTIMIZE:
 -- ETL (atau kredensial efn_etl yang bocor) tidak bisa menghapus/mengubah salinan; perubahan hanya oleh admin ClickHouse
 -- (terdeteksi lewat kepala rantai di Loki). Bila suatu saat ada `GRANT ALL`/wildcard ke etl_writer, cabut dulu.
@@ -83,6 +89,9 @@ REVOKE ALTER DELETE, ALTER UPDATE, TRUNCATE, DROP TABLE, OPTIMIZE ON efn_dwh.aud
 -- ERASURE_TARGETS). `mutations_sync` disetel per query oleh ETL.
 GRANT ALTER DELETE ON efn_dwh.competitor_prices TO etl_writer;
 GRANT ALTER DELETE ON efn_dwh.loyalty_events TO etl_writer;
+-- G50 (L-154): erasure perilaku per subject_key (services/etl/efn_etl/behavior.py BEHAVIOR_ERASURE_TABLE). Agregat
+-- agg_visitor_* anonim -> tanpa ALTER DELETE.
+GRANT ALTER DELETE ON efn_dwh.fact_visitor_event TO etl_writer;
 
 GRANT etl_writer TO efn_etl;
 SET DEFAULT ROLE etl_writer TO efn_etl;

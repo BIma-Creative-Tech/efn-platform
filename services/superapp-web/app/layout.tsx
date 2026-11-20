@@ -11,6 +11,10 @@ import './fonts.css';
 import { getBrand } from '@/lib/brand-server';
 import { safeScheme, themeToCssVars } from '@/lib/brands';
 import { SiteHeader } from '@/components/SiteHeader';
+import { EngageProvider } from '@/components/engage/EngageProvider';
+import { FeatureGate } from '@/components/engage/FeatureGate';
+import { TrackingBanner } from '@/components/engage/TrackingBanner';
+import { getSessionToken } from '@/lib/session';
 import './globals.css';
 
 export async function generateMetadata(): Promise<Metadata> {
@@ -30,6 +34,7 @@ export async function generateViewport(): Promise<Viewport> {
 export default async function RootLayout({ children }: { children: ReactNode }) {
   const brand = await getBrand();
   const style = themeToCssVars(brand.theme) as CSSProperties;
+  const loggedIn = Boolean(await getSessionToken());
 
   return (
     <html lang="id" data-brand={brand.id} data-scheme={safeScheme(brand.theme)} style={style}>
@@ -37,21 +42,29 @@ export default async function RootLayout({ children }: { children: ReactNode }) 
         <a className="skip-link" href="#konten">
           Lewati ke konten
         </a>
-        <SiteHeader brand={brand} />
-        <main id="konten" tabIndex={-1}>
-          <div className="container">{children}</div>
-        </main>
-        <footer className="site-footer">
-          <div className="container">
-            <p>
-              <strong>{brand.name}</strong>
-              {brand.id === 'efn' ? '' : ' · bagian dari Erajaya Food & Nourishment (EFN)'}
-            </p>
-            <p>
-              <Link href="/privasi">Kebijakan Privasi</Link>
-            </p>
-          </div>
-        </footer>
+        {/* G50: flag fitur dari BFF; banner consent tracking, wishlist, dan alert tersembunyi sampai flag menyala. */}
+        <EngageProvider loggedIn={loggedIn}>
+          <TrackingBanner />
+          <SiteHeader brand={brand} />
+          <main id="konten" tabIndex={-1}>
+            <div className="container">{children}</div>
+          </main>
+          <footer className="site-footer">
+            <div className="container">
+              <p>
+                <strong>{brand.name}</strong>
+                {brand.id === 'efn' ? '' : ' · bagian dari Erajaya Food & Nourishment (EFN)'}
+              </p>
+              <p>
+                <Link href="/privasi">Kebijakan Privasi</Link>
+                <FeatureGate feature="tracking">
+                  {' · '}
+                  <Link href="/privasi/pelacakan">Pengaturan pelacakan</Link>
+                </FeatureGate>
+              </p>
+            </div>
+          </footer>
+        </EngageProvider>
       </body>
     </html>
   );

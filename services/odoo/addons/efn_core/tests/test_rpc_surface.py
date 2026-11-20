@@ -391,6 +391,19 @@ RPC_ALLOWLIST = {
         "efn_minmax_ingest",
     ): "G44: check_caller + run milik company/open/kind weekly_minmax + FOR UPDATE + idempotensi (run, chunk_no); "
     "usulan v2 draft (engine v2) / shadow (engine v1), approval planner v1",
+    # G50 efn_campaign (docs/04 §28.7): bot = campaign_api.check_caller (group_campaign_bot + Internal User saja,
+    ("efn.campaign", "efn_campaign_proposal_upsert"): "G50: check_caller + company_code + advisory lock + "
+    "idempoten (company, run_id, segment_code); tanpa data member (pii_suspected)",
+    (
+        "efn.campaign",
+        "efn_campaign_claim",
+    ): "G50: check_caller + FOR UPDATE SKIP LOCKED queued->claimed, company caller",
+    ("efn.campaign", "efn_campaign_ack"): "G50: check_caller + FOR UPDATE baris company caller; idempoten",
+    ("efn.campaign", "action_efn_propose"): "G50: group_campaign_user + check_access(write) + company + draft",
+    ("efn.campaign", "action_efn_reset_draft"): "G50: group_campaign_user + check_access(write) + company",
+    ("efn.campaign", "action_efn_cancel"): "G50: group_campaign_user (+approver bila approved) + check_access(write)",
+    ("efn.campaign", "action_efn_approve"): "G50: group_campaign_approver + check_access(read) + company + "
+    "SoD (bukan pembuat/penyunting) + proposed + sakelar; voucher via wizard CE sudo",
     # G44 efn_assortment (docs/04 §28.5, L-150): override restriksi DC -> outlet.
     (
         "stock.picking",
