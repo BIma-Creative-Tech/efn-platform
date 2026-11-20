@@ -33,9 +33,9 @@ const GOOD = { cids: [3, 5], codes: ['BCF', 'PB'], exp: NOW + 100, iat: NOW, nam
 describe('cookie sesi eis1', () => {
   it('nama __Host-eis (C2) dan atribut sesuai kontrak; tanpa Domain', () => {
     expect(SESSION_COOKIE).toBe('__Host-eis');
-    expect(SESSION_TTL_SEC).toBe(28800);
+    expect(SESSION_TTL_SEC).toBe(7200);
     const set = setCookieHeader('v');
-    expect(set).toBe('__Host-eis=v; Max-Age=28800; Path=/; HttpOnly; Secure; SameSite=Lax');
+    expect(set).toBe('__Host-eis=v; Max-Age=7200; Path=/; HttpOnly; Secure; SameSite=Lax');
     expect(clearCookieHeader()).toBe('__Host-eis=; Max-Age=0; Path=/; HttpOnly; Secure; SameSite=Lax');
     expect(set).not.toMatch(/Domain/i);
   });
@@ -45,7 +45,7 @@ describe('cookie sesi eis1', () => {
     const [prefix, b64, sig] = v.split('.');
     expect(prefix).toBe('eis1');
     expect(Buffer.from(b64, 'base64url').toString('utf8')).toBe(
-      `{"cids":[3,5],"codes":["BCF","PB"],"exp":${NOW + 28800},"iat":${NOW},"name":"Siti Ünal","roles":["user"],"sub":7}`,
+      `{"cids":[3,5],"codes":["BCF","PB"],"exp":${NOW + 7200},"iat":${NOW},"name":"Siti Ünal","roles":["user"],"sub":7}`,
     );
     expect(sig).toBe(hmacSha256B64Url(SKEY, `eis1.${b64}`));
     expect(sig).toHaveLength(43);
@@ -71,7 +71,7 @@ describe('cookie sesi eis1', () => {
     expect(verifySessionValue(forge(noName), SKEY, NOW + 1)).toBeNull();
   });
 
-  it('waktu: exp - iat > 28800, iat > now + 30, sudah kedaluwarsa, exp = iat ditolak', () => {
+  it('waktu: exp - iat > 7200, iat > now + 30, sudah kedaluwarsa, exp = iat ditolak', () => {
     expect(verifySessionValue(forge({ ...GOOD, exp: NOW + 28801 }), SKEY, NOW + 1)).toBeNull();
     expect(verifySessionValue(forge({ ...GOOD, iat: NOW + 40, exp: NOW + 100 }), SKEY, NOW)).toBeNull();
     expect(verifySessionValue(forge(GOOD), SKEY, NOW + 100)).toBeNull(); // now >= exp

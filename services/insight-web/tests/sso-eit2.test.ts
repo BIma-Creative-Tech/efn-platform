@@ -38,7 +38,7 @@ describe('POST /sso eit2', () => {
     const cookie = res.headers.get('set-cookie') ?? '';
     expect(cookie.startsWith(`${SESSION_COOKIE}=eis2.`)).toBe(true);
     expect(cookie).not.toContain(TOKEN_B);
-    for (const attr of ['HttpOnly', 'Secure', 'SameSite=Lax', 'Path=/', 'Max-Age=28800']) expect(cookie).toContain(attr);
+    for (const attr of ['HttpOnly', 'Secure', 'SameSite=Lax', 'Path=/', 'Max-Age=7200']) expect(cookie).toContain(attr);
     expect(verifySessionValue(cookieValue(res), SESSION_KEY, IAT + 10)).toMatchObject({ v: 2, sub: 9, wids: [22], roles: ['store', 'user'] });
   });
   it('eit2 replay -> 401 generik', async () => {

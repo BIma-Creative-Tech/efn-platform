@@ -18,7 +18,7 @@
 ```
 Browser staf (WireGuard, subnet staf)
   -> https://erp.<domain>/efn/insight/open     Odoo: cek grup + INSIGHT_ENABLED, buat token eit1 (60 dtk), audit ir.logging
-  -> POST https://insight.<domain>/sso          insight-web: verifikasi HMAC/waktu/jti -> cookie __Host-eis (8 jam)
+  -> POST https://insight.<domain>/sso          insight-web: verifikasi HMAC/waktu/jti -> cookie __Host-eis (2 jam, L-217)
   -> https://insight.<domain>/...               insight-web -> ClickHouse https://clickhouse:8443 (user efn_insight)
 ```
 
@@ -126,7 +126,7 @@ terdampak (cookie memakai kunci sesi).
 
 ### 4.2 `insight_session_key` (insight-web saja)
 Dampak: **semua sesi keluar** (cookie lama gagal verifikasi) → user membuka lagi dari Odoo. Ini juga mekanisme
-pencabutan darurat (L-119: user dinonaktifkan di Odoo masih memegang cookie ≤ 8 jam).
+pencabutan darurat (L-119: user dinonaktifkan di Odoo masih memegang cookie ≤ 2 jam, L-217).
 1. Ganti nilai secret. 2. `up -d --force-recreate insight-web` (sidecar ikut). 3. Verifikasi login ulang.
 
 ### 4.3 `insight_scope_key` (clickhouse-init + insight-web) — urutan wajib
@@ -196,7 +196,7 @@ Odoo sendiri: 503 "Insight belum dikonfigurasi" + log ERROR `insight_misconfigur
 memuat path, atau `insight_sso_key` tidak terbaca / < 64 hex di container odoo.
 
 ### "Sesi berakhir, buka lagi dari Odoo" berulang
-Cookie > 8 jam, `insight_session_key` baru dirotasi, atau insight-web dibuka lewat host lain (cookie `__Host-` terikat
+Cookie > 2 jam, `insight_session_key` baru dirotasi, atau insight-web dibuka lewat host lain (cookie `__Host-` terikat
 host `insight.<domain>`). Bila terjadi tepat setelah login: jam insight-web salah (§5).
 
 ### Kartu galat "timeout" / "tidak bisa dimuat" pada banyak blok sekaligus

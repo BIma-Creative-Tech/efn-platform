@@ -445,6 +445,7 @@ for v in v_esb_sales_daily v_esb_sales_branch_daily v_esb_payment_daily v_esb_fl
   echo "CREATE ROW POLICY OR REPLACE efn_insight_scope ON efn_insight.${v} USING company_code != '' AND ${FMT} AND ${CODES} AND ${INSIGHT_SIG} TO insight_reader;"
 done | $CH --log_queries=0 --multiquery
 # G47 (docs/04 §28.13.7, L-188): row policy efn_insight_scope untuk v_sm_* (butuh $INSIGHT_KEY tervalidasi di atas).
+# shellcheck source=/dev/null  # file di-mount saat runtime (/init/access)
 . /init/access/insight-sm-policy.sh
 unset INSIGHT_KEY INSIGHT_SIG
 # Fail closed: view efn_insight tanpa row policy = semua PT terbaca (grant efn_insight.* wildcard). Bila ada, cabut

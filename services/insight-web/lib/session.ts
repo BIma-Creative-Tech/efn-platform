@@ -30,7 +30,8 @@ import { hmacSha256B64Url, verifyHmacB64Url } from './hmac';
 import type { SsoPayload, SsoPayloadV2 } from './token';
 
 export const SESSION_COOKIE = '__Host-eis';
-export const SESSION_TTL_SEC = 28800;
+// 2 jam (keputusan pemilik proyek 21 Nov 2026, SEC-G47-03; sebelumnya 8 jam L-119): pencabutan cakupan lebih cepat.
+export const SESSION_TTL_SEC = 7200;
 export const SESSION_VALUE_RE = /^eis1\.[A-Za-z0-9_-]{16,2048}\.[A-Za-z0-9_-]{43}$/;
 export const SESSION_VALUE_RE_V2 = /^eis2\.[A-Za-z0-9_-]{16,3000}\.[A-Za-z0-9_-]{43}$/;
 const IAT_SKEW = 30;
