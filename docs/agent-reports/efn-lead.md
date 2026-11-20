@@ -12,8 +12,8 @@ Laporan kerja Lead Agent (konvensi CLAUDE.md "Tim agent"). Bagian "Status sesi" 
 
 **Langkah berikutnya:**
 1. User merge PR.
-2. Bila disetujui: ringkas tabel K25 di CLAUDE.md (±19 KB, terkirim tiap pesan) → detail ke `docs/`.
-3. Bila disetujui: turunkan model agent mekanis ke Sonnet.
+2. Selesai: tabel K25 diringkas (CLAUDE.md 19,2 → 10,4 KB), detail di `docs/K25_KEBUTUHAN_PEMILIK.md`.
+3. Selesai: aturan pilihan model per tugas di `.claude/agents/efn-lead.md` (default agent tetap Opus).
 
 **Blocker / pertanyaan untuk user:**
 1. `.claude/settings.json` masih melarang `Read(./**/.env.*)` sehingga `.env.example` ikut terblokir; perlu diganti manual (auto mode menolak Claude mengubah izinnya sendiri).
