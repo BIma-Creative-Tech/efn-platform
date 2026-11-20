@@ -430,6 +430,63 @@ groups:
           description: "Jalankan sudo efn-online-cs online-erasure-pending; selesaikan unlinked_open_parts (refund/serah terima terverifikasi)."
           runbook_url: https://github.com/efn/efn-platform/blob/main/docs/runbooks/online-orders.md#erasure-paksa
 
+  # ─────────────────────────── Forecast (G44, SEC-215, R-T15) ───────────────────────────
+  # API key Odoo user teknis forecast (efn_forecast_<pt>) dibuat MANUAL, durasi <= 35 hari, TANPA rotasi otomatis.
+  # Metrik textfile ditulis scripts/host/efn-forecast-key-status (timer harian, hanya membaca; deret per PT hanya ada
+  # bila FORECAST_ENABLED=true di .env deploy). Kegagalan run/dead-man forecast: loki-rules/efn-forecast.yml.
+  # Dampak kedaluwarsa: tidak ada usulan reorder baru (bukan transaksi) -> warning saja.
+  - name: efn-forecast-key
+    rules:
+      - alert: EfnForecastApiKeyExpiringSoon
+        expr: (max by (company) (efn_forecast_api_key_expiry_timestamp_seconds) > 0) - time() < 7 * 86400
+        labels:
+          severity: warning
+          team: ops
+        annotations:
+          summary: "API key Odoo bot forecast PT {{ $labels.company }} kedaluwarsa < 7 hari"
+          description: "Buat key baru user efn_forecast_<pt>, pasang ke secret, recreate forecast-worker, lalu hapus key lama (runbook §4). Setelah kedaluwarsa run forecast gagal 401."
+          runbook_url: https://github.com/efn/efn-platform/blob/main/docs/runbooks/forecast-worker.md#rotasi
+      - alert: EfnForecastApiKeyMissing
+        expr: max by (company) (efn_forecast_api_key_active_keys) == 0
+        for: 1h
+        labels:
+          severity: warning
+          team: ops
+        annotations:
+          summary: "Forecast aktif tetapi user efn_forecast_{{ $labels.company }} tanpa API key aktif"
+          description: "Key kedaluwarsa/dihapus; run forecast berikutnya ditolak Odoo (401). Buat key baru (runbook §3)."
+          runbook_url: https://github.com/efn/efn-platform/blob/main/docs/runbooks/forecast-worker.md#api-key
+      # SEC-223 (G45): key tanpa tanggal kedaluwarsa = pelanggaran kebijakan <= 35 hari (R-T15); key itu tidak pernah
+      # memicu EfnForecastApiKeyExpiringSoon sehingga bocornya tidak terbatas waktu. Metrik harian -> tanpa `for`.
+      - alert: EfnForecastApiKeyNoExpiry
+        expr: max by (company) (efn_forecast_api_key_no_expiry_keys) > 0
+        labels:
+          severity: warning
+          team: ops
+        annotations:
+          summary: "User efn_forecast_{{ $labels.company }} punya {{ $value }} API key tanpa tanggal kedaluwarsa"
+          description: "Kebijakan: key bot forecast wajib berdurasi <= 35 hari. Buat key berdurasi, pasang ke secret, recreate forecast-worker, lalu hapus key tanpa kedaluwarsa (runbook §4b)."
+          runbook_url: https://github.com/efn/efn-platform/blob/main/docs/runbooks/forecast-worker.md#key-tanpa-kedaluwarsa
+      - alert: EfnForecastApiKeyCheckFailed
+        expr: max(efn_forecast_api_key_check_last_run_ok) == 0
+        for: 1h
+        labels:
+          severity: warning
+          team: ops
+        annotations:
+          summary: "Pemeriksaan masa berlaku API key forecast gagal"
+          description: "efn-forecast-key-status tidak dapat membaca key (container odoo mati, user teknis hilang/nonaktif). Lihat journald tag efn-forecast-key-status."
+          runbook_url: https://github.com/efn/efn-platform/blob/main/docs/runbooks/forecast-worker.md#pengingat-key
+      - alert: EfnForecastApiKeyCheckNotRunning
+        expr: time() - max(efn_forecast_api_key_check_last_run_timestamp_seconds) > 2 * 86400 + 3600
+        labels:
+          severity: warning
+          team: ops
+        annotations:
+          summary: "Timer efn-forecast-key-status tidak berjalan > 2 hari"
+          description: "Pengingat kedaluwarsa API key forecast buta. systemctl status efn-forecast-key-status.timer."
+          runbook_url: https://github.com/efn/efn-platform/blob/main/docs/runbooks/forecast-worker.md#pengingat-key
+
   # ─────────────────────────── Backup & DR (R-T08) ───────────────────────────
   # Metrik efn_backup_* / efn_restore_test_* ditulis scripts/backup.sh & scripts/restore-test.sh (textfile collector).
   - name: efn-backup

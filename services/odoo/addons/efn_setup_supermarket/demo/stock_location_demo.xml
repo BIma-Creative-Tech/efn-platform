@@ -1,0 +1,191 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- DEMO tahap B — zona outlet + cycle count + putaway (fit-gap G45 S-15, S-16). CE murni, tanpa kode.
+
+     Fakta source stock 19.0 [V 19 Nov 2026]:
+       - stock.location.cyclic_inventory_frequency (Integer hari, default 0, CHECK >= 0); next_inventory_date compute
+         stored = last_inventory_date (atau hari ini) + frekuensi, hanya untuk lokasi internal/transit ber-company.
+       - stock.location TIDAK punya frekuensi hitung per kategori. "Cycle count per kategori" dicapai dengan
+         zona per kelompok kategori + putaway rule per kategori: barang kategori X selalu disimpan di zona X, sehingga
+         jadwal hitung zona = jadwal hitung kategori. Jadwal per kategori lintas lokasi = gap opsional fase 2 (S-15).
+       - stock.putaway.rule (location_in_id, location_out_id, category_id, company_id, sequence): pencocokan kategori
+         menelusuri INDUK kategori (rule "Fresh" berlaku untuk Sayur/Buah/Daging/Ikan/Bakery); hanya membaca rule di
+         lokasi yang dituju (Stock outlet), tidak di induk lokasi. Butuh grup Storage Locations (sudah di data/).
+       - res.company.annual_inventory_month/day (default Desember/31) = opname tahunan untuk lokasi TANPA frekuensi.
+         Tidak diubah (Q-SM10).
+     Kapasitas rak (S-16): stock.storage.category.capacity CE = qty per PRODUK per kategori penyimpanan, dipakai putaway
+     ke lokasi rak; tidak dipakai untuk membatasi usulan order. Cap usulan memakai efn.assortment.line.shelf_capacity_qty
+     (per outlet x produk, diisi setelah seed G48). Tidak ada data kapasitas di sini (tanpa produk).
+
+     Frekuensi PLACEHOLDER (Q-SM10): Fresh 7 hari, Chiller 14, Freezer 30, Dry 30; Stock DC 30.
+     SMD05 tanpa freezer (konsisten dengan capability efn_assortment_demo.xml) -> tidak ada zona Freezer.
+     Lokasi zona = anak Stock outlet (lot_stock_id), sehingga lokasi sumber POS (child_of) tetap melihat stoknya.
+     noupdate="1": perubahan pengguna tidak ditimpa upgrade. <function> di noupdate hanya jalan saat install; untuk DB
+     demo tahap A, migrasi 19.0.2.0.0 menerapkan ulang file ini. -->
+<odoo noupdate="1">
+    <!-- ===== SMD01 ===== -->
+    <record id="location_smd01_fresh" model="stock.location">
+        <field name="name">Zona Fresh</field>
+        <field name="location_id" model="stock.warehouse" eval="obj(ref('warehouse_smd01')).lot_stock_id.id"/>
+        <field name="usage">internal</field>
+        <field name="company_id" ref="company_smd"/>
+        <field name="cyclic_inventory_frequency">7</field>
+    </record>
+    <record id="location_smd01_chiller" model="stock.location">
+        <field name="name">Zona Chiller</field>
+        <field name="location_id" model="stock.warehouse" eval="obj(ref('warehouse_smd01')).lot_stock_id.id"/>
+        <field name="usage">internal</field>
+        <field name="company_id" ref="company_smd"/>
+        <field name="cyclic_inventory_frequency">14</field>
+    </record>
+    <record id="location_smd01_freezer" model="stock.location">
+        <field name="name">Zona Freezer</field>
+        <field name="location_id" model="stock.warehouse" eval="obj(ref('warehouse_smd01')).lot_stock_id.id"/>
+        <field name="usage">internal</field>
+        <field name="company_id" ref="company_smd"/>
+        <field name="cyclic_inventory_frequency">30</field>
+    </record>
+    <record id="location_smd01_dry" model="stock.location">
+        <field name="name">Zona Dry</field>
+        <field name="location_id" model="stock.warehouse" eval="obj(ref('warehouse_smd01')).lot_stock_id.id"/>
+        <field name="usage">internal</field>
+        <field name="company_id" ref="company_smd"/>
+        <field name="cyclic_inventory_frequency">30</field>
+    </record>
+
+    <!-- ===== SMD02 ===== -->
+    <record id="location_smd02_fresh" model="stock.location">
+        <field name="name">Zona Fresh</field>
+        <field name="location_id" model="stock.warehouse" eval="obj(ref('warehouse_smd02')).lot_stock_id.id"/>
+        <field name="usage">internal</field>
+        <field name="company_id" ref="company_smd"/>
+        <field name="cyclic_inventory_frequency">7</field>
+    </record>
+    <record id="location_smd02_chiller" model="stock.location">
+        <field name="name">Zona Chiller</field>
+        <field name="location_id" model="stock.warehouse" eval="obj(ref('warehouse_smd02')).lot_stock_id.id"/>
+        <field name="usage">internal</field>
+        <field name="company_id" ref="company_smd"/>
+        <field name="cyclic_inventory_frequency">14</field>
+    </record>
+    <record id="location_smd02_freezer" model="stock.location">
+        <field name="name">Zona Freezer</field>
+        <field name="location_id" model="stock.warehouse" eval="obj(ref('warehouse_smd02')).lot_stock_id.id"/>
+        <field name="usage">internal</field>
+        <field name="company_id" ref="company_smd"/>
+        <field name="cyclic_inventory_frequency">30</field>
+    </record>
+    <record id="location_smd02_dry" model="stock.location">
+        <field name="name">Zona Dry</field>
+        <field name="location_id" model="stock.warehouse" eval="obj(ref('warehouse_smd02')).lot_stock_id.id"/>
+        <field name="usage">internal</field>
+        <field name="company_id" ref="company_smd"/>
+        <field name="cyclic_inventory_frequency">30</field>
+    </record>
+
+    <!-- ===== SMD03 ===== -->
+    <record id="location_smd03_fresh" model="stock.location">
+        <field name="name">Zona Fresh</field>
+        <field name="location_id" model="stock.warehouse" eval="obj(ref('warehouse_smd03')).lot_stock_id.id"/>
+        <field name="usage">internal</field>
+        <field name="company_id" ref="company_smd"/>
+        <field name="cyclic_inventory_frequency">7</field>
+    </record>
+    <record id="location_smd03_chiller" model="stock.location">
+        <field name="name">Zona Chiller</field>
+        <field name="location_id" model="stock.warehouse" eval="obj(ref('warehouse_smd03')).lot_stock_id.id"/>
+        <field name="usage">internal</field>
+        <field name="company_id" ref="company_smd"/>
+        <field name="cyclic_inventory_frequency">14</field>
+    </record>
+    <record id="location_smd03_freezer" model="stock.location">
+        <field name="name">Zona Freezer</field>
+        <field name="location_id" model="stock.warehouse" eval="obj(ref('warehouse_smd03')).lot_stock_id.id"/>
+        <field name="usage">internal</field>
+        <field name="company_id" ref="company_smd"/>
+        <field name="cyclic_inventory_frequency">30</field>
+    </record>
+    <record id="location_smd03_dry" model="stock.location">
+        <field name="name">Zona Dry</field>
+        <field name="location_id" model="stock.warehouse" eval="obj(ref('warehouse_smd03')).lot_stock_id.id"/>
+        <field name="usage">internal</field>
+        <field name="company_id" ref="company_smd"/>
+        <field name="cyclic_inventory_frequency">30</field>
+    </record>
+
+    <!-- ===== SMD04 ===== -->
+    <record id="location_smd04_fresh" model="stock.location">
+        <field name="name">Zona Fresh</field>
+        <field name="location_id" model="stock.warehouse" eval="obj(ref('warehouse_smd04')).lot_stock_id.id"/>
+        <field name="usage">internal</field>
+        <field name="company_id" ref="company_smd"/>
+        <field name="cyclic_inventory_frequency">7</field>
+    </record>
+    <record id="location_smd04_chiller" model="stock.location">
+        <field name="name">Zona Chiller</field>
+        <field name="location_id" model="stock.warehouse" eval="obj(ref('warehouse_smd04')).lot_stock_id.id"/>
+        <field name="usage">internal</field>
+        <field name="company_id" ref="company_smd"/>
+        <field name="cyclic_inventory_frequency">14</field>
+    </record>
+    <record id="location_smd04_freezer" model="stock.location">
+        <field name="name">Zona Freezer</field>
+        <field name="location_id" model="stock.warehouse" eval="obj(ref('warehouse_smd04')).lot_stock_id.id"/>
+        <field name="usage">internal</field>
+        <field name="company_id" ref="company_smd"/>
+        <field name="cyclic_inventory_frequency">30</field>
+    </record>
+    <record id="location_smd04_dry" model="stock.location">
+        <field name="name">Zona Dry</field>
+        <field name="location_id" model="stock.warehouse" eval="obj(ref('warehouse_smd04')).lot_stock_id.id"/>
+        <field name="usage">internal</field>
+        <field name="company_id" ref="company_smd"/>
+        <field name="cyclic_inventory_frequency">30</field>
+    </record>
+
+    <!-- ===== SMD05 (tanpa freezer) ===== -->
+    <record id="location_smd05_fresh" model="stock.location">
+        <field name="name">Zona Fresh</field>
+        <field name="location_id" model="stock.warehouse" eval="obj(ref('warehouse_smd05')).lot_stock_id.id"/>
+        <field name="usage">internal</field>
+        <field name="company_id" ref="company_smd"/>
+        <field name="cyclic_inventory_frequency">7</field>
+    </record>
+    <record id="location_smd05_chiller" model="stock.location">
+        <field name="name">Zona Chiller</field>
+        <field name="location_id" model="stock.warehouse" eval="obj(ref('warehouse_smd05')).lot_stock_id.id"/>
+        <field name="usage">internal</field>
+        <field name="company_id" ref="company_smd"/>
+        <field name="cyclic_inventory_frequency">14</field>
+    </record>
+    <record id="location_smd05_dry" model="stock.location">
+        <field name="name">Zona Dry</field>
+        <field name="location_id" model="stock.warehouse" eval="obj(ref('warehouse_smd05')).lot_stock_id.id"/>
+        <field name="usage">internal</field>
+        <field name="company_id" ref="company_smd"/>
+        <field name="cyclic_inventory_frequency">30</field>
+    </record>
+
+    <!-- Putaway per kategori di Stock outlet: Fresh -> Zona Fresh; Dairy & Chilled -> Chiller; Frozen -> Freezer;
+         kategori ambient -> Dry. Rule per kategori daun/induk eksplisit (bukan satu rule di root) agar urutan tidak
+         bergantung tie-break sequence. SMD05 tanpa rule Frozen (barang frozen memang tidak dikirim, assortment).
+         Python 3.12: comprehension di safe_eval (pola stock_warehouse_demo.xml). -->
+    <function model="stock.putaway.rule" name="create"
+              eval="[[{
+                  'location_in_id': obj().env.ref('efn_setup_supermarket.warehouse_' + w).lot_stock_id.id,
+                  'location_out_id': ref('location_' + w + '_' + z),
+                  'category_id': ref('product_category_smd_' + c),
+                  'company_id': ref('company_smd'),
+                  'sequence': 10,
+              }
+              for w in ('smd01', 'smd02', 'smd03', 'smd04', 'smd05')
+              for c, z in (
+                  ('fresh', 'fresh'), ('dairy_chilled', 'chiller'), ('frozen', 'freezer'),
+                  ('dry_grocery', 'dry'), ('beverage', 'dry'), ('snack', 'dry'), ('personal_care', 'dry'),
+                  ('household', 'dry'), ('alcohol', 'dry'), ('imported_premium', 'dry'),
+              )
+              if not (w == 'smd05' and z == 'freezer')]]"/>
+
+    <!-- Stock DC: hitung siklus 30 hari (PLACEHOLDER Q-SM10). Zona DC (rak/chiller/freezer) = keputusan Q-SM2. -->
+    <function model="stock.location" name="write"
+              eval="[[obj().env.ref('efn_setup_supermarket.warehouse_smd_dc').lot_stock_id.id], {'cyclic_inventory_frequency': 30}]"/>
+</odoo>

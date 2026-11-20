@@ -14,7 +14,9 @@
         (create_missing_warehouse hanya untuk company pertama), sehingga DC dibuat eksplisit di sini. Pada mode test
         (modules.module.current_test) stock otomatis membuat satu gudang tambahan untuk company baru; test modul ini
         tidak mengasumsikan jumlah gudang.
-        Outlet (SMD01..SMD05) ada di demo/ karena nama/alamat bergantung Q-SM2. -->
+        Outlet (SMD01..SMD05) ada di demo/ karena nama/alamat bergantung Q-SM2.
+     3. Tahap B: efn_is_dc (efn_assortment) pada DC. Outlet TIDAK ditandai DC (gudang tujuan). -->
+
 <odoo noupdate="1">
     <record id="base.group_user" model="res.groups">
         <field name="implied_ids" eval="[
@@ -43,5 +45,9 @@
         <field name="partner_id" ref="partner_smd_dc"/>
         <field name="reception_steps">two_steps</field>
         <field name="delivery_steps">pick_ship</field>
+        <!-- Tahap B (19.0.2.0.0): DC assortment (efn_assortment, ADR-045) -> transfer DC -> outlet dicek assortment saat
+             konfirmasi. Menggantikan post_init_hook tahap A (QA-1). DB yang di-upgrade dari 19.0.1.0.0: flag di-set
+             oleh post_init_hook efn_assortment atau migrasi 19.0.2.0.0 (noupdate tidak menulis record lama). -->
+        <field name="efn_is_dc" eval="True"/>
     </record>
 </odoo>

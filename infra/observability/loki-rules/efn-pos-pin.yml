@@ -1,0 +1,63 @@
+# G45 / SEC-216 (devsecops): alert tebakan PIN supervisor POS (E-41 retur tanpa struk + override lot kedaluwarsa).
+# Sumber = WARNING terstruktur Odoo dari helper bersama efn_pos_refund_origin/models/return_pin.py `log_pin_failure`
+# (dipanggil jalur retur efn_pos_refund_origin dan jalur override efn_expiry_monitor), format Odoo:
+#   <YYYY-MM-DD HH:MM:SS,mmm> <pid> WARNING <db> odoo.addons.efn_<modul>[.<sub>]: EFN_POS_PIN_FAIL
+#     path=<return_approval|expiry_override> config=<id> cashier=<uid> approver=<uid>
+#     reason=<wrong_pin|locked|cashier_locked>
+# Tanpa PIN/hash/data pelanggan (hanya id teknis). Dicocokkan BERJANGKAR (timestamp, pid, level, logger efn_*, tag,
+# skema key=value tetap), bukan substring: teks "EFN_POS_PIN_FAIL" di pesan lain (mis. nama login) tidak dihitung.
+# Label `service` = label Docker container (promtail.yml), tidak bisa dipalsukan container lain. Baris ini TIDAK
+# diberi stream khusus di promtail (retensi default 30 hari; bukti permanen = efn.pos.return.approval /
+# efn.expiry.pos.approval state=failed di Odoo, teraudit efn_audit).
+# Konteks lockout server (SEC-216): approver 5 gagal/15 menit lintas jalur, kasir 10 gagal/60 menit lintas approver.
+# Setiap percobaan saat terkunci tetap dicatat (reason=locked|cashier_locked) -> ikut dihitung (indikasi otomatisasi).
+# Ambang per POS config (outlet/kasir): >= 5 dalam 15 menit = warning (setara satu lockout approver), >= 10 = critical
+# (menembus lebih dari satu approver/kasir terkunci, pola tebakan bergilir). Critical menekan warning config yang sama
+# (alertmanager.yml inhibit_rules). Runbook: docs/runbooks/pos-pin-bruteforce.md.
+groups:
+  - name: efn-pos-pin
+    interval: 1m
+    rules:
+      - alert: EfnPosPinFailures
+        expr: |
+          sum by (config_id) (
+            count_over_time({service="odoo"}
+              |~ `^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},\d{3} \d+ WARNING \S+ odoo\.addons\.efn_[a-z0-9_]{1,40}(\.[a-z0-9_]{1,40}){0,4}: EFN_POS_PIN_FAIL path=(return_approval|expiry_override) config=\d{1,10} cashier=\d{1,10} approver=\d{1,10} reason=(wrong_pin|locked|cashier_locked)\s*$`
+              | regexp ` EFN_POS_PIN_FAIL path=[a-z_]+ config=(?P<config_id>\d{1,10}) ` [15m])
+          ) >= 5
+        labels:
+          severity: warning
+          team: security
+        annotations:
+          summary: "POS config {{ $labels.config_id }}: {{ $value }} PIN supervisor salah/terkunci dalam 15 menit"
+          description: "Tebakan PIN persetujuan retur tanpa struk / override lot kedaluwarsa (SEC-216). Hubungi kepala toko: siapa kasir yang mencoba, apakah supervisor hadir. Cek efn.pos.return.approval dan efn.expiry.pos.approval state=failed."
+          runbook_url: "https://github.com/efn/efn-platform/blob/main/docs/runbooks/pos-pin-bruteforce.md#efnpospinfailures"
+      - alert: EfnPosPinBruteForce
+        expr: |
+          sum by (config_id) (
+            count_over_time({service="odoo"}
+              |~ `^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},\d{3} \d+ WARNING \S+ odoo\.addons\.efn_[a-z0-9_]{1,40}(\.[a-z0-9_]{1,40}){0,4}: EFN_POS_PIN_FAIL path=(return_approval|expiry_override) config=\d{1,10} cashier=\d{1,10} approver=\d{1,10} reason=(wrong_pin|locked|cashier_locked)\s*$`
+              | regexp ` EFN_POS_PIN_FAIL path=[a-z_]+ config=(?P<config_id>\d{1,10}) ` [15m])
+          ) >= 10
+        labels:
+          severity: critical
+          team: security
+        annotations:
+          summary: "POS config {{ $labels.config_id }}: dugaan brute force PIN supervisor ({{ $value }} gagal dalam 15 menit)"
+          description: "Pola tebakan PIN bergilir lintas approver/jalur. Tutup sesi POS config ini, rotasi PIN supervisor yang ditargetkan, perlakukan sebagai insiden fraud sampai terbukti sebaliknya (runbook + security-incident.md)."
+          runbook_url: "https://github.com/efn/efn-platform/blob/main/docs/runbooks/pos-pin-bruteforce.md#efnpospinbruteforce"
+      # Penjaga format: baris dari logger efn_* yang memuat tag EFN_POS_PIN_FAIL tetapi TIDAK cocok skema berjangkar di
+      # atas (format log_pin_failure berubah, path/reason baru) -> dua alert di atas buta. Logger tidak dapat
+      # dikendalikan pengguna, jadi teks bebas di pesan logger lain (odoo.http, login) tidak memicu ini.
+      - alert: EfnPosPinLogFormatUnrecognized
+        expr: |
+          sum (count_over_time({service="odoo"}
+            |~ ` WARNING \S+ odoo\.addons\.efn_[a-z0-9_]{1,40}(\.[a-z0-9_]{1,40}){0,4}: EFN_POS_PIN_FAIL `
+            !~ `^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},\d{3} \d+ WARNING \S+ odoo\.addons\.efn_[a-z0-9_]{1,40}(\.[a-z0-9_]{1,40}){0,4}: EFN_POS_PIN_FAIL path=(return_approval|expiry_override) config=\d{1,10} cashier=\d{1,10} approver=\d{1,10} reason=(wrong_pin|locked|cashier_locked)\s*$` [1h])) > 0
+        labels:
+          severity: warning
+          team: security
+        annotations:
+          summary: "Baris EFN_POS_PIN_FAIL berformat tidak dikenal (alert brute force PIN POS buta)"
+          description: "Samakan format log_pin_failure (efn_pos_refund_origin/models/return_pin.py) dengan regex loki-rules/efn-pos-pin.yml; sementara itu periksa kegagalan PIN langsung di Odoo."
+          runbook_url: "https://github.com/efn/efn-platform/blob/main/docs/runbooks/pos-pin-bruteforce.md#efnpospinlogformatunrecognized"

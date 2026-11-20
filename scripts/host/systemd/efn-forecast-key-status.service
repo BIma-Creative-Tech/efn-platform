@@ -1,0 +1,22 @@
+# SEC-215 (G44): baca masa berlaku API key Odoo user teknis forecast (efn_forecast_<pt>) -> metrik textfile untuk alert
+# pengingat rotasi (alert-rules.yml grup efn-forecast-key). HANYA MEMBACA (odoo shell, tanpa nilai key). Pasang:
+# docs/runbooks/forecast-worker.md §4a. Root: docker exec + /var/lib/efn/node-exporter; log -> journald -> Loki.
+[Unit]
+Description=EFN status masa berlaku API key Odoo forecast
+Wants=docker.service
+After=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/efn-forecast-key-status
+TimeoutStartSec=10min
+UMask=0077
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=full
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+Nice=10

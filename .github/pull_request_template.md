@@ -18,7 +18,16 @@
 - [ ] Dokumen diperbarui (docs/, ADR jika keputusan arsitektur)
 
 ## Cara menguji
-<!-- Langkah reproduksi di dev/staging -->
+<!-- Langkah reproduksi di dev/staging. Tulis perintah + hasilnya; sebut jujur apa yang belum terverifikasi. -->
+- [ ] `make lint`
+- [ ] `make test` / `make test-py` (sesuai service yang berubah)
+- [ ] `make validate` (bila compose/infra berubah)
+- [ ] `make lint-enc` (bila ada koneksi antar-service baru)
+- [ ] `/security-check` → `docs/reviews/SECURITY_REVIEW_<tanggal>.md`
+- [ ] Cek manual:
+
+## Belum terverifikasi
+<!-- Apa yang belum diuji (mis. butuh staging, butuh kredensial vendor) -->
 
 ## Dampak risiko (lihat docs/01 §4)
 <!-- Sebutkan R-xxx yang terkait, atau "tidak ada" -->

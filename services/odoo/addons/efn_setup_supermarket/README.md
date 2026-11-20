@@ -1,53 +1,201 @@
-# efn_setup_supermarket — tahap A (G44)
+# efn_setup_supermarket — tahap A (G44) + tahap B (G45)
 
-Modul **data-only** untuk konfigurasi Odoo CE 19 standar bisnis Supermarket (DC + 5 outlet) di PT Supermarket Demo.
-Tidak ada model, field, atau logika Python. Dasar: fit-gap `docs/fit-gap/G45_SUPERMARKET.md` (S-01..S-07, §2) dan
-`docs/04_SERVICE_CONTRACTS.md` §28.1.
+Modul **data-only** untuk konfigurasi bisnis Supermarket (DC + 5 outlet) di PT Supermarket Demo. Isinya Odoo CE 19
+standar ditambah data untuk modul gap `efn_assortment`, `efn_replenishment`, dan `efn_expiry_monitor`.
 
-- **ADR**: ADR-045 (DC satu PT + restriksi assortment, **Proposed**), ADR-031 (tanpa modul pihak ketiga), ADR-001
-  (satu DB multi-company), ADR-027 (pajak configurable).
-- **Risiko**: **R-L14** (struktur DC dalam PT yang sama vs perizinan gudang/PPN/NITKU, menunggu Q-SM5 & Q-SM20),
-  R-L03 (tarif pajak placeholder), R-L07 (traceability lot).
-- **Referensi desain**: tidak ada; semua butir tahap A tertutup CE standar.
+- Tidak ada model, field, atau hook. Satu-satunya Python adalah `migrations/19.0.2.0.0/post-migrate.py`, yang
+  menerapkan ulang data tahap B pada DB tahap A (lihat "Upgrade").
+- Dasar: fit-gap `docs/fit-gap/G45_SUPERMARKET.md` (S-01..S-16, §5) dan `docs/04_SERVICE_CONTRACTS.md` §28.1, §28.4,
+  §28.5, §28.5a, §28.10.
+
+**Versi:** 19.0.2.0.0.
+
+**ADR terkait:**
+- ADR-045: DC satu PT + restriksi assortment (**Proposed**).
+- ADR-046: forecast/replenishment (**Proposed**).
+- ADR-031: tanpa modul pihak ketiga.
+- ADR-001: satu DB multi-company.
+- ADR-027: pajak configurable.
+
+**Risiko yang dimitigasi atau tercatat:**
+- **R-L14**: struktur DC dalam PT yang sama vs perizinan gudang/PPN/NITKU. Menunggu Q-SM5 dan Q-SM20.
+- R-L03: tarif pajak masih placeholder.
+- R-L07: traceability lot.
+
+**Referensi desain:** tidak ada untuk modul ini. Butir CE tertutup standar; butir gap dirujuk di README modul gap
+masing-masing.
 
 ## Apa yang dikonfigurasi
 
-| Butir | Konfigurasi CE | File | Bisa diubah pengguna |
-|---|---|---|---|
-| Company | `res.company` **PT Supermarket Demo (PLACEHOLDER)**, `efn_brand_code = SMD` (jenis usaha `retail` = compute `efn_core`), root, IDR, NPWP fiktif `0000000000000000`, alamat "Jl. Contoh Fiktif", `vat_check_vies = False` | `data/res_company_data.xml` | ya (noupdate) |
-| PPN | CoA `l10n_id` via `try_loading('id')`; pajak jual default `tax_ST4` (PPN 11% efektif); label pelanggan "PPN 11%"/"Bebas PPN" dsb.; `round_globally`. **PB1 tidak dikonfigurasi** (hanya bila ada deli/kafe makan di tempat) | `data/res_company_data.xml` | ya |
-| Nomenklatur | company = GS1 (`barcodes_gs1_nomenclature.default_gs1_nomenclature`); `ir.default` per company SMD: `pos.config.fallback_nomenclature_id` = EFN Retail (IDR) | `data/res_company_data.xml` | ya |
-| Grup inventory | Lots & Serial, Storage Locations, Multi-Step Routes (implied `base.group_user`, tanpa `mrp`) | `data/stock_config_data.xml` | ya |
-| DC | `stock.warehouse` `SMDDC`, `two_steps` + `pick_ship`, alamat fiktif Kab. Bekasi | `data/stock_config_data.xml` | ya |
-| Kategori | 16 `product.category` (Supermarket > Fresh > Sayur/Buah/Daging/Ikan & Seafood/Bakery; Dairy & Chilled; Frozen; Dry Grocery; Minuman; Snack; Personal Care; Household; Alkohol; Impor Premium), **FEFO di setiap kategori** (CE tidak menelusuri induk kategori) | `data/product_category_data.xml` | ya |
-| Demo: outlet | 5 `stock.warehouse` `SMD01`..`SMD05` (Jakarta Selatan, Bandung, Tangerang, Surabaya, Denpasar; nama/alamat fiktif), `resupply_wh_ids = SMDDC` → rute "<outlet>: Supply Product from <DC>" lewat transit internal | `demo/stock_warehouse_demo.xml` | ya |
-| Demo: lot di POS | `pos_type_id` outlet: `use_existing_lots = True`, `use_create_lots = False` | `demo/stock_warehouse_demo.xml` | ya |
-| Demo: harga | `account_price_include = tax_included` | `demo/res_company_demo.xml` | ya |
+### Data (selalu dimuat, `noupdate`)
 
-Tidak ada produk: seed G48 yang mengisi katalog.
+| Butir | Konfigurasi | File |
+|---|---|---|
+| Company | `res.company` **PT Supermarket Demo (PLACEHOLDER)**, `efn_brand_code = SMD`, root, IDR, NPWP fiktif, alamat fiktif, `vat_check_vies = False` | `data/res_company_data.xml` |
+| PPN | CoA `l10n_id` (`try_loading('id')`), pajak jual default `tax_ST4` (PPN 11% efektif), label pajak Indonesia, `round_globally`. **PB1 tidak dikonfigurasi** | `data/res_company_data.xml` |
+| Nomenklatur | Company memakai GS1. Per company SMD ada `ir.default` `pos.config.fallback_nomenclature_id` = EFN Retail (IDR) | `data/res_company_data.xml` |
+| Grup inventory | Lots & Serial, Storage Locations, Multi-Step Routes | `data/stock_config_data.xml` |
+| DC | `stock.warehouse` `SMDDC`, `two_steps` + `pick_ship`, **`efn_is_dc = True`** (tahap B; transfer DC → outlet dicek assortment) | `data/stock_config_data.xml` |
+| Kategori | 16 `product.category` dengan FEFO di setiap kategori | `data/product_category_data.xml` |
+| **Ambang kedaluwarsa (tahap B)** | Untuk 16 kategori: `efn_near_expiry_days`, `efn_markdown_days`, `efn_min_receipt_days`. **PLACEHOLDER** (tabel di bawah) | `data/product_category_expiry_data.xml` |
+
+### Demo (`--with-demo`, `noupdate`)
+
+| Butir | Konfigurasi | File |
+|---|---|---|
+| Outlet | `SMD01`..`SMD05` di 5 provinsi, `resupply_wh_ids` = DC. POS memakai lot yang ada dan tidak membuat lot | `demo/stock_warehouse_demo.xml` |
+| Harga | `account_price_include = tax_included` | `demo/res_company_demo.xml` |
+| **Capability & kebijakan** | Matriks di bawah. SMD02 punya baris *deny* Impor Premium. SMD03 `closed` dengan *allow* untuk 8 kategori | `demo/efn_assortment_demo.xml` |
+| **Zona + cycle count + putaway** | Zona Fresh/Chiller/Freezer/Dry di bawah Stock setiap outlet (SMD05 tanpa Freezer), dengan `cyclic_inventory_frequency`. Putaway rule per kategori ke zona. Stock DC dihitung tiap 30 hari | `demo/stock_location_demo.xml` |
+| **Jadwal kirim** | 44 `efn.delivery.schedule`: satu per outlet × kategori yang lolos assortment | `demo/efn_replenishment_demo.xml` |
+| **User per persona** | Kepala toko SMD01..05 (scope outlet sendiri), buyer DC, markdown manager, supervisor ops. Login placeholder, **tanpa password** | `demo/res_users_demo.xml` |
+| **Sakelar** | `efn_replenishment.enabled = true` (hanya demo) | `demo/ir_config_parameter_demo.xml` |
+
+### Ambang per kategori (hari)
+
+Semua nilai adalah **PLACEHOLDER**, menunggu dua jawaban:
+- **Q-SM28**: nilai awal dari category manager.
+- **Q-SM9**: satuan hari atau % umur simpan, dan siapa yang boleh override.
+
+| Kategori | near-expiry | markdown | sisa umur min. saat terima | Rasional |
+|---|---|---|---|---|
+| Supermarket (root, fallback) | 30 | 14 | 30 | konservatif; menangkap produk yang keliru dipasang di induk |
+| Fresh (induk), Sayur, Buah | 2 | 1 | 2 | umur 3–7 hari |
+| Daging, Ikan & Seafood, Bakery | 1 | 1 | 1 | umur 1–3 hari, markdown H-1 |
+| Dairy & Chilled | 5 | 3 | 5 | umur 7–21 hari |
+| Frozen | 30 | 14 | 60 | umur 6–12 bulan |
+| Dry Grocery, Minuman | 60 | 30 | 90 | umur 6–24 bulan |
+| Snack | 45 | 21 | 60 | lebih pendek dari dry (minyak/tengik) |
+| Personal Care, Household, Alkohol | 90 | 45 | 120 | umur 1–3 tahun |
+| Impor Premium | 30 | 14 | 45 | lead time impor panjang; penerimaan lebih longgar |
+
+Aturan yang dijaga test:
+- `markdown <= near-expiry`;
+- `min receipt >= near-expiry`.
+
+`efn_min_receipt_days` juga dibaca `efn_replenishment` untuk shelf-life cap usulan (L-151).
+
+### Capability outlet (demo)
+
+| Outlet | chiller | freezer | alcohol_license | non_halal_allowed | kebijakan | Skenario yang bisa didemokan |
+|---|---|---|---|---|---|---|
+| SMD01 Jakarta | v | v | v | v | open | semua lolos |
+| SMD02 Bandung | v | v | | | open | `denied` (Impor Premium), `missing_capability:alcohol_license` |
+| SMD03 Tangerang | v | v | | | **closed** | `not_listed` (Alkohol, Impor Premium) |
+| SMD04 Surabaya | v | v | v | v | open | outlet kedua berizin alkohol |
+| SMD05 Denpasar | v | | | v | open | `missing_capability:freezer` |
+
+Izin alkohol dan non-halal di atas adalah placeholder: daftar nyata menunggu Q-SM13 (Legal) dan Q-SM21. Kekurangan
+`alcohol_license` atau `non_halal_allowed` **tidak bisa di-override** (L-150).
+
+**Syarat capability produk diisi oleh seed G48, bukan modul ini.** Modul ini tidak membuat produk, dan
+`efn_required_capability_ids` hanya ada di `product.template` (tidak ada versi per kategori). Rekomendasi untuk seed:
+
+| Kategori | Capability wajib |
+|---|---|
+| Frozen | `freezer` |
+| Dairy & Chilled, Daging, Ikan & Seafood | `chiller` |
+| Alkohol | `alcohol_license`, ditambah `non_halal_allowed` bila Q-SM21 menetapkan alkohol non-halal |
+| Impor Premium | per produk, sesuai jenisnya |
+
+### Jadwal kirim (demo, PLACEHOLDER Q-SM11)
+
+| Kelompok | Hari | Cut-off (jam lokal, H-lead) | Lead |
+|---|---|---|---|
+| Fresh, Dairy & Chilled | setiap hari | 21:00 | 1 hari (SMD05: 2) |
+| Frozen | Sel, Jum | 17:00 | 1 hari |
+| Ambient (Dry Grocery, Minuman, Snack, Personal Care, Household, Alkohol, Impor Premium) | Sen, Rab, Jum | 17:00 | 1 hari (SMD05: 2) |
+
+- SMD05 memakai zona waktu `Asia/Makassar`.
+- Ada **satu jadwal per kategori**. Jadwal yang kategorinya tumpang-tindih (mis. "semua kategori" bersama "Fresh")
+  membuat produk diusulkan dua kali. `efn_replenishment` belum punya constraint yang mencegah hal ini.
+- Jadwal hanya dibuat untuk kategori yang lolos assortment outlet.
+
+### User demo
+
+| xmlid | Login | Grup | Outlet |
+|---|---|---|---|
+| `user_smd0N_store_head` | `efn_demo_smd0N_kepala_toko` | Replenishment: kepala toko | SMD0N saja |
+| `user_smd_buyer_dc` | `efn_demo_smd_buyer_dc` | Replenishment: buyer DC, Purchase User | — |
+| `user_smd_markdown_manager` | `efn_demo_smd_markdown_manager` | `efn_expiry_monitor.group_markdown_manager` | — |
+| `user_smd_supervisor_ops` | `efn_demo_smd_supervisor_ops` | `efn_expiry_monitor.group_expiry_override`, Assortment Manager | — |
+
+- User demo tidak bisa login sampai admin menetapkan password dan user mengaktifkan 2FA (`auth_totp`).
+- Tidak ada email atau nomor HP (minimisasi data pribadi).
+- SoD: kepala toko tidak memegang grup Purchase atau buyer. Override dipegang supervisor, bukan kepala toko yang
+  menerima barang.
+
+### Sakelar fitur (docs/04 §28.10)
+
+| Parameter | Di data | Di demo | Alasan |
+|---|---|---|---|
+| `efn_replenishment.enabled` | `false` (milik `efn_replenishment`) | `true` | jadwal dan approver demo tersedia |
+| `efn_expiry_monitor.enabled` | `false` (milik `efn_expiry_monitor`) | **`false`** | syarat §28.10 = ambang diisi category manager (Q-SM28); nilai di sini masih placeholder |
+| `efn_assortment.enforce` | `true` (milik `efn_assortment`) | `true` | — |
+
+Modul ini tidak membuat ulang record parameter. Pemiliknya adalah modul masing-masing.
+
+## Cycle count dan kapasitas rak: apa yang CE tutup
+
+- **Cycle count (S-15), CE**: `stock.location.cyclic_inventory_frequency` (hari) menghasilkan `next_inventory_date`
+  [V 19.0]. CE tidak punya frekuensi per kategori. Penggantinya adalah zona per kelompok kategori ditambah putaway
+  rule per kategori (`stock.putaway.rule.category_id`, yang menelusuri kategori induk [V]). Hasilnya, jadwal hitung
+  zona sama dengan jadwal hitung kategori. Opname tahunan untuk lokasi tanpa frekuensi memakai
+  `res.company.annual_inventory_month/day` (default 31 Desember, tidak diubah). Gap opsional fase 2: jadwal per
+  kategori lintas lokasi.
+- **Kapasitas rak (S-16)**: `stock.storage.category.capacity` CE = qty per produk per kategori penyimpanan. Field ini
+  dipakai putaway ke rak, bukan cap usulan order [V]. Cap usulan memakai
+  `efn.assortment.line.shelf_capacity_qty` (outlet × produk), yang diisi setelah seed G48. Modul ini tidak mengisi
+  kapasitas di baris kategori karena satuannya mengikuti UoM produk.
+
+## Upgrade 19.0.1.x → 19.0.2.0.0
+
+Semua file `noupdate`, jadi upgrade biasa tidak menulis record lama dan tidak menjalankan `<function>`. Migrasi
+`post-migrate.py` menangani ini:
+- menerapkan ulang `data/product_category_expiry_data.xml`, hanya bila belum ada satu pun ambang yang terisi;
+- men-set `efn_is_dc` DC;
+- pada DB demo: menerapkan ulang file demo tahap B dengan penjaga anti-duplikat (putaway rule dan jadwal hanya bila
+  belum ada).
+
+Depends baru (`efn_assortment`, `efn_replenishment`, `efn_expiry_monitor`) terpasang otomatis saat upgrade.
 
 ## Checklist operasional (DB nyata, bukan demo)
 
-1. Gudang outlet baru (UI): isi **Resupply From** = DC; pada operasi *PoS Orders* gudang itu centang
-   *Use Existing Lots* dan hapus centang *Create New Lots*.
-2. POS config baru: buat saat company aktif = PT Supermarket (agar `ir.default` fallback berlaku) atau isi
-   *Fallback Nomenclature* = "EFN Retail (IDR)" secara manual. Config yang dibuat lewat RPC wajib mengisinya eksplisit.
-3. Sebelum pilot: **uji seluruh katalog barcode** dengan nomenklatur GS1. EAN-13 berawalan `13`/`15`/`17` dapat
-   terbaca sebagai AI tanggal dan gagal tanpa fallback (fit-gap §2). Bila gagal, ganti nomenklatur company ke
-   "EFN Retail (IDR)".
-4. Produk: isi `is_storable`, `tracking = lot`, `use_expiration_date` dan umur simpan per produk. CE tidak punya
-   default per kategori. Default per company lewat `ir.default` sengaja tidak dipakai karena ikut mengenai produk
-   service/hadiah POS.
-5. NPWP, nama legal, alamat: ganti placeholder setelah Q-SM1/Q-SM2. **Jangan** menerbitkan e-Faktur dengan NPWP fiktif.
+1. Gudang outlet baru (UI): isi **Resupply From** = DC. Pada operasi *PoS Orders*, centang *Use Existing Lots* dan
+   hapus centang *Create New Lots*.
+2. POS config baru: buat saat company aktif = PT Supermarket, atau isi *Fallback Nomenclature* = "EFN Retail (IDR)".
+3. Sebelum pilot, **uji seluruh katalog barcode** dengan nomenklatur GS1 (prefiks `13`/`15`/`17`, fit-gap §2).
+4. Produk: isi `is_storable`, `tracking = lot`, `use_expiration_date`, umur simpan, dan
+   `efn_required_capability_ids` (lihat tabel capability).
+5. Outlet baru: buat zona Fresh/Chiller/Freezer/Dry di bawah Stock, frekuensi hitung, dan putaway rule per kategori
+   (pola `demo/stock_location_demo.xml`). Isi capability dan kebijakan assortment (Assortment Manager).
+6. Jadwal kirim: satu jadwal per kategori yang saling lepas per outlet. **Jangan** membuat jadwal tanpa kategori bila
+   sudah ada jadwal berkategori.
+7. Kepala toko: isi *Outlet dikelola* (`efn_outlet_warehouse_ids`) dan grup *Replenishment: kepala toko*. Jangan beri
+   grup Purchase.
+8. Ganti ambang placeholder setelah Q-SM28/Q-SM9, **baru** nyalakan `efn_expiry_monitor.enabled`.
+9. NPWP, nama legal, alamat: ganti placeholder setelah Q-SM1/Q-SM2. **Jangan** menerbitkan e-Faktur dengan NPWP fiktif.
+
+## Keputusan klien yang dibutuhkan
+
+| Pertanyaan | Isi |
+|---|---|
+| Q-SM1 | kode, nama legal, NPWP, PKP |
+| Q-SM2 | outlet/DC, zona, jam operasional |
+| Q-SM3 | timbangan/pemindai GS1 |
+| Q-SM5 | pajak, terkait R-L14 |
+| **Q-SM9** | sisa umur minimum: hari atau %, dan siapa yang boleh override |
+| **Q-SM10** | frekuensi cycle count per zona dan tanggal opname tahunan |
+| **Q-SM11** | jadwal kirim dan cut-off per kelompok produk; kelayakan pasok fresh dari DC ke outlet luar Jawa (SMD05) |
+| **Q-SM13 / Q-SM21** | outlet berizin alkohol dan outlet boleh non-halal; apakah alkohol juga dihitung non-halal |
+| **Q-SM28** | ambang near-expiry/markdown per kategori |
+| **Q-SM29 / Q-SM4** | pemetaan persona (kepala toko per outlet, buyer, markdown manager) |
 
 ## Apa yang belum
 
-- **Tahap B (G45)**: depends `efn_assortment`, `efn_replenishment`, `efn_expiry_monitor`. Isinya ambang near-expiry
-  per kategori, capability outlet, jadwal kirim contoh, dan sub-lokasi zona + `cyclic_inventory_frequency`.
-- **Q-SM1**: kode, nama legal, NPWP, status PKP. Kode `SMD` di `efn_core` + test kontrak dikerjakan efn-odoo-engineer;
-  modul ini gagal dipasang sampai nilai Selection itu ada.
-- **Q-SM2**: nama/alamat/kota DC & outlet, zona, jam operasional.
-- **Q-SM3**: timbangan/pemindai GS1-128 atau DataBar Expanded. Menentukan apakah nomenklatur GS1 dipertahankan.
-- **Q-SM5** (konsultan pajak): kategori bebas PPN, harga include, PB1 deli/kafe, pemusatan PPN/NITKU. Terkait R-L14.
-- Default tracking/umur per kategori dan FEFO otomatis di POS: gap `efn_expiry_monitor`.
-- Belum diuji di instance Odoo berjalan (lihat laporan `docs/agent-reports/efn-odoo-functional.md`).
+- **Belum diuji di instance Odoo berjalan**, termasuk install, upgrade/migrasi, dan test.
+- `efn_expiry_monitor` sedang dibangun paralel. Modul ini mengikuti kontrak nama field dan grup (§28.5a); bila nama
+  berubah, install gagal.
+- Kapasitas rak per produk dan syarat capability produk: seed G48.
+- Jadwal supplier (`efn.supplier.schedule`) dan supplierinfo DC: butuh supplier dan produk, jadi masuk seed G48.
+- Zona DC dan langkah QC DC (`three_steps`): Q-SM2.

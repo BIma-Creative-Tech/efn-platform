@@ -2622,3 +2622,159 @@ yang diubah (forecast-worker ditulis efn-data-ai-engineer paralel).
   `EfnForecastRunFailed` (worker tanpa metrik), jalur antar-mesin WireGuard (K25-02), `.github/dependabot.yml` dan
   `Makefile test-py` (di luar izin path).
 - Odoo `RPC_ALLOWLIST` harus memuat 5 metode yang sama (efn-odoo-engineer); `ODOO_WORKERS` + 1 selama batch.
+
+## G44 lanjutan: SEC-214, SEC-215, wiring rilis forecast (19 Nov 2026, worktree `efn-platform-g44`, branch `feat/wave-45-supermarket-expiry`, belum di-commit)
+
+Dasar: `docs/reviews/SECURITY_REVIEW_2026-11-18_g44.md` (SEC-214 Low, SEC-215 Info) + sisa laporan G44 di atas. Tidak ada
+kode Odoo/worker yang diubah (hanya `Dockerfile` + `requirements.lock` forecast-worker).
+
+### SEC-214: lock dependency ber-hash
+- Repo belum punya pola lock Python (semua service `pip install -r requirements.txt`) → pola baru, dipakai forecast-worker
+  dulu: `requirements.txt` tetap input pin langsung (review + pip-audit), `requirements.lock` = keluaran
+  `pip-compile --generate-hashes` (Python 3.12 linux, image = `FROM` Dockerfile).
+- `services/forecast-worker/Dockerfile`: `pip install --require-hashes --no-deps -r requirements.lock` + `pip check`;
+  lock placeholder / tanpa hash → build gagal dengan pesan jelas (fail closed).
+- `services/forecast-worker/requirements.lock`: **placeholder** (`EFN_LOCK_PLACEHOLDER`), hash tidak dikarang.
+- `scripts/lock-python-deps.sh <svc> [--upgrade]`: pip-tools 7.5.1 di container image base service, idempoten
+  (mempertahankan pin lock lama), tulis atomik, menangani Git Bash (`MSYS_NO_PATHCONV`, `pwd -W`).
+- `scripts/check-py-lock.sh`: bash + awk, tanpa jaringan: placeholder, header Python 3.12, setiap entri `==` + hash
+  sha256 64 hex, tanpa opsi indeks/URL, himpunan dependency langsung (`via -r requirements.txt`) dan versi = pin
+  requirements.txt.
+- CI `ci.yml`: langkah check-py-lock di job `python`; pip-audit atas lock (`--require-hashes --disable-pip`, transitif
+  ikut); job pytest memasang lock ber-hash + `pip check` untuk service ber-lock; cache pip ikut lock; path-filter memuat
+  kedua skrip. Runbook baru `docs/runbooks/python-dependency-lock.md` (perintah persis, cek lisensi transitif
+  `pip-licenses`, penanganan hash mismatch sebagai dugaan supply chain).
+
+### SEC-215: hardening ClickHouse + alert
+- `clickhouse-init.sh`: `create_user` menerima CIDR opsional → `efn_forecast_reader` dibuat/di-ALTER `HOST IP
+  '<CH_FORECAST_READER_HOST_CIDR>'` (default 172.30.11.0/24 = ipam `forecast-ch`; validasi CIDR privat /16../32 di sh).
+  User lain tetap `HOST ANY` (tidak diubah, di luar temuan).
+- Grant wildcard `efn_forecast.*` **tidak** diganti grant per view: `services/forecast-worker/tests/test_access_sql.py`
+  (milik data-AI, di luar izin path) mengunci baris `GRANT SELECT ON efn_forecast.* TO forecast_reader;`. Pengganti
+  setara: pagar fail-closed di clickhouse-init — `efn_forecast` hanya boleh berisi 6 VIEW allowlist (= `VIEW_COLUMNS`);
+  objek lain → `REVOKE SELECT ON efn_forecast.* FROM forecast_reader` + init gagal (pola pagar row policy insight).
+- Compose base: env `CH_FORECAST_READER_HOST_CIDR` di `clickhouse-init`; `.env.example` + config rilis.
+- Alert Loki baru `infra/observability/loki-rules/efn-forecast.yml` (sumber log `EFN_FORECAST_RUN`, konsisten dengan
+  dead-man ETL berbasis log; worker tanpa metrik): `EfnForecastRunFailed` (failed / batch tak dapat dimulai, 2 jam),
+  `EfnForecastOdooAuthFailure` (`odoo_auth*`/`odoo_company_mismatch*`), `EfnForecastRunStale` (tanpa run harian ok
+  > 26 jam **dan** bukti worker aktif dalam 4 hari → tidak berisik di env yang mematikan forecast). Semua warning.
+- Pengingat kedaluwarsa key 35 hari (pola metrik textfile `efn-rotate-online-key`): skrip host baru
+  `scripts/host/efn-forecast-key-status` (root, hanya membaca id + kedaluwarsa `res.users.apikeys` via `odoo shell`,
+  tanpa nilai key; deret per PT hanya bila `.env` `FORECAST_ENABLED=true`) + unit systemd harian 07:30 WIB; grup
+  Prometheus `efn-forecast-key`: `EfnForecastApiKeyExpiringSoon` (< 7 hari), `EfnForecastApiKeyMissing`,
+  `EfnForecastApiKeyCheckFailed`, `EfnForecastApiKeyCheckNotRunning`.
+
+### Wiring rilis G44
+- `IMAGE_FORECAST_WORKER` di `deploy.yml` (cosign verify + manifest), `scripts/host/efn-deploy` (`IMAGE_VARS`, 11 image),
+  `scripts/deploy.sh` (cek digest + `.env`). Image selalu di manifest; compose memakainya hanya dengan overlay.
+- `deploy-validate.sh`: `FORECAST_ENABLED FORECAST_DAILY_CRON FORECAST_TZ FORECAST_HORIZON_DAYS FORECAST_CHUNK_SIZE
+  FORECAST_ODOO_RPC_TIMEOUT_SECONDS FORECAST_MEMORY_LIMIT FORECAST_CPUS CH_FORECAST_READER_HOST_CIDR` di
+  `EFN_RELEASE_CONFIG_VARS` + `efn_validate_forecast_config` (regex/rentang = config.py worker & gateway);
+  `FORECAST_ENABLED` masuk `EFN_GATED_FEATURES` (production true hanya dengan `EFN_ALLOW_FEATURE_ON`);
+  `EFN_FORECAST_COMPANY_CODES=(SMD)` ikut `efn_validate_company_lists`.
+- `deploy.sh`: overlay `docker-compose.forecast.yml` otomatis bila `FORECAST_ENABLED=true` (pola overlay QR/booking/
+  promo; ESB sendiri belum di rantai rilis), syarat profil `data` + API key forecast nyata per PT; cron dikutip tunggal
+  di `.env`. `deploy.yml`: `CFG_FORECAST_*` + `CFG_CH_FORECAST_READER_HOST_CIDR`.
+- `check-encryption.sh`: `CH_FORECAST_READER_HOST_CIDR` wajib /16../32 dan = subnet ipam `forecast-ch` saat overlay
+  ter-render; grep `create_user efn_forecast_reader ... "$FORECAST_CIDR"` + pagar REVOKE.
+- `test-efn-deploy.sh`: `forecast-worker` di SVCS; kasus 274a–274h (manifest tanpa/salah image forecast, stdin ditolak,
+  gerbang production, cron berspasi utuh sampai deploy.sh, CIDR 0.0.0.0/0), 275a–275z (unit validasi), 276 (daftar
+  IMAGE_* identik di efn-deploy / deploy.sh / .env / deploy.yml).
+- Runbook `forecast-worker.md` (§4a pengingat key, alert run, §5a run basi, §8 production), indeks runbook.
+
+### Belum terverifikasi
+- Tidak ada docker/bash/shellcheck/yamllint/promtool di sesi ini: `check-py-lock.sh`, `lock-python-deps.sh`,
+  `test-efn-deploy.sh`, `check-encryption.sh`, shellcheck (termasuk `clickhouse-init.sh -s sh`), `docker compose config`,
+  promtool atas grup `efn-forecast-key`, dan build image **belum dijalankan**.
+- LogQL `sum(absent_over_time(...)) and sum(count_over_time(...)) > 0` dan `regexp` non-capturing belum diuji di Loki
+  3.2 (CI tidak memvalidasi loki-rules selain yamllint).
+- `HOST IP` ClickHouse 24.8 terhadap klien IPv4 lewat listener `::` (alamat IPv4-mapped) belum diuji runtime; bila
+  worker ditolak login, periksa `system.query_log`/log server dan runbook §5 langkah 5.
+- `efn-forecast-key-status`: model `res.users.apikeys` CE 19 (`expiration_date`) diasumsikan sama dengan yang dipakai
+  `efn-rotate-online-key`; belum dijalankan terhadap Odoo nyata.
+- pip-tools 7.5.1 + pip di image base belum dicoba (`lock-python-deps.sh` belum pernah jalan).
+
+### Dampak & yang harus dilakukan
+- Sampai lock dibuat: job CI `python` (juga PR Odoo-only, karena job itu berjalan untuk perubahan Odoo), pytest
+  forecast-worker, build-push forecast-worker, dan deploy.yml (image forecast-worker wajib bertanda tangan) **gagal**.
+- Wrapper `efn-deploy` di host staging/prod wajib dipasang ulang sebelum rilis berikutnya (jumlah image manifest 11).
+- Rekomendasi ke efn-data-ai-engineer: ganti grant wildcard dengan 6 `GRANT SELECT ON efn_forecast.<view>` + ubah
+  assertion `test_reader_role_only_reads_efn_forecast`; pagar clickhouse-init tetap dipertahankan. Catat hasil cek
+  lisensi transitif di README forecast-worker.
+
+## G45: SEC-223 (hardening forecast) + SEC-216 sisi observability (19 Nov 2026, worktree `efn-platform-g44`, branch `feat/wave-45-supermarket-expiry`, belum di-commit)
+
+Acuan: `docs/reviews/SECURITY_REVIEW_2026-11-19_g45.md` SEC-216 (rekomendasi 3) dan SEC-223. Status dari lead sebelum
+kerja ini: lock forecast-worker OK, test-efn-deploy 399/0, shellcheck bersih (perbaikan lead SC2034 `check-py-lock.sh`
+dan disable SC2016 `check-encryption.sh` dipertahankan).
+
+### SEC-223 (a): CIDR HOST user forecast minimal /24
+- `infra/clickhouse/clickhouse-init.sh` `private_cidr_ok`: prefix 24..32 (sebelumnya 16..32). 172.30.0.0/16 mencakup
+  semua network EFN.
+- `scripts/lib/deploy-validate.sh`: `>= 24` + pesan /24../32.
+- `scripts/check-encryption.sh`: regex env compose `/(2[4-9]|3[0-2])$`; cek statis baru bahwa clickhouse-init berisi
+  `[ "$c_p" -lt 24 ]` (disable SC2016 per perintah, literal).
+- `scripts/host/test-efn-deploy.sh`: 275ya–275ye (/16, /23, 10.88.0.0/20 ditolak; /32 WireGuard dan /28 diterima) +
+  275yf (fungsi `private_cidr_ok` diekstrak dari clickhouse-init.sh dengan awk lalu dijalankan di `sh`: 3 nilai
+  diterima, 6 ditolak termasuk injeksi `';DROP` dan tanpa prefix). Jumlah test naik 6 → harapan 405/0.
+- Komentar `docker-compose.yml` (clickhouse-init env) dan runbook forecast-worker §7 diperbarui.
+
+### SEC-223 (b): pagar definisi view `efn_forecast`
+- clickhouse-init.sh, setelah pagar allowlist nama/engine: bila `system.columns` menunjukkan kolom
+  `system.tables.create_table_query` ada (CH 24.8: ada), setiap view `efn_forecast` (setelah backtick dibuang dan
+  whitespace dinormalkan) WAJIB cocok
+  `DEFINER = efn_forecast_definer SQL SECURITY DEFINER AS SELECT [A-Za-z0-9_, ]+ FROM efn_dwh[.]v_fc_<nama tanpa v_> ?$`
+  dan memuat tepat satu `SELECT ` dan satu ` FROM ` (menutup UNION/JOIN/subquery/table function/db lain). Menyimpang →
+  `REVOKE SELECT ON efn_forecast.* FROM forecast_reader` + exit 1 (pola SEC-215). Kolom tidak ada → PERINGATAN dan
+  pagar dilewati (sesuai instruksi "bila CH mengeksposnya"). Regex tanpa backslash (`[.]`, `[[:space:]]`) agar tidak
+  bergantung escape string literal ClickHouse.
+- check-encryption.sh: cek statis keberadaan pola regex + blok `if [ -n "$FC_BADDEF" ]`.
+- Runbook forecast-worker §5 langkah 5: pesan "definisi view efn_forecast menyimpang" + query diagnosis.
+
+### SEC-223 (c): key forecast tanpa kedaluwarsa → metrik + alert
+- `scripts/host/efn-forecast-key-status`: metrik baru `efn_forecast_api_key_no_expiry_keys{company}`. Sekaligus
+  diperbaiki: sampel kini dikelompokkan per family (sebelumnya sampel `expiry` dan `active` ditulis setelah kedua blok
+  HELP/TYPE dan berselang-seling per PT → format teks Prometheus tidak rapi bila PT > 1).
+- `infra/observability/alert-rules.yml` grup `efn-forecast-key`: `EfnForecastApiKeyNoExpiry`
+  (`max by (company) (efn_forecast_api_key_no_expiry_keys) > 0`, warning, tanpa `for` karena metrik harian).
+- Runbook forecast-worker §4b `#key-tanpa-kedaluwarsa` + baris tabel §4a; indeks runbook.
+- Catatan: key tanpa kedaluwarsa tetap dihitung di `active_keys` (perilaku lama, agar `EfnForecastApiKeyMissing` tidak
+  salah menyala); `expiry_timestamp` tetap 0 bila hanya ada key tanpa kedaluwarsa (tidak memicu ExpiringSoon).
+
+### SEC-216: alert Loki tebakan PIN supervisor POS
+- Format aktual Odoo (dibaca dari `efn_pos_refund_origin/models/return_pin.py` `log_pin_failure`, bukan dari brief):
+  `EFN_POS_PIN_FAIL path=<return_approval|expiry_override> config=<id> cashier=<uid> approver=<uid>
+  reason=<wrong_pin|locked|cashier_locked>`, level WARNING, logger modul pemanggil (`odoo.addons.efn_*...`). Brief lead
+  menyebut `config_id`/`cashier_uid`/`approver_uid`; regex mengikuti kode (`config=`/`cashier=`/`approver=`).
+- File baru `infra/observability/loki-rules/efn-pos-pin.yml` grup `efn-pos-pin`:
+  - `EfnPosPinFailures` ≥ 5 / 15 menit per `config_id` → warning, team security;
+  - `EfnPosPinBruteForce` ≥ 10 / 15 menit per `config_id` → critical;
+  - `EfnPosPinLogFormatUnrecognized` (penjaga format, logger `odoo.addons.efn_*` + tag tetapi skema tidak cocok, 1 jam)
+    → warning.
+  Regex berjangkar penuh (timestamp, pid, WARNING, logger efn_*, skema key=value, path/reason allowlist); `config_id`
+  diekstrak di query (bukan label promtail). Tanpa perubahan promtail (baris tanpa PII, retensi default).
+- `alertmanager.yml`: inhibit `EfnPosPinBruteForce` → `EfnPosPinFailures` (`equal: [config_id]`).
+- Runbook baru `docs/runbooks/pos-pin-bruteforce.md` (anchor per alert) + indeks.
+- Saat file ini ditulis, jalur `expiry_override` di `efn_expiry_monitor/models/pos_config.py` masih memakai
+  `_logger.warning("EFN expiry override: PIN salah ...")` lama (belum memanggil `log_pin_failure`) → kegagalan override
+  kedaluwarsa belum terhitung alert sampai efn-odoo-engineer selesai. Baris lama itu tidak memuat tag, jadi tidak
+  memicu penjaga format.
+
+### Belum terverifikasi
+- Tidak ada shell/docker di sesi ini: shellcheck, `test-efn-deploy.sh` (275ya–275yf), `check-encryption.sh`,
+  `docker compose config`, promtool (`EfnForecastApiKeyNoExpiry`), dan amtool (inhibit) **belum dijalankan**.
+- Pagar definisi view: bentuk `create_table_query` CH 24.8 untuk view `SQL SECURITY DEFINER` diasumsikan
+  `CREATE VIEW db.v (<kolom>) DEFINER = efn_forecast_definer SQL SECURITY DEFINER AS SELECT a, b FROM efn_dwh.v_fc_x`
+  (urutan sesuai format SHOW CREATE ClickHouse 24.x). Belum dijalankan terhadap ClickHouse nyata. Bila formatnya beda
+  (mis. alias kolom ditulis ulang), init GAGAL tertutup dan grant forecast dicabut → jalankan
+  `SELECT name, create_table_query FROM system.tables WHERE database='efn_forecast'` di stack dev sebelum merge dan
+  sesuaikan regex. `countSubstrings`, `replaceRegexpAll` dengan `[[:space:]]` (RE2) diasumsikan tersedia di 24.8.
+- LogQL `efn-pos-pin.yml` (`|~` + `!~` berantai, `| regexp` sesudah filter) belum diuji di ruler Loki; CI tidak
+  memvalidasi loki-rules selain yamllint.
+- Test 275yf memakai `sh` di container test (diasumsikan ada, image Debian).
+
+### Residual (bukan cakupan)
+- View `efn_dwh.v_fc_*` (INVOKER, dieksekusi dengan hak `efn_forecast_definer`) tidak dipagari definisinya; pengubahnya
+  butuh hak DDL admin ClickHouse, dan hak definer sudah dibatasi ke 14 objek eksplisit (forecast-access.sql).
+- Alert per `config`: tebakan yang berpindah register dalam satu outlet bisa di bawah ambang per config (lockout server
+  per approver/kasir tetap berlaku); dicatat di runbook "Batas yang diketahui".

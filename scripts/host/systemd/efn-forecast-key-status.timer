@@ -1,0 +1,11 @@
+# SEC-215: cek harian (key bot forecast 35 hari, rotasi manual) -> alert EfnForecastApiKeyExpiringSoon pada sisa < 7 hari.
+[Unit]
+Description=Jadwal harian status masa berlaku API key Odoo forecast
+
+[Timer]
+OnCalendar=*-*-* 07:30:00 Asia/Jakarta
+RandomizedDelaySec=10m
+Persistent=true
+
+[Install]
+WantedBy=timers.target

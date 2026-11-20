@@ -127,7 +127,8 @@ RPC_ALLOWLIST = {
     ("pos.order", "remove_from_ui"): "override CE",
     # efn_pos_kds (Gelombang 15, SEC-77): override CE pos.session.load_data -> super() lalu catat
     # env.user (grup POS user) sebagai penerima notifikasi kasir KDS; tanpa data tambahan.
-    ("pos.session", "load_data"): "override CE (+ catat penerima notifikasi KDS)",
+    ("pos.session", "load_data"): "override CE (+ catat penerima notifikasi KDS; efn_expiry_monitor: penanda "
+    "cr.cache agar preload lot hanya dihitung saat load sesi, SEC-224)",
     # efn_online_order (Gelombang 17, E-28, docs/04 §10.4.3 + §10.12): 10 metode BFF lewat odoo-rpc-gateway.
     # `_efn_online_check_caller` = grup group_online_channel + user ∈ channel.user_ids + company kanal ∈ company
     # user + kanal aktif; context klien dibuang kecuali lang; tulis via sudo setelah cek; input divalidasi manual.
@@ -423,6 +424,53 @@ RPC_ALLOWLIST = {
         "efn.replenishment.proposal",
         "action_efn_reject",
     ): "G44: sama dengan action_efn_approve (tanpa procurement)",
+    # G45 efn_expiry_monitor (docs/04 §28.5a): markdown per lot, alert near-expiry, override penerimaan, POS.
+    (
+        "efn.lot.markdown",
+        "action_efn_activate",
+    ): "G45: check_access(write) + record rule (outlet kepala toko / semua outlet manager) + company + draft + peran "
+    "(kepala toko outlet ini / Markdown Manager) + batas diskon peran (Q-SM4) + periode; state via sudo, teraudit",
+    (
+        "efn.lot.markdown",
+        "action_efn_cancel",
+    ): "G45: check_access(write) + company + peran sama dengan action_efn_activate; hanya draft/aktif",
+    (
+        "efn.expiry.alert",
+        "action_efn_create_markdown",
+    ): "G45: check_access(write) + record rule + company; hanya mengembalikan action form (create = ACL markdown)",
+    (
+        "efn.expiry.alert",
+        "action_efn_transfer",
+    ): "G45: check_access(write) + record rule + company; hanya mengembalikan action wizard",
+    ("efn.expiry.alert", "action_efn_close"): "G45: check_access(write) + record rule + company; state via sudo",
+    (
+        "efn.expiry.transfer.wizard",
+        "action_confirm",
+    ): "G45: check_access(write) alert + company + tahap bukan expired + qty <= alert + tujuan outlet non-DC PT sama "
+    "+ _efn_assortment_allowed; picking draft dibuat dengan hak user (ACL stock.picking)",
+    (
+        "stock.picking",
+        "action_efn_expiry_receipt_override",
+    ): "G45: grup Markdown Manager / Inventory Administrator + check_access(read) + company; buka wizard",
+    (
+        "efn.expiry.receipt.override.wizard",
+        "action_confirm",
+    ): "G45: grup Markdown Manager / Inventory Administrator + check_access(read) picking + company + alasan >= 10; "
+    "event append-only via sudo, teraudit",
+    (
+        "pos.config",
+        "efn_expiry_lot_candidates",
+    ): "G45: _efn_expiry_check_caller (grup POS user + check_access(read) config + company + sesi terbuka) + flag; "
+    "produk milik company; hanya nama lot/tanggal/qty + markdown (tanpa data pelanggan)",
+    (
+        "pos.config",
+        "efn_expiry_override_approvers",
+    ): "G45: _efn_expiry_check_caller + flag; hanya {id, name} supervisor grup override ber-PIN, bukan pemanggil",
+    (
+        "pos.config",
+        "efn_expiry_override_request",
+    ): "G45: _efn_expiry_check_caller + flag + validasi input + PIN diverifikasi server (hash E-41) + kunci 5x/15 "
+    "menit; persetujuan terikat config/sesi/uuid order/produk/lot/kasir, dipakai saat sync",
     # G28: override metode CE (hak akses = ACL + record rule CE; logika tambahan setelah super()).
     ("stock.picking", "button_validate"): "override CE (efn_agri: tolak validasi transfer QC tanpa inspeksi selesai)",
     ("stock.scrap", "do_scrap"): "override CE (efn_ck_production: alasan waste wajib)",

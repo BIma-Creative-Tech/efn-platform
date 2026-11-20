@@ -19,7 +19,7 @@
 # Env wajib : TRAEFIK_DOMAIN ACME_EMAIL GHCR_USER GHCR_TOKEN APP_ENV PAYMENT_PROVIDER
 #             EFN_PUBLIC_BIND (IP host untuk 80/443 websecure)
 #             IMAGE_POSTGRES IMAGE_ODOO IMAGE_API_GATEWAY IMAGE_SUPERAPP_WEB IMAGE_INSIGHT_WEB IMAGE_AI_OCR_WORKER IMAGE_ETL
-#               IMAGE_TEXT2SQL IMAGE_MINIO IMAGE_METABASE
+#               IMAGE_TEXT2SQL IMAGE_MINIO IMAGE_METABASE IMAGE_FORECAST_WORKER (G44)
 #               (= <registry>/<svc>@sha256:<digest>; SEC-10: deploy by digest). Lewat efn-deploy nilainya HANYA dari
 #               manifest rilis bertanda tangan + `cosign verify` di host (SEC-42); env CI tidak bisa mengisinya.
 #             Pin root CA: EFN_PKI_ROOT_SHA256 (dari efn-deploy, atau dibaca dari /etc/efn/deploy.conf saat manual)
@@ -54,6 +54,10 @@
 #               G27 (docs/04 §18): PROMO_ENABLED PROMO_PUSH_ENABLED PROMO_COMPANIES PROMO_SYNC_SECONDS (true -> API key
 #               promo host:* nyata per PT + overlay docker-compose.online-promo-<pt>.yml), CONSENT_PRIVACY_VERSION
 #               CONSENT_PRIVACY_TEXT_SHA256 PRIVACY_CONSENT_ENFORCED (persetujuan Kebijakan Privasi, §18.3a).
+#               G44 (docs/04 §28.2/§28.10): FORECAST_ENABLED FORECAST_DAILY_CRON FORECAST_TZ FORECAST_HORIZON_DAYS
+#               FORECAST_CHUNK_SIZE FORECAST_ODOO_RPC_TIMEOUT_SECONDS FORECAST_MEMORY_LIMIT FORECAST_CPUS
+#               CH_FORECAST_READER_HOST_CIDR (true -> profil data + API key forecast host:* nyata per PT + overlay
+#               docker-compose.forecast.yml; production true hanya dengan EFN_ALLOW_FEATURE_ON).
 #               (true|false, default false; G21/G22 job ETL opsional, prasyarat dicek deploy-validate)
 set -euo pipefail
 
@@ -91,7 +95,7 @@ fi
   || die "PKI_SOURCE=${PKI_SOURCE} sudah dihapus (SEC-23); leaf selalu diterbitkan dari intermediate"
 DIGEST_RE='^[a-z0-9.-]+(:[0-9]+)?/[a-z0-9._/-]+@sha256:[a-f0-9]{64}$'
 for v in IMAGE_POSTGRES IMAGE_ODOO IMAGE_API_GATEWAY IMAGE_SUPERAPP_WEB IMAGE_INSIGHT_WEB IMAGE_AI_OCR_WORKER IMAGE_ETL \
-         IMAGE_TEXT2SQL IMAGE_MINIO IMAGE_METABASE; do
+         IMAGE_TEXT2SQL IMAGE_MINIO IMAGE_METABASE IMAGE_FORECAST_WORKER; do
   [[ "${!v:-}" =~ $DIGEST_RE ]] || die "$v harus <registry>/<image>@sha256:<64 hex> (dapat: '${!v:-}')"
 done
 [[ "$APP_ENV" =~ ^(production|staging)$ ]] || die "APP_ENV harus production|staging"
@@ -205,6 +209,19 @@ if [[ "${PROMO_ENABLED:-false}" == true ]]; then
     f="$SECRETS_DIR/odoo_api_key_promo_$(tr '[:upper:]' '[:lower:]' <<< "$co").txt"
     if [[ ! -s "$f" ]] || grep -qx 'disabled' "$f"; then
       die "PROMO_ENABLED=true tetapi API key promo ${co} tidak ada/placeholder (docs/runbooks/odoo-promo-api-key.md)"
+    fi
+  done
+fi
+
+# G44 (docs/04 §28.2/§28.10): forecast aktif = overlay docker-compose.forecast.yml dipasang (langkah compose), sehingga
+# WAJIB profil data (ClickHouse + clickhouse-init) dan API key Odoo user teknis forecast nyata per PT (host:*, dibuat
+# Superadmin di Odoo, runbook forecast-worker.md §3). Placeholder `disabled` = worker menolak start -> lebih baik berhenti.
+if [[ "${FORECAST_ENABLED:-false}" == true ]]; then
+  [[ ",${COMPOSE_PROFILES}," == *",data,"* ]] || die "FORECAST_ENABLED=true membutuhkan profil compose data (COMPOSE_PROFILES di deploy.conf)"
+  for co in "${EFN_FORECAST_COMPANY_CODES[@]}"; do
+    f="$SECRETS_DIR/odoo_api_key_forecast_$(tr '[:upper:]' '[:lower:]' <<< "$co").txt"
+    if [[ ! -s "$f" ]] || grep -qx 'disabled' "$f"; then
+      die "FORECAST_ENABLED=true tetapi API key forecast ${co} tidak ada/placeholder (docs/runbooks/forecast-worker.md#api-key)"
     fi
   done
 fi
@@ -336,6 +353,10 @@ if [[ "$ETL_ENABLE_ODOO_EFF" != true ]]; then
 fi
 
 echo "==> Menulis .env (non-secret)"
+# G44: cron forecast (regex deploy-validate: angka * / , - dan spasi tunggal) dikutip tunggal agar compose membacanya
+# literal; kosong = default compose.
+FC_CRON_DOTENV=""
+if [[ -n "${FORECAST_DAILY_CRON:-}" ]]; then FC_CRON_DOTENV="'${FORECAST_DAILY_CRON}'"; fi
 # SEC-50b: satu kunci satu baris; nilai dengan karakter kontrol ditolak; jumlah baris diverifikasi
 DOTENV=(
   "TRAEFIK_DOMAIN=${TRAEFIK_DOMAIN}"
@@ -350,6 +371,7 @@ DOTENV=(
   "IMAGE_TEXT2SQL=${IMAGE_TEXT2SQL}"
   "IMAGE_MINIO=${IMAGE_MINIO}"
   "IMAGE_METABASE=${IMAGE_METABASE}"
+  "IMAGE_FORECAST_WORKER=${IMAGE_FORECAST_WORKER}"
   "APP_ENV=${APP_ENV}"
   "NODE_ENV=production"
   "PG_SUPERUSER=${PG_SUPERUSER:-postgres}"
@@ -530,6 +552,17 @@ DOTENV=(
   "WA_UNOFFICIAL_ENABLED=${WA_UNOFFICIAL_ENABLED:-false}"
   "WA_UNOFFICIAL_RISK_ACCEPTANCE_REF=${WA_UNOFFICIAL_RISK_ACCEPTANCE_REF:-}"
   "ETL_ENABLE_BEHAVIOR=${ETL_ENABLE_BEHAVIOR:-false}"
+  # G44 (docs/04 §28.10): forecast-worker; kosong = default compose (MATI, 23:30 WIB, ...). Cron memuat spasi/'*' ->
+  # dikutip tunggal (nilai sudah divalidasi regex tanpa kutip/'$'; compose membaca literal).
+  "FORECAST_ENABLED=${FORECAST_ENABLED:-false}"
+  "FORECAST_DAILY_CRON=${FC_CRON_DOTENV}"
+  "FORECAST_TZ=${FORECAST_TZ:-}"
+  "FORECAST_HORIZON_DAYS=${FORECAST_HORIZON_DAYS:-}"
+  "FORECAST_CHUNK_SIZE=${FORECAST_CHUNK_SIZE:-}"
+  "FORECAST_ODOO_RPC_TIMEOUT_SECONDS=${FORECAST_ODOO_RPC_TIMEOUT_SECONDS:-}"
+  "FORECAST_MEMORY_LIMIT=${FORECAST_MEMORY_LIMIT:-}"
+  "FORECAST_CPUS=${FORECAST_CPUS:-}"
+  "CH_FORECAST_READER_HOST_CIDR=${CH_FORECAST_READER_HOST_CIDR:-}"   # SEC-215: kosong = 172.30.11.0/24 (forecast-ch)
 )
 efn_write_dotenv "$COMPOSE_DIR/.env" "${DOTENV[@]}" || die "gagal menulis .env (SEC-50)"
 
@@ -612,6 +645,13 @@ for co in "${PROMO_CO_LIST[@]}"; do
   [[ -f "$ov" ]] || die "PT ${co} di PROMO_COMPANIES tanpa overlay infra/compose/${ov} (bundel rilis G27+?)"
   [[ " ${FILES[*]} " == *" ${ov} "* ]] || FILES+=(-f "$ov")
 done
+# G44 (docs/04 §28.2): forecast-worker (image IMAGE_FORECAST_WORKER bertanda tangan) + API key Odoo forecast + network
+# forecast-ch/forecast-rpc HANYA saat FORECAST_ENABLED=true (profil & key dicek di langkah 1). false -> overlay tidak
+# dipasang -> container lama dihapus `up --remove-orphans`, key tidak di-mount ke service mana pun.
+if [[ "${FORECAST_ENABLED:-false}" == true ]]; then
+  [[ -f docker-compose.forecast.yml ]] || die "FORECAST_ENABLED=true tetapi infra/compose/docker-compose.forecast.yml tidak ada di bundel"
+  FILES+=(-f docker-compose.forecast.yml)
+fi
 DC=(docker compose "${FILES[@]}")
 # W-11: daftar file compose untuk skrip host lain (efn-rotate-online-key me-recreate BFF dengan konfigurasi yang SAMA)
 printf '%s\n' "${FILES[@]}" | grep -v '^-f$' > .efn-compose-files.tmp && mv -f .efn-compose-files.tmp .efn-compose-files

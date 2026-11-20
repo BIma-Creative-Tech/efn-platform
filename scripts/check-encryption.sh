@@ -58,6 +58,9 @@
 #           port/label Traefik, root, tanpa read_only/cap_drop ALL/tmpfs /work, di luar profil migrate, CH bukan https
 #           8443 + CA internal, env *_FILE tanpa secret ter-mount; overlay migration menambah network ke odoo atau
 #           me-mount kode migrasi read-write (render prod-esb-migrate, prod-migration)
+#   - (SEC-215/SEC-223) clickhouse-init tanpa CH_FORECAST_READER_HOST_CIDR /24../32 atau != subnet ipam forecast-ch;
+#           user efn_forecast_reader tidak dibuat dengan HOST IP; pagar allowlist objek efn_forecast hilang; pagar
+#           definisi view efn_forecast (SQL SECURITY DEFINER + definer) hilang
 #   - (at rest) service metabase tanpa secret metabase_encryption_key / dengan MB_ENCRYPTION_SECRET_KEY di env /
 #     dengan override entrypoint apa pun termasuk `[]`/`''` / dengan image resmi metabase/metabase (G16b, SEC-86)
 # Pengecualian hanya lewat ADR-022; tambahkan di sini dengan komentar alasan.
@@ -476,6 +479,18 @@ check_compose() {
   jq -e '(.services["clickhouse-init"] // null) as $c | $c == null
          or ([$c.secrets[]? | (.source // .)] | index("clickhouse_password_forecast") != null)' <<< "$json" > /dev/null \
     || err "[$label] clickhouse-init: secret clickhouse_password_forecast wajib di-mount (user efn_forecast_reader, G44)"
+  # SEC-215: user efn_forecast_reader HOST IP = subnet network forecast-ch. clickhouse-init wajib meneruskan
+  # CH_FORECAST_READER_HOST_CIDR; bila overlay forecast ter-render (satu host), nilainya HARUS sama dengan ipam
+  # forecast-ch (CIDR lain = worker ditolak login, atau HOST lebih lebar dari network yang dimaksud).
+  jq -e '(.services["clickhouse-init"] // null) as $c | $c == null
+         or ((($c.environment // {}).CH_FORECAST_READER_HOST_CIDR // "") | test("^[0-9]{1,3}(\\.[0-9]{1,3}){3}/(2[4-9]|3[0-2])$"))' \
+      <<< "$json" > /dev/null \
+    || err "[$label] clickhouse-init: CH_FORECAST_READER_HOST_CIDR wajib CIDR IPv4 /24../32 (HOST user efn_forecast_reader, SEC-215/SEC-223)"
+  jq -e '(.networks["forecast-ch"] // null) as $n | (.services["clickhouse-init"] // null) as $c
+         | $n == null or $c == null
+         or ((($c.environment // {}).CH_FORECAST_READER_HOST_CIDR // "") == (($n.ipam.config // [])[0].subnet // "-"))' \
+      <<< "$json" > /dev/null \
+    || err "[$label] clickhouse-init: CH_FORECAST_READER_HOST_CIDR != subnet ipam network forecast-ch (SEC-215)"
   jq -e '[.services | to_entries[] | select((.value.networks // {}) | has("forecast-ch")) | .key]
          - ["clickhouse", "forecast-worker"] | length == 0' <<< "$json" > /dev/null \
     || err "[$label] network forecast-ch dipakai service selain clickhouse/forecast-worker (docs/04 §28.2)"
@@ -869,6 +884,23 @@ check_files() {
       err "infra/compose/docker-compose*.yml: ${ref_var} di-hardcode; wajib \${${ref_var}:-} (SEC-G50-10)"
     fi
   done
+  # SEC-215 (G44): user ClickHouse forecast dibatasi HOST IP (bukan HOST ANY) + pagar allowlist objek efn_forecast
+  local chi="${ROOT_DIR}/infra/clickhouse/clickhouse-init.sh"
+  # shellcheck disable=SC2016  # literal $FORECAST_CIDR di file target, bukan ekspansi
+  grep -qE '^create_user efn_forecast_reader /run/secrets/clickhouse_password_forecast "\$FORECAST_CIDR"$' "$chi" \
+    || err "infra/clickhouse/clickhouse-init.sh: efn_forecast_reader wajib dibuat dengan HOST IP \$FORECAST_CIDR (SEC-215)"
+  grep -qF 'REVOKE SELECT ON efn_forecast.* FROM forecast_reader' "$chi" \
+    || err "infra/clickhouse/clickhouse-init.sh: pagar objek efn_forecast (REVOKE bila di luar allowlist) hilang (SEC-215)"
+  # SEC-223 (G45): pagar definisi view (DEFINER + SQL SECURITY DEFINER + sumber efn_dwh.v_fc_*) lewat create_table_query
+  grep -qF "DEFINER = efn_forecast_definer SQL SECURITY DEFINER AS SELECT [A-Za-z0-9_, ]+ FROM efn_dwh[.]v_fc_" "$chi" \
+    || err "infra/clickhouse/clickhouse-init.sh: regex pagar definisi view efn_forecast (create_table_query, SEC-223) hilang"
+  # shellcheck disable=SC2016  # literal $FC_BADDEF di file target, bukan ekspansi
+  grep -qE '^[[:space:]]+if \[ -n "\$FC_BADDEF" \]; then$' "$chi" \
+    || err "infra/clickhouse/clickhouse-init.sh: REVOKE pagar definisi view efn_forecast (SEC-223) hilang"
+  # SEC-223: prefix HOST user forecast minimal /24 (172.30.0.0/16 = semua network EFN)
+  # shellcheck disable=SC2016  # literal $c_p di file target, bukan ekspansi
+  grep -qE '\[ "\$c_p" -lt 24 \]' "$chi" \
+    || err "infra/clickhouse/clickhouse-init.sh: private_cidr_ok wajib menolak prefix < /24 (SEC-223)"
   check_esb_users
   echo "check-encryption: file konfigurasi infra diperiksa"
 }

@@ -3579,8 +3579,8 @@ event, consumer idempoten + DLQ, PostgreSQL sumber kebenaran, ClickHouse turunan
 | `efn.forecast.calendar` + perluasan `efn.forecast.season` (`efn_demand_forecast`) | Odoo | G44 | **Dibangun G44** (test lulus di container; belum diuji end-to-end) |
 | `efn_replenishment` (jadwal kirim & supplier, usulan order outlet → DC, qty orderpoint DC → RFQ draft CE, approval, log bias) | Odoo | G44 | **Dibangun G44** (test lulus di container; belum diuji end-to-end) |
 | `services/forecast-worker` (statsforecast, compose `efn-data`) | Python 3.12 | G44 | **Dibangun G44** (test lulus di container; belum diuji end-to-end) |
-| `efn_expiry_monitor` (near-expiry, `efn.lot.markdown`, aset POS FEFO + blok kedaluwarsa, "kirim ke member" via outbox) | Odoo + POS | G45 | Belum dibangun |
-| `efn_setup_supermarket` tahap B (ambang per kategori, capability, jadwal contoh) | Odoo data-only | G45 | Belum dibangun |
+| `efn_expiry_monitor` (near-expiry, `efn.lot.markdown`, aset POS FEFO + blok kedaluwarsa, "kirim ke member" via outbox) | Odoo + POS | G45 | **Dibangun G45** (test server lulus; POS belum diuji di layar) |
+| `efn_setup_supermarket` tahap B (ambang per kategori, capability, jadwal contoh) | Odoo data-only | G45 | **Dibangun G45** (test server lulus; POS belum diuji di layar) |
 | `efn_campaign` 19.0.1.0.0 (usulan segmen, approval SoD, voucher CE `loyalty` per mode, outbox + klaim/ack, markdown generik `_efn_propose_markdown`) | Odoo | **G50** | **Dibangun G50** (`efn_campaign.enabled=false`; test modul di container; **belum diuji end-to-end** — payload klaim belum cocok dengan BFF, §28.7b) |
 | BFF `src/behavior` (+ `GET /v1/config`), `src/wishlist` (+ `AlertWatcherService`), `src/campaign` (+ listener segmen mTLS `:9466`, `GET /v1/me/inbox`), `src/notification/email`, `src/notification/wa-unofficial` | NestJS | **G50** | **Dibangun G50** (semua flag `false`; Jest di container; belum end-to-end) |
 | Migrasi PG `infra/postgres/init/20-platform-g50a.sql` (skema `behavior`, wishlist/alert, kampanye/inbox/voucher) dan `21-platform-g50b.sql` (email, WA unofficial) | SQL | **G50** | **Dibangun G50** (idempoten; dijalankan dua kali di container) |
@@ -3589,7 +3589,7 @@ event, consumer idempoten + DLQ, PostgreSQL sumber kebenaran, ClickHouse turunan
 | ETL `behavior_events` + `behavior_erasure` (`services/etl/efn_etl/behavior.py`) → `fact_visitor_event`, `agg_visitor_product_daily`, `agg_visitor_funnel_daily`, `agg_visitor_search_daily`; view `efn_segment.*` | ETL/ClickHouse | **G50** | **Dibangun G50** (`ETL_ENABLE_BEHAVIOR=false`; DDL `infra/clickhouse/init/16-g50-behavior.sql`) |
 | Mart `fact_forecast_daily`, `fact_forecast_accuracy`, `fact_replenishment`, `fact_lot_expiry`, `fact_campaign_result`, `fact_dc_fill_rate` | ETL/ClickHouse | G44–G47 | `fact_forecast_daily` + `fact_forecast_accuracy` dibangun G44 (`ETL_ENABLE_FORECAST=false`); `fact_legacy_sales_daily` (histori ESB, §28.2a) G46 (`ETL_ENABLE_FORECAST_LEGACY=false`); mart perilaku G50 (baris di atas); `fact_campaign_result` & sisanya belum |
 | Super-App web: banner consent `tracking`, event perilaku, wishlist, notify-me, price alert; layar inbox `/inbox` (`GET /v1/me/inbox`) | Next.js | **G50** | **Dibangun G50** kecuali `/inbox` (**sedang dibuat**); teks banner DRAFT menunggu DPO (Q-SM33); app mobile belum |
-| Event server `purchase` dari `order.paid` (L-185) + CHECK `event_raw.type` | BFF + SQL | G50 (lanjutan) | **Diputuskan, belum dibangun** |
+| Event server `purchase` dari `order.paid` (L-185) + CHECK `event_raw.type` | BFF + SQL | **G50** | **Dibangun G50** (`purchase-events.service.ts`, job 5 menit, consent `tracking`) |
 | Insight persona + scope outlet (`eit2`/`eis2`) | Odoo + insight-web | G47 | Belum dibangun |
 
 ### 28.2 Kalender & forecast API (forecast-worker → Odoo)
@@ -3757,6 +3757,22 @@ forecast v2 tidak mulai dari `category_mean` (histori < 56 hari). Status: **diba
   `kind: "markdown"`. Odoo **tidak** publish langsung ke RabbitMQ. *(v20.2: `efn_campaign` G50 menyediakan
   `_efn_propose_markdown` yang membuat kampanye `markdown` berstatus `proposed` — tetap lewat approval Marketing sebelum
   masuk outbox, §28.7a; Q-SM31. Integrasi tombol di `efn_expiry_monitor` belum.)*
+- **Catatan implementasi G45** (kode = `efn_expiry_monitor`; test server lulus, POS belum diuji di layar):
+  - Ambang kategori **mewarisi induk terdekat yang terisi per field** (nilai 0 = kosong, `_efn_effective_days`);
+    `efn_replenishment._efn_min_remaining_days` memakai helper yang sama (fallback ke field mentah bila helper tidak ada).
+    Constraint: 0..3650 hari; `efn_markdown_days` ≤ `efn_near_expiry_days` bila keduanya diisi (nilai sama valid).
+  - `notify_members` hanya disimpan; `notify_state` = `pending` (outbox + `promo.campaign.requested` = **G46**, belum ada).
+  - Parameter tambahan (default di data modul; nilai di luar rentang -> default): `efn_expiry_monitor.max_discount_store_head`
+    (50), `.max_discount_markdown_manager` (90) — batas diskon efektif saat aktivasi (Q-SM4); `.pos_lot_limit` (20000
+    baris lot per sesi POS); `.override_ttl_seconds` (1800, masa berlaku persetujuan PIN supervisor di server).
+  - Server menjadi penentu akhir saat sync order (order lunas **tidak pernah ditolak**, termasuk offline): klaim klien
+    (`efn_lot_source`, `efn_markdown_ref`, `efn_expiry_override`) divalidasi, pelanggaran dicatat di `efn.expiry.event`
+    (`pos_expired_no_override`, `markdown_invalid`, `markdown_price_mismatch`, `markdown_cap_exceeded`, ...).
+  - **Cap tidak memecah baris**: POS membatasi qty baris markdown ke sisa kuota; sisa dijual kasir sebagai baris harga
+    normal terpisah. Server menghitung `qty_sold += min(qty, sisa)` dan mencatat kelebihan; retur (baris
+    `refunded_orderline_id`) mengurangi `qty_sold` dari baris asal.
+  - Bergantung `efn_pos_refund_origin` (hash PIN supervisor `res.users.efn_return_pin_hash`, tidak pernah ke browser).
+  - Override sisa umur penerimaan DC -> outlet: *Markdown Manager* atau *Inventory Administrator*, alasan ≥ 10 karakter.
 
 ### 28.6 Event perilaku `POST /v1/events` (BFF `src/behavior`) — dibangun G50 (v20.2)
 - Publik (tanpa Bearer) atau dengan Bearer member. Header `Authorization` ada tetapi tidak valid → `401` (tidak diam-diam

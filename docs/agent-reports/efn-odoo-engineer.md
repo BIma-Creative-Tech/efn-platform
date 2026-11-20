@@ -2930,3 +2930,57 @@ sudo) — bila tidak, tambahkan field itu ke allowlist; ACL `loyalty.card` dari 
   `approved_by_id`, `origin`, `segment_code`, `segment_member_count`, `approval_rev` → kampanye baru tetap kosong/awal.
 - Catatan: form "Baru" di web client masih bisa MENAMPILKAN default user untuk field sistem (onchange `default_get`),
   tetapi nilai itu tidak tersimpan (field readonly tidak dikirim; bila dikirim → `field_not_writable`).
+# G45 — `efn_expiry_monitor` 19.0.1.0.0 + SEC-209 + masukan functional (19 Nov 2026) — BELUM DIJALANKAN
+
+Worktree `efn-platform-g44`, branch `feat/wave-45-supermarket-expiry`. Tanpa shell di sesi ini: tidak ada test/ruff yang
+dijalankan; lead menjalankan di container (`docs/runbooks/dev-stack-boot.md`).
+
+## Modul & file
+- **Baru `services/odoo/addons/efn_expiry_monitor/`** (LGPL-3, depends `stock`, `product_expiry`, `point_of_sale`,
+  `mail`, `efn_core`, `efn_audit`, `efn_assortment`, `efn_pos_refund_origin`): `__manifest__.py`, `README.md`,
+  `models/{common,product_category,stock_lot,efn_expiry_event,efn_lot_markdown,efn_expiry_alert,stock_picking,
+  pos_config,pos_order}.py`, `wizard/{efn_expiry_transfer_wizard,efn_expiry_receipt_override_wizard}.py` + view,
+  `security/{efn_expiry_monitor_security.xml,ir.model.access.csv}`, `data/{efn_expiry_monitor_data.xml,
+  efn_audit_rule_data.xml}`, `views/*.xml`, `static/src/app/{utils/efn_expiry.js,services/pos_store_patch.js,
+  models/pos_order_line_patch.js,components/efn_expiry_override_dialog/*}`, `tests/{common,test_expiry_alert,
+  test_lot_markdown,test_receipt_transfer,test_pos_expiry}.py`.
+- **`efn_assortment` 19.0.1.2.0 (SEC-209):** `stock.move._efn_transit_leg_target` — move transit (PT sama) → gudang
+  non-DC di PT ber-DC dicek; 2 test baru; README + komentar hook QA-1 (hook supermarket sudah dihapus functional).
+- **`efn_replenishment` 19.0.1.2.0:** constraint `efn.delivery.schedule` tumpang-tindih per outlet (kategori sama /
+  induk-anak / salah satu tanpa kategori) + test; `_efn_min_remaining_days` memakai pewarisan kategori
+  (`_efn_effective_days`) bila efn_expiry_monitor terpasang.
+- **`efn_core/tests/test_rpc_surface.py`:** 11 entri `RPC_ALLOWLIST` G45.
+
+## Kontrak & penyimpangan
+- Nama field/grup persis kontrak: `efn_near_expiry_days`, `efn_markdown_days`, `efn_min_receipt_days`,
+  `group_markdown_manager`, `group_expiry_override`. **Tambahan:** pewarisan ambang dari induk terdekat (masukan
+  functional), parameter `max_discount_*`, `pos_lot_limit`, `override_ttl_seconds`.
+- "Kepala toko" = stock user dengan outlet di `efn_outlet_warehouse_ids` (tanpa grup baru). Markdown Manager,
+  supervisor override, Inventory Administrator: rule semua outlet di company.
+- `notify_members` hanya `notify_state = pending` (outbox G46). Override POS offline hanya untuk kasir ber-grup
+  override; PIN supervisor online saja (pakai PIN E-41 `efn_return_pin_hash`).
+- Transfer antar outlet = picking **draft** (bukan dikonfirmasi). Order POS lunas tidak pernah ditolak; selisih → event.
+- Tour POS tidak ditulis (konvensi repo memakai tag `efn_tour`; tanpa runtime risiko gagal tinggi) → test server
+  JS-less `test_pos_expiry.py`.
+
+- Seluruh test belum dijalankan. Rawan: `TestPoSCommon` + lot (`create_ui_order_data` dengan `pack_lot_ids` +
+  discount), apakah env user test punya grup override (ditangani kondisional), `button_validate` penerimaan tanpa
+  wizard, `restrict_lot_id` di 19.0 (dijaga `in _fields`), xpath view `//field[@name='origin']` picking dan `//sheet`
+  kategori, `company.internal_transit_location_id.usage == 'transit'` + company terisi (test SEC-209).
+- POS JS belum dieksekusi sama sekali (lihat README "Batasan": bentuk `modifiedPackLotLines`, `price_type` setelah
+  `setUnitPrice`, `getSelectedOrderline` di jalur edit, `tracking` di `product.template` POS).
+- Tidak ada `_logger.error`; WARNING hanya pada approver tidak sah / PIN salah (jalur RPC).
+
+## G45 putaran perbaikan security (SEC-216..222, SEC-224) — BELUM DIJALANKAN
+- `efn_pos_refund_origin` 19.0.1.5.0: `return_pin.pin_failure_count/pin_locked/log_pin_failure`; titik perluasan
+  `efn.pos.return.approval._efn_pin_failures_total` / `_efn_cashier_pin_failures_total`; batas kasir 10/60 menit;
+  log `EFN_POS_PIN_FAIL path=… config=… cashier=… approver=… reason=…` (format devsecops) di kedua jalur.
+- `efn_expiry_monitor` 19.0.1.1.0 (+ `migrations/19.0.1.1.0/post-migrate.py`): lockout bersama + approver dibatasi
+  outlet (SEC-216); `clock_skew` + identitas `env.uid` (SEC-217); rule baca-saja supervisor override (SEC-218); guard
+  write alert (SEC-219); `efn.expiry.event.lot_ids` + `_efn_short_life_uncovered` (SEC-220); retur hanya dari baris asal
+  + cek persen vs harga normal (SEC-222; perbaikan QA `_efn_markdown_refund` dipertahankan, kini dibatasi qty asal);
+  autovacuum approval + preload hanya di `pos.session.load_data` + `groups` POS user (SEC-224). 10 test baru.
+- `efn_assortment` 19.0.1.3.0: SEC-221 lokasi internal tanpa gudang / transit antar-PT + test.
+- `efn_core` test_rpc_surface: teks entri `("pos.session", "load_data")` diperbarui.
+- Belum: penegakan "akun perangkat/pos_hr tanpa grup override" (hanya dokumentasi), `employee_id` di event, entri
+  `PDP_DATA_INVENTORY.md`, aturan alert Loki (devsecops), cek ulang assortment setelah ubah tujuan pasca-confirm.

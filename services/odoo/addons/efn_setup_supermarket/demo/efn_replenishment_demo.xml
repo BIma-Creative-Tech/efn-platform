@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- DEMO tahap B — jadwal kirim DC -> outlet (efn.delivery.schedule; fit-gap G45 S-12, docs/04 §28.4, ADR-046 §3.4).
+     SEMUA NILAI PLACEHOLDER sampai Ops menjawab Q-SM11 (jadwal kirim per kelompok produk & cut-off) dan Q-SM2.
+
+     Kadens (bitmask Sen=1 Sel=2 Rab=4 Kam=8 Jum=16 Sab=32 Min=64):
+       Fresh (induk; mencakup Sayur/Buah/Daging/Ikan/Bakery) : setiap hari (127), cut-off 21:00 H-lead
+       Dairy & Chilled                                        : setiap hari (127), cut-off 21:00 (satu truk rantai dingin
+                                                                dengan fresh)
+       Frozen                                                 : 2x/minggu Sel+Jum (18), cut-off 17:00
+       Ambient (Dry Grocery, Minuman, Snack, Personal Care,   : 3x/minggu Sen+Rab+Jum (21), cut-off 17:00
+                Household, Alkohol, Impor Premium)
+     Lead time 1 hari; SMD05 (Denpasar) 2 hari (DC Kab. Bekasi -> Bali lewat darat + penyeberangan) dan zona waktu
+     Asia/Makassar (WITA), sehingga cut-off dihitung di jam lokal outlet.
+
+     MENGAPA SATU JADWAL PER KATEGORI (bukan satu jadwal "Dry" untuk semua ambient): product_group adalah Many2one tunggal
+     dan _efn_series memakai child_of; jadwal tanpa kategori (= semua) bersama jadwal Fresh akan mengusulkan produk fresh
+     DUA KALI. efn_replenishment belum punya constraint anti-tumpang-tindih per outlet (rekomendasi ke efn-odoo-engineer,
+     laporan efn-odoo-functional G45). Karena itu setiap outlet memakai kategori yang saling lepas.
+
+     Jadwal hanya dibuat untuk kategori yang lolos assortment outlet (efn_assortment_demo.xml):
+       SMD01, SMD04 : 10 jadwal (semua, termasuk Alkohol & Impor Premium)
+       SMD02        : 8 (tanpa Alkohol - tanpa izin; tanpa Impor Premium - deny)
+       SMD03        : 8 (closed; tanpa Alkohol & Impor Premium - tidak ber-allow)
+       SMD05        : 8 (tanpa Frozen - tanpa freezer; tanpa Alkohol)
+     Total 44. Tanpa xmlid (dibuat lewat create); test mencari per outlet.
+     efn_replenishment.enabled tetap mengikuti ir_config_parameter_demo.xml. noupdate: hanya jalan saat install; DB demo
+     tahap A memperolehnya lewat migrasi 19.0.2.0.0. -->
+<odoo noupdate="1">
+    <function model="efn.delivery.schedule" name="create"
+              eval="[[{
+                  'company_id': ref('company_smd'),
+                  'warehouse_id': ref('warehouse_' + w),
+                  'supply_warehouse_id': ref('warehouse_smd_dc'),
+                  'product_group': ref('product_category_smd_' + c),
+                  'weekdays': {'fresh': 127, 'dairy_chilled': 127, 'frozen': 18}.get(c, 21),
+                  'cutoff_time': 21.0 if c in ('fresh', 'dairy_chilled') else 17.0,
+                  'lead_days': lead,
+                  'review_days': 0,
+                  'tz': tz,
+              }
+              for w, tz, lead, cats in (
+                  ('smd01', 'Asia/Jakarta', 1, ('fresh', 'dairy_chilled', 'frozen', 'dry_grocery', 'beverage', 'snack',
+                                                'personal_care', 'household', 'alcohol', 'imported_premium')),
+                  ('smd02', 'Asia/Jakarta', 1, ('fresh', 'dairy_chilled', 'frozen', 'dry_grocery', 'beverage', 'snack',
+                                                'personal_care', 'household')),
+                  ('smd03', 'Asia/Jakarta', 1, ('fresh', 'dairy_chilled', 'frozen', 'dry_grocery', 'beverage', 'snack',
+                                                'personal_care', 'household')),
+                  ('smd04', 'Asia/Jakarta', 1, ('fresh', 'dairy_chilled', 'frozen', 'dry_grocery', 'beverage', 'snack',
+                                                'personal_care', 'household', 'alcohol', 'imported_premium')),
+                  ('smd05', 'Asia/Makassar', 2, ('fresh', 'dairy_chilled', 'dry_grocery', 'beverage', 'snack',
+                                                 'personal_care', 'household', 'imported_premium')),
+              )
+              for c in cats]]"/>
+</odoo>

@@ -91,16 +91,45 @@ class StockMove(models.Model):
                 return wh
         return self.env["stock.warehouse"]
 
+    def _efn_transit_leg_target(self):
+        """SEC-209: gudang outlet tujuan bila move ini adalah langkah transit -> outlet (picking kedua transfer dua
+        langkah DC -> transit -> outlet), selain itu recordset kosong.
+
+        Syarat: lokasi sumber ber-usage ``transit`` milik PT yang sama dengan gudang tujuan, gudang tujuan bukan DC,
+        dan PT itu punya minimal satu gudang ``efn_is_dc`` (PT F&B tanpa DC tidak terpengaruh). Transit antar-PT
+        (lokasi tanpa company) dilewati. Langkah pertama DC -> transit tanpa tujuan akhir tidak bisa dinilai; keputusan
+        jatuh di langkah ini, sehingga transfer manual dua langkah tetap terblokir (preventif, bukan hanya laporan).
+
+        SEC-221 (G45, 19.0.1.3.0): lokasi antara juga mencakup lokasi ``internal`` TANPA gudang dan transit antar-PT
+        (company kosong); lokasi ber-company harus sama dengan PT outlet tujuan."""
+        self.ensure_one()
+        Warehouse = self.env["stock.warehouse"]
+        source = self.location_id.sudo()
+        intermediate = source.usage == "transit" or (source.usage == "internal" and not source.warehouse_id)
+        if not intermediate:
+            return Warehouse
+        target = self.location_dest_id.warehouse_id.sudo()
+        if not target or target.efn_is_dc or (source.company_id and target.company_id != source.company_id):
+            return Warehouse
+        has_dc = Warehouse.sudo().search_count(
+            [("company_id", "=", target.company_id.id), ("efn_is_dc", "=", True)], limit=1
+        )
+        return target if has_dc else Warehouse
+
     def _efn_assortment_violations(self):
-        """[(move, outlet, kode)] untuk move dari gudang DC ke gudang lain PT yang sama yang tidak lolos."""
+        """[(move, outlet, kode)] untuk move dari gudang DC ke gudang lain PT yang sama, atau langkah transit -> outlet
+        di PT ber-DC (SEC-209), yang tidak lolos."""
         result = []
         for move in self:
             source = move.location_id.warehouse_id
-            if not source or not source.sudo().efn_is_dc:
-                continue
-            target = move._efn_target_warehouse()
-            if not target or target.company_id != source.company_id:
-                continue
+            if source and source.sudo().efn_is_dc:
+                target = move._efn_target_warehouse()
+                if not target or target.company_id != source.company_id:
+                    continue
+            else:
+                target = move._efn_transit_leg_target()
+                if not target:
+                    continue
             ok, reason = target._efn_assortment_allowed(move.product_id)
             if ok:
                 continue
