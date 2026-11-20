@@ -28,6 +28,12 @@ scrape_configs:
       # (EOF, gelombang 7). Traefik memakai klien sendiri sehingga tcp:// + tls tetap benar di traefik.yml.
       - host: https://docker-socket-proxy:2376
         refresh_interval: 15s
+        # K25-06: hanya container project compose stack ini (proxy melihat semua container host: stack EFN lain,
+        # project non-EFN). @EFN_STACK@ dirender infra/stack/render-config.sh saat start (bukan -config.expand-env,
+        # yang mengubah backslash regex redaksi di bawah).
+        filters:
+          - name: label
+            values: ["com.docker.compose.project=@EFN_STACK@"]
         tls_config:
           ca_file: /run/secrets/efn_ca_crt
           cert_file: /run/secrets/tls_promtail_crt

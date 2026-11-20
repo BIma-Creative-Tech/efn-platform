@@ -91,6 +91,7 @@ Alert keamanan yang tidak terjelaskan → pintu masuk insiden: [security-inciden
 | forecast-worker Supermarket (G44, ADR-046): menyalakan di dev/stg (`FORECAST_ENABLED`, overlay `forecast`), user teknis + API key `efn_forecast_smd`, rotasi key/mTLS/password ClickHouse, run gagal (`why=` gateway), sizing worker Odoo | [forecast-worker.md](forecast-worker.md) |
 | Deploy gagal: modul Odoo wajib (`efn_pos_refund_origin`) belum `installed` (SEC-129) | [deploy-odoo-modules.md](deploy-odoo-modules.md) |
 | Boot stack dev di laptop (Docker Desktop/WSL2), upgrade modul Odoo dev | [dev-stack-boot.md](dev-stack-boot.md) |
+| Tiga environment lokal K25-06 (`efn-prod` gladi produksi, `efn-stg`/`efn-dev` cermin prod): `EFN_STACK`/`EFN_SUBNET_BASE`, worktree per env, sertifikat edge lokal tanpa ACME, urutan seed, sidecar `*-tls`, anggaran memori 12 GB | [multi-env-local.md](multi-env-local.md) |
 | VPS Bima Creative (ADR-043, Proposed): **A** lingkungan pengembangan Claude Code + Docker tanpa data/secret klien (SSH key-only, UFW + WireGuard `10.90.0.0/24`, plafon memori dev 8 GiB, validasi CI lokal, tmux); **B** stack ekstraksi ESB + ClickHouse (DIBLOKIR sampai checklist go/no-go: LUKS, egress hanya ESB, backup `age` + uji restore, akses per orang + auditd, crypto-erase saat selesai) | [vps-bima.md](vps-bima.md) |
 | CI GitHub di repo privat paket gratis: kuota artifact/menit, code scanning, suppression scanner, Dependabot | [ci-github-free-plan.md](ci-github-free-plan.md) |
 
@@ -118,5 +119,6 @@ Setiap service: `restart`, logging dibatasi 5×20 MB, `no-new-privileges`, limit
 | `insight-web` + `insight-web-tls` (G42) | tanpa pengecualian hardening; network `insight-ingress` (Traefik/blackbox) + `insight-data` (hanya ClickHouse), bukan `internal`/`data`/`egress`; replika 1 | dashboard read-only; memegang kunci SSO/sesi/cakupan + password ClickHouse `efn_insight` ([insight-web.md](insight-web.md)) |
 | `forecast-worker` (G44, overlay `docker-compose.forecast.yml`) | tanpa pengecualian hardening (non-root 65534, `read_only` + tmpfs 256m, `cap_drop: [ALL]`); network `forecast-ch` (hanya ClickHouse) + `forecast-rpc` (hanya odoo-rpc-gateway), tanpa egress | satu-satunya pemegang API key Odoo forecast + sertifikat klien CN `forecast-worker` ([forecast-worker.md](forecast-worker.md)) |
 | `promtail-journal` (prod) | mount `/var/log/journal` + `/etc/machine-id` read-only, root tanpa capability | journald host (efn-deploy, backup) → Loki |
+| `traefik`, `promtail` (K25-06) | `entrypoint` = `infra/stack/render-config.sh` (sh, menulis konfigurasi statis ter-render ke tmpfs `/tmp`, lalu exec) | konfigurasi statis tidak bisa membaca env; filter discovery per project compose (`EFN_STACK`) ([multi-env-local.md](multi-env-local.md)) |
 
 Di prod hanya Traefik yang mem-publish port (80/443); dicek otomatis di CI job `infra`.

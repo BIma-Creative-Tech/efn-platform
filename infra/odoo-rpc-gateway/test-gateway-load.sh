@@ -16,6 +16,7 @@
 set -euo pipefail
 
 CURL_IMAGE="curlimages/curl:8.11.1@sha256:c1fe1679c34d9784c1b0d1e5f62ac0a79fca01fb6377cdd33e90473c6f9f9a69"
+STACK="${EFN_STACK:-efn}"   # K25-06: network <stack>_internal, container <stack>-odoo-rpc-gateway-1
 N="${1:-200}"
 PAR="${2:-150}"
 [[ "$N" =~ ^[1-9][0-9]{0,3}$ && "$PAR" =~ ^[1-9][0-9]{0,2}$ ]] || { echo "pemakaian: $0 [N<=9999] [paralel<=999]" >&2; exit 2; }
@@ -39,7 +40,7 @@ done > "${work}/urls.cfg"
 chmod 644 "${work}/urls.cfg"
 since="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 sleep 1
-MSYS_NO_PATHCONV=1 docker run --rm --network efn_internal -v "$(hostpath "$work"):/t:ro" "$CURL_IMAGE" \
+MSYS_NO_PATHCONV=1 docker run --rm --network "${STACK}_internal" -v "$(hostpath "$work"):/t:ro" "$CURL_IMAGE" \
   -sS --http1.1 -H 'Connection: close' --parallel --parallel-immediate --parallel-max "$PAR" -m 30 \
   --cacert /t/efn_ca_crt --cert /t/tls_api_gateway_crt --key /t/tls_api_gateway_key \
   -X POST -H 'Content-Type: application/json' -H 'Authorization: bearer g17-load-test-token-not-a-secret' \
@@ -52,11 +53,11 @@ sort "${work}/codes.txt" | uniq -c | sed 's/^/  /'
 served=$(grep -c '^401 $' "${work}/codes.txt" || true)
 busy=$(grep -c '^503 unavailable$' "${work}/codes.txt" || true)
 other=$(( $(wc -l < "${work}/codes.txt") - served - busy ))
-lines=$(docker logs --since "$since" efn-odoo-rpc-gateway-1 2>&1 | grep -E '/efn_online_status ' || true)
+lines=$(docker logs --since "$since" "${STACK}-odoo-rpc-gateway-1" 2>&1 | grep -E '/efn_online_status ' || true)
 queued=$(awk 'NF > 2 && $(NF-1) ~ /^[0-9]+$/ && $(NF-1) > 0' <<< "$lines" | grep -c . || true)
 maxq=$(awk 'NF > 2 && $(NF-1) ~ /^[0-9]+$/ {if ($(NF-1) > m) m = $(NF-1)} END {print m + 0}' <<< "$lines")
 echo "dilayani Odoo=${served} ditolak-antrean(503 gateway)=${busy} lain=${other} | log: antre>0 ms=${queued}, antre maks=${maxq} ms"
-health="$(docker inspect -f '{{.State.Health.Status}}' efn-odoo-rpc-gateway-1)"
+health="$(docker inspect -f '{{.State.Health.Status}}' "${STACK}-odoo-rpc-gateway-1")"
 echo "health gateway setelah uji: ${health}"
 if (( served > 0 && busy > 0 && other == 0 )) && [[ "$health" == healthy ]]; then
   echo "OK: batas koneksi + antrean + 503 bekerja"

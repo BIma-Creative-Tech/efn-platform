@@ -32,7 +32,7 @@
 #   efn_ca_crt                    bundle CA internal (verifikasi ClickHouse & odoo-rpc-gateway)
 services:
   forecast-worker:
-    image: ${IMAGE_FORECAST_WORKER:-ghcr.io/efn/forecast-worker:dev}
+    image: ${IMAGE_FORECAST_WORKER:-ghcr.io/${EFN_STACK:-efn}/forecast-worker:dev}
     build:
       context: ../../services/forecast-worker
     profiles: ["data"]
@@ -126,15 +126,18 @@ services:
   odoo-rpc-gateway:
     networks: [internal, forecast-rpc]
 
+# K25-06: nama `<EFN_STACK>_<key>` + subnet <EFN_SUBNET_BASE>.11/.12 (peta oktet di docker-compose.yml).
 networks:
   forecast-ch:     # hanya clickhouse <-> forecast-worker (dicek scripts/check-encryption.sh)
+    name: ${EFN_STACK:-efn}_forecast-ch
     internal: true
     ipam:
-      config: [{ subnet: 172.30.11.0/24 }]
+      config: [{ subnet: "${EFN_SUBNET_BASE:-172.30}.11.0/24" }]
   forecast-rpc:    # hanya odoo-rpc-gateway <-> forecast-worker (dicek scripts/check-encryption.sh)
+    name: ${EFN_STACK:-efn}_forecast-rpc
     internal: true
     ipam:
-      config: [{ subnet: 172.30.12.0/24 }]
+      config: [{ subnet: "${EFN_SUBNET_BASE:-172.30}.12.0/24" }]
 
 secrets:
   odoo_api_key_forecast_smd: { file: ../../secrets/odoo_api_key_forecast_smd.txt }

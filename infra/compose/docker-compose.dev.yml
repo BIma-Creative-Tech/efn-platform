@@ -4,13 +4,17 @@
 # DBeaver) gunakan CA secrets/efn_ca_crt.txt dan hostname `localhost` (ada di SAN).
 # Catatan: daftar `ports` digabung (append) dengan base; port 80/443 Traefik sudah ada di base.
 # Port service ber-sidecar dipublish di service app (pemilik network namespace), bukan di sidecar.
+# K25-06: image lokal = <EFN_STACK>/<svc>:dev (default efn/<svc>:dev) agar build satu stack tidak menimpa stack lain.
+# Port host di bawah TETAP: hanya satu stack ber-overlay dev per host (staging/prod lokal memakai docker-compose.prod.yml).
 services:
   # Host internal (erp./bi./ops./status.) hanya di entrypoint wg-https: dev = https://erp.efn.local:9443
   # (base: 127.0.0.1:9443 -> :8443). Sertifikat publik dev = default self-signed Traefik (E8).
   traefik:
     environment:
-      # Browser laptop -> port publish -> Traefik terlihat dari bridge Docker Desktop (bukan WireGuard)
-      - EFN_INTERNAL_EXTRA_CIDR=172.16.0.0/12
+      # Browser laptop -> port publish -> Traefik terlihat dari bridge Docker Desktop (bukan WireGuard).
+      # EFN_SUBNET_BASE di luar 172.16/12 (mis. 10.250): set EFN_INTERNAL_EXTRA_CIDR=<base>.0.0/24 di .env (runbook
+      # multi-env-local.md §4).
+      - EFN_INTERNAL_EXTRA_CIDR=${EFN_INTERNAL_EXTRA_CIDR:-172.16.0.0/12}
     # Sertifikat edge dev self-signed *.efn.local (scripts/gen-secrets.sh): sniStrict butuh sertifikat yang cocok.
     volumes:
       - ../traefik/dev:/etc/traefik/dynamic/dev:ro
@@ -19,7 +23,7 @@ services:
   # `command` menggantikan base seluruhnya: parameter archive WAL-G, TLS, hba_file, SEC-18 tetap disertakan.
   # Set PG_ARCHIVE_MODE=off di .env bila tidak ingin archiving di laptop.
   postgres:
-    image: efn/postgres:dev
+    image: ${EFN_STACK:-efn}/postgres:dev
     ports: ["127.0.0.1:5432:5432"]   # TLS wajib: psql "sslmode=verify-full sslrootcert=secrets/efn_ca_crt.txt host=localhost"
     command:
       - postgres
@@ -69,16 +73,16 @@ services:
   # laptop lewat filter s3-gateway (https://localhost:9000, CA secrets/efn_ca_crt.txt); admin/console:
   # `docker exec efn-minio-1 mc ...` (runbook dev-stack-boot.md §5).
   minio:
-    image: efn/minio:dev
+    image: ${EFN_STACK:-efn}/minio:dev
 
   minio-init:
-    image: efn/minio:dev
+    image: ${EFN_STACK:-efn}/minio:dev
 
   s3-gateway:
     ports: ["127.0.0.1:9000:9000"]          # https (S3 API lewat filter L7)
 
   odoo:
-    image: efn/odoo:dev
+    image: ${EFN_STACK:-efn}/odoo:dev
     ports: ["127.0.0.1:8443:8443", "127.0.0.1:8444:8444"]     # sidecar ghostunnel (https)
     volumes:
       - ../../services/odoo/addons:/mnt/extra-addons:ro
@@ -100,7 +104,7 @@ services:
     secrets: [odoo_pii_key_v1, odoo_pii_bidx_key, odoo_pii_name_key]   # digabung dengan daftar secret base
 
   api-gateway:
-    image: efn/api-gateway:dev
+    image: ${EFN_STACK:-efn}/api-gateway:dev
     build:
       target: dev
     ports: ["127.0.0.1:3000:3000"]          # https
@@ -164,7 +168,7 @@ services:
 
   # Stage dev image: `next dev -H ${HOSTNAME}` -> 127.0.0.1 (base env), diakses lewat sidecar :3443
   superapp-web:
-    image: efn/superapp-web:dev
+    image: ${EFN_STACK:-efn}/superapp-web:dev
     build:
       target: dev
     ports: ["127.0.0.1:3443:3443"]          # sidecar ghostunnel (https)
@@ -196,7 +200,7 @@ services:
   # 127.0.0.1), masuk dari Odoo dev menu "Dashboard Insight". Port sidecar tidak dipublish (mTLS CN traefik saja).
   # INSIGHT_ENABLED=true di .env lokal untuk uji (runbook insight-web.md §2).
   insight-web:
-    image: efn/insight-web:dev
+    image: ${EFN_STACK:-efn}/insight-web:dev
     environment:
       APP_ENV: dev
       # Origin Odoo yang diizinkan untuk POST /sso (C1) harus persis origin halaman form Odoo dev (dengan port).
@@ -212,7 +216,7 @@ services:
     ports: ["127.0.0.1:11434:11434"]        # sidecar ghostunnel (https)
 
   etl:
-    image: efn/etl:dev
+    image: ${EFN_STACK:-efn}/etl:dev
     environment:
       APP_ENV: dev
       ETL_INTERVAL_SECONDS: "120"
@@ -233,7 +237,7 @@ services:
       # di DB Odoo dev). Nyalakan lewat .env lokal setelah modul + grant terpasang; base meneruskan `${X:-false}`.
 
   ocr-worker:
-    image: efn/ai-ocr-worker:dev
+    image: ${EFN_STACK:-efn}/ai-ocr-worker:dev
     environment:
       APP_ENV: dev
       # Gelombang 10: Ollama dev = CPU saja; qwen2.5vl:3b butuh ±70 s per foto baru (prompt eval ±1300 token gambar
@@ -241,7 +245,7 @@ services:
       OLLAMA_TIMEOUT_SECONDS: ${OLLAMA_TIMEOUT_SECONDS:-240}
 
   text2sql:
-    image: efn/text2sql:dev
+    image: ${EFN_STACK:-efn}/text2sql:dev
     environment:
       APP_ENV: dev
 

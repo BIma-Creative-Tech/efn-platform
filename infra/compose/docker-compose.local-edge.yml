@@ -1,0 +1,17 @@
+# K25-06 (docs/runbooks/multi-env-local.md): overlay GLADI LOKAL di atas docker-compose.prod.yml untuk host TANPA domain
+# publik / WireGuard (laptop, mesin lokal). Hanya sertifikat edge: Traefik memakai sertifikat self-signed *.efn.local
+# dari scripts/gen-secrets.sh (secrets/dev_edge_*.txt, sama dengan dev) karena ACME HTTP-01/DNS-01 tidak bisa
+# menerbitkan untuk domain .local (tls.options sniStrict menolak handshake tanpa sertifikat yang cocok).
+# Aturan prod lain TETAP (APP_ENV=production, tanpa port backend, kill switch default false). JANGAN dipakai di server
+# produksi (deploy.sh tidak pernah menyertakan file ini). Router websecure tetap mereferensikan resolver letsencrypt:
+# Traefik mencatat kegagalan ACME untuk *.efn.local lalu melayani sertifikat edge ini (perilaku sama dengan dev).
+services:
+  traefik:
+    volumes:
+      - ../traefik/dev:/etc/traefik/dynamic/dev:ro
+    secrets: [dev_edge_crt, dev_edge_key]   # digabung dengan daftar secret base
+
+# Bukan bagian scripts/secrets.list (bukan secret produksi). Dibuat/diperbarui scripts/gen-secrets.sh (90 hari).
+secrets:
+  dev_edge_crt: { file: ../../secrets/dev_edge_crt.txt }
+  dev_edge_key: { file: ../../secrets/dev_edge_key.txt }

@@ -99,6 +99,8 @@ done
 efn_load_pinned_conf /etc/efn/deploy.conf || die "pin topologi /etc/efn/deploy.conf"
 efn_validate_topology "$APP_ENV" || die "topologi tidak valid (SEC-50)"
 efn_validate_config "$APP_ENV" || die "konfigurasi tidak valid (SEC-50)"
+# K25-06: server = stack default (TRUSTED_PROXIES di bawah dipin 172.30.1.0/24; EFN_STACK/EFN_SUBNET_BASE tidak ditulis)
+efn_validate_stack_identity server || die "identitas stack tidak valid (K25-06, docs/runbooks/multi-env-local.md)"
 # SEC-50a: IP wg-https WAJIB alamat di interface WireGuard (bukan sekadar IP yang ada di host, mis. IP publik)
 ip -4 -o addr show dev wg0 2> /dev/null | grep -q " inet ${EFN_WG_BIND}/" \
   || die "IP WireGuard ${EFN_WG_BIND} tidak ada di interface wg0 (wg-quick@wg0 harus aktif sebelum deploy/docker)"

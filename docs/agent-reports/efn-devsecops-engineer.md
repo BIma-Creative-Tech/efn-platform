@@ -1,5 +1,62 @@
 # Laporan Agent: efn-devsecops-engineer
 
+## K25-06 identitas stack (20 Nov 2026, worktree efn-platform-k2506, branch feat/k25-06-stack-name, belum di-commit) — compose jalan dengan nama project & subnet apa pun
+
+Pemicu: gladi prod lokal `efn-prod` (lead menambal `sed`): label/konfigurasi memakai nama network `efn_*`, subnet tetap
+`172.30.x`, tag image `:dev` dipakai bersama semua env. Tanpa shell: belum ada `docker compose config` yang dijalankan.
+
+### Keputusan
+1. **Satu variabel `EFN_STACK`** (default `efn`): `name: ${EFN_STACK:-efn}` (project), `networks.<n>.name:
+   ${EFN_STACK:-efn}_<n>` (base, esb, forecast), semua label `traefik.docker.network`, tag image default
+   `ghcr.io/${EFN_STACK:-efn}/<svc>:dev` (dev overlay `${EFN_STACK:-efn}/<svc>:dev`). Default me-render string identik.
+   Produksi server tidak berubah: `IMAGE_*` digest dari deploy.sh menimpa default; deploy.sh kini menolak
+   `EFN_STACK`/`EFN_SUBNET_BASE` non-default (`efn_validate_stack_identity server`, karena TRUSTED_PROXIES dipin 172.30).
+2. **`EFN_SUBNET_BASE`** (default `172.30`): IPAM `"${EFN_SUBNET_BASE:-172.30}.<n>.0/24"` (dikutip: `{`/`}` di flow
+   mapping). `TRUSTED_PROXIES` default `${TRUSTED_PROXIES:-${EFN_SUBNET_BASE:-172.30}.1.0/24}`; baris di `.env.example`
+   dikomentari. `EFN_INTERNAL_EXTRA_CIDR` dev overlay jadi `${EFN_INTERNAL_EXTRA_CIDR:-172.16.0.0/12}`.
+3. **pg_hba → `samenet`** (postgres hanya di network `data`; CI menolak network tambahan). Cakupan = data subnet +
+   loopback container postgres sendiri (hanya role aplikasi, bukan superuser). Tanpa entrypoint/template baru.
+4. **Traefik + Promtail: render template saat start** (`infra/stack/render-config.sh`, sh, tmpfs `/tmp`): konfigurasi
+   statis Traefik tidak bisa membaca env bila memakai file, dan Promtail `-config.expand-env` mengubah backslash regex
+   redaksi. Ditemukan masalah tambahan yang tidak disebut di brief: `docker-socket-proxy` melihat SEMUA container host,
+   sehingga Traefik stack A memuat router stack B / project lain dan Promtail menelan log stack lain (prod → dev Loki).
+   Diperbaiki dengan `providers.docker.constraints: Label(com.docker.compose.project, @EFN_STACK@)` dan filter docker_sd
+   `label=com.docker.compose.project=@EFN_STACK@`. `providers.docker.network: "@EFN_STACK@_internal"` dipertahankan
+   sebagai fallback; setiap router tetap wajib label eksplisit (dicek).
+5. **Prometheus**: dns_sd ke alias ber-scope network `api-gateway-metrics` / `ocr-worker-metrics` (hanya di
+   `networks.internal.aliases` service pemilik; juga di overlay llm untuk ocr-worker). Relabel keep dipertahankan,
+   diubah ke `\d{1,3}\.\d{1,3}\.1\.\d{1,3}:<port>` (oktet ketiga 1 = network internal untuk base apa pun).
+   `docker_sd_configs` lewat socket proxy ditolak: menambah akses API Docker ke Prometheus (least privilege).
+6. Port host Traefik `${EFN_HTTP_PORT:-80}` / `${EFN_HTTPS_PORT:-443}` agar stack kedua bisa hidup bersamaan.
+7. Overlay baru `docker-compose.local-edge.yml` (sertifikat edge self-signed untuk gladi tanpa domain publik; tidak
+   dipakai deploy.sh).
+
+### File
+- `infra/compose/docker-compose.yml`, `docker-compose.dev.yml`, `docker-compose.esb.yml`, `docker-compose.forecast.yml`,
+  `docker-compose.llm.yml`, `docker-compose.local-edge.yml` (baru), `.env.example`
+- `infra/stack/render-config.sh` (baru), `infra/traefik/traefik.yml`, `infra/observability/promtail.yml`,
+  `infra/observability/prometheus.yml`, `infra/postgres/pg_hba.conf`
+- `scripts/check-encryption.sh` (aturan 10 `check_stack_identity` + `check_stack_files`; render `prod-stack`
+  EFN_STACK=efn-prod/10.250 dan `dev-stack` efn-dev/10.252; `kind` agar render paksaan memakai aturan prod/dev penuh),
+  `scripts/lib/deploy-validate.sh` (`efn_validate_stack_identity`), `scripts/deploy.sh` (panggilan mode server),
+  `scripts/restore-test.sh` (`COMPOSE_PROJECT` default `EFN_STACK`), `scripts/smoke/run-e2e-smoke.sh`,
+  `infra/odoo-rpc-gateway/test-gateway.sh`, `test-gateway-load.sh` (network/container dari `EFN_STACK`)
+- `.github/workflows/ci.yml` (shellcheck `infra/stack/*.sh`)
+- `docs/runbooks/multi-env-local.md` (baru), `docs/runbooks/README.md`
+
+### Perbedaan `docker compose config` stack `efn` (yang diharapkan)
+Identik kecuali: traefik & promtail (+`entrypoint` render-config, `command` menunjuk `/tmp/...`, +env `EFN_STACK`,
++volume skrip; healthcheck traefik membaca `/tmp/traefik.yml`); api-gateway & ocr-worker (+`networks.internal.aliases`).
+Container itu ter-recreate sekali.
+
+### Belum terverifikasi
+- Interpolasi `name:` top-level dan nested default `${A:-${B:-x}}` di Compose v2 CI (dokumentasi: didukung).
+- Traefik image alpine punya `/bin/sh`+`sed`; Promtail image debian (`bash` ada di healthcheck). Constraint & filter
+  docker_sd belum diuji runtime. Sumber IP koneksi port publish Docker Desktop (asumsi gateway edge `<base>.0.1`).
+- `CH_FORECAST_READER_HOST_CIDR` tidak ada di main (mungkin cabang lain) — tidak diubah.
+- `tests/load/run.sh` masih memakai `efn_*` / `efn-*-1` (uji beban dev, stack default).
+- `CLAUDE.md` tidak diubah (aturan K25-06 sudah mencakup; runbook menjadi rujukan teknis).
+
 ## G43 fase 2 W3 (18 Nov 2026, branch feat/wave-43-esb-migration, belum di-commit) — secret migrasi, image/service `esb-migrate`, CI, check-encryption, runbook
 
 Kontrak: kontrak kerja G43 fase 2 (W3), docs/04 §27.2/§27.10, ADR-042 (Accepted), laporan W1 "Please forward → W3".

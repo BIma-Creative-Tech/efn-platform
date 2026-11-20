@@ -740,7 +740,7 @@ jobs:
           shellcheck -x infra/odoo-rpc-gateway/test-gateway.sh infra/odoo-rpc-gateway/test-gateway-load.sh
           shellcheck -s sh infra/odoo-rpc-gateway/entrypoint.sh
           shellcheck -s sh infra/minio/*.sh infra/redis/*.sh infra/rabbitmq/*.sh infra/clickhouse/*.sh infra/s3-gateway/*.sh \
-            infra/acme/*.sh scripts/acme-test/*.sh infra/metabase/*.sh
+            infra/acme/*.sh scripts/acme-test/*.sh infra/metabase/*.sh infra/stack/*.sh
       # Filter L7 object storage (ADR-030): sintaks HAProxy valid dengan sertifikat dummy dari gen-pki.sh
       - name: haproxy -c (infra/s3-gateway/haproxy.cfg)
         run: |
