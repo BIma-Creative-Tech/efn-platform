@@ -253,6 +253,8 @@ export class AppConfig {
     attempt(() => void this.mgmClaimWindowDays, 'MGM_CLAIM_WINDOW_DAYS tidak valid');
     attempt(() => void this.mgmSettleIntervalMs, 'MGM_SETTLE_INTERVAL_MS tidak valid');
     attempt(() => void this.mgmPolicyCeilings, 'MGM_POLICY_CEILING_* tidak valid');
+    // G50 (docs/04 §28.6–§28.8, §28.10): tracking, wishlist/alert, kampanye
+    problems.push(...this.g50StartupProblems());
     if (problems.length > 0) throw new ConfigError(`Konfigurasi tidak lengkap: ${problems.join('; ')}`);
   }
 
@@ -290,7 +292,10 @@ export class AppConfig {
     // §10.4.1: mTLS ke odoo-rpc-gateway wajib bila kanal online/katalog aktif dan bukan stub dev (tanpa fallback plaintext)
     attempt(() => {
       // G22: QR meja juga memakai json2 lewat gateway yang sama
-      if ((this.onlineEnabled || this.onlineCatalogEnabled || this.fnbQrEnabled || this.bookingEnabled) && !this.odooOnlineMock) void this.odooRpcTls;
+      // G50: klaim outbox kampanye Odoo (`efn.campaign/efn_campaign_claim`) juga lewat gateway yang sama
+      if ((this.onlineEnabled || this.onlineCatalogEnabled || this.fnbQrEnabled || this.bookingEnabled || this.promoCampaignEnabled) && !this.odooOnlineMock) {
+        void this.odooRpcTls;
+      }
     });
     if (problems.length > 0) throw new ConfigError(`Konfigurasi TLS tidak valid: ${problems.join('; ')}`);
     return { plaintextChannels: plaintext };
@@ -862,7 +867,7 @@ export class AppConfig {
    * `CONSENT_<PURPOSE>_TEXT_SHA256` (mis. `CONSENT_LOCATION_VERSION=v1`). `null` bila belum dikonfigurasi
    * (grant ditolak 503; penarikan tetap diterima).
    */
-  consentActiveText(purpose: 'location' | 'marketing' | 'privacy'): { version: string; textSha256: string } | null {
+  consentActiveText(purpose: 'location' | 'marketing' | 'privacy' | 'tracking'): { version: string; textSha256: string } | null {
     const p = purpose.toUpperCase();
     const version = this.str(`CONSENT_${p}_VERSION`);
     const textSha256 = this.str(`CONSENT_${p}_TEXT_SHA256`)?.toLowerCase();
@@ -2124,6 +2129,215 @@ export class AppConfig {
       flatPointsMax: this.int('MGM_POLICY_CEILING_FLAT_POINTS_MAX', 1000, 0, 100_000),
       capPointsMax: this.int('MGM_POLICY_CEILING_CAP_POINTS_MAX', 100_000, 1, 10_000_000),
     };
+  }
+
+  // ───────────── G50 — tracking perilaku, wishlist/alert, kampanye (docs/04 §28.6–§28.10, ADR-047/044/048 Proposed) ─────────────
+  /** §28.10: kill switch `POST /v1/events` (default false; production OFF sampai DPO, Q-SM16/17/26). */
+  get behaviorTrackingEnabled(): boolean {
+    return this.bool('BEHAVIOR_TRACKING_ENABLED', false);
+  }
+  /** ADR-047 §3.3: pepper `subject_key = HMAC(pepper, member_id)` (secret `behavior_subject_pepper`). */
+  get behaviorSubjectPepper(): string {
+    return this.secret('BEHAVIOR_SUBJECT_PEPPER');
+  }
+  /** ADR-047 §3.1 no. 3: pepper `device_key = HMAC(pepper, device_id)` (secret `behavior_device_pepper`). */
+  get behaviorDevicePepper(): string {
+    return this.secret('BEHAVIOR_DEVICE_PEPPER');
+  }
+  /** §28.6: batas event per menit per `device_key` (kontrak 120). */
+  get behaviorRateDevicePerMinute(): number {
+    return this.int('BEHAVIOR_RL_DEVICE_PER_MIN', 120, 1, 100_000);
+  }
+  /** §28.6: batas event per menit per IP (kontrak 600). */
+  get behaviorRateIpPerMinute(): number {
+    return this.int('BEHAVIOR_RL_IP_PER_MIN', 600, 1, 1_000_000);
+  }
+  /** L-153: retensi staging `behavior.event_raw` (hari, kontrak 7; maks 7 — lebih lama butuh keputusan DPO). */
+  get behaviorEventRetentionDays(): number {
+    return this.int('BEHAVIOR_EVENT_RETENTION_DAYS', 7, 1, 7);
+  }
+  /** ADR-047 §3.3: tautan device ↔ member dihapus setelah N hari tanpa aktivitas (default 180). */
+  get behaviorDeviceLinkIdleDays(): number {
+    return this.int('BEHAVIOR_DEVICE_LINK_IDLE_DAYS', 180, 1, 365);
+  }
+  /** Bukti consent device (append-only, tanpa PII). PLACEHOLDER DPO: default 400 hari. */
+  get behaviorDeviceConsentRetentionDays(): number {
+    return this.int('BEHAVIOR_DEVICE_CONSENT_RETENTION_DAYS', 400, 30, 3650);
+  }
+  /** ADR-047 §3.3: snapshot anggota segmen (hari, default 30). */
+  get segmentRetentionDays(): number {
+    return this.int('SEGMENT_RETENTION_DAYS', 30, 1, 90);
+  }
+  /** Daftar `subject_key` terhapus untuk job erasure ClickHouse (> TTL `fact_visitor_event` 90 hari). */
+  get behaviorErasedSubjectRetentionDays(): number {
+    return this.int('BEHAVIOR_ERASED_SUBJECT_RETENTION_DAYS', 100, 91, 400);
+  }
+  /** Interval job behavior (partisi, retensi, cart_abandon). 0 = mati (test). Default 1 jam. */
+  get behaviorJobIntervalMs(): number {
+    return this.int('BEHAVIOR_JOB_INTERVAL_MS', 3_600_000, 0, 86_400_000);
+  }
+
+  /** §28.8 / §28.10: wishlist member (default false). */
+  get wishlistEnabled(): boolean {
+    return this.bool('WISHLIST_ENABLED', false);
+  }
+  /** §28.8: notify-me stok kembali (default false). */
+  get restockAlertEnabled(): boolean {
+    return this.bool('RESTOCK_ALERT_ENABLED', false);
+  }
+  /** §28.8: price alert (default false). */
+  get priceAlertEnabled(): boolean {
+    return this.bool('PRICE_ALERT_ENABLED', false);
+  }
+  /** Interval pengamat stok/harga untuk alert (detik, 60..86400, default 300). */
+  get alertWatchIntervalSeconds(): number {
+    return this.int('ALERT_WATCH_INTERVAL_SECONDS', 300, 60, 86_400);
+  }
+  /**
+   * §28.9 / §28.10 (ADR-048): flag kanal email (env yang sama dibaca `EmailConfig` BFF-B). Di sini hanya dipakai wishlist
+   * untuk menolak pilihan kanal `email` saat mati; gerbang kirim sebenarnya ada di `EmailNotifier`.
+   */
+  get emailEnabled(): boolean {
+    return this.bool('EMAIL_ENABLED', false);
+  }
+  /** §28.10 (ADR-044): flag kanal WA unofficial (env sama dengan `WaUnofficialConfig` BFF-B). OFF prod. */
+  get waUnofficialEnabled(): boolean {
+    return this.bool('WA_UNOFFICIAL_ENABLED', false);
+  }
+
+  /** §28.10: kill switch kampanye (campaign-sync, dispatcher, endpoint segmen). Default false; production OFF. */
+  get promoCampaignEnabled(): boolean {
+    return this.bool('PROMO_CAMPAIGN_ENABLED', false);
+  }
+  /** L-157 / Q-SM24: cap frekuensi per member (default nonaktif). */
+  get campaignFrequencyCapEnabled(): boolean {
+    return this.bool('CAMPAIGN_FREQUENCY_CAP_ENABLED', false);
+  }
+  /** L-157 / Q-SM24: cap anggaran voucher per kampanye (default nonaktif). */
+  get campaignBudgetCapEnabled(): boolean {
+    return this.bool('CAMPAIGN_BUDGET_CAP_ENABLED', false);
+  }
+  /** ADR-047 §3.4: maksimum kampanye per member per 7 hari bila cap frekuensi aktif (PLACEHOLDER Q-SM24, default 2). */
+  get campaignMaxPerMemberPerWeek(): number {
+    return this.int('CAMPAIGN_MAX_PER_MEMBER_PER_WEEK', 2, 1, 50);
+  }
+  /** PT yang outbox kampanyenya diklaim (`CAMPAIGN_COMPANIES`, default `SMD`). */
+  get campaignCompanies(): string[] {
+    const raw = this.str('CAMPAIGN_COMPANIES') ?? 'SMD';
+    const out = [...new Set(raw.split(/[\s,;]+/).filter((s) => s.length > 0))];
+    if (out.length === 0 || out.length > 10 || out.some((c) => !/^[A-Z][A-Z0-9]{1,9}$/.test(c))) {
+      throw new ConfigError('CAMPAIGN_COMPANIES harus daftar kode PT ^[A-Z][A-Z0-9]{1,9}$ (maks 10)');
+    }
+    return out;
+  }
+  /** Interval klaim outbox kampanye Odoo (detik, 15..3600, default 60). */
+  get campaignSyncSeconds(): number {
+    return this.int('CAMPAIGN_SYNC_SECONDS', 60, 15, 3600);
+  }
+  /**
+   * API key user teknis kampanye per PT (`efn_campaign_<kode>`, satu company; §28.7):
+   * `ODOO_API_KEY_CAMPAIGN_<PT>_FILE` → `/run/secrets/odoo_api_key_campaign_<pt>` → (dev) env literal.
+   */
+  odooApiKeyCampaign(company: string): string {
+    if (!/^[A-Z][A-Z0-9]{1,9}$/.test(company)) throw new ConfigError('kode PT kampanye tidak valid');
+    const envName = `ODOO_API_KEY_CAMPAIGN_${company}`;
+    const contractName = `odoo_api_key_campaign_${company.toLowerCase()}`;
+    const raw = this.onlineSecretRaw(envName, contractName);
+    if (raw !== undefined && raw.trim().toLowerCase() === 'disabled') {
+      throw new ConfigError(`${envName} masih placeholder 'disabled' — kampanye ${company} belum boleh aktif`);
+    }
+    return this.onlineSecret(envName, contractName);
+  }
+  /**
+   * §28.7: listener HTTPS mTLS terpisah untuk `POST /internal/v1/segments/{run_id}/members` (Fastify tidak bisa
+   * meminta sertifikat klien per path — pola `/metrics`). 0 = mati. Default 9466; hanya dibuka bila kampanye aktif.
+   */
+  get segmentInternalPort(): number {
+    return this.int('SEGMENT_INTERNAL_PORT', 9466, 0, 65535);
+  }
+  /** CN/SAN DNS sertifikat klien yang boleh mengirim anggota segmen (default `segment-worker`). */
+  get segmentAllowedClientNames(): string[] {
+    const raw = this.str('SEGMENT_TLS_CLIENT_ALLOWED_CN') ?? 'segment-worker';
+    const out = raw.split(/[\s,;]+/).filter((s) => s.length > 0);
+    if (out.length === 0 || out.some((s) => !/^[A-Za-z0-9.-]{1,253}$/.test(s))) throw new ConfigError('SEGMENT_TLS_CLIENT_ALLOWED_CN tidak valid');
+    return out;
+  }
+  /** CA verifikasi sertifikat klien segmen (`SEGMENT_CLIENT_CA_FILE`, default CA internal). */
+  get segmentClientCa(): Buffer {
+    const path = this.caPath('SEGMENT_CLIENT_CA_FILE');
+    let ca: Buffer;
+    try {
+      ca = this.readFile(path);
+    } catch {
+      throw new ConfigError(`Segmen: CA klien (SEGMENT_CLIENT_CA_FILE=${path}) tidak dapat dibaca`);
+    }
+    if (!ca.toString('utf8').includes('-----BEGIN CERTIFICATE-----')) throw new ConfigError('Segmen: CA klien bukan PEM');
+    return ca;
+  }
+
+  /** Validasi G50 saat start (dipanggil `assertStartupSecrets`). Pesan tanpa nilai rahasia. */
+  private g50StartupProblems(): string[] {
+    const problems: string[] = [];
+    const attempt = (fn: () => void): void => {
+      try {
+        fn();
+      } catch (err) {
+        problems.push(err instanceof Error ? err.message : 'konfigurasi G50 tidak valid');
+      }
+    };
+    if (!this.isDevEnv) {
+      for (const name of Object.keys(this.env)) {
+        if (/^ODOO_API_KEY_CAMPAIGN_[A-Z0-9_]+$/.test(name) && !name.endsWith('_FILE') && this.str(name) !== undefined) {
+          problems.push(`${name} sebagai env literal ditolak di luar APP_ENV=dev; pakai ${name}_FILE (SEC-29)`);
+        }
+      }
+    }
+    for (const getter of [
+      () => this.behaviorRateDevicePerMinute,
+      () => this.behaviorRateIpPerMinute,
+      () => this.behaviorEventRetentionDays,
+      () => this.behaviorDeviceLinkIdleDays,
+      () => this.behaviorDeviceConsentRetentionDays,
+      () => this.segmentRetentionDays,
+      () => this.behaviorErasedSubjectRetentionDays,
+      () => this.behaviorJobIntervalMs,
+      () => this.alertWatchIntervalSeconds,
+      () => this.campaignMaxPerMemberPerWeek,
+      () => this.campaignCompanies,
+      () => this.campaignSyncSeconds,
+      () => this.segmentInternalPort,
+      () => this.segmentAllowedClientNames,
+      () => this.consentActiveText('tracking'),
+    ]) {
+      attempt(() => void getter());
+    }
+    if (this.behaviorTrackingEnabled) {
+      attempt(() => {
+        // Domain terpisah: subject_key (member) tidak boleh bisa dihitung dari device_key dan sebaliknya
+        if (this.behaviorSubjectPepper === this.behaviorDevicePepper) {
+          throw new ConfigError('BEHAVIOR_SUBJECT_PEPPER dan BEHAVIOR_DEVICE_PEPPER harus berbeda (ADR-047 §3.3)');
+        }
+      });
+    }
+    let mock = true;
+    try {
+      mock = this.odooOnlineMock;
+    } catch {
+      mock = true; // ODOO_ONLINE_MOCK di staging/prod sudah dilaporkan validasi online
+    }
+    if (this.promoCampaignEnabled && !mock) {
+      attempt(() => void this.odooRpcUrl);
+      for (const pt of this.safeCampaignCompanies()) attempt(() => void this.odooApiKeyCampaign(pt));
+    }
+    return problems;
+  }
+
+  private safeCampaignCompanies(): string[] {
+    try {
+      return this.campaignCompanies;
+    } catch {
+      return [];
+    }
   }
 
   // ───────────── G22 — poin online (docs/04 §14.C.1 no. 5) ─────────────

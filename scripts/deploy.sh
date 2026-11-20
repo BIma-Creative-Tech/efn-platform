@@ -633,10 +633,12 @@ echo "==> Migrasi skema idempoten (infra/postgres/init/[0-9][0-9]-*.sql >= 04)"
 # tabel mgm_*; earn/reverse POS & online menulis mgm_source/mgm_reversal). 18 = G43 (ADR-043: CHECK kode PT + IMD/CUP;
 # tanpa 18 akrual/kebijakan/poin PT IMD & CUP ditolak CHECK). 19 = G44 (docs/04 §12.1 revisi 18 Nov 2026: CHECK kode
 # PT + SMD; tanpa 19 ledger/kebijakan/MGM PT SMD ditolak CHECK). Urutan wajib: 18 lalu 19 (pagar merge di 19).
+# 20 = G50-A (docs/04 §28.6-28.8: consent purpose tracking, skema behavior, wishlist/alert, campaign, voucher, inbox).
+# 21 = G50-B (docs/04 §28.9: member_email, outbound email/WA unofficial). Urutan wajib: 20 lalu 21.
 for req in 04-platform-v3-6.sql 05-platform-loyalty-pos.sql 06-platform-loyalty-guard.sql 07-platform-online.sql \
            08-platform-g18-privacy.sql 09-platform-g20.sql 10-platform-g21.sql 11-platform-g22.sql 12-platform-g23.sql \
            13-platform-g24.sql 14-platform-g26.sql 15-platform-g27.sql 16-platform-g27b.sql \
-           17-platform-g31.sql 18-platform-g43.sql 19-platform-g44.sql; do
+           17-platform-g31.sql 18-platform-g43.sql 19-platform-g44.sql 20-platform-g50a.sql 21-platform-g50b.sql; do
   [[ -s "$BASE/postgres/init/$req" ]] || die "migrasi wajib $req tidak ada di $BASE/postgres/init (bundel rilis tidak lengkap)"
 done
 for mig in "$BASE"/postgres/init/[0-9][0-9]-*.sql; do

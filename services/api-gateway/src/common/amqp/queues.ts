@@ -48,6 +48,41 @@ export const ONLINE_QUEUES: readonly QueueName[] = [
  * bergantung pada definitions broker yang baru (rilis tetap bisa start di broker lama).
  */
 export const MGM_QUEUES: readonly QueueName[] = [QUEUES.MGM_REWARD_REQUESTED];
+
+/**
+ * G50 docs/04 §28.7: queue yang hanya diperiksa (passive declare) bila fitur terkait aktif. Pola sama dengan
+ * MGM_QUEUES: fitur mati = BFF tidak bergantung pada definitions broker baru. Nama harus sama dengan konstanta di
+ * behavior-message.ts, campaign-message.ts, alert-message.ts, email.constants.ts, wa-unofficial.contract.ts.
+ */
+export const G50_QUEUES = {
+  behavior: ['behavior.event'],
+  campaign: ['promo.campaign.requested'],
+  restockAlert: ['notify.restock'],
+  priceAlert: ['notify.price_alert'],
+  email: ['notify.email'],
+  waUnofficial: ['notify.wa_unofficial', 'notify.wa_unofficial.result'],
+} as const;
+
+export interface G50QueueFlags {
+  behaviorTrackingEnabled: boolean;
+  promoCampaignEnabled: boolean;
+  restockAlertEnabled: boolean;
+  priceAlertEnabled: boolean;
+  emailEnabled: boolean;
+  waUnofficialEnabled: boolean;
+}
+
+/** Daftar queue G50 yang wajib ada di broker untuk kombinasi flag saat ini. */
+export function g50QueuesFor(flags: G50QueueFlags): string[] {
+  const out: string[] = [];
+  if (flags.behaviorTrackingEnabled) out.push(...G50_QUEUES.behavior);
+  if (flags.promoCampaignEnabled) out.push(...G50_QUEUES.campaign);
+  if (flags.restockAlertEnabled) out.push(...G50_QUEUES.restockAlert);
+  if (flags.priceAlertEnabled) out.push(...G50_QUEUES.priceAlert);
+  if (flags.emailEnabled) out.push(...G50_QUEUES.email);
+  if (flags.waUnofficialEnabled) out.push(...G50_QUEUES.waUnofficial);
+  return out;
+}
 export const ONLINE_DELIVERY_LIMIT = 10;
 
 export function dlqName(queue: string): string {

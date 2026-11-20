@@ -2778,3 +2778,112 @@ modul `efn_legacy_history` + `mrp` terpasang, user `efn_migration` ada, overlay 
 - Keamanan xmlid `efn_mig_esb` saat upgrade/uninstall modul lain (§27.4 butir 6) [B]; ukuran memori segmen 500 rb baris
   (sales.line dibaca ulang per gudang — hemat memori, lebih lambat) [B].
 - Runbook §4.2 perlu disesuaikan: pembungkus `run-import.sh` kini ada (argumen = nama berkas di direktori pertukaran).
+
+---
+
+# G50 — `efn_campaign` 19.0.1.0.0 (kampanye supermarket, 20 Nov 2026)
+
+Worktree `efn-platform-g50`, branch `feat/wave-50-supermarket-campaign`. Kontrak: `docs/04` §28.7, §28.10, L-155/L-156/
+L-157/L-164; ADR-047 §3.4; fit-gap G45 S-17 + §5.
+
+## Modul & file (baru, LGPL-3, depends `mail`, `loyalty`, `stock`, `efn_core`, `efn_audit`)
+- `services/odoo/addons/efn_campaign/__manifest__.py`, `__init__.py`, `README.md`
+- `models/campaign_api.py` (helper bot: `check_caller`, sakelar, galat berkode), `models/efn_campaign.py`
+  (`efn.campaign` + 3 RPC bot + 4 tombol + `_efn_propose_markdown`), `models/efn_campaign_outbox.py`
+  (`efn.campaign.outbox` + cron reclaim), `models/loyalty_card.py` (`loyalty.card.efn_campaign_id`)
+- `security/efn_campaign_security.xml` (3 grup + record rule), `security/ir.model.access.csv`
+- `data/ir_config_parameter.xml` (`efn_campaign.enabled=false`), `data/ir_cron.xml` (5 menit),
+  `data/efn_audit_rule_data.xml`
+- `views/efn_campaign_views.xml`, `tests/test_campaign.py` (17 test, tag `efn`)
+
+## Keputusan desain
+- Fit-gap mencantumkan depends `pos_loyalty`, `sale_loyalty`, `efn_promo`; tidak dipakai kode → tidak di-depend
+  (modul tetap terpasang tanpa POS/Sales). Penegakan kupon di POS/online tetap CE.
+- Program voucher **dipilih** Marketing (program CE yang sudah dikonfigurasi reward-nya), bukan dibuat modul.
+  `anonymous_code`/`member_bound` → `program_type=coupons`; `public_code` → `promo_code` dengan tepat satu aturan aktif
+  berkode; approval menulis `limit_usage=True`, `max_usage=code_qty`; satu program kode publik hanya untuk satu kampanye
+  disetujui. Tanpa program = notifikasi saja.
+- Voucher dibuat **saat approval** (transaksi yang sama dengan outbox); gagal = approval batal. Wizard dipanggil sudo
+  dengan `loyalty_no_mail` + `action_no_send_mail` (CE tidak mengirim email kartu; notifikasi = BFF).
+- SoD: penyetuju ≠ `maker_id` dan ∉ `editor_ids` (penyunting isi kampanye, pola `efn_mgm_policy`). Usulan worker dibuat
+  bot; Marketing yang melengkapi menjadi penyunting → butuh approver kedua (4-eyes selalu, bukan hanya di atas ambang).
+- Mode dikunci setelah `approval_rev > 0`, termasuk setelah batal → reset draft. Re-approval → `approval_rev` +1, outbox
+  baru, kartu baru; batal menonaktifkan kartu revisi sebelumnya dan menandai outbox `queued` → `failed/cancelled`
+  (ditolak bila sudah `claimed/done`).
+- Ack menerima baris yang sudah kembali `queued`/`failed` asal pernah diklaim (BFF sudah publish; hilir idempoten);
+  belum pernah diklaim → `not_claimed`; milik PT lain → `not_found` (tidak membocorkan keberadaan).
+- Klaim menandai baris yang periode kampanyenya lewat sebagai `failed/expired` (+ aktivitas) alih-alih mengirimnya.
+- Sakelar mati: ketiga metode bot → `422 efn_campaign:disabled` (termasuk ack, mengikuti instruksi); cron reclaim
+  melewati PT yang mati; tombol Setujui ditolak.
+- Markdown G45: `_efn_propose_markdown` (privat) → kampanye `markdown` `proposed` (perlu approval), outbox membawa
+  `ref_model`/`ref_id` sumber. Tidak ada depends ke `efn_expiry_monitor`.
+- Ringkasan worker ditolak `pii_suspected` bila memuat ≥ 6 digit berurutan atau pola email.
+- `outbox.payload` `groups=base.group_system` (kode bearer); audit `efn.campaign` tanpa `partner_ids`.
+
+## API CE 19 yang dicek (WebFetch `raw.githubusercontent.com/odoo/odoo/19.0`, 20 Nov 2026)
+- `loyalty/wizard/loyalty_generate_wizard.py`: field `program_id`, `mode` (`anonymous|selected`), `customer_ids`,
+  `customer_tag_ids`, `coupon_qty` (compute stored, editable), `points_granted`, `valid_until`, `description`;
+  `generate_coupons()` membuat `loyalty.card` (`program_id, points, expiration_date, partner_id`) + `loyalty.history`,
+  mengembalikan kartu (kode tetap fallback mencari kartu baru bila nilai balik bukan recordset).
+- `loyalty/models/loyalty_card.py`: `code` default `_generate_code()` (14 karakter), UNIQUE(code), `partner_id`
+  ("reserved for this partner"), `expiration_date`, `active`; `_send_creation_communication` dilewati bila
+  `loyalty_no_mail`/`action_no_send_mail`.
+- `loyalty/models/loyalty_program.py`: `program_type` (`coupons`, `promo_code`, ...), `limit_usage`/`max_usage` (CHECK
+  `max_usage > 0` bila limit), `date_from/date_to`, `company_id`, `rule_ids`/`reward_ids` compute dari tipe.
+- `loyalty/models/loyalty_rule.py`: `mode` (`auto|with_code`, compute dari `code`), `code` unik vs aturan aktif & kartu.
+- `loyalty/models/loyalty_reward.py`: `required_points` (Float, default 1) — dipakai sebagai `points_granted`.
+- `loyalty/security/ir.model.access.csv`: `base.group_user` tanpa hak (0,0,0,0) → modul menambah ACL baca
+  `loyalty.program/rule/reward/card` untuk grup Marketing.
+
+## Untuk lead (di luar batas file saya) — WAJIB agar run 0 failed
+1. `services/odoo/addons/efn_core/tests/test_rpc_surface.py` `RPC_ALLOWLIST` (SEC-58) — tambahkan:
+   ```python
+   # G50 efn_campaign (docs/04 §28.7): bot = campaign_api.check_caller (group_campaign_bot + Internal User saja,
+   # aktif, non-share, TEPAT satu company; context dibuang) + sakelar efn_campaign.enabled; tulis via sudo setelah cek.
+   ("efn.campaign", "efn_campaign_proposal_upsert"): "G50: check_caller + company_code + advisory lock + "
+   "idempoten (company, run_id, segment_code); tanpa data member (pii_suspected)",
+   ("efn.campaign", "efn_campaign_claim"): "G50: check_caller + FOR UPDATE SKIP LOCKED queued->claimed, company caller",
+   ("efn.campaign", "efn_campaign_ack"): "G50: check_caller + FOR UPDATE baris company caller; idempoten",
+   ("efn.campaign", "action_efn_propose"): "G50: group_campaign_user + check_access(write) + company + draft",
+   ("efn.campaign", "action_efn_reset_draft"): "G50: group_campaign_user + check_access(write) + company",
+   ("efn.campaign", "action_efn_cancel"): "G50: group_campaign_user (+approver bila approved) + check_access(write)",
+   ("efn.campaign", "action_efn_approve"): "G50: group_campaign_approver + check_access(read) + company + "
+   "SoD (bukan pembuat/penyunting) + proposed + sakelar; voucher via wizard CE sudo",
+   ```
+2. Tambahkan `efn_campaign` ke daftar modul test/instal CI (`.github/workflows/ci.yml`, baris `EFN_*_MODULES` yang
+   memuat `efn_demand_forecast`) dan ke `EFN_TEST_MODULES` run container.
+3. Gateway `odoo-rpc-gateway` (devsecops): allowlist path `/json/2/efn.campaign/efn_campaign_proposal_upsert`
+   (CN `segment-worker`), `.../efn_campaign_claim` dan `.../efn_campaign_ack` (CN BFF), secret
+   `odoo_api_key_campaign_<kode>`.
+
+## Usulan revisi kontrak `docs/04` §28.7 (tidak saya ubah)
+- Payload `promo.campaign.requested` implementasi menambah `schema_version`, `approval_rev`, `segment_code`, `title`,
+  `body`, `voucher_mode`, `voucher` (bentuk per mode, lihat README), tanggal `YYYY-MM-DD`; `voucher_program_ref` =
+  integer id `loyalty.program`.
+- Bentuk respons klaim/ack dan kode galat (README "Kontrak RPC") belum ada di kontrak.
+- Argumen upsert (`member_count`, `metrics`, `summary`, `generated_at`) perlu dikunci di kontrak + parity test worker.
+
+## Pertanyaan terbuka
+- Q-G50-1: sumber `partner_ids` untuk `member_bound` (sementara diisi manual Marketing) dan cara BFF memetakan
+  `partner_id` ke member (perlu tautan member↔partner di BFF/`efn_privacy`?).
+- Q-G50-2: markdown "kirim ke member" (§28.5a) langsung ke outbox atau lewat approval Marketing (implementasi: approval).
+- Q-G50-3: ambang 4-eyes per anggaran (Q-SM24) — saat ini semua kampanye butuh penyetuju kedua.
+- Q-G50-4: batas jumlah kode per kampanye (5000) dan ukuran respons klaim terhadap batas body gateway.
+- Q-G50-5: erasure member pada kartu `member_bound` (anonimkan/arsip) — hook belum ada.
+
+## Test — BELUM DIJALANKAN (tanpa shell; lead menjalankan di container Odoo 19)
+`tests/test_campaign.py`: pemanggil bot fail-closed (403), sakelar mati 422 + override per PT, upsert idempoten +
+validasi (422/403, `pii_suspected`), locked setelah approval, SoD pembuat/penyunting, guard field sistem + payload
+tidak terbaca Marketing, voucher `anonymous_code`/`public_code`/`member_bound`, kunci mode setelah batal/reset,
+re-approval rev 2, klaim/ack (limit, idempotensi, not_found/not_claimed), cron reclaim + 5 percobaan → failed +
+aktivitas, klaim melewati kampanye kedaluwarsa, isolasi multi-company, markdown generik.
+
+## Belum diverifikasi / titik rawan test
+- Tidak ada yang dijalankan di Odoo 19 nyata; ruff belum dijalankan (format manual ≤ 120).
+- Pembuatan `loyalty.program` di test dengan `reward_ids` eksplisit + `default_program_type` (interaksi `default_get`/
+  compute `_compute_from_program_type`) [B]; `rule_ids` eksplisit untuk `promo_code` [B].
+- `check_company` pada penulisan sudo (form ditulis sudo setelah cek hak) — dilapis constraint Python eksplisit.
+- `fields.Json` + `groups=` pada outbox dan akses `read(['payload'])` oleh Marketing → `AccessError` [B].
+- Test membebaskan kode company `SMD`/`FARM` di transaksi uji (pola test forecast) — modul lain yang bereaksi atas
+  perubahan `efn_brand_code` [B].
+- `res.users.group_ids` untuk menambah grup di test (nama field 19.0, sama dengan test forecast).

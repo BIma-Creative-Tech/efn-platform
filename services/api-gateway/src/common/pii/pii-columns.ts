@@ -1,4 +1,4 @@
-import { PII_AAD } from './crypto';
+import { PII_AAD, piiAad } from './crypto';
 
 /**
  * Daftar SEMUA kolom `*_enc` di skema `platform` (docs/04 §7.2, §8.2, §8.4). Dipakai oleh job/CLI re-encrypt
@@ -42,6 +42,9 @@ export const PII_COLUMNS: readonly PiiColumn[] = [
   },
   // G27 §18.2: token push Expo (pengenal perangkat = data pribadi)
   { table: 'push_token', column: 'token_enc', pk: 'id', aad: PII_AAD.PUSH_TOKEN },
+  // G50 (docs/04 §28.7/§28.9): alamat email member (ADR-048) dan kode voucher kampanye yang ditugaskan BFF.
+  { table: 'member_email', column: 'email_enc', pk: 'member_id', aad: piiAad('member_email', 'email_enc') },
+  { table: 'member_voucher', column: 'code_enc', pk: 'id', aad: piiAad('member_voucher', 'code_enc') },
 ];
 
 const IDENT_RE = /^[a-z_][a-z0-9_]*$/;

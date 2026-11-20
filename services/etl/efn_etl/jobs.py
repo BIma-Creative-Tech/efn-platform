@@ -431,14 +431,21 @@ def enabled_jobs(
     waste: bool = False,
     forecast: bool = False,
     forecast_legacy: bool = False,
+    behavior: bool = False,
 ) -> list[Job]:
     """Job incremental. Odoo: penjualan POS + (Gelombang 13) pembayaran POS, outlet, produk (efn_etl/pos.py) +
     (Gelombang 21, `partner_region`) wilayah pembeli di penjualan dan master `dim_region` (efn_etl/region.py) +
     (Gelombang 22, `kds`) tiket & stasiun KDS, `kds_online` = kanal online E-29a (efn_etl/kds.py) +
     (Gelombang 32, `waste`) waste & yield CK (efn_etl/waste.py) +
     (Gelombang 44, `forecast`) gudang, kalender, run & proyeksi forecast (efn_etl/forecast.py) +
-    (Gelombang 46, `forecast_legacy`, hanya bersama `forecast`) histori penjualan ESB pra-cutover."""
+    (Gelombang 46, `forecast_legacy`, hanya bersama `forecast`) histori penjualan ESB pra-cutover.
+    Platform: (Gelombang 50, `behavior`) event perilaku visitor `behavior.event_raw` (efn_etl/behavior.py); tidak butuh
+    Odoo."""
     jobs = [competitor_prices_job(age_out), loyalty_events_job(age_out)]
+    if behavior:
+        from efn_etl.behavior import behavior_job
+
+        jobs.append(behavior_job())
     if odoo_enabled:
         # Import lokal: pos.py / kds.py mengimpor helper dari modul ini.
         from efn_etl.kds import kds_jobs

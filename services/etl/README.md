@@ -274,6 +274,32 @@ PDP (SEC-16, docs/04 §7.2): ETL **tidak memegang `otp_pepper`** dan tidak mengh
 
 Koneksi PostgreSQL memakai `default_transaction_read_only=on`, `TimeZone=UTC`. User `efn_etl` (anggota `efn_readonly`, grant level kolom; butuh `price_hunter_report.user_hash` dan `loyalty_ledger.company_code`). Hak ClickHouse user `efn_etl`: `infra/clickhouse/access/etl-access.sql`.
 
+## G50: perilaku visitor supermarket (ADR-047 Proposed, docs/04 §28.6/§28.7, L-152..L-155)
+
+Kode: `efn_etl/behavior.py`. DDL: `infra/clickhouse/init/16-g50-behavior.sql`. Grant PG: `sql/platform-behavior-grants.sql`
+(dijalankan sebagai pemilik tabel `behavior.*` setelah tabel BFF ada). **Production OFF** selama
+`BEHAVIOR_TRACKING_ENABLED` OFF (DPO Q-SM16/17/26).
+
+| Job | Sumber | Target | Cursor / jadwal |
+|---|---|---|---|
+| `behavior_erasure` (aktif bila `ETL_ENABLE_BEHAVIOR`) | PG `behavior.subject_erasure` (asumsi G50, milik BFF) | `ALTER TABLE fact_visitor_event DELETE WHERE subject_key IN (...)` + verifikasi count 0 | tiap siklus SEBELUM job incremental; mulai `watermark − ETL_BEHAVIOR_ERASURE_RECHECK_HOURS` (24) |
+| `behavior_events` (`ETL_ENABLE_BEHAVIOR=false` default) | PG `behavior.event_raw` (staging 7 h) | `fact_visitor_event` (ReplacingMergeTree(ingested_at), partisi harian, TTL 90 h) | `ingested_at`, `subject_key:event_id` |
+| `behavior_agg` | `fact_visitor_event` (INSERT ... SELECT di ClickHouse) | `agg_visitor_product_daily`, `agg_visitor_funnel_daily`, `agg_visitor_search_daily` (TTL 2 th, tanpa subject_key) | tiap `ETL_BEHAVIOR_AGG_INTERVAL_SECONDS` (3600), hitung ulang `ETL_BEHAVIOR_AGG_DAYS` (3) hari WIB terakhir |
+
+- Fail closed: `subject_key` bukan hex sha256, PT tak dikenal, tipe event/kanal di luar kontrak -> halaman batal
+  (heartbeat `error`). `query` disanitasi ulang (NFKC, lowercase, email & angka >= 6 digit -> `[redacted]`, <= 64).
+- Erasure: job `behavior_erasure` gagal -> `behavior_events` dilewati siklus itu. DSAR (`privacy_erasure`):
+  `privacy.erasure.completed` ditahan sampai subject_key milik `request_id` di `behavior.subject_erasure` hilang.
+- k-anonim: istilah pencarian di agregat hanya bila >= `ETL_BEHAVIOR_K_MIN` (10) subjek berbeda. Agregat lain = hitungan
+  tanpa pengenal.
+- Ubah retensi (setelah DPO Q-SM17): `ALTER TABLE efn_dwh.fact_visitor_event MODIFY TTL event_date + INTERVAL <n> DAY`
+  (admin ClickHouse) dan perbarui DDL 16.
+- Env baru: `ETL_ENABLE_BEHAVIOR` (false), `ETL_BEHAVIOR_AGG_DAYS` (3, 1..7), `ETL_BEHAVIOR_AGG_INTERVAL_SECONDS`
+  (3600, 900..86400), `ETL_BEHAVIOR_K_MIN` (10, 2..1000), `ETL_BEHAVIOR_ERASURE_RECHECK_HOURS` (24, 1..168),
+  `ETL_BEHAVIOR_ERASURE_BATCH_SIZE` (500, 1..1000). Tidak ada secret baru (ETL tidak memegang `behavior_subject_pepper`).
+- Belum: skema `behavior.*` dibuat BFF paralel (kolom diasumsikan, grant kolom = verifikasi saat deploy); event `purchase`
+  belum ada di kontrak §28.6; pemetaan `outlet_code` -> `warehouse_id` untuk row policy Insight (G47) belum.
+
 ## Test
 
 ```

@@ -1,6 +1,7 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
+import { FeatureGate } from '@/components/engage/FeatureGate';
 import { CONSENT_PURPOSES, CONSENT_TEXTS } from '@/lib/consent';
 import { loadConsents } from '@/lib/consent-server';
 import { getSessionToken } from '@/lib/session';
@@ -44,6 +45,18 @@ export default async function PrivasiAkunPage() {
           initial={CONSENT_PURPOSES.map((p) => ({ record: consents.records[p], text: CONSENT_TEXTS[p] }))}
         />
       )}
+
+      <FeatureGate feature="tracking">
+        <section className="card stack" aria-labelledby="pelacakan-privasi">
+          <h2 id="pelacakan-privasi" style={{ margin: 0 }}>
+            Pelacakan aktivitas
+          </h2>
+          <p style={{ margin: 0 }}>
+            Pilihan pelacakan di perangkat dan pengaitan dengan akun diatur terpisah di{' '}
+            <Link href="/privasi/pelacakan">Pengaturan Pelacakan</Link>. Pengaitan dengan akun tidak aktif kecuali Anda menyalakannya sendiri.
+          </p>
+        </section>
+      </FeatureGate>
 
       <section className="card stack" aria-labelledby="persetujuan-privasi">
         <h2 id="persetujuan-privasi" style={{ margin: 0 }}>

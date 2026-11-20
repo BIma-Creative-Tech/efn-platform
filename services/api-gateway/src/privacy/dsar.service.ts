@@ -2,6 +2,9 @@ import { Inject, Injectable, Logger, Optional } from '@nestjs/common';
 import { OnlinePrivacyService, openOnlineOrders } from '../orders/online-privacy.service';
 import { randomUUID } from 'node:crypto';
 import { PgMgmStore } from '../loyalty/mgm/mgm.repository';
+import { exportBehaviorMember, optionalSubjectPepper } from '../behavior/behavior-privacy';
+import { exportCampaignMember } from '../campaign/campaign-privacy';
+import { exportWishlistMember } from '../wishlist/wishlist-privacy';
 import { AppConfig } from '../config/app-config';
 import { DB, Db } from '../common/db/db';
 import { ApiError, Errors } from '../common/errors/api-error';
@@ -204,6 +207,10 @@ export class DsarService {
     );
     // G31 §20.7: kode referral milik sendiri + waktu tautan (tanpa identitas referrer/downline)
     const referral = await new PgMgmStore().exportFor(this.db, user.memberHash);
+    // G50 §28.6–§28.8 (L-161): wishlist/alert, tautan perangkat + event staging ≤ 7 hari, inbox/voucher kampanye
+    const wishlist = await exportWishlistMember(this.db, user.memberId);
+    const behavior = await exportBehaviorMember(this.db, user.memberId, optionalSubjectPepper(this.config));
+    const campaign = await exportCampaignMember(this.db, user.memberId);
     const truncated = ledger.rows.length > EXPORT_ROW_LIMIT || reports.rows.length > EXPORT_ROW_LIMIT;
 
     await this.db.query(
@@ -263,9 +270,15 @@ export class DsarService {
         earn_status: r.earn_status,
         points_earned_in_session: Number(r.points ?? 0),
       })),
+      wishlist: wishlist.wishlist,
+      restock_alerts: wishlist.restock_alerts,
+      price_alerts: wishlist.price_alerts,
+      behavior: { linked_devices: behavior.linked_devices, events: behavior.events },
+      campaign_inbox: campaign.inbox,
+      campaign_vouchers: campaign.vouchers,
       requests: requests.items,
       processors: DATA_PROCESSORS,
-      truncated: truncated || onlineOrders.truncated,
+      truncated: truncated || onlineOrders.truncated || behavior.truncated,
     };
   }
 

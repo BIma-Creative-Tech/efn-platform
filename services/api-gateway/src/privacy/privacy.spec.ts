@@ -107,6 +107,8 @@ describe('ConsentService (§8.4/§8.7/§8.9)', () => {
       { purpose: 'location', granted: true, version: 'v2', updated_at: '1970-01-01T00:00:00.000Z' },
       { purpose: 'marketing', granted: false, version: null, updated_at: null },
       { purpose: 'privacy', granted: false, version: null, updated_at: null },
+      // G50 ADR-047: purpose baru `tracking` (default tidak diberikan)
+      { purpose: 'tracking', granted: false, version: null, updated_at: null },
     ]);
     expect(parseSetConsent({ granted: true, version: 'v2' })).toEqual({ granted: true, version: 'v2' });
     expect((await catchApiError(() => parseSetConsent({ granted: 'ya', version: 'v2' }))).getStatus()).toBe(400);

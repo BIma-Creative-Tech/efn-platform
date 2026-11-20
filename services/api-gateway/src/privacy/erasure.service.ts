@@ -7,6 +7,9 @@ import { DB, Db, Queryable } from '../common/db/db';
 import { erasureSuppressionTag } from '../common/pii/erasure-suppression';
 import { randomTombstone } from '../common/pii/pii';
 import { PgMgmStore } from '../loyalty/mgm/mgm.repository';
+import { eraseBehaviorMember, optionalSubjectPepper } from '../behavior/behavior-privacy';
+import { eraseCampaignMember } from '../campaign/campaign-privacy';
+import { eraseWishlistMember } from '../wishlist/wishlist-privacy';
 import { OBJECT_STORAGE, ObjectStorage } from '../market-scout/storage/object-storage';
 import { MetricsService } from '../common/metrics/metrics.service';
 
@@ -345,6 +348,11 @@ export class ErasureService implements OnModuleInit, OnModuleDestroy {
     //     referrer dibatalkan, hash di reward/sumber → tombstone (baris keuangan tetap)
     await new PgMgmStore().erase(q, hash, tomb, new Date());
     if (memberId === null) return; // retention subjek ledger POS: tidak ada baris akun
+    // 4d. G50 §28.6–§28.8 (L-154, L-161): tautan device, event staging, segmen (+ daftar erasure ClickHouse), wishlist/
+    //     alert, inbox/penerimaan kampanye; kode voucher yang sudah ditugaskan hanya dilepas tautannya
+    await eraseBehaviorMember(q, memberId, optionalSubjectPepper(this.config));
+    await eraseWishlistMember(q, memberId);
+    await eraseCampaignMember(q, memberId);
     // 5. Consent: bukti dipertahankan tanpa PII
     await q.query(`UPDATE platform.consent SET ip_enc = NULL WHERE member_id = $1 AND ip_enc IS NOT NULL`, [memberId]);
     // 6. Request DSAR lain milik subjek (export, delete yang pernah dibatalkan) tidak lagi memuat member_hash

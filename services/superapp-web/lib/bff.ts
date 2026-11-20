@@ -49,7 +49,7 @@ export interface BffErrorBody {
 
 export type BffResult<T> =
   | { ok: true; status: number; data: T }
-  | { ok: false; status: number; code: string; message: string; body: BffErrorBody | null };
+  | { ok: false; status: number; code: string; message: string; body: BffErrorBody | null; retryAfterS?: number };
 
 export interface BffRequestOptions {
   method?: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
@@ -141,12 +141,17 @@ export async function bffFetch<T>(path: string, opts: BffRequestOptions = {}): P
   if (res.status >= 500) {
     console.error(`[bff] ${init.method} ${logSafe(path)} -> ${res.status} req=${logSafe(requestId)}`);
   }
+  // G50: `Retry-After` (detik) untuk 429 event perilaku; hanya bentuk angka yang dibaca.
+  const ra = Number(res.headers.get('retry-after'));
+  const retryAfterS = Number.isFinite(ra) && ra > 0 ? Math.min(Math.floor(ra), 3600) : undefined;
   return {
     ok: false,
     status: res.status,
-    code: errBody?.error?.code ?? `http_${res.status}`,
+    // G50: §28.6 menulis `{ "error": "tracking_consent_required" }` (string); bentuk umum `{ error: { code } }` tetap didukung.
+    code: errBody?.error?.code ?? (typeof (errBody as { error?: unknown } | null)?.error === 'string' ? ((errBody as { error: string }).error) : `http_${res.status}`),
     message: errBody?.error?.message ?? GENERIC_ERROR_MESSAGE,
     body: errBody,
+    ...(retryAfterS !== undefined ? { retryAfterS } : {}),
   };
 }
 

@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- G50 (docs/04 §28.7, L-156, ADR-047 §3.4): Marketing (membuat/menyunting), Marketing approver (menyetujui; SoD
+     pembuat != penyetuju ditegakkan di server), user teknis bot `efn_campaign_<kode>` (segment-worker + BFF
+     campaign-sync; Internal User + grup ini saja, TEPAT satu company, tanpa ACL dokumen). API key per PT
+     `/run/secrets/odoo_api_key_campaign_<kode>`. -->
+<odoo>
+    <record id="res_groups_privilege_efn_campaign" model="res.groups.privilege">
+        <field name="name">EFN Kampanye Tertarget</field>
+        <field name="category_id" ref="base.module_category_marketing"/>
+    </record>
+
+    <record id="group_campaign_user" model="res.groups">
+        <field name="name">Kampanye: Marketing</field>
+        <field name="comment">Membuat dan menyunting kampanye (segmen/markdown), memilih program voucher dan mode voucher, mengajukan untuk approval.</field>
+        <field name="privilege_id" ref="res_groups_privilege_efn_campaign"/>
+        <field name="implied_ids" eval="[(4, ref('base.group_user'))]"/>
+    </record>
+
+    <record id="group_campaign_approver" model="res.groups">
+        <field name="name">Kampanye: Marketing approver</field>
+        <field name="comment">Menyetujui kampanye yang diajukan (bukan kampanye yang ia buat/sunting sendiri). Approval membuat voucher dan mengantrekan kampanye untuk BFF.</field>
+        <field name="privilege_id" ref="res_groups_privilege_efn_campaign"/>
+        <field name="implied_ids" eval="[(4, ref('group_campaign_user'))]"/>
+    </record>
+
+    <record id="group_campaign_bot" model="res.groups">
+        <field name="name">Layanan kampanye (user teknis segment-worker / BFF)</field>
+        <field name="comment">User teknis /json/2 lewat odoo-rpc-gateway: efn_campaign_proposal_upsert, efn_campaign_claim, efn_campaign_ack. Hanya Internal User + grup ini, tepat satu company. Tanpa akses dokumen langsung.</field>
+        <field name="privilege_id" ref="res_groups_privilege_efn_campaign"/>
+        <field name="api_key_duration">35</field>
+    </record>
+
+    <data noupdate="1">
+        <record id="efn_campaign_rule_company" model="ir.rule">
+            <field name="name">EFN kampanye: multi-company</field>
+            <field name="model_id" ref="model_efn_campaign"/>
+            <field name="domain_force">[('company_id', 'in', company_ids)]</field>
+        </record>
+        <record id="efn_campaign_outbox_rule_company" model="ir.rule">
+            <field name="name">EFN outbox kampanye: multi-company</field>
+            <field name="model_id" ref="model_efn_campaign_outbox"/>
+            <field name="domain_force">[('company_id', 'in', company_ids)]</field>
+        </record>
+    </data>
+</odoo>

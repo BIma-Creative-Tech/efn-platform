@@ -1536,3 +1536,120 @@ proyeksi Odoo = ClickHouse; run `ok`, 0 baris ditolak. Angka bisnis klien tidak 
 - Belum: AutoARIMA vs AutoETS pada histori panjang (24 bulan) belum dibandingkan; `category_mean` masih di atas baseline
   untuk menu baru (sebagian artefak backtest: seri yang baru muncul di periode uji); penghapusan baris Odoo legacy tidak
   dipropagasi ETL (selisih 2 baris pada uji).
+
+## Gelombang 50 — perilaku visitor ke ClickHouse + `segment-worker` (20 Nov 2026)
+
+ADR-047 (Proposed), docs/04 §28.6/§28.7/§28.10, L-152..L-155, R-L13/R-B17. Semua default mati; **production OFF**
+sampai DPO (Q-SM16/17/26). Ditulis tanpa shell: pytest/ruff belum dijalankan oleh agent ini.
+
+### File
+- ETL: `services/etl/efn_etl/behavior.py` (baru), `config.py`, `jobs.py` (`enabled_jobs(behavior=)`), `erasure.py`
+  (hook `SubjectHook` per `request_id`, default kosong = perilaku lama), `adapters.py` (`ClickHouseBehaviorStore`),
+  `__main__.py` (siklus erasure perilaku → job incremental → agregat), `sql/platform-behavior-grants.sql` (baru),
+  `tests/test_behavior.py` (baru), `README.md` (bagian G50).
+- ClickHouse: `infra/clickhouse/init/16-g50-behavior.sql` (baru), `infra/clickhouse/access/segment-access.sql` (baru),
+  `infra/clickhouse/access/etl-access.sql` (grant G50).
+- `services/segment-worker/` (baru): `efn_segment/{__init__,__main__,config,tls,schedule,source,segments,contract,http,
+  bff,odoo,runner}.py`, `tests/{conftest,test_segments,test_contract,test_runner,test_clients,test_config,
+  test_access_sql}.py`, `Dockerfile`, `.dockerignore`, `requirements.txt`, `requirements-dev.txt`, `ruff.toml`,
+  `pytest.ini`, `README.md`. **`requirements.lock` belum ada** (lihat Dependency).
+
+### Skema ClickHouse
+- `efn_dwh.fact_visitor_event`: `event_id` UUID, `subject_key`, `subject_kind`, `company_code`, `channel`,
+  `channel_code`, `outlet_code`, `event_type`, `product_id`, `duration_s`, `qty`, `query` (search saja, disanitasi ulang),
+  `result_count`, `stock_status`, `price_idr`, `received_at`, `event_date` (WIB), `ingested_at` (versi).
+  ReplacingMergeTree(ingested_at), PARTITION BY event_date, ORDER BY (company_code, event_date, subject_key, event_id),
+  TTL 90 hari (`ttl_only_drop_parts`), bloom filter `subject_key`.
+- `agg_visitor_product_daily` (funnel per produk×outlet×kanal×hari), `agg_visitor_funnel_daily` (subjek berbeda per tahap
+  per outlet×kanal×hari), `agg_visitor_search_daily` (istilah dengan ≥ k subjek). Tanpa subject_key, TTL 2 tahun,
+  ReplacingMergeTree(computed_at), dihitung ETL lewat INSERT ... SELECT server-side untuk 3 hari terakhir tiap jam.
+- View `efn_dwh.v_seg_subject_product_daily`, `v_seg_subject_search_daily`, `v_seg_product`, `v_seg_market_price` →
+  dibungkus DEFINER `efn_segment.v_subject_product_daily`, `v_subject_search_daily`, `v_product`, `v_market_price`.
+- Retensi ditulis literal di DDL (90 h / 2 th) karena `clickhouse-init.sh` milik devsecops; ubah = `ALTER ... MODIFY TTL`.
+
+### User/grant baru
+- ClickHouse `efn_segment_reader` + role `segment_reader` + profil `segment_readonly` (readonly=2 CONST, allow_ddl=0,
+  max_execution_time 300/600, konkurensi 2) + kuota `segment_quota`; definer `efn_segment_definer` (HOST NONE). Grant
+  **per view** (SEC-215), REVOKE di `efn_dwh/efn_esb/efn_forecast`.
+- `etl_writer`: SELECT, INSERT pada `fact_visitor_event` + 3 tabel agregat; `ALTER DELETE` hanya `fact_visitor_event`.
+- PostgreSQL `efn_etl` (langsung, bukan `efn_readonly`): USAGE skema `behavior`; SELECT kolom `behavior.event_raw`
+  dan `behavior.subject_erasure(id, subject_key, request_id, created_at)`; REVOKE `device_link`/`device_consent`.
+
+### Untuk devsecops (compose/secret/flag) — usulan, tidak saya ubah
+1. `clickhouse-init.sh`: `create_user efn_segment_reader /run/secrets/clickhouse_password_segment` + blok
+   `GRANT segment_reader TO efn_segment_reader; SET DEFAULT ROLE segment_reader TO efn_segment_reader;
+   ALTER USER efn_segment_reader SETTINGS PROFILE 'segment_readonly';` (pola forecast G44). Tanpa ini access SQL tetap
+   jalan (role/view saja) tetapi worker tidak bisa login. Pertimbangkan `HOST IP` subnet efn-data (SEC-215).
+2. Secret baru: `clickhouse_password_segment` (clickhouse-init + segment-worker), `tls_segment_worker_crt/key`
+   (CN `segment-worker`, CA internal), `odoo_api_key_campaign_<kode>` per PT (mis. `_smd`; placeholder `disabled`
+   ditolak worker). Tidak ada secret baru untuk ETL (tidak memegang `behavior_subject_pepper`; §28.10 menyebut "job
+   erasure ETL untuk subject" — desain ini membuatnya tidak perlu, lihat Keputusan).
+3. Service `segment-worker` di compose `efn-data` (container & kredensial terpisah dari forecast-worker): read_only,
+   tmpfs /tmp, user 65534, network ke ClickHouse + jalur WireGuard ke `api-gateway:3000` dan `odoo-rpc-gateway:8443`.
+   `command: ["python","-m","efn_segment","run"]`.
+4. `odoo-rpc-gateway`: tambah CN `segment-worker` ke allow-cn **hanya** untuk path
+   `/json/2/efn.campaign/efn_campaign_proposal_upsert`. BFF: allowlist CN `segment-worker` hanya untuk
+   `POST /internal/v1/segments/*/members`.
+5. Env ETL baru: `ETL_ENABLE_BEHAVIOR` (false), `ETL_BEHAVIOR_AGG_DAYS` (3), `ETL_BEHAVIOR_AGG_INTERVAL_SECONDS` (3600),
+   `ETL_BEHAVIOR_K_MIN` (10), `ETL_BEHAVIOR_ERASURE_RECHECK_HOURS` (24), `ETL_BEHAVIOR_ERASURE_BATCH_SIZE` (500).
+   Env segment-worker: lihat `services/segment-worker/README.md` (flag `SEGMENT_ENABLED=false`).
+6. `deploy-validate`: `SEGMENT_ENABLED`/`ETL_ENABLE_BEHAVIOR` boolean; usul tolak `true` di production selama
+   `BEHAVIOR_TRACKING_ENABLED`/`PROMO_CAMPAIGN_ENABLED` OFF.
+7. Jalankan `services/etl/sql/platform-behavior-grants.sql` sebagai pemilik tabel `behavior.*` setelah DDL BFF
+   (atau salin ke init Postgres G50). CI: job pytest/ruff + pip-audit + Trivy untuk `services/segment-worker`.
+
+### Dependency + lock
+`segment-worker/requirements.txt`: `clickhouse-connect==0.8.9`, `requests==2.34.2`, `urllib3==2.8.0`,
+`certifi==2026.10.19` (sama dengan forecast-worker; tanpa numpy/pandas). Dev: `pytest==9.0.3`. **Lock ber-hash belum
+dibuat** (tanpa shell saya tidak bisa menghitung hash; `scripts/check-py-lock.sh` dan
+`docs/runbooks/python-dependency-lock.md` belum ada di worktree saat saya bekerja). Lead: jalankan di container
+`pip-compile --generate-hashes --allow-unsafe --output-file=requirements.lock requirements.txt` lalu sesuaikan dengan
+script lock devsecops. Dockerfile sudah memakai `pip install --require-hashes -r requirements.lock` → build gagal sampai
+lock ada (sengaja, fail closed).
+
+### Keputusan desain
+- **Cursor ETL = `ingested_at`** (waktu masuk staging), bukan `received_at`: antrean RabbitMQ yang tertunda tidak membuat
+  event terlewat. `event_date` tetap dari `received_at` (waktu server).
+- **Erasure tanpa pepper di ETL**: BFF menulis semua `subject_key` subjek (HMAC member + setiap `device_key` tertaut) ke
+  `behavior.subject_erasure`; ETL hanya mencocokkan. Job `behavior_erasure` jalan tiap siklus sebelum job incremental,
+  recheck 24 jam (menutup race staging), kunci di jendela recheck dikecualikan dari muat ulang; gagal → job
+  `behavior_events` dilewati siklus itu. DSAR: `privacy.erasure.completed` (store clickhouse) ditahan sampai
+  subject_key milik `request_id` hilang. Mutation `ALTER DELETE` (fisik), bukan lightweight DELETE (pola §8.4).
+- **Agregat**: hitungan tanpa pengenal disimpan apa adanya; istilah pencarian hanya ≥ k (10) subjek. Agregat tidak dihapus
+  saat erasure (anonim, ADR-047 §3.3); hitung ulang setelah erasure bisa menyisakan baris lama (diterima).
+- **Segmen**: Python murni atas agregat per subjek×produk dari ClickHouse; hanya subjek `member` (device = opsi);
+  segmen < 10 anggota tidak dikirim; anggota dikirim lengkap ke BFF sebelum ringkasan Odoo; segmen gagal di BFF tidak
+  diringkas ke Odoo; run baru = `run_id` baru. Ringkasan divalidasi menolak string hex-64 di mana pun (L-155).
+- `top_products` di ringkasan hanya produk dengan ≥ `SEGMENT_K_MIN` subjek.
+
+### Asumsi skema/kontrak yang belum ditetapkan (perlu rekonsiliasi lead dengan BFF/Odoo)
+1. **PG `behavior.event_raw`** kolom: `event_id uuid, subject_key char(64), subject_kind ('device'|'member'),
+   company_code (diturunkan BFF dari channel_code, §8), channel, channel_code, outlet_code, type, product_id, duration_s,
+   qty, query, result_count, stock_status ('in_stock'|'low'|'out'), price_idr bigint, received_at, ingested_at
+   timestamptz DEFAULT now()` + index `(ingested_at)`. Kontrak §28.7 tidak menyebut `company_code` maupun `ingested_at`.
+2. **PG `behavior.subject_erasure(id bigserial, subject_key char(64), request_id uuid NULL, reason text, created_at)`**
+   append-only, retensi ≥ 100 hari, diisi BFF dalam transaksi erasure **sebelum** `dsar_request` berstatus processing.
+   Belum ada di docs/04 (usulan revisi §28.6/§8.4).
+3. **Event server `purchase`** (per baris pesanan online `paid`, `price_idr` = harga satuan) — belum ada di §28.6. Tanpa
+   itu "sudah beli" hanya dari `checkout_start` (product_id keranjang bisa kosong) → viewed-not-bought kelebihan anggota.
+   Tipe di luar daftar membatalkan halaman ETL (fail closed).
+4. **Kode segmen**: `viewed_not_bought|wishlist_idle|oos_viewed|price_sensitive|search_no_result`.
+5. **Ringkasan Odoo**: `{schema_version:1, company_code, run_id, segment_code, member_count, metrics:{as_of,
+   lookback_days, product_count, top_products:[{product_id, subjects}], reason_counts?:{market, habit}}}`;
+   idempoten per `(run_id, segment_code)`; galat `efn_campaign:<kode>` (422/403); respons objek/`true`.
+6. **BFF members**: body persis §28.7; sukses 2xx; chunk ulang boleh 2xx atau `409 duplicate_chunk`; header tambahan
+   `Idempotency-Key: segment:<run_id>:<segment_code>:<chunk_no>`. Usul kontrak: field `chunk_total` (sekarang BFF bisa
+   mencocokkan Σ anggota dengan `member_count` dari Odoo).
+7. `outlet_code` di mart belum dipetakan ke `warehouse_id` (row policy Insight `v_sm_*` G47 butuh `warehouse_id`).
+
+### Belum terverifikasi
+- pytest + ruff kedua paket (belum dijalankan); DDL/akses ClickHouse 24.8 belum diterapkan ke server (sintaks view
+  subquery + `FINAL`, `uniqExactIf`, `maxIf` DateTime64 default 1970).
+- `clickhouse_connect` `command(sql, parameters=...)` dengan parameter server-side `{x:Type}` pada INSERT ... SELECT
+  (dipakai agregat) belum diuji; bila tidak didukung, ganti ke `query()` atau literal tanggal tervalidasi.
+- Volume: FINAL atas 90 hari event + agregasi per subjek×produk 60 hari belum diukur (asumsi ADR ±0,5 juta event/hari).
+- Pembanding Price Hunter kosong sampai `competitor_prices.product_sku` dipetakan (`default_code` juga belum unik antar
+  PT).
+- File `services/segment-worker/efn_segment/http.py` bernama sama dengan modul stdlib `http`; aman karena hanya diimpor
+  absolut sebagai `efn_segment.http`, tetapi lead boleh mengganti nama menjadi `transport.py` (agent tidak bisa
+  menghapus file).
