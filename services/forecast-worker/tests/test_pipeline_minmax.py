@@ -1,5 +1,6 @@
 """Panel (censoring OOS, SKU baru), category_mean, agregasi DC, min/max & service level dari waste."""
 
+from dataclasses import replace
 from datetime import date, timedelta
 
 import numpy as np
@@ -13,6 +14,7 @@ from efn_forecast.pipeline import (
     SeriesForecast,
     aggregate_dc,
     build_panel,
+    forecast_lines,
     forecast_panel,
     minmax_lines,
     service_level,
@@ -124,3 +126,50 @@ def test_category_mean_without_peers_uses_own_level() -> None:
     assert float(np.mean(fc[1].yhat)) == pytest.approx(12.0, rel=0.05)
     assert float(np.mean(fc[2].yhat)) == pytest.approx(3.0, rel=0.05)
     assert all(np.all(f.sigma >= 0) for f in result.forecasts)
+
+
+def test_parallel_jobs_match_sequential_and_log_progress(caplog: pytest.LogCaptureFixture) -> None:
+    """G46b: FORECAST_JOBS > 1 (proses spawn per gudang) = hasil identik & urutan sama dengan jobs=1; progres per
+    gudang tercatat tanpa angka bisnis."""
+    end = START + timedelta(days=99)
+    sales = []
+    for wh in (2, 3, 4):
+        sales += [(wh, 1, START + timedelta(days=i), 10.0 + wh) for i in range(100)]
+        sales += [(wh, 2, end - timedelta(days=i), 4.0) for i in range(10)]
+    panel = build_panel(START, end, sales, [], {1: "A", 2: "A"}, {2: "PB01", 3: "PB02", 4: "PB03"})
+    seq_cfg = PipelineConfig(candidates=("AutoETS",), cv_windows=0, horizon_days=7)
+    with caplog.at_level("INFO", logger="efn_forecast.pipeline"):
+        seq = forecast_panel(panel, [], CalendarConfig(), seq_cfg, FakeRunner())
+    progress = [r.getMessage() for r in caplog.records if r.getMessage().startswith("forecast gudang")]
+    assert len(progress) == 3 and progress[-1].startswith("forecast gudang 3/3 wh=4 seri=2")
+    par = forecast_panel(panel, [], CalendarConfig(), replace(seq_cfg, jobs=2), FakeRunner())
+    assert [(f.warehouse_id, f.product_id, f.model) for f in par.forecasts] == [
+        (f.warehouse_id, f.product_id, f.model) for f in seq.forecasts
+    ]
+    pairs = zip(par.forecasts, seq.forecasts, strict=True)
+    assert all(np.allclose(a.yhat, b.yhat) and np.allclose(a.sigma, b.sigma) for a, b in pairs)
+    assert par.model_counts == seq.model_counts and par.failed_series == seq.failed_series
+
+
+def test_inactive_series_zero_not_sent_but_counted_in_backtest() -> None:
+    """G46b: seri tanpa jual >= inactive_days (bukan karena OOS) -> ramalan 0 berlabel `inactive`, tidak menjadi baris
+    kontrak/min-max; SKU yang sedang OOS (censored) tetap diramal."""
+    end = START + timedelta(days=99)
+    sales = [(2, 1, START + timedelta(days=i), 10.0) for i in range(100)]
+    sales += [(2, 2, START + timedelta(days=i), 8.0) for i in range(60)]  # berhenti terjual 40 hari terakhir
+    sales += [(2, 3, START + timedelta(days=i), 6.0) for i in range(60)]  # berhenti karena stok habis
+    stock = [(2, 3, START + timedelta(days=i), 5.0) for i in range(60)]
+    stock += [(2, 3, START + timedelta(days=i), 0.0) for i in range(60, 100)]
+    panel = build_panel(START, end, sales, stock, {1: "A", 2: "A", 3: "A"}, {2: "PB01"})
+    cfg = PipelineConfig(candidates=("AutoETS",), cv_windows=0, horizon_days=7)
+    result = forecast_panel(panel, [], CalendarConfig(), cfg, FakeRunner())
+    fc = {f.product_id: f for f in result.forecasts}
+    assert fc[2].model == "inactive" and float(fc[2].yhat.sum()) == 0.0
+    assert fc[1].model != "inactive" and fc[3].model != "inactive"
+    assert result.model_counts["inactive"] == 1
+    lines = forecast_lines(result.forecasts, end)
+    assert {ln["product_id"] for ln in lines} == {1, 3}
+    mm = minmax_lines(result.forecasts, {1: "A", 2: "A", 3: "A"}, {}, MinMaxConfig(), ())
+    assert 2 not in {ln["product_id"] for ln in mm}
+    off = forecast_panel(panel, [], CalendarConfig(), replace(cfg, inactive_days=0), FakeRunner())
+    assert all(f.model != "inactive" for f in off.forecasts)
