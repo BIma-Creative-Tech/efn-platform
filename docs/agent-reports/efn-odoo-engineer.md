@@ -3004,15 +3004,25 @@ dan run belum dijalankan; lead menjalankan di container (DB `efn_smd_demo`). **T
   inventory mode dan guard efn_* memeriksa `env.user.has_group`.
 - Produk: `company_id = SMD`, lot + expiry, `alert_time` = ambang near-expiry kategori (dibaca runtime lewat
   `_efn_expiry_thresholds`), EAN-13 `299…` (restricted circulation, hindari 13/15/17/21/22/23).
-- Histori lewat `efn_legacy_history.bulk.bulk_upsert` (sudo + `efn_legacy_import=True`, `max_day=cutover`, batch
-  `DEFAULT_BATCH`), parameter cutover diset sebelum upsert. Flow `sold` = qty agar forecast v1 punya histori.
+- **Revisi (keputusan pemilik proyek 20 Nov 2026): tanpa modul/data migrasi brand lama.** Histori = `pos.order`
+  `paid` sintetis di satu `pos.session` `closed` per outlet ("[DEMO SUPERMARKET] histori SMD0N"), satu order per
+  outlet per hari (`SMD_SEED_ORDERS_PER_DAY`), `pos_reference` `DEMO-SMD0N-YYYYMMDD-n` (kunci idempoten), pajak per
+  produk di-cache (`taxes_id.compute_all` × qty), `total_cost` dari biaya, commit per outlet × bulan. Tanpa stock move,
+  tanpa `pos.payment`, tanpa akuntansi penutupan sesi. Batas opsional `SMD_SEED_HISTORY_SKUS`.
+- Override `pos.order`/`.line`/`.payment`/`.session` yang terpasang bersama `efn_setup_supermarket` (efn_pos_kds,
+  efn_pos_otp_gate, efn_pos_loyalty_ledger, efn_pos_refund_origin, efn_expiry_monitor) hanya bekerja di
+  `_process_order`/`_process_saved_order`/`load_data`/`_validate_session`; guard `create`/`write` (SEC-125 state paid,
+  SEC-113/126 `pos.payment`) melewati `env.su`. `pos.order.create` sudo langsung = tanpa hook loyalty/OTP/KDS/expiry/
+  refund; tidak ada aturan `efn_audit` untuk model POS. Tidak ada modul yang diubah.
+- Sesi histori dibuat `state=closed` (+ konteks CE `onboarding_creation`), sehingga `_check_pos_config` (sesi
+  `state != 'closed'`) tidak menghalangi kasir membuka sesi baru. Forecast v1 (stock.move) tidak punya histori.
 - Kalender `lebaran_window` = satu tanggal (1 Syawal): worker memilih libur pertama di dalam jendela manual, jendela
   lebar menangkap Nyepi 19 Mar 2026.
 - Markdown diaktifkan `with_user(user_smd_markdown_manager)`; gagal → tulis state via sudo (dicatat di log).
 
 ## Belum diverifikasi
-- Seluruh run; `ruff check`/`ruff format --check`; perkiraan volume histori (±500–600 ribu baris per model default)
-  dan durasi.
+- Tahap 1–10 dijalankan lead (20 Nov 2026, 0 traceback, idempoten). Tahap histori `pos.order` revisi: belum
+  dijalankan; perkiraan ±3.650 order / ±533 ribu baris, 15–35 menit (belum diukur); ruff revisi belum dijalankan.
 - Titik rawan: `stock.quant` create inventory mode + `action_apply_inventory` per batch 200; `to_weight`/
   `available_in_pos` (dijaga `in _fields`); pembuatan `pos.config`/metode bayar (dalam savepoint, gagal = peringatan);
   aktivasi markdown oleh user demo (record rule); `env(user=..., context=...)` di shell 19.
