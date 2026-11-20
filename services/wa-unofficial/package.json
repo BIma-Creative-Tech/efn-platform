@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "description": "EFN WhatsApp tidak resmi (Baileys) — HANYA promo & notify-me supermarket, terisolasi (ADR-044 Proposed, K18-01). OFF default.",
-  "license": "UNLICENSED",
+  "license": "GPL-3.0-only",
   "type": "commonjs",
   "engines": { "node": ">=22" },
   "scripts": {

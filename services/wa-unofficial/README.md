@@ -71,10 +71,17 @@ QR/kode pairing tidak pernah di-log; respons `Cache-Control: no-store`.
 kuota, opt-out berupa `to_hash`) — semua AES-256-GCM, AAD = nama logis berkas, mode 0600. Kunci salah → gagal muat
 (tidak ada fallback ke sesi kosong). Rotasi kunci = logout + pairing ulang. Backup volume hanya lewat backup terenkripsi.
 
+## Lisensi
+Service ini berlisensi **GPL-3.0-only** (file `LICENSE`, ikut di image) karena memuat `libsignal` (GPL-3.0,
+dependensi Baileys). Pengecualian dari larangan GPL di CI berlaku **hanya** untuk service ini (keputusan pemilik proyek
+20 Nov 2026, ADR-044 §3.3). Service lain tidak terkena karena terpisah proses (hanya pesan RabbitMQ). Kewajiban GPL
+muncul saat distribusi; konfirmasi Legal wajib sebelum production.
+
 ## Dependency
 | Paket | Versi | Lisensi | Catatan |
 |---|---|---|---|
 | `@whiskeysockets/baileys` | **6.7.24 (exact)** | MIT | library tidak resmi; dist-tag `legacy` npm per 20 Nov 2026 (7.x masih RC). Minimal 6.7.22: < 6.7.22 terkena GHSA-qvv5-jq5g-4cgg (spoofing pesan, critical). 6.x menarik `libsignal` dari GitHub (git dep) |
+| `libsignal` (transitif, git dep Baileys) | 6.0.0 | **GPL-3.0** | alasan service ini GPL-3.0-only (ADR-044 §3.3) |
 | `amqplib` | ^0.10.5 | MIT | |
 | `https-proxy-agent` | ^7.0.6 | MIT | hanya bila `WA_UNOFFICIAL_PROXY_URL` |
 | dev: `typescript`, `jest`, `ts-jest`, `@types/*` | lihat package.json | Apache-2.0 / MIT | |

@@ -42,6 +42,8 @@ RUN apk add --no-cache --upgrade musl musl-utils zlib \
 COPY --from=deps  --chown=app:app /app/node_modules ./node_modules
 COPY --from=build --chown=app:app /app/dist ./dist
 COPY --chown=app:app package.json ./
+# GPL-3.0-only (memuat libsignal GPL-3.0, ADR-044 §3.3): teks lisensi ikut di image yang didistribusikan.
+COPY --chown=app:app LICENSE ./
 USER app
 VOLUME ["/var/lib/wa-unofficial"]
 # 8443 = admin HTTPS (/health, /v1/admin/*, /metrics) — hanya lewat Traefik wg-https + internal-ops (mTLS operator)

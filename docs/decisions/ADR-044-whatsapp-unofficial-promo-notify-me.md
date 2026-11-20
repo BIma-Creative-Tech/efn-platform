@@ -126,6 +126,20 @@ L-175, L-178..L-180.
 | DLQ | — | `notify.wa_unofficial.dlq` wajib policy broker `message-ttl` 24 jam + `max-length`: `expiration` dicabut saat dead-letter sehingga `to_e164` bisa tertahan tanpa batas (SEC-G50-04, pemblokir production WA) | Minimisasi & retensi PDP untuk nomor HP. |
 | Uji | — | Service **tidak pernah dijalankan terhadap WhatsApp nyata**; perilaku pairing, reconnect, kode putus, STOP dari alamat `@lid` belum terverifikasi | Wajib PoC dengan nomor uji sebelum Q-SM14 ditandatangani. |
 
+### 3.3 Lisensi (keputusan pemilik proyek 20 Nov 2026)
+- Baileys (MIT) bergantung pada **`libsignal` (GPL-3.0)**; tidak ada alternatif Baileys tanpa `libsignal`.
+- Larangan GPL/AGPL di CI (`.github/workflows/security.yml`, dependency review) adalah **setelan internal proyek**
+  (baseline Fase 0, 5 Okt 2026), bukan regulasi. Pemilik proyek memilih **pengecualian khusus**:
+  - `pkg:npm/libsignal` diizinkan di dependency review, **hanya** untuk `services/wa-unofficial`. Langkah CI
+    "Pengecualian GPL libsignal hanya untuk wa-unofficial" gagal bila `libsignal` muncul di lockfile service lain.
+  - `services/wa-unofficial` berlisensi **GPL-3.0-only** (`package.json`, `LICENSE` teks GPL-3.0, ikut di image).
+  - Service lain **tidak** terkena: `wa-unofficial` adalah proses/container terpisah yang hanya berkomunikasi lewat
+    RabbitMQ (pesan JSON), tanpa linking kode dengan BFF/Odoo/web.
+- Konsekuensi GPL-3.0 muncul saat **distribusi** (mis. menyerahkan image/source ke infrastruktur klien): penerima
+  berhak atas source `wa-unofficial` di bawah GPL-3.0. Menjalankan service tanpa distribusi tidak memicu kewajiban
+  (bukan AGPL).
+- **Syarat production:** konfirmasi Legal atas pengecualian ini, bersama penerimaan risiko Q-SM14 (`WA_UNOFFICIAL_RISK_ACCEPTANCE_REF`).
+
 ## 4. Konsekuensi
 
 ### 4.1 Positif

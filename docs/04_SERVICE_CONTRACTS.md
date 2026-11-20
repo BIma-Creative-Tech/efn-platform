@@ -4109,7 +4109,8 @@ Semua `Cache-Control: no-store`. Flag fitur mati → endpoint `404`. Galat berbe
     (butuh token di URL) — keputusan DPO/lead.
   - **Alur isi & verifikasi alamat email member belum ada** (Q-SM34) → semua enqueue `skipped_no_email`.
 - **wa-unofficial** (`services/wa-unofficial`, Node 22, **`@whiskeysockets/baileys` 6.7.24 exact**, minimal 6.7.22
-  karena GHSA-qvv5-jq5g-4cgg / CVE-2026-48063 kritis, L-178): hanya consume `notify.wa_unofficial`, publish
+  karena GHSA-qvv5-jq5g-4cgg / CVE-2026-48063 kritis, L-178; service berlisensi **GPL-3.0-only** karena `libsignal`
+  GPL-3.0, pengecualian CI khusus service ini, ADR-044 §3.3): hanya consume `notify.wa_unofficial`, publish
   `notify.wa_unofficial.result`. Endpoint (HTTPS `:8443`, CN/SAN `wa-unofficial`):
   | Endpoint | Respons |
   |---|---|
