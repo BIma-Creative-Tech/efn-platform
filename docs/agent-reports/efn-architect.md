@@ -1086,3 +1086,92 @@ mengubah `CLAUDE.md` atas instruksi agent. Teks siap-tempel:
   (Apache-2.0) dan `holidays` (MIT) dari repo primer; cakupan "Cuti Bersama" `holidays` per tahun; volume event
   (asumsi ±0,5 juta/hari simulasi); semua estimasi biaya = perkiraan architect. Mermaid tidak dirender. Tidak ada
   runtime/test yang dijalankan (dokumen saja).
+
+---
+
+# Gelombang 47 — Kontrak byte-exact EFN Insight supermarket per persona (2026-11-20)
+
+- **Branch/worktree:** `feat/wave-47-insight-supermarket` di `E:\Projects\efn-platform-g47`. Dokumen saja, tanpa kode.
+- **Dibaca read-only:** `E:\Projects\efn-platform-g45` (PR #114, `efn_expiry_monitor`), `E:\Projects\efn-platform-g50`
+  (PR #117: `16-g50-behavior.sql`, `20-platform-g50a.sql`, `efn_campaign`, `docs/04` v20.2).
+
+## Ringkasan (untuk manajemen)
+Kontrak dashboard supermarket untuk lima peran sudah lengkap di `docs/04` §28.13. Kepala toko hanya melihat tokonya, dan
+margin/GMROI hanya terlihat oleh Direksi dan Category manager. Kedua aturan ini dikunci di database, tidak hanya di
+layar. Estimasi ±25–33 hari-engineer, ditambah ±4,5 hari untuk kartu near-expiry dan marketing yang menunggu PR #114/#117.
+Yang perlu diputuskan klien: siapa memegang peran apa (Q-SM29), definisi metrik (Q-INS-S1..S4, S12), dan akses kepala
+toko dari ponsel (Q-SM45).
+
+## File diubah
+| File | Isi |
+|---|---|
+| `docs/04_SERVICE_CONTRACTS.md` | header v20.3; §28.11 menjadi penunjuk; **§28.13 baru** (16 subbagian: dependensi, persona, cakupan, `eit2`/`eis2`, setting & `SQL_efn_sig2`, row policy 3 kelas, 14 mart/dim + job/watermark, 28 view + pemetaan kartu, kesegaran, rute/filter/tautan Odoo, flag, L-186..L-199, Q-SM40..Q-SM45, risiko, estimasi) |
+| `docs/decisions/ADR-041-insight-web-sso-odoo.md` | §3.4 revisi (opsi tanda tangan S1/S2, modul jembatan) + pemicu tinjau ulang |
+
+## Keputusan teknis kunci (usulan architect; perlu diterima lead)
+1. `SQL_efn_sig2` menandatangani juga `personas` dan `cats` (menyimpang dari ringkasan §28.11). Alasannya: biaya ±1 hari
+   sekarang, sedangkan menambahkannya nanti butuh format token baru.
+2. Modul jembatan `efn_insight_sm` (auto_install) memuat grup persona dan field `efn_insight_categ_ids`.
+3. Baris tingkat PT memakai `warehouse_id = 0`. Kepala toko tidak mendapat nilai 0.
+4. Q-SM37: pemetaan `(channel_code, outlet_code)` → `efn.online.outlet.warehouse_id`. Ini keputusan lead sementara (L-190)
+   dan masih perlu dikonfirmasi Data + Ops.
+5. `fact_visitor_funnel` tidak dibuat; funnel memakai agregat G50 yang sudah ada.
+6. Fill rate DC dihitung per baris usulan: qty terkirim di picking usulan beserta backorder-nya, dibagi `qty_approved`.
+7. Kesegaran stok memakai ambang 75/135 menit, bukan 30/60 seperti permintaan desain, karena snapshot stok hanya per
+   60 menit (L-195).
+8. Urutan merge #114 → #117 → G47. Bila G47 masuk lebih dulu, view perilaku ditahan di file `18-g47-…`.
+
+## Penyelarasan dengan spesifikasi desain (`docs/design/insight-supermarket.md`)
+Semua ID kartu ST-/EX-/CM-/DC-/MK- sudah dipetakan ke view dan kolom (§28.13.9). Kartu yang menunggu atau tidak bisa
+dipenuhi:
+- **MK-0 "≈ N% perangkat":** tidak dapat dipenuhi, karena perangkat tanpa consent memang tidak dicatat.
+- **MK-1 pengunjung unik per periode:** hanya sebagian (Σ perangkat-hari).
+- **MK-4 omzet inkremental:** tidak dihitung.
+- **EX-1 YoY:** baru tersedia setelah ada 12 bulan histori SMD.
+- **Omzet online:** menunggu ETL `source='online'`.
+
+Butir dari lead yang sudah ditangani:
+- `outlet_type` ada di semua view yang memuat warehouse.
+- Cakupan Price Hunter tersedia lewat `sample_n_30d`, `last_sample_date`, dan `v_sm_price_coverage`.
+- Kesegaran diekspos lewat `v_sm_freshness`.
+- Basis omzet tanpa PPN, tanpa istilah PB1.
+- Id record Odoo tersedia untuk tautan "Buka di Odoo".
+- Q-INS-S9 default "tidak". Karena allowlist persona sudah memuat `exec`, mengubahnya nanti cukup di aplikasi.
+
+## Keputusan yang butuh tanda tangan klien
+- **Q-SM29 dan Q-SM44:** penetapan persona, dan apakah kepala toko boleh melihat nilai HPP near-expiry dan susut.
+- **Q-INS-S1..S4, S12:** definisi GMROI, OOS, stok kritis, fill rate, dan basis pajak. Kontrak sudah memakai default.
+- **Q-SM40:** sumber nilai susut SMD.
+- **Q-SM41:** definisi "pengunjung".
+- **Q-SM42:** `company_id` produk.
+- **Q-SM43:** panjang kode outlet online.
+- **Q-SM45:** akses dari ponsel / jaringan outlet.
+
+## Temuan untuk lead / agent lain
+- `fact_sales_line` belum memuat penjualan online, jadi omzet SMD saat ini hanya POS dan kiosk.
+- ETL waste G32 membaca kolom `efn_ck_production`. Untuk scrap SMD perlu fallback `stock_location.warehouse_id`, dan
+  nilai susut belum terbukti terisi (Q-SM40).
+- `efn_etl` di-REVOKE dari `platform.campaign*` (G50). Hasil kampanye diambil lewat view agregat baru
+  `platform.v_campaign_stats` yang tidak memuat `member_id`.
+- Regex `outlet_code` di event dibatasi 16 karakter, sedangkan di Odoo 24 karakter (Q-SM43).
+- Nilai `payload_b64`/`sig_b64` dan sig2 untuk vektor uji **belum dihitung**. Builder Odoo dan insight-web menghitungnya,
+  lalu lead membandingkan sebelum merge (pola G42).
+
+## Terverifikasi / belum terverifikasi
+- **Terverifikasi** di source Odoo 19.0 (raw.githubusercontent.com/odoo/odoo/19.0):
+  - `stock.location.warehouse_id` dengan `store=True`;
+  - `stock.move.quantity`, `product_uom_qty`, `location_final_id`, `move_dest_ids` (`stock_move_move_rel`);
+  - `pos.order.line.coupon_id` → `loyalty.card`.
+- **Terverifikasi** dari kode repo (main, #114, #117): nama tabel/kolom mart G44/G50, model `efn.expiry.alert`,
+  `efn.lot.markdown`, `efn.replenishment.*`, `efn.online.outlet`, dan `efn.campaign`.
+- **Belum terverifikasi:**
+  - nilai vektor HMAC/SHA256;
+  - `efn_waste_value` pada scrap SMD;
+  - CE yang menggabungkan move beberapa usulan ke satu picking;
+  - kupon di `sale.order.line`;
+  - `purchase.order.line.qty_received` tersimpan;
+  - pola URL `/odoo/...`;
+  - perilaku CREATE VIEW ClickHouse 24.8 atas tabel yang belum ada;
+  - harga SMD termasuk pajak.
+
+  Semua estimasi adalah perkiraan architect. Tidak ada test yang dijalankan.

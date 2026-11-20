@@ -58,3 +58,27 @@ Rasio kontras tokenn utama dihitung manual dengan rumus luminans relatif WCAG (t
 
 ## Belum diverifikasi
 Tidak diuji di browser, pembaca layar, atau perangkat. Kontras token yang disebut "diperiksa test" (border, soft, chrome-muted, c6/c7 gelap) belum dihitung; ambang status dan palet adalah proposal. Interaksi keyboard chart ECharts (dispatchAction) belum dicoba.
+
+---
+
+# G47 — Spesifikasi UX/UI Insight Supermarket per persona (20 Nov 2026)
+
+**Hasil:** `docs/design/insight-supermarket.md` (worktree `efn-platform-g47`, branch `feat/wave-47-insight-supermarket`). Hanya dokumen; tidak ada kode, CSS, atau kontrak yang diubah.
+
+## Isi
+Kamus metrik bisnis; 5 persona (Kepala toko mobile-first, Direksi, Category manager, DC, Marketing) masing-masing dengan pertanyaan + tindakan, wireframe ASCII, spesifikasi kartu (ST-, EX-, CM-, DC-, MK-) lengkap dengan periode/pembanding, visual, ambang, keadaan kosong/usang, drill-down ke Odoo; routing + peran; filter dan perilaku satu outlet; aturan kesegaran per kartu (dua kelas); A11y WCAG 2.2 AA; format id-ID; komponen baru; prioritas P0/P1/P2; 15 pertanyaan terbuka (Q-INS-S1..S15).
+
+## Keputusan desain utama
+1. Insight hanya membaca; semua tindakan lewat tautan "Buka di Odoo" (approval/SoD teraudit di Odoo, data bisa tertinggal 15 menit).
+2. Empat keadaan "tidak ada angka" dibedakan (nol, belum ada data, fitur belum aktif, data usang); khusus usulan order, data > 60 menit tidak menyatakan status.
+3. Ambang near-expiry/markdown diambil dari konfigurasi kategori Odoo, bukan di-hard-code di Insight.
+4. Marketing: k-anonim (`< 10`), pita cakupan consent, halaman hanya EmptyState bila tracking mati.
+
+## Diverifikasi
+Kontras pasangan status di atas latar `*-soft` (6 pasang, terang/gelap) dihitung manual dengan rumus WCAG; semua lolos, terendah `--good` terang 4,74:1. Tidak ada warna baru.
+
+## Perlu keputusan / tindak lanjut
+Q-INS-S1..S15 di dokumen; terutama definisi GMROI, OOS rate, fill rate, basis pajak Omzet (PPN), akses `exec` ke halaman persona, dan ambang. Architect perlu memetakan metrik Bagian 0 ke `v_sm_*` termasuk watermark per mart dan kategori yang dikelola per Category manager.
+
+## Belum diverifikasi
+Tidak diuji di browser/pembaca layar/ponsel atau dengan pengguna; nama metrik belum dicocokkan dengan kontrak architect; format URL Odoo 19 belum diverifikasi; semua ambang adalah usulan.
