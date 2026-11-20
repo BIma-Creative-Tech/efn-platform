@@ -1175,3 +1175,52 @@ Butir dari lead yang sudah ditangani:
   - harga SMD termasuk pajak.
 
   Semua estimasi adalah perkiraan architect. Tidak ada test yang dijalankan.
+
+## G47 lanjutan — keputusan pemilik proyek 20 Nov 2026 (L-200..L-203)
+
+**Ringkasan (manajemen):** definisi KPI kini diatur per PT di Odoo tanpa ubah kode, Omzet tampil termasuk PPN, dan
+kepala toko boleh melihat nilai HPP susut dan near-expiry tokonya. Tambahan biaya ±2–2,5 hari-engineer; total G47 menjadi
+±31,5–40 hari-engineer.
+
+**Perubahan di `docs/04` §28.13 (v20.3):**
+
+*Konfigurasi KPI (§28.13.8c, baru)*
+- Model Odoo `efn.insight.sm.kpi` (per PT, kunci tertutup, validasi tipe/rentang) dan grup
+  `efn_insight_sm.group_insight_kpi_admin`, teraudit `efn_audit`.
+- ETL `sm_dims` menyalin ke `dim_sm_kpi_config`; insight-web membaca lewat view `v_sm_kpi_config`.
+- 39 kunci: definisi GMROI, OOS, stok kritis, fill rate, waste, ambang warna, dan ambang kesegaran.
+- Perubahan berlaku ≤ 1 siklus ETL dan **ikut menghitung ulang angka historis**, karena mart kini menyimpan nilai mentah
+  dan view yang menghitung status.
+
+*Mart dan view*
+- `agg_sm_stock_daily` kini menyimpan nilai mentah (`sold_28d`, `qty_sold_28d`); status OOS/kritis tidak lagi disimpan.
+- `fact_dc_fill_rate` mendapat kolom `qty_received` dan `last_received_at`.
+- View stok, stok kritis, fill rate, GMROI, dan kesegaran membaca konfigurasi.
+- Kolom `net_sales_incl_tax`, `tax`, dan `avg_basket_incl_tax` ditambahkan di `v_sm_sales_daily` dan
+  `v_sm_outlet_daily`.
+
+*Keputusan*
+- **L-199 digantikan L-202:** Omzet termasuk PPN; margin, GMROI, Waste %, dan HPP tanpa PPN. Label kartu ditabelkan di
+  §28.13.11.
+- **L-203 (menutup Q-SM44):** persona `store` dapat melihat nilai HPP susut dan near-expiry, hanya untuk `wids`-nya, tanpa
+  kelas policy baru. Daftar persona view memang sudah memuat `store`.
+- Margin, GMROI, nilai stok total, dan PO tetap tertutup bagi `store`.
+- Konsekuensi yang dicatat: HPP satuan lot bisa diturunkan dari `value_cost / qty`.
+
+**Default yang berbeda dari contoh pemilik (L-201)** — definisi contoh pemilik tetap tersedia sebagai opsi konfigurasi:
+- **Penyebut OOS:** SKU ber-orderpoint, karena kebijakan assortment `open` membuat penyebut "ter-assortment" sama dengan
+  seluruh katalog.
+- **Stok kritis:** ≤ min **atau** cakupan < 2 hari. SKU tanpa penjualan tidak pernah kritis bila hanya memakai cakupan.
+- **Fill rate:** qty **dikirim**. Penerimaan di outlet sering divalidasi terlambat.
+
+**Pertanyaan yang ditutup:** Q-INS-S1..S4, Q-INS-S12, Q-SM44.
+
+**`docs/design/insight-supermarket.md` (milik designer):** catatan architect ditambahkan di §0, baris kamus metrik
+diselaraskan, §7 butir 4 (pajak) dan catatan ambang di §8 disesuaikan, dan Q di §10 dicoret sebagai ditutup.
+
+**Belum dilakukan:** commit lokal. Agent ini tidak punya akses shell/git di sesi ini, jadi perubahan masih berupa file yang
+belum di-commit di worktree `E:\Projects\efn-platform-g47`.
+
+**Belum terverifikasi:**
+- Rantai `stock_move_move_rel` dari picking DC ke penerimaan outlet di resupply CE 19 (untuk `qty_received`).
+- Besaran PPN efektif SMD; contoh 11 % hanya ilustrasi.

@@ -10,25 +10,34 @@ Belum diuji di browser, pembaca layar, atau perangkat nyata (spesifikasi saja).
 
 ## 0. Kamus metrik bisnis (satu definisi, dipakai semua persona)
 
+> **Catatan efn-architect, 20 Nov 2026.** Bagian ini disesuaikan atas permintaan efn-lead untuk mengikuti keputusan
+> pemilik proyek; desainnya sendiri tidak berubah.
+> - Baris Omzet, Margin kotor, GMROI, Waste %, OOS rate, Stok kritis, dan Fill rate DC diselaraskan dengan
+>   `docs/04` §28.13 (L-200..L-203).
+> - Definisi dan **ambang** (warna kartu dan kesegaran §5.2) kini **dikonfigurasi per PT di Odoo**
+>   (`efn.insight.sm.kpi`, §28.13.8c). Angka ambang di dokumen ini menjadi nilai default; insight-web membacanya dari
+>   `v_sm_kpi_config`, bukan dari konstanta.
+> - Q-INS-S1..S4, S12 dan Q-SM44 sudah **ditutup** (lihat §10).
+
 Nama di kolom kiri = label UI sekaligus nama yang dipakai kontrak. Definisi = maksud bisnis; rumus final milik bisnis/architect (Bagian 9).
 
 | Metrik (label UI) | Definisi singkat | Satuan | Baik bila | Persona |
 |---|---|---|---|---|
-| Omzet | Penjualan bersih setelah diskon, semua kanal (POS, online, kiosk). Label jujur soal pajak: lihat §7.4 | Rp | naik | Direksi, Kepala toko (ringkas) |
-| Margin kotor | (Omzet − HPP) / Omzet | % (pp untuk delta) | naik | Direksi |
-| GMROI | Margin kotor (Rp) / rata-rata nilai persediaan pada HPP, periode yang sama (definisi final: Q-INS-S1) | kali (x) | naik | Direksi |
+| Omzet | Penjualan bersih setelah diskon, **termasuk PPN** (keputusan 20 Nov 2026, L-202); saat ini POS + kiosk, online menyusul. Label: "Omzet (termasuk PPN)" | Rp | naik | Direksi, Kepala toko (ringkas) |
+| Margin kotor | (Omzet tanpa PPN − HPP) / Omzet tanpa PPN. Label: "Margin kotor (tanpa PPN)" | % (pp untuk delta) | naik | Direksi |
+| GMROI | Margin kotor (Rp, tanpa PPN) / rata-rata nilai persediaan pada HPP, periode yang sama. Default: bulanan, rata-rata harian, DC ikut; dapat diubah per PT (L-200) | kali (x) | naik | Direksi |
 | YoY | Perubahan Omzet dibanding periode yang sama tahun lalu | % | naik | Direksi |
-| Waste % | Nilai susut (scrap: rusak, kedaluwarsa, hilang) pada HPP / Omzet | % | turun | Direksi, Kepala toko |
+| Waste % | Nilai susut (scrap: rusak, kedaluwarsa, hilang) pada HPP / Omzet **tanpa PPN** (basis sama; penyebut configurable, L-200). Kepala toko melihat nilai HPP tokonya (L-203) | % | turun | Direksi, Kepala toko |
 | Galat forecast (WAPE) | Σ|aktual − forecast| / Σ aktual, SKU × outlet, 8 minggu terakhir (ADR-046). Akurasi ≈ 100% − WAPE | % | turun | Direksi |
 | Bias forecast | (Σ forecast − Σ aktual) / Σ aktual; positif = cenderung kelebihan | % | mendekati 0 | Direksi |
-| OOS rate | Porsi SKU × outlet × hari yang stoknya nol padahal masuk assortment outlet itu | % | turun | Category manager |
+| OOS rate | Porsi SKU × outlet × hari yang stoknya ≤ 0 pada snapshot akhir hari, dari SKU yang punya orderpoint di outlet itu (≈ assortment aktif; L-201). Configurable per PT (L-200) | % | turun | Category manager |
 | Near-expiry | Lot yang sisa harinya ≤ ambang kategori (`efn.expiry.alert`); status Pantau / Markdown sekarang / Kedaluwarsa | lot, qty, Rp (HPP) | turun | Category manager, Kepala toko |
 | Markdown aktif | Lot yang punya `efn.lot.markdown` berstatus berlaku | lot | — | Kepala toko, Category manager |
 | Harga vs pasar | (Harga jual kita − median harga pasar Price Hunter tervalidasi 30 hari) / median | % | dekat 0 | Category manager |
 | Sinyal terlalu mahal | SKU yang dilihat tetapi tidak dibeli **dan** harga > median pasar/median beli member (ADR-047 §3.3) | SKU | turun | Category manager, Marketing |
-| Stok kritis | SKU di outlet dengan stok ≤ minimum orderpoint, atau < N hari cakupan (definisi final: Q-INS-S3) | SKU | turun | Kepala toko |
+| Stok kritis | SKU di outlet dengan stok ≤ minimum orderpoint **atau** < 2 hari cakupan (default; aturan & N configurable, L-200/L-201) | SKU | turun | Kepala toko |
 | Usulan order | `efn.replenishment.proposal` per jadwal kirim: status Draf / Diusulkan / Disetujui / Ditolak / Kedaluwarsa, batas persetujuan (`cutoff_at`) | usulan, baris | — | Kepala toko, DC |
-| Fill rate DC | Qty yang dikirim DC / qty yang disetujui outlet, per pengiriman (definisi final: Q-INS-S4) | % | naik | DC, Direksi (opsional) |
+| Fill rate DC | Qty yang dikirim DC / qty yang disetujui outlet, per baris usulan (default; basis "diterima outlet" dan tingkat baris/qty configurable, L-200/L-201) | % | naik | DC, Direksi (opsional) |
 | Order outlet | Permintaan outlet ke DC per hari kirim: jumlah, baris, status | usulan | — | DC |
 | Umur stok DC | Sebaran qty/nilai stok DC menurut sisa umur (lot) atau lama di gudang | bucket hari | lebih sedikit di bucket tua | DC |
 | PO supplier | RFQ/PO DC: Draf / Dikonfirmasi / Diterima sebagian / Terlambat (melewati tanggal terima terjanji) | PO | — | DC |
@@ -456,7 +465,13 @@ Tenang, lugas, orientasi tindakan; tanpa jargon teknis dan tanpa menyalahkan.
 1. **Forecast = usulan.** EX-6 dan ST-1 menyebut "usulan", bukan "perintah"; qty final = persetujuan manusia.
 2. **Hasil kampanye = korelasi kecuali ada kelompok kontrol.** Kolom inkremental hanya bila kelompok kontrol ada; selain itu "Tidak dihitung". Jangan menamai konversi biasa sebagai "dampak".
 3. **Harga vs pasar = sampel komunitas** (Price Hunter), bukan survei lengkap; selalu tampil n dan cakupan.
-4. **Pajak:** supermarket = ritel, PPN. Label **"Omzet"** harus menyatakan basis: bila angka mart tanpa PPN → "Omzet (tanpa PPN)"; bila dengan PPN → "Omzet (termasuk PPN)". Spesifikasi tidak memilih; **Q-INS-S12**. Jangan memakai "PB1" (pajak restoran) di halaman supermarket. HPP dan margin harus pada basis yang sama dengan Omzet.
+4. **Pajak (diputuskan 20 Nov 2026, L-202; catatan efn-architect):** supermarket = ritel, PPN.
+   - Label **"Omzet (termasuk PPN)"**.
+   - **"Margin kotor (tanpa PPN)"**: margin dan HPP tetap tanpa PPN karena PPN bukan pendapatan. Akibatnya Omzet dan
+     Margin di satu baris KPI memakai basis berbeda, sehingga kedua ubin wajib menyebut basisnya.
+   - Waste % = HPP susut / Omzet **tanpa PPN**, dengan label "dari omzet tanpa PPN".
+   - Harga rak (CM-5) termasuk PPN.
+   - Jangan memakai "PB1" (pajak restoran) di halaman supermarket.
 5. **Hari ini ≠ sampai tutup toko.** Angka "hari ini" memakai "s.d. 14:45".
 
 ---
@@ -477,7 +492,9 @@ Semua membaca token G42; tidak ada warna baru. State `loading/empty/error` mengi
 | `PersonaChip` | `{ role: Role; scope: string }` | Teks "Kepala toko · Outlet Kelapa Gading" |
 | `ScopeBanner` (G42 `FilterNotice` diperluas) | `{ outletCount: number; roleLabel: string }` | Hanya teks; tampil bila ada >1 peran |
 
-Perluasan `lib/thresholds.ts` (nama usulan; semua dikonfigurasi): `oosWarnPct`, `oosBadPct`, `wasteWarnPct`, `wasteBadPct`, `wapeGoodPct`, `wapeWarnPct`, `biasWarnPct`, `biasBadPct`, `fillGoodPct`, `fillWarnPct`, `priceAboveWarnPct`, `priceAboveBadPct`, `cutoffUrgentMinutes` (120), `nearLiveWarnMinutes` (30), `nearLiveBadMinutes` (60), `kAnonymity` (10), `minPriceSample` (3). Ambang near-expiry **bukan** di sini: dari konfigurasi kategori Odoo (`efn_near_expiry_days`, `efn_markdown_days`) lewat kontrak data.
+*(Catatan efn-architect 20 Nov 2026: nilai ambang di bawah kini default; nilai efektif per PT dibaca dari
+`v_sm_kpi_config` (kunci `thr.*`/`fresh.*`, `docs/04` §28.13.8c, L-200); `kAnonymity` **tidak** configurable dari
+Odoo — keputusan DPO.)* Perluasan `lib/thresholds.ts` (nama usulan; semua dikonfigurasi): `oosWarnPct`, `oosBadPct`, `wasteWarnPct`, `wasteBadPct`, `wapeGoodPct`, `wapeWarnPct`, `biasWarnPct`, `biasBadPct`, `fillGoodPct`, `fillWarnPct`, `priceAboveWarnPct`, `priceAboveBadPct`, `cutoffUrgentMinutes` (120), `nearLiveWarnMinutes` (30), `nearLiveBadMinutes` (60), `kAnonymity` (10), `minPriceSample` (3). Ambang near-expiry **bukan** di sini: dari konfigurasi kategori Odoo (`efn_near_expiry_days`, `efn_markdown_days`) lewat kontrak data.
 
 ---
 
@@ -499,10 +516,10 @@ Dependensi pemblokir: row policy `eit2` (§28.11) lulus review security sebelum 
 
 | ID | Pertanyaan | Pemilik | Dampak bila belum |
 |---|---|---|---|
-| **Q-INS-S1** | Definisi GMROI: margin kotor ÷ **rata-rata** nilai persediaan pada HPP (harian atau akhir bulan?), pakai persediaan DC + outlet atau outlet saja? | Finance/Direksi | EX-1 GMROI tidak bisa dihitung konsisten |
-| **Q-INS-S2** | Definisi dan ambang OOS rate: stok nol pada akhir hari atau sepanjang jam buka? Hanya SKU assortment aktif? Ambang baik/peringatan (usulan 2%/5%)? Apakah per kategori berbeda (segar vs kering)? | Category manager | CM-1/2 status menyesatkan |
-| **Q-INS-S3** | Definisi "stok kritis": ≤ minimum orderpoint, atau < N hari cakupan? Berapa N? | Ops/Kepala toko | ST-3 tidak jelas |
-| **Q-INS-S4** | Fill rate DC: dihitung terhadap qty disetujui outlet atau qty diminta forecast? Per baris atau per pengiriman? Ambang (usulan 95%/90%)? | DC/Ops | DC-1/3 |
+| **Q-INS-S1** | ~~Definisi GMROI~~ — **ditutup 20 Nov 2026 (L-200)**: default bulanan, rata-rata harian HPP, DC ikut; configurable per PT | — | — |
+| **Q-INS-S2** | ~~Definisi dan ambang OOS rate~~ — **ditutup (L-200/L-201)**: stok ≤ 0 di snapshot akhir hari, penyebut SKU ber-orderpoint, ambang 2%/5%; configurable per PT (ambang per kategori belum: gelombang berikut) | — | — |
+| **Q-INS-S3** | ~~Definisi stok kritis~~ — **ditutup (L-200/L-201)**: ≤ min **atau** < 2 hari cakupan; aturan & N configurable | — | — |
+| **Q-INS-S4** | ~~Fill rate DC~~ — **ditutup (L-200/L-201)**: qty dikirim / qty disetujui per baris usulan, ambang 95%/90%; basis "diterima" & tingkat configurable | — | — |
 | **Q-INS-S5** | Ambang WAPE/bias yang wajar untuk SKU × outlet × hari vs agregat mingguan (usulan WAPE 25%/40%, bias ±5%/±10%) dan tingkat agregasi yang ditampilkan Direksi | Planner/Direksi | EX-1, EX-6 |
 | **Q-INS-S6** | Apakah Odoo menyimpan "kategori yang dikelola" per Category manager (untuk default filter dan row policy kategori)? Bila tidak: semua kategori, dan akses kategori tidak dibatasi | Architect/Odoo functional | CM default |
 | **Q-INS-S7** | Waktu cron near-expiry dan stok: harian jam berapa? Perlu pembaruan tengah hari untuk kepala toko? | Odoo functional | ST-2 menampilkan "dihitung 06:00" benar atau tidak |
@@ -510,7 +527,7 @@ Dependensi pemblokir: row policy `eit2` (§28.11) lulus review security sebelum 
 | **Q-INS-S9** | Apakah peran `exec` boleh membuka halaman persona lain (hak akses halaman, bukan scope data)? | Security/Direksi | §2.1 |
 | **Q-INS-S10** | Umur stok DC: bucket menurut sisa umur lot (perishable) atau lama di gudang (kering)? Batas bucket per kategori | DC | DC-4 |
 | **Q-INS-S11** | Format jam: `14:45` (usulan) atau `14.45`? Kesepakatan dengan Odoo | Bisnis | Konsistensi |
-| **Q-INS-S12** | Basis pajak Omzet: sebelum atau sesudah PPN? HPP dan margin pada basis yang sama? | Finance | Label EX-1 dan seluruh angka rupiah |
+| **Q-INS-S12** | ~~Basis pajak Omzet~~ — **ditutup 20 Nov 2026 (L-202)**: Omzet termasuk PPN; margin, HPP, Waste % tanpa PPN | — | — |
 | **Q-INS-S13** | Kepala toko dengan beberapa outlet: perlu tampilan gabungan atau selalu satu outlet per tab? | Ops | Bagian 3 |
 | **Q-INS-S14** | Kampanye: jendela atribusi (berapa hari setelah kirim dihitung konversi) dan apakah kelompok kontrol akan ada (menentukan "Omzet inkremental") | Marketing | MK-4 |
 | **Q-INS-S15** | Apakah angka usulan order (qty) perlu tampil di Insight, atau cukup status dan jumlah baris (kepala toko mengubah qty di Odoo)? Spesifikasi ini: hanya status dan jumlah baris. | Ops | ST-1 |
