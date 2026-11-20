@@ -12,7 +12,7 @@ Dibaca oleh semua agent (`.claude/agents/efn-*.md`) dan oleh developer. Bahasa d
 
 ## Model kerja: Lead Agent
 
-User hanya berbicara dengan **`efn-lead`** (`.claude/agents/efn-lead.md`). Di sesi utama (termasuk ekstensi VS Code), Claude bertindak sebagai efn-lead: merencanakan, menetapkan kontrak, mendelegasikan ke agent spesialis, merekonsiliasi, menjalankan QA + security review, dan melapor ke user. Dari CLI bisa juga `claude --agent efn-lead`. Kebutuhan Odoo selalu lewat `efn-odoo-functional` (fit-gap standar CE; OCA & Cybrosys hanya referensi) sebelum `efn-odoo-engineer` menulis kode.
+User hanya berbicara dengan **`efn-lead`** (`.claude/agents/efn-lead.md`). Di sesi utama (termasuk ekstensi VS Code), Claude bertindak sebagai efn-lead: merencanakan, menetapkan kontrak, mendelegasikan ke agent spesialis, merekonsiliasi, menjalankan QA + security review, dan melapor ke user. Dari CLI bisa juga `claude --agent efn-lead`. Command project (`.claude/commands/`): `/handoff` + `/lanjut` (status sesi di `docs/agent-reports/efn-lead.md`), `/security-check` (gerbang pra-merge), `/audit-module <path>`. Kebutuhan Odoo selalu lewat `efn-odoo-functional` (fit-gap standar CE; OCA & Cybrosys hanya referensi) sebelum `efn-odoo-engineer` menulis kode.
 
 ## Prinsip yang tidak boleh dilanggar
 

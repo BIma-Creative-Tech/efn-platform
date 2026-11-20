@@ -1,0 +1,38 @@
+{
+  "permissions": {
+    "deny": [
+      "Read(./secrets/**)",
+      "Read(./**/.env)",
+      "Read(./**/.env.*)",
+      "Read(./data/**)",
+      "Read(./**/node_modules/**)",
+      "Read(./**/.next/**)",
+      "Read(./**/dist/**)",
+      "Read(./**/build/**)",
+      "Read(./**/coverage/**)",
+      "Read(./**/__pycache__/**)",
+      "Read(./**/.ruff_cache/**)",
+      "Read(./**/.pytest_cache/**)",
+      "Read(./**/package-lock.json)",
+      "Read(./**/pnpm-lock.yaml)",
+      "Read(./**/*.lock)",
+      "Bash(rm -rf:*)",
+      "Bash(git push --force:*)",
+      "Bash(git push -f:*)",
+      "Bash(git push origin main:*)",
+      "Bash(docker system prune:*)",
+      "Bash(docker volume prune:*)",
+      "Bash(make clean:*)",
+      "Bash(make pki-root:*)",
+      "Bash(make pki-intermediate:*)"
+    ],
+    "allow": [
+      "Bash(git status)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)",
+      "Bash(make validate)",
+      "Bash(make lint)",
+      "Bash(make ps)"
+    ]
+  }
+}
