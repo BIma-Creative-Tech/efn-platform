@@ -166,8 +166,16 @@ Forecast demo = **v2** (ETL → ClickHouse → forecast-worker).
   query bentuk `_SQL_SALES_FACT`; outbox loyalty 0, stock move 0, tanpa log audit POS; sesi histori `closed`.
   Pindai near-expiry setelah flag dinyalakan (versi sebelum revisi histori, tahap stok tidak berubah) = 187 alert
   (8 expired, 121 markdown, 58 near) + aktivitas kepala toko.
-- **Belum diverifikasi:** ETL → ClickHouse → forecast-worker di atas DB demo, POS di layar (markdown/FEFO/blokir lot,
-  buka sesi baru), transfer DC → outlet yang diblokir assortment lewat UI.
+- **POS (tour Chrome, 20 Nov 2026):** `efn_expiry_monitor/tests/test_expiry_tour.py` (FEFO + harga markdown lot;
+  lot kedaluwarsa → batal → PIN salah → override supervisor) lolos, suite tour CI 33/33. Tour menangkap bug G45
+  (tambah produk lewat kartu produk tidak memasang FEFO/markdown/override), sudah diperbaiki di PR G45.
+- **Engine forecast (dry-run, 20 Nov 2026):** `run_batch`/`compute` forecast-worker asli dengan sumber CSV yang
+  meniru `v_fc_sales_daily` dari DB demo, outlet SMD01 (400 seri): `FORECAST_MODELS=AutoETS FORECAST_CV_WINDOWS=1`
+  = **80 s**, 0 seri gagal, WAPE backtest 28 hari 0,65 (baseline mean-56 0,67; seasonal naive 0,79). Default
+  `AutoETS,AutoARIMA` + CV 4 **> 57 menit untuk satu outlet tanpa selesai** → untuk demo pakai `FORECAST_MODELS=AutoETS`
+  (atau CV 1) sampai performa AutoARIMA ditangani. WAPE tinggi karena noise sintetis + banyak SKU intermiten.
+- **Belum diverifikasi:** jalur ETL → ClickHouse → forecast-worker → Odoo (ingest + usulan replenishment) di atas DB
+  demo; POS manual di layar (buka sesi baru di outlet demo); transfer DC → outlet yang diblokir assortment lewat UI.
 - Sesi histori ditutup tanpa akuntansi penutupan (tanpa jurnal, picking, statement kas); order tanpa `pos.payment`
   dan tanpa stock move. Jangan memakai DB demo untuk laporan keuangan.
 - Forecast v1 Odoo tidak punya histori (lihat §4.5). Histori DC (keluar DC → outlet) tidak dibuat; forecast DC
