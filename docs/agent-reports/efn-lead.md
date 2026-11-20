@@ -16,7 +16,7 @@ Laporan kerja Lead Agent (konvensi CLAUDE.md "Tim agent"). Bagian "Status sesi" 
 3. Selesai: aturan pilihan model per tugas di `.claude/agents/efn-lead.md` (default agent tetap Opus).
 
 **Blocker / pertanyaan untuk user:**
-1. `.claude/settings.json` masih melarang `Read(./**/.env.*)` sehingga `.env.example` ikut terblokir; perlu diganti manual (auto mode menolak Claude mengubah izinnya sendiri).
+1. CLAUDE.md global (`~/.claude/CLAUDE.md`) belum terpasang: auto mode menolak Claude menulisnya; draf disiapkan untuk disalin manual oleh user. (`.claude/settings.json` sudah dikoreksi user: `.env.example` kini terbaca.)
 
 **Kandidat keputusan:** tidak ada yang mengubah kode/kontrak.
 

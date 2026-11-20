@@ -3,7 +3,8 @@
     "deny": [
       "Read(./secrets/**)",
       "Read(./**/.env)",
-      "Read(./**/.env.*)",
+      "Read(./**/.env.local)",
+      "Read(./**/.env.*.local)",
       "Read(./data/**)",
       "Read(./**/node_modules/**)",
       "Read(./**/.next/**)",
