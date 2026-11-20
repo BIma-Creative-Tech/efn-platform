@@ -2836,3 +2836,36 @@ dijalankan; lead menjalankan di container (`docs/runbooks/dev-stack-boot.md`).
 - `efn_core` test_rpc_surface: teks entri `("pos.session", "load_data")` diperbarui.
 - Belum: penegakan "akun perangkat/pos_hr tanpa grup override" (hanya dokumentasi), `employee_id` di event, entri
   `PDP_DATA_INVENTORY.md`, aturan alert Loki (devsecops), cek ulang assortment setelah ubah tujuan pasca-confirm.
+
+---
+
+# G48 — seed data simulasi Supermarket (20 Nov 2026) — BELUM DIJALANKAN
+
+Worktree `efn-platform-g48`, branch `feat/wave-48-supermarket-seed` (basis G45/PR #114). Tanpa shell: skrip, ruff,
+dan run belum dijalankan; lead menjalankan di container (DB `efn_smd_demo`). **Tidak ada modul Odoo yang diubah.**
+
+## File
+- Baru `scripts/dev/seed_demo_supermarket.py` (`odoo shell < file`, header `# ruff: noqa: F821, E501, S311`): 12 tahap,
+  commit per tahap, log `SEED ...` + ringkasan + `SEED_DONE`; `SEED ABORT` + exit 2 bila prasyarat tidak ada.
+- Baru `docs/runbooks/demo-supermarket-seed.md`; entri di `docs/runbooks/README.md`.
+
+## Isi & keputusan
+- Semua record di company `efn_setup_supermarket.company_smd`; memakai xmlid demo (DC, SMD01..05, zona
+  `location_smd0N_*`, user persona, kategori `product_category_smd_*`, capability `efn_assortment.capability_*`).
+- Env dijalankan sebagai `base.user_admin` (bukan OdooBot) + `allowed_company_ids=[SMD]`, karena `stock.quant`
+  inventory mode dan guard efn_* memeriksa `env.user.has_group`.
+- Produk: `company_id = SMD`, lot + expiry, `alert_time` = ambang near-expiry kategori (dibaca runtime lewat
+  `_efn_expiry_thresholds`), EAN-13 `299…` (restricted circulation, hindari 13/15/17/21/22/23).
+- Histori lewat `efn_legacy_history.bulk.bulk_upsert` (sudo + `efn_legacy_import=True`, `max_day=cutover`, batch
+  `DEFAULT_BATCH`), parameter cutover diset sebelum upsert. Flow `sold` = qty agar forecast v1 punya histori.
+- Kalender `lebaran_window` = satu tanggal (1 Syawal): worker memilih libur pertama di dalam jendela manual, jendela
+  lebar menangkap Nyepi 19 Mar 2026.
+- Markdown diaktifkan `with_user(user_smd_markdown_manager)`; gagal → tulis state via sudo (dicatat di log).
+
+## Belum diverifikasi
+- Seluruh run; `ruff check`/`ruff format --check`; perkiraan volume histori (±500–600 ribu baris per model default)
+  dan durasi.
+- Titik rawan: `stock.quant` create inventory mode + `action_apply_inventory` per batch 200; `to_weight`/
+  `available_in_pos` (dijaga `in _fields`); pembuatan `pos.config`/metode bayar (dalam savepoint, gagal = peringatan);
+  aktivasi markdown oleh user demo (record rule); `env(user=..., context=...)` di shell 19.
+- ETL/forecast di atas `efn_smd_demo` butuh `ODOO_DB=efn_smd_demo` + grant read-only ke DB itu (runbook §4).
