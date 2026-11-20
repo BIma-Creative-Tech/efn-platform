@@ -1,5 +1,56 @@
 # Laporan Agent: efn-devsecops-engineer
 
+## G50 (20 Nov 2026, worktree `efn-platform-g50`, branch `feat/wave-50-supermarket-campaign`, belum di-commit) — wiring kampanye supermarket
+
+Ditulis tanpa shell: `docker compose config`, shellcheck, hadolint, yamllint, promtool, `haproxy -c`, check-encryption
+**belum dijalankan** (lead menjalankan). ADR-044/047/048 Proposed; semua flag default `false`.
+
+### File
+- Baru: `infra/compose/docker-compose.wa-unofficial.yml` (wa-unofficial + wa-egress-proxy, profil `wa-unofficial`),
+  `infra/compose/docker-compose.segment.yml` (segment-worker, profil `data`), `infra/wa-egress/haproxy.cfg` (TLS
+  passthrough allowlist SNI), `docs/runbooks/supermarket-campaign-channels.md`.
+- Diubah: `infra/rabbitmq/rabbitmq-entrypoint.sh` (7 queue + DLQ, izin efn-bff, user opsional efn-wa-unofficial),
+  `infra/clickhouse/clickhouse-init.sh` (efn_segment_reader + role/profil), `infra/odoo-rpc-gateway/haproxy.cfg` + README
+  (path #30-#32, CN ketiga), `infra/compose/docker-compose.yml` (secret, env BFF/ETL G50), `docker-compose.dev.yml`
+  (Mailpit TLS, env email/consent dev, network `mail`), `.env.example`, `infra/observability/prometheus.yml` (job
+  wa-unofficial dns_sd), `alert-rules.yml` (EfnWaUnofficialDown/Banned, DLQ WA dikecualikan dari alert generik),
+  `infra/traefik/dynamic/internal-tls.yml` (serversTransport wa-unofficial), `scripts/secrets.list`, `gen-secrets.sh`,
+  `gen-pki.sh` (segment-worker, wa-unofficial, wa-operator, mailpit; DEV_ONLY/NONPROD_ONLY), `scripts/lib/deploy-validate.sh`
+  (`efn_validate_g50_config`, EFN_GATED_FEATURES, release vars), `scripts/deploy.sh` (DOTENV G50),
+  `scripts/check-encryption.sh` (blok 6b6, render dev/prod-segment + dev/prod-wa-unofficial, ACL CN ketiga),
+  `.github/workflows/ci.yml`, `build-push.yml`, `deploy.yml` (CFG_* G50), `.github/dependabot.yml`,
+  `services/wa-unofficial/Dockerfile` (direktif `# syntax` dipindah ke baris 1), `docs/runbooks/README.md`.
+
+### Keputusan
+1. **User Odoo terpisah untuk segment-worker** (`efn_segment_<pt>`, secret `odoo_api_key_segment_smd`); BFF tetap
+   `efn_campaign_<pt>`. Kode worker tidak berubah: env `ODOO_API_KEY_CAMPAIGN_SMD_FILE` menunjuk file secret segmen.
+2. **Egress WA = TLS passthrough HAProxy + allowlist SNI** (bukan proxy HTTP CONNECT): tanpa hop plaintext dan tanpa
+   pengecualian check-encryption; `WA_UNOFFICIAL_PROXY_URL` tidak diset (ditolak check-encryption). Host:
+   `web.whatsapp.com` saja, **BELUM DIVERIFIKASI**; media tidak diizinkan.
+3. **Network wa-unofficial = rmq + wa-egress + wa-admin.** wa-admin (internal) wajib agar Traefik/Prometheus bisa masuk;
+   menyimpang dari brief "rmq + wa-egress saja", dicatat di overlay.
+4. **Secret WA `host:disabled`** (production OFF); dev nyata hanya `APP_ENV=dev bash scripts/gen-secrets.sh` (pola
+   SEC-199). User broker efn-wa-unofficial hanya dibuat bila secret bukan placeholder; secret hash key BFF hanya lewat
+   overlay (tanpa overlay = kanal BFF mati `hash_key_missing`).
+5. **mTLS operator**: TLS option `efn-mtls` (CA internal) + leaf `wa-operator` (non-production). Traefik tidak bisa
+   memfilter CN -> lapis IP staf + token admin; usulan CA operator terpisah (backlog).
+6. **Gate production**: ref (`BEHAVIOR_TRACKING_DPO_APPROVAL_REF`, `PROMO_CAMPAIGN_APPROVAL_REF`,
+   `WA_UNOFFICIAL_RISK_ACCEPTANCE_REF`) **dan** izin Superadmin `EFN_ALLOW_FEATURE_ON`. ETL_ENABLE_BEHAVIOR /
+   SEGMENT_ENABLED ditolak di production selama fitur sumber mati.
+7. Semua queue G50 `x-delivery-limit 10` (pola G17/G31). segment-worker berbagi backend gateway `odoo_forecast`.
+8. Scrape wa-unofficial lewat dns_sd: tanpa overlay = 0 target (tidak ada EfnServiceDown palsu).
+
+### Blocker untuk lead (bukan file devsecops)
+- **Skema `behavior.*` BFF vs ETL tidak cocok**: `20-platform-g50a.sql` tanpa `company_code`/`ingested_at` di
+  `event_raw` dan tabel erasure `erased_subject`; ETL mengharapkan `company_code`, `ingested_at`, `subject_erasure(id,
+  subject_key, request_id, created_at)`. Pemilik tabel = `efn_platform_owner` (NOLOGIN), bukan `efn_bff` seperti header
+  `platform-behavior-grants.sql`. Grant ETL sengaja TIDAK dipasang di deploy.sh.
+- `test-efn-deploy.sh` belum punya kasus G50 (fungsi baru + gated features); `test-gateway.sh` belum punya kasus #30-#32.
+
+### Belum terverifikasi
+Lihat laporan balik ke lead (render compose, sintaks HAProxy/promtool, digest Mailpit + `readyz` dengan UI TLS, nested
+merge `networks`/`secrets` override, sysctl bind :443 non-root, Baileys/egress nyata, Trivy image wa-unofficial).
+
 ## G43 fase 2 W3 (18 Nov 2026, branch feat/wave-43-esb-migration, belum di-commit) — secret migrasi, image/service `esb-migrate`, CI, check-encryption, runbook
 
 Kontrak: kontrak kerja G43 fase 2 (W3), docs/04 §27.2/§27.10, ADR-042 (Accepted), laporan W1 "Please forward → W3".

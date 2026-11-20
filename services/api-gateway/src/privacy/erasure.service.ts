@@ -348,9 +348,10 @@ export class ErasureService implements OnModuleInit, OnModuleDestroy {
     //     referrer dibatalkan, hash di reward/sumber → tombstone (baris keuangan tetap)
     await new PgMgmStore().erase(q, hash, tomb, new Date());
     if (memberId === null) return; // retention subjek ledger POS: tidak ada baris akun
-    // 4d. G50 §28.6–§28.8 (L-154, L-161): tautan device, event staging, segmen (+ daftar erasure ClickHouse), wishlist/
-    //     alert, inbox/penerimaan kampanye; kode voucher yang sudah ditugaskan hanya dilepas tautannya
-    await eraseBehaviorMember(q, memberId, optionalSubjectPepper(this.config));
+    // 4d. G50 §28.6–§28.8 (L-154, L-161): `behavior.subject_erasure` (semua subject_key subjek + request_id, antrean
+    //     erasure ClickHouse ETL — atomik dengan transisi processing di transaksi ini), tautan device, event staging,
+    //     segmen, wishlist/alert, inbox/penerimaan kampanye; kode voucher yang sudah ditugaskan hanya dilepas tautannya
+    await eraseBehaviorMember(q, memberId, optionalSubjectPepper(this.config), requestId);
     await eraseWishlistMember(q, memberId);
     await eraseCampaignMember(q, memberId);
     // 5. Consent: bukti dipertahankan tanpa PII

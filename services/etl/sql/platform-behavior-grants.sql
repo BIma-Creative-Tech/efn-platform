@@ -1,9 +1,7 @@
 -- G50 (ADR-047 Proposed, docs/04 §28.6/§28.7, L-153/L-154): grant read-only ETL pada skema `behavior` DB platform.
--- Pemilik skema & tabel = BFF (`efn_bff`, init Postgres G50 milik efn-bff-engineer/devsecops). File ini TIDAK membuat
--- tabel; dijalankan SETELAH tabel ada, sebagai pemilik tabel (pola odoo-readonly-grants.sql):
---   psql "host=postgres dbname=efn_platform user=efn_bff sslmode=verify-full sslrootcert=/run/secrets/efn_ca_crt" \
---        -v ON_ERROR_STOP=1 -f services/etl/sql/platform-behavior-grants.sql
--- Atau isi file ini disalin ke init Postgres G50 setelah CREATE TABLE (pilihan devsecops). Idempoten.
+-- Pemilik skema & tabel = `efn_platform_owner` (NOLOGIN, SEC-39). Grant yang sama SUDAH dipasang oleh
+-- infra/postgres/init/20-platform-g50a.sql (yang dijalankan deploy.sh); file ini = referensi kolom yang dibaca ETL dan
+-- pemeriksaan manual (jalankan sebagai superuser atau `SET ROLE efn_platform_owner`). Idempoten.
 -- ON_ERROR_STOP + grant level kolom = verifikasi skema: kolom yang diasumsikan ETL (services/etl/efn_etl/behavior.py,
 -- SQL_BEHAVIOR_EVENTS / SQL_BEHAVIOR_ERASURES / SQL_DSAR_SUBJECT_KEYS) tidak ada -> deploy gagal, bukan ETL diam.
 --

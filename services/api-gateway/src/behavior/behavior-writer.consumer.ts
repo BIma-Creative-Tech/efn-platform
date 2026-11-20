@@ -4,6 +4,7 @@ import { AmqpService, MessageMeta, PermanentMessageError } from '../common/amqp/
 import { DB, Db } from '../common/db/db';
 import { claimMessage } from '../common/db/processed-message';
 import { BEHAVIOR_EVENT_QUEUE, BEHAVIOR_PUBLISHERS, behaviorIdempotencyKey, parseBehaviorMessage } from './behavior-message';
+import { resolveChannelCompanies } from './channel-company';
 
 export const BEHAVIOR_WRITER_CONSUMER = 'bff.behavior-writer';
 
@@ -57,16 +58,20 @@ export class BehaviorWriterConsumer implements OnApplicationBootstrap {
       const keep = new Set(fresh.rows.map((r) => String(r.event_id).toLowerCase()));
       const rows = msg.events.filter((e) => keep.has(e.event_id));
       if (rows.length > 0) {
+        // PT diturunkan ulang dari pemetaan kanal → PT saat tulis (sumber sama dengan ingest); kanal yang sementara tidak
+        // terpetakan memakai PT yang sudah divalidasi saat ingest (pesan ber-`company_code` ∈ COMPANY_CODES).
+        const companies = await resolveChannelCompanies(q, rows.map((e) => e.channel_code));
+        // ingested_at = DEFAULT clock_timestamp() (cursor ETL), tidak dikirim BFF
         await q.query(
           `INSERT INTO behavior.event_raw
              (received_at, batch_id, subject_key, subject_kind, channel, event_id, type, client_ts, channel_code, outlet_code,
-              product_id, duration_s, qty, query, result_count, stock_status, price_idr)
+              product_id, duration_s, qty, query, result_count, stock_status, price_idr, company_code)
            SELECT $1::timestamptz, $2::uuid, $3, $4, $5, t.event_id, t.type, t.client_ts, t.channel_code, t.outlet_code,
-                  t.product_id, t.duration_s, t.qty, t.query, t.result_count, t.stock_status, t.price_idr
+                  t.product_id, t.duration_s, t.qty, t.query, t.result_count, t.stock_status, t.price_idr, t.company_code
              FROM unnest($6::uuid[], $7::text[], $8::timestamptz[], $9::text[], $10::text[], $11::int[], $12::smallint[],
-                         $13::int[], $14::text[], $15::int[], $16::text[], $17::bigint[])
+                         $13::int[], $14::text[], $15::int[], $16::text[], $17::bigint[], $18::text[])
                   AS t(event_id, type, client_ts, channel_code, outlet_code, product_id, duration_s, qty, query, result_count,
-                       stock_status, price_idr)`,
+                       stock_status, price_idr, company_code)`,
           [
             msg.received_at,
             msg.batch_id,
@@ -85,6 +90,7 @@ export class BehaviorWriterConsumer implements OnApplicationBootstrap {
             rows.map((e) => e.result_count),
             rows.map((e) => e.stock_status),
             rows.map((e) => e.price_idr),
+            rows.map((e) => companies.get(e.channel_code) ?? e.company_code),
           ],
         );
       }

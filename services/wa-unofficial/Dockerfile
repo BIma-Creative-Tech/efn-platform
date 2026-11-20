@@ -1,5 +1,6 @@
-# wa-unofficial — WhatsApp tidak resmi (Baileys) HANYA promo & notify-me supermarket (ADR-044 Proposed, K18-01).
 # syntax=docker/dockerfile:1.7
+# wa-unofficial — WhatsApp tidak resmi (Baileys) HANYA promo & notify-me supermarket (ADR-044 Proposed, K18-01).
+# (Direktif syntax WAJIB baris pertama; di bawah komentar ia diabaikan - devsecops G50.)
 #
 # Container terisolasi: non-root, dirancang untuk read-only rootfs (`read_only: true` + tmpfs /tmp di compose);
 # satu-satunya path tulis = volume sesi terenkripsi /var/lib/wa-unofficial. Tanpa npm/npx saat runtime (tidak ada egress

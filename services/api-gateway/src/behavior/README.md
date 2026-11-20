@@ -14,7 +14,7 @@ ClickHouse (ADR-003; BFF tidak pernah menulis ClickHouse).
 | Endpoint | Auth | Ringkas |
 |---|---|---|
 | `POST /v1/events/consent` | publik | `{device_id (uuid v4), granted, version}` → `202 {recorded, granted}`; grant hanya versi teks aktif (`CONSENT_TRACKING_VERSION`/`_TEXT_SHA256`) → `409 stale_text` / `503 consent_unavailable`; penarikan selalu diterima + hapus tautan device. Flag mati → `202 {recorded:false, disabled:true}`. Rate limit 30/menit/IP. |
-| `POST /v1/events` | publik atau Bearer | Body §28.6 (≤ 50 event, ≤ 32 KB, `additionalProperties:false`, `client_ts` ±24 jam). `202 {accepted, duplicates, rejected[{index, code: invalid|stale|unknown_product}]}`. Flag mati → `202 {accepted:0, disabled:true}`. Tanpa consent → `403 tracking_consent_required` (bentuk `{error:{code,message}}`). 429 + `Retry-After`. Broker mati → 503. |
+| `POST /v1/events` | publik atau Bearer | Body §28.6 (≤ 50 event, ≤ 32 KB, `additionalProperties:false`, `client_ts` ±24 jam). `202 {accepted, duplicates, rejected[{index, code: invalid|stale|unknown_channel|unknown_product}]}`. Flag mati → `202 {accepted:0, disabled:true}`. Tanpa consent → `403 tracking_consent_required` (bentuk `{error:{code,message}}`). 429 + `Retry-After`. Broker mati → 503. |
 | `GET /v1/config` | publik | `{features:{tracking, wishlist, restock_alert, price_alert, campaign_inbox}, tracking_consent:{version}|null}`; `tracking` hanya true bila flag aktif **dan** teks consent dikonfigurasi. |
 
 ## Desain
@@ -25,15 +25,29 @@ ClickHouse (ADR-003; BFF tidak pernah menulis ClickHouse).
   baris `behavior.device_consent` terbaru `granted`. Device tertaut ke member ber-consent → subject member.
 - Pengayaan server: `price_idr` dari salinan katalog (`platform.online_catalog_item`), `stock_status` dari cache Redis
   `ocat:stk:*` (tidak memanggil Odoo). Produk tidak ada di kanal → `unknown_product`.
+- **PT per event** (`company_code`, revisi G50-A untuk ETL): pemetaan kanal → PT = blok `channel` Odoo yang disalin
+  `CatalogSyncService` ke `platform.online_catalog_sync.channel_data` (`channel-company.ts`; syarat sama dengan katalog
+  L-11: `code` = kanal, `active`, PT ∈ `COMPANY_CODES`). Kanal tak terpetakan → `unknown_channel` (tidak pernah disimpan
+  tanpa PT, tidak ditebak dari kode kanal). Writer menurunkan ulang PT saat tulis; kanal yang sementara hilang dari
+  salinan memakai PT tervalidasi dari pesan.
 - Query pencarian: NFKC + lowercase, email & rangkaian ≥ 6 digit (boleh berpemisah) → `[redacted]` (`redactQuery`).
 - Consumer `bff.behavior-writer`: `processed_message` + dedup `(subject_key, event_id)` di `behavior.event_dedup`
-  dalam satu transaksi; insert batch `unnest` ke `behavior.event_raw` (partisi harian UTC).
+  dalam satu transaksi; insert batch `unnest` ke `behavior.event_raw` (partisi harian UTC). `ingested_at` = DEFAULT
+  `clock_timestamp()` (waktu masuk staging) — cursor job ETL `behavior_events` `(ingested_at, subject_key||':'||event_id)`,
+  index `(ingested_at)` di tabel induk.
 - Job (`BehaviorJobsService`, 1 jam, advisory lock): partisi (fungsi SECURITY DEFINER), drop partisi > 7 hari, retensi
-  dedup/tautan (180 h)/consent device (400 h, placeholder)/segmen (30 h)/`erased_subject` (100 h); **`cart_abandon`**
-  diturunkan server (cart_add terakhir 24–48 jam tanpa checkout_start; `event_id` UUID v8 deterministik).
-- Privasi (`behavior-privacy.ts`, dipanggil `src/privacy`): erasure hapus staging/dedup/segmen/tautan + catat
-  `behavior.erased_subject` (dibaca job ETL untuk DELETE ClickHouse, L-154); DSAR export tautan perangkat (tanpa
-  device_key) + event staging; cabut consent `tracking` akun → hapus tautan & pemetaan subject.
+  dedup/tautan (180 h)/consent device (400 h, placeholder)/segmen (30 h)/`erased_subject` + `subject_erasure` (≥ 100 h,
+  minimum konfigurasi 100); **`cart_abandon`** diturunkan server (cart_add terakhir 24–48 jam tanpa checkout_start;
+  `event_id` UUID v8 deterministik; `channel` web|app, kanal & PT disalin dari cart_add — ETL menolak channel lain).
+- Privasi (`behavior-privacy.ts`, dipanggil `src/privacy`): erasure menulis SEMUA subject_key subjek (HMAC member +
+  setiap device_key tertaut) ke **`behavior.subject_erasure`** (`request_id` DSAR) — antrean job ETL `behavior_erasure`
+  dan `BehaviorDsarHook` (L-154) — di transaksi ErasureService yang sama dengan transisi `dsar_request` → `processing`
+  (atomik), lalu hapus staging/dedup/segmen/tautan dan catat `behavior.erased_subject` (BFF: tolak subjek terhapus di
+  ingest segmen). DSAR export tautan perangkat (tanpa device_key) + event staging; cabut consent `tracking` akun → hapus
+  tautan & pemetaan subject.
+- Grant ETL (di `20-platform-g50a.sql`, = `services/etl/sql/platform-behavior-grants.sql`): `efn_etl` SELECT per kolom
+  `event_raw` (tanpa `batch_id`/`client_ts`) dan `subject_erasure` (`id, subject_key, request_id, created_at`); tanpa akses
+  `device_link`/`device_consent`/`subject_member`/`erased_subject`.
 
 ## Belum / catatan
 - Consumer memakai koneksi AMQP `efn-bff` (kontrak §28.7 menyebut user `efn-behavior`) — usulan kontrak di laporan.

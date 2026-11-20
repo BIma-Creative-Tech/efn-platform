@@ -57,6 +57,17 @@ function setup(opts: Opts = {}) {
     if (t.includes('FROM behavior.device_consent')) return opts.device === undefined ? { rows: [], rowCount: 0 } : { rows: [{ granted: opts.device }], rowCount: 1 };
     if (t.includes('FROM platform.consent')) return opts.tracking ? { rows: [{ granted: true }], rowCount: 1 } : { rows: [], rowCount: 0 };
     if (t.includes('FROM behavior.device_link l')) return opts.linkedMember ? { rows: [{ member_id: opts.linkedMember }], rowCount: 1 } : { rows: [], rowCount: 0 };
+    if (t.includes('FROM platform.online_catalog_sync')) {
+      // Pemetaan kanal → PT: SMD aktif; OLD tidak aktif; ZZ kode PT di luar COMPANY_CODES
+      return {
+        rows: [
+          { channel_code: 'SMD', code: 'SMD', active: 'true', company_code: 'SMD' },
+          { channel_code: 'OLD', code: 'OLD', active: 'false', company_code: 'GL' },
+          { channel_code: 'ZZ', code: 'ZZ', active: 'true', company_code: 'ZZ' },
+        ],
+        rowCount: 3,
+      };
+    }
     if (t.includes('FROM platform.online_catalog_item')) {
       return {
         rows: [{ product_id: 10, data: { prices: [{ outlet_code: null, price_incl: 15000.4 }, { outlet_code: 'SMD01', price_incl: 14000 }] } }],
@@ -144,8 +155,8 @@ describe('BehaviorService.ingest', () => {
     expect(id).toBe(`behavior:${payload.batch_id}`);
     expect(payload.subject_kind).toBe('device');
     expect(payload.subject_key).toBe(deviceKey(DEVICE_PEPPER, DEVICE));
-    expect(payload.events[0]).toMatchObject({ price_idr: 14000, stock_status: 'out' });
-    expect(payload.events[1]).toMatchObject({ price_idr: 15000, stock_status: null });
+    expect(payload.events[0]).toMatchObject({ price_idr: 14000, stock_status: 'out', company_code: 'SMD' });
+    expect(payload.events[1]).toMatchObject({ price_idr: 15000, stock_status: null, company_code: 'SMD' });
     const raw = JSON.stringify(payload);
     expect(raw).not.toContain(DEVICE);
     expect(raw).not.toContain('10.0.0.9');
@@ -156,6 +167,33 @@ describe('BehaviorService.ingest', () => {
     const res = await ctx.svc.ingest(body([ev({ product_id: 99 })]), 100, null, null);
     expect(res).toEqual({ accepted: 0, duplicates: 0, rejected: [{ index: 0, code: 'unknown_product' }] });
     expect(ctx.published).toHaveLength(0);
+  });
+
+  it('kanal tanpa pemetaan PT (tidak ada / tidak aktif / PT di luar COMPANY_CODES) → rejected unknown_channel, termasuk search', async () => {
+    const ctx = setup({ device: true });
+    const res = await ctx.svc.ingest(
+      body([
+        ev({ channel_code: 'NOPE' }),
+        ev({ channel_code: 'OLD' }),
+        ev({ channel_code: 'ZZ' }),
+        ev({ channel_code: 'NOPE', type: 'search', product_id: undefined, query: 'telur', result_count: 0 }),
+        ev(),
+      ]),
+      100,
+      null,
+      null,
+    );
+    expect(res).toEqual({
+      accepted: 1,
+      duplicates: 0,
+      rejected: [
+        { index: 0, code: 'unknown_channel' },
+        { index: 1, code: 'unknown_channel' },
+        { index: 2, code: 'unknown_channel' },
+        { index: 3, code: 'unknown_channel' },
+      ],
+    });
+    expect(ctx.published[0]!.payload.events.map((e) => e.company_code)).toEqual(['SMD']);
   });
 
   it('Bearer tanpa consent tracking AKUN → 403 walau consent device ada', async () => {

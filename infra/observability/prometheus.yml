@@ -100,6 +100,28 @@ scrape_configs:
         regex: '172\.30\.1\.\d+:9100'
         action: keep
 
+  # G50 (docs/04 §28.9, ADR-044): wa-unofficial /metrics di server admin HTTPS :8443 (CA internal, SAN wa-unofficial),
+  # autentikasi bearer token metrik (wa_unofficial_metrics_token, != token admin). Service + secret + network wa-admin
+  # HANYA ada di overlay docker-compose.wa-unofficial.yml: tanpa overlay nama DNS tidak ada -> 0 target (tidak ada
+  # EfnServiceDown palsu). Hanya IP di subnet wa-admin (172.30.16.0/24) yang dipertahankan.
+  - job_name: wa-unofficial
+    metrics_path: /metrics
+    scheme: https
+    authorization:
+      type: Bearer
+      credentials_file: /run/secrets/wa_unofficial_metrics_token
+    tls_config:
+      ca_file: /run/secrets/efn_ca_crt
+      server_name: wa-unofficial
+    dns_sd_configs:
+      - names: ["wa-unofficial.efn_wa-admin"]
+        type: A
+        port: 8443
+    relabel_configs:
+      - source_labels: [__address__]
+        regex: '172\.30\.16\.\d+:8443'
+        action: keep
+
   # Metrik per-queue (ocr.requested, *.dlq): endpoint per-object plugin rabbitmq_prometheus (TLS 15691, mTLS)
   - job_name: rabbitmq
     metrics_path: /metrics/per-object

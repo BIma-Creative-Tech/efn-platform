@@ -1,4 +1,5 @@
 import { PermanentMessageError } from '../common/amqp/amqp.service';
+import { isCompanyCode } from '../loyalty/loyalty.service';
 import { CLIENT_EVENT_TYPES, ClientEventType, MAX_EVENTS_PER_BATCH, isUuidV4 } from './dto/behavior.dto';
 
 /** docs/04 §28.7: queue `behavior.event` (DLQ `behavior.event.dlq`), `message_id` = `behavior:<batch_id>`. */
@@ -14,6 +15,8 @@ export interface BehaviorQueueEvent {
   type: ClientEventType;
   client_ts: string;
   channel_code: string;
+  /** PT pemilik kanal (`channel-company.ts`); wajib — kolom `event_raw.company_code` (cursor/partisi mart ETL). */
+  company_code: string;
   outlet_code: string | null;
   product_id: number | null;
   duration_s: number | null;
@@ -72,6 +75,7 @@ export function parseBehaviorMessage(payload: unknown): BehaviorEventMessage {
       Number.isFinite(Date.parse(e.client_ts)) &&
       typeof e.channel_code === 'string' &&
       /^[A-Z0-9-]{1,8}$/.test(e.channel_code) &&
+      isCompanyCode(e.company_code) &&
       nullableStr(e.outlet_code, /^[A-Za-z0-9_-]{1,16}$/) &&
       nullableInt(e.product_id, 1, 2_147_483_647) &&
       nullableInt(e.duration_s, 0, 600) &&
@@ -86,6 +90,7 @@ export function parseBehaviorMessage(payload: unknown): BehaviorEventMessage {
       type: e.type as ClientEventType,
       client_ts: new Date(String(e.client_ts)).toISOString(),
       channel_code: String(e.channel_code),
+      company_code: String(e.company_code),
       outlet_code: (e.outlet_code as string | null) ?? null,
       product_id: (e.product_id as number | null) ?? null,
       duration_s: (e.duration_s as number | null) ?? null,

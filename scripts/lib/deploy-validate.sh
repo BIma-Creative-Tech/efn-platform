@@ -49,7 +49,13 @@ EFN_RELEASE_CONFIG_VARS=(ACME_EMAIL PAYMENT_PROVIDER PG_SUPERUSER WHATSAPP_ENABL
   ONLINE_SLOTS_ENABLED
   PROMO_ENABLED PROMO_PUSH_ENABLED PROMO_COMPANIES PROMO_SYNC_SECONDS
   MGM_ENABLED MGM_CLAIM_WINDOW_DAYS MGM_SETTLE_INTERVAL_MS
-  CONSENT_PRIVACY_VERSION CONSENT_PRIVACY_TEXT_SHA256 PRIVACY_CONSENT_ENFORCED)
+  CONSENT_PRIVACY_VERSION CONSENT_PRIVACY_TEXT_SHA256 PRIVACY_CONSENT_ENFORCED
+  BEHAVIOR_TRACKING_ENABLED BEHAVIOR_TRACKING_DPO_APPROVAL_REF CONSENT_TRACKING_VERSION CONSENT_TRACKING_TEXT_SHA256
+  BEHAVIOR_EVENT_RETENTION_DAYS WISHLIST_ENABLED RESTOCK_ALERT_ENABLED PRICE_ALERT_ENABLED ALERT_WATCH_INTERVAL_SECONDS
+  PROMO_CAMPAIGN_ENABLED PROMO_CAMPAIGN_APPROVAL_REF CAMPAIGN_FREQUENCY_CAP_ENABLED CAMPAIGN_BUDGET_CAP_ENABLED
+  CAMPAIGN_MAX_PER_MEMBER_PER_WEEK CAMPAIGN_COMPANIES CAMPAIGN_SYNC_SECONDS
+  EMAIL_ENABLED EMAIL_SMTP_HOST EMAIL_SMTP_PORT EMAIL_SMTP_TLS_MODE EMAIL_SMTP_USER EMAIL_FROM EMAIL_UNSUBSCRIBE_URL
+  EMAIL_RATE_PER_MIN WA_UNOFFICIAL_ENABLED WA_UNOFFICIAL_RISK_ACCEPTANCE_REF ETL_ENABLE_BEHAVIOR)
 # G22 (docs/04 §14.D.1, L-72 D-22-18): env yang DIHAPUS kontrak. Bukan konfigurasi rilis (kunci manifest tak dikenal =
 # ditolak efn-deploy); jalur manual `sudo -E bash deploy.sh` -> production DITOLAK, staging peringatan (BFF: gagal start
 # di production, warning di luar production).
@@ -61,8 +67,11 @@ EFN_REMOVED_CONFIG_VARS=(LOYALTY_POINT_EXPIRY_DAYS)
 # hanya bisa dinyalakan di production lewat izin Superadmin, bukan variabel CI/manifest saja.
 # G42 (docs/04 §26.12 L-125, ADR-041): dashboard Insight menunggu review security, DPO (nama staf di cookie + log audit),
 # Q-ESB1/7/9 dan Q-INS1/Q-INS4 -> INSIGHT_ENABLED=true di production juga hanya dengan izin Superadmin.
+# G50 (docs/04 §28.10): tracking perilaku, kampanye tertarget dan WA tidak resmi = OFF di production; selain izin
+# Superadmin ini, efn_validate_g50_config mewajibkan ref persetujuan di manifest (DPO / pemilik risiko + Legal).
 EFN_GATED_FEATURES=(LOYALTY_EXPIRY_ENABLED LOYALTY_INACTIVE_ANONYMIZE LOYALTY_EXPIRY_NOTICE_REQUIRE_CONSENT
-  FNB_QR_POINTS_ENABLED ONLINE_LOYALTY_REDEEM_ENABLED INSIGHT_ENABLED)
+  FNB_QR_POINTS_ENABLED ONLINE_LOYALTY_REDEEM_ENABLED INSIGHT_ENABLED
+  BEHAVIOR_TRACKING_ENABLED PROMO_CAMPAIGN_ENABLED WA_UNOFFICIAL_ENABLED)
 # Subset EFN_GATED_FEATURES yang nilai berisikonya `false` (default true = filter perlindungan aktif). SEC-171 (r15):
 # melepas filter consent `marketing` untuk notice hangus = keputusan Legal yang sama jenisnya dengan L-73, jadi memakai
 # izin yang sama (EFN_ALLOW_FEATURE_ON), bukan izin darurat EFN_ALLOW_CONTROL_OFF.
@@ -505,6 +514,7 @@ efn_validate_config() { # app_env
     fi
   done
   efn_validate_g22_config "$app_env" || return 1
+  efn_validate_g50_config "$app_env" || return 1
   # SEC-50c: kontrol keamanan tidak bisa dimatikan di production kecuali izin eksplisit Superadmin di deploy.conf
   if [[ "$app_env" == production ]]; then
     local -a allow
@@ -644,6 +654,84 @@ efn_validate_g22_config() { # app_env
         return 1
       fi
     done
+  fi
+}
+
+# ── G50 (docs/04 §28.6-§28.10; ADR-044/047/048 Proposed): tracking, wishlist/alert, kampanye, email, WA tidak resmi ──
+# Dipanggil efn_validate_config. Kosong = default compose (SEMUA flag mati). Rentang = BFF app-config.ts / email.config.ts.
+# Production (selain izin Superadmin EFN_GATED_FEATURES di efn_validate_g22_config):
+#   BEHAVIOR_TRACKING_ENABLED=true -> wajib BEHAVIOR_TRACKING_DPO_APPROVAL_REF (DPO: Q-SM16/17/26)
+#   PROMO_CAMPAIGN_ENABLED=true    -> wajib PROMO_CAMPAIGN_APPROVAL_REF (DPO profiling + Marketing + Finance)
+#   WA_UNOFFICIAL_ENABLED=true     -> wajib WA_UNOFFICIAL_RISK_ACCEPTANCE_REF (pemilik proyek + Legal, Q-SM14)
+#   ETL_ENABLE_BEHAVIOR / SEGMENT_ENABLED=true ditolak selama fitur sumbernya mati (laporan data-AI G50 no. 6)
+# Secret G50 hanya di service yang tercantum (§28.10 baris terakhir) = scripts/check-encryption.sh (render compose).
+efn_validate_g50_config() { # app_env
+  local app_env="$1" v spec name lo hi c
+  local ref_re='^[A-Za-z0-9._/-]{3,64}$'
+  local num_re='^(0|[1-9][0-9]{0,5})$'
+  for v in BEHAVIOR_TRACKING_ENABLED WISHLIST_ENABLED RESTOCK_ALERT_ENABLED PRICE_ALERT_ENABLED PROMO_CAMPAIGN_ENABLED \
+           CAMPAIGN_FREQUENCY_CAP_ENABLED CAMPAIGN_BUDGET_CAP_ENABLED EMAIL_ENABLED WA_UNOFFICIAL_ENABLED \
+           ETL_ENABLE_BEHAVIOR SEGMENT_ENABLED; do
+    efn_no_cntrl "$v" "${!v:-}" || return 1
+    [[ -z "${!v:-}" || "${!v}" == true || "${!v}" == false ]] || _efn_err "$v harus true|false" || return 1
+  done
+  for v in BEHAVIOR_TRACKING_DPO_APPROVAL_REF PROMO_CAMPAIGN_APPROVAL_REF WA_UNOFFICIAL_RISK_ACCEPTANCE_REF; do
+    efn_no_cntrl "$v" "${!v:-}" || return 1
+    [[ -z "${!v:-}" || "${!v}" =~ $ref_re ]] \
+      || _efn_err "$v harus nomor dokumen persetujuan ^[A-Za-z0-9._/-]{3,64}\$ (bukan isi dokumen)" || return 1
+  done
+  for spec in BEHAVIOR_EVENT_RETENTION_DAYS:1:7 ALERT_WATCH_INTERVAL_SECONDS:60:86400 CAMPAIGN_MAX_PER_MEMBER_PER_WEEK:1:50 \
+              CAMPAIGN_SYNC_SECONDS:15:3600 EMAIL_SMTP_PORT:1:65535 EMAIL_RATE_PER_MIN:1:10000; do
+    IFS=: read -r name lo hi <<< "$spec"
+    [[ -z "${!name:-}" ]] && continue
+    [[ "${!name}" =~ $num_re ]] && (( ${!name} >= lo && ${!name} <= hi )) \
+      || _efn_err "$name harus bilangan bulat ${lo}..${hi}" || return 1
+  done
+  # Teks consent tracking: format sama dengan purpose lain, berpasangan
+  _efn_re CONSENT_TRACKING_VERSION '^[A-Za-z0-9._@-]{1,32}$' || return 1
+  _efn_re CONSENT_TRACKING_TEXT_SHA256 '^[0-9a-f]{64}$' || return 1
+  if [[ -n "${CONSENT_TRACKING_VERSION:-}" && -z "${CONSENT_TRACKING_TEXT_SHA256:-}" ]] \
+     || [[ -z "${CONSENT_TRACKING_VERSION:-}" && -n "${CONSENT_TRACKING_TEXT_SHA256:-}" ]]; then
+    _efn_err "CONSENT_TRACKING_VERSION dan CONSENT_TRACKING_TEXT_SHA256 harus di-set berpasangan"; return 1
+  fi
+  if [[ "${BEHAVIOR_TRACKING_ENABLED:-false}" == true && -z "${CONSENT_TRACKING_VERSION:-}" ]]; then
+    _efn_err "BEHAVIOR_TRACKING_ENABLED=true wajib CONSENT_TRACKING_VERSION + CONSENT_TRACKING_TEXT_SHA256 (teks consent disetujui DPO)"; return 1
+  fi
+  # Kampanye: daftar PT = subset entitas §12.1 (API key odoo_api_key_campaign_<pt> per PT di compose)
+  if [[ -n "${CAMPAIGN_COMPANIES:-}" ]]; then
+    [[ "$CAMPAIGN_COMPANIES" =~ ^[A-Z]{2,8}(,[A-Z]{2,8}){0,9}$ ]] \
+      || _efn_err "CAMPAIGN_COMPANIES tidak valid (kode PT huruf besar dipisah koma)" || return 1
+    local -a camp
+    IFS=, read -r -a camp <<< "$CAMPAIGN_COMPANIES"
+    for c in "${camp[@]}"; do efn_validate_company_code "$c" || return 1; done
+  fi
+  # Email (ADR-048 §3.2): tanpa mode plaintext; aktif = host, from, URL unsubscribe https wajib (BFF gagal kirim tanpa itu)
+  _efn_re EMAIL_SMTP_TLS_MODE '^(implicit|starttls)$' || return 1
+  _efn_re EMAIL_SMTP_HOST '^[A-Za-z0-9.-]{1,253}$' || return 1
+  _efn_re EMAIL_SMTP_USER '^[A-Za-z0-9._%+@-]{1,128}$' || return 1
+  _efn_re EMAIL_FROM '^([A-Za-z0-9 ._-]{1,64} )?<?[A-Za-z0-9._%+-]{1,64}@[A-Za-z0-9.-]{1,253}\.[A-Za-z]{2,24}>?$' || return 1
+  _efn_re EMAIL_UNSUBSCRIBE_URL '^https://([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}(/[A-Za-z0-9._~-]+)*$' || return 1
+  if [[ "${EMAIL_ENABLED:-false}" == true ]]; then
+    for v in EMAIL_SMTP_HOST EMAIL_FROM EMAIL_UNSUBSCRIBE_URL; do
+      [[ -n "${!v:-}" ]] || _efn_err "EMAIL_ENABLED=true wajib ${v} (docs/04 §28.9)" || return 1
+    done
+  fi
+  if [[ "$app_env" == production ]]; then
+    if [[ "${BEHAVIOR_TRACKING_ENABLED:-false}" == true && -z "${BEHAVIOR_TRACKING_DPO_APPROVAL_REF:-}" ]]; then
+      _efn_err "production menolak BEHAVIOR_TRACKING_ENABLED=true tanpa BEHAVIOR_TRACKING_DPO_APPROVAL_REF (DPO Q-SM16/17/26, docs/04 §28.10)"; return 1
+    fi
+    if [[ "${PROMO_CAMPAIGN_ENABLED:-false}" == true && -z "${PROMO_CAMPAIGN_APPROVAL_REF:-}" ]]; then
+      _efn_err "production menolak PROMO_CAMPAIGN_ENABLED=true tanpa PROMO_CAMPAIGN_APPROVAL_REF (DPO + Marketing + Finance, docs/04 §28.10)"; return 1
+    fi
+    if [[ "${WA_UNOFFICIAL_ENABLED:-false}" == true && -z "${WA_UNOFFICIAL_RISK_ACCEPTANCE_REF:-}" ]]; then
+      _efn_err "production menolak WA_UNOFFICIAL_ENABLED=true tanpa WA_UNOFFICIAL_RISK_ACCEPTANCE_REF (penerimaan risiko tertulis pemilik proyek + Legal, Q-SM14, ADR-044)"; return 1
+    fi
+    if [[ "${ETL_ENABLE_BEHAVIOR:-false}" == true && "${BEHAVIOR_TRACKING_ENABLED:-false}" != true ]]; then
+      _efn_err "production menolak ETL_ENABLE_BEHAVIOR=true selama BEHAVIOR_TRACKING_ENABLED mati (docs/04 §28.10)"; return 1
+    fi
+    if [[ "${SEGMENT_ENABLED:-false}" == true && "${PROMO_CAMPAIGN_ENABLED:-false}" != true ]]; then
+      _efn_err "production menolak SEGMENT_ENABLED=true selama PROMO_CAMPAIGN_ENABLED mati (docs/04 §28.10)"; return 1
+    fi
   fi
 }
 

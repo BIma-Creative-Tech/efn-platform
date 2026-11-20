@@ -382,6 +382,35 @@ jobs:
           CFG_CONSENT_PRIVACY_VERSION: ${{ vars.CONSENT_PRIVACY_VERSION }}
           CFG_CONSENT_PRIVACY_TEXT_SHA256: ${{ vars.CONSENT_PRIVACY_TEXT_SHA256 }}
           CFG_PRIVACY_CONSENT_ENFORCED: ${{ vars.PRIVACY_CONSENT_ENFORCED || 'false' }}
+          # G50 (docs/04 §28.10): kampanye supermarket. Production: tracking/kampanye/WA tidak resmi OFF; true ditolak
+          # deploy-validate tanpa *_REF persetujuan + EFN_ALLOW_FEATURE_ON Superadmin (deploy.conf).
+          CFG_BEHAVIOR_TRACKING_ENABLED: ${{ vars.BEHAVIOR_TRACKING_ENABLED || 'false' }}
+          CFG_BEHAVIOR_TRACKING_DPO_APPROVAL_REF: ${{ vars.BEHAVIOR_TRACKING_DPO_APPROVAL_REF }}
+          CFG_CONSENT_TRACKING_VERSION: ${{ vars.CONSENT_TRACKING_VERSION }}
+          CFG_CONSENT_TRACKING_TEXT_SHA256: ${{ vars.CONSENT_TRACKING_TEXT_SHA256 }}
+          CFG_BEHAVIOR_EVENT_RETENTION_DAYS: ${{ vars.BEHAVIOR_EVENT_RETENTION_DAYS }}
+          CFG_WISHLIST_ENABLED: ${{ vars.WISHLIST_ENABLED || 'false' }}
+          CFG_RESTOCK_ALERT_ENABLED: ${{ vars.RESTOCK_ALERT_ENABLED || 'false' }}
+          CFG_PRICE_ALERT_ENABLED: ${{ vars.PRICE_ALERT_ENABLED || 'false' }}
+          CFG_ALERT_WATCH_INTERVAL_SECONDS: ${{ vars.ALERT_WATCH_INTERVAL_SECONDS }}
+          CFG_PROMO_CAMPAIGN_ENABLED: ${{ vars.PROMO_CAMPAIGN_ENABLED || 'false' }}
+          CFG_PROMO_CAMPAIGN_APPROVAL_REF: ${{ vars.PROMO_CAMPAIGN_APPROVAL_REF }}
+          CFG_CAMPAIGN_FREQUENCY_CAP_ENABLED: ${{ vars.CAMPAIGN_FREQUENCY_CAP_ENABLED || 'false' }}
+          CFG_CAMPAIGN_BUDGET_CAP_ENABLED: ${{ vars.CAMPAIGN_BUDGET_CAP_ENABLED || 'false' }}
+          CFG_CAMPAIGN_MAX_PER_MEMBER_PER_WEEK: ${{ vars.CAMPAIGN_MAX_PER_MEMBER_PER_WEEK }}
+          CFG_CAMPAIGN_COMPANIES: ${{ vars.CAMPAIGN_COMPANIES }}
+          CFG_CAMPAIGN_SYNC_SECONDS: ${{ vars.CAMPAIGN_SYNC_SECONDS }}
+          CFG_EMAIL_ENABLED: ${{ vars.EMAIL_ENABLED || 'false' }}
+          CFG_EMAIL_SMTP_HOST: ${{ vars.EMAIL_SMTP_HOST }}
+          CFG_EMAIL_SMTP_PORT: ${{ vars.EMAIL_SMTP_PORT }}
+          CFG_EMAIL_SMTP_TLS_MODE: ${{ vars.EMAIL_SMTP_TLS_MODE }}
+          CFG_EMAIL_SMTP_USER: ${{ vars.EMAIL_SMTP_USER }}
+          CFG_EMAIL_FROM: ${{ vars.EMAIL_FROM }}
+          CFG_EMAIL_UNSUBSCRIBE_URL: ${{ vars.EMAIL_UNSUBSCRIBE_URL }}
+          CFG_EMAIL_RATE_PER_MIN: ${{ vars.EMAIL_RATE_PER_MIN }}
+          CFG_WA_UNOFFICIAL_ENABLED: ${{ vars.WA_UNOFFICIAL_ENABLED || 'false' }}
+          CFG_WA_UNOFFICIAL_RISK_ACCEPTANCE_REF: ${{ vars.WA_UNOFFICIAL_RISK_ACCEPTANCE_REF }}
+          CFG_ETL_ENABLE_BEHAVIOR: ${{ vars.ETL_ENABLE_BEHAVIOR || 'false' }}
         run: |
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/efn-release"

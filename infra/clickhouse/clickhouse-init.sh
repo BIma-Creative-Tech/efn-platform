@@ -233,6 +233,11 @@ create_user efn_insight /run/secrets/clickhouse_password_insight
 # clickhouse_password_forecast ke clickhouse-init di base compose (semua env; scripts/secrets.list `random`) -> WAJIB
 # seperti efn_insight: secret hilang = init gagal (fail closed, bukan user tanpa password).
 create_user efn_forecast_reader /run/secrets/clickhouse_password_forecast
+# G50 (ADR-047 Proposed, docs/04 §28.7): user segment-worker (read-only efn_segment.v_*, access/segment-access.sql).
+# Pola efn_forecast_reader: secret clickhouse_password_segment di-mount ke clickhouse-init di base compose (semua env;
+# scripts/secrets.list `random`) -> secret hilang = init gagal (fail closed). segment-worker hanya di overlay
+# docker-compose.segment.yml.
+create_user efn_segment_reader /run/secrets/clickhouse_password_segment
 # G43 (docs/04 §27.10): user mesin migrasi `efn_mig` HANYA selama program migrasi. Secret tidak di-mount / kosong /
 # placeholder (`disabled`, scripts/secrets.list) -> user dihapus (bukan gagal: stack normal tidak butuh migrasi).
 # Secret ada tetapi tidak valid (charset/panjang) -> init gagal (create_user, fail closed).
@@ -295,6 +300,14 @@ SET DEFAULT ROLE forecast_reader TO efn_forecast_reader;
 ALTER USER efn_forecast_reader SETTINGS PROFILE 'forecast_readonly';
 EOF
 
+# G50: segment-access.sql membuat role segment_reader, profil segment_readonly, kuota segment_quota, definer
+# efn_segment_definer (HOST NONE) dan view efn_segment.v_*; pengikatan ke user di sini (pola forecast G44).
+$CH --multiquery <<'EOF'
+GRANT segment_reader TO efn_segment_reader;
+SET DEFAULT ROLE segment_reader TO efn_segment_reader;
+ALTER USER efn_segment_reader SETTINGS PROFILE 'segment_readonly';
+EOF
+
 # G38 (docs/04 §23.3): row policy cakupan PT pada view efn_t2s. Service text2sql mengirim setting SQL_efn_cids
 # (company_id, dipisah koma), SQL_efn_codes (kode PT §12.1) dan SQL_efn_sig = hex(SHA256(kunci|cids|codes)); kunci =
 # secret text2sql_scope_key (hex). Tanpa setting / tanda tangan salah -> 0 baris atau error (fail closed). Kunci hanya
@@ -355,4 +368,4 @@ if [ -n "$INSIGHT_MISSING" ]; then
 fi
 
 rm -f "$CFG"
-echo "clickhouse-init: skema, user (efn_etl, efn_text2sql, efn_metabase, efn_esb, efn_insight, efn_forecast_reader, efn_mig bila aktif) dan grant diterapkan"
+echo "clickhouse-init: skema, user (efn_etl, efn_text2sql, efn_metabase, efn_esb, efn_insight, efn_forecast_reader, efn_segment_reader, efn_mig bila aktif) dan grant diterapkan"

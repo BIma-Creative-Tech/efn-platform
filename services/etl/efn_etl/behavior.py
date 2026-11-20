@@ -317,10 +317,10 @@ def run_behavior_agg(store: AggStore, now: datetime, days: int, k_min: int) -> A
 
 
 # ---------------------------------------------------------------- erasure per subject_key
-# ASUMSI G50 (tabel milik BFF, belum ada di kontrak docs/04): `behavior.subject_erasure(id bigserial, subject_key
-# char(64), request_id uuid NULL, reason text, created_at timestamptz DEFAULT now())`, append-only, disimpan BFF >= 100
-# hari (> TTL 90 hari ClickHouse). BFF mengisi SEMUA subject_key subjek (HMAC member + setiap device_key tertaut) dalam
-# transaksi yang sama dengan penghapusan staging/device_link, SEBELUM dsar_request berstatus processing.
+# G50 (tabel milik BFF, init 20-platform-g50a.sql; belum di kontrak docs/04): `behavior.subject_erasure(id bigserial,
+# subject_key char(64), request_id uuid NOT NULL, reason text, created_at timestamptz DEFAULT now())`, append-only,
+# disimpan BFF >= 100 hari (> TTL 90 hari ClickHouse). BFF mengisi SEMUA subject_key subjek (HMAC member + setiap
+# device_key tertaut) dalam transaksi yang sama dengan transisi dsar_request ke processing (commit atomik).
 SQL_BEHAVIOR_ERASURES = """
 SELECT s.id::text AS erasure_id, s.subject_key, s.created_at,
        s.created_at AS _cursor_ts, s.id::text AS _cursor_key

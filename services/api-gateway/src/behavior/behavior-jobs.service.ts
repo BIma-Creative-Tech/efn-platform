@@ -70,6 +70,8 @@ export class BehaviorJobsService implements OnModuleInit, OnModuleDestroy {
         await purge(`DELETE FROM behavior.segment_member WHERE received_at < now() - make_interval(days => $1::int)`, this.config.segmentRetentionDays);
         await purge(`DELETE FROM behavior.segment_chunk WHERE received_at < now() - make_interval(days => $1::int)`, this.config.segmentRetentionDays);
         await purge(`DELETE FROM behavior.erased_subject WHERE erased_at < now() - make_interval(days => $1::int)`, this.config.behaviorErasedSubjectRetentionDays);
+        // Antrean erasure ETL: ≥ 100 hari (> TTL ClickHouse 90 hari; konfigurasi minimum 91)
+        await purge(`DELETE FROM behavior.subject_erasure WHERE created_at < now() - make_interval(days => $1::int)`, this.config.behaviorErasedSubjectRetentionDays);
         const cartAbandon = this.config.behaviorTrackingEnabled ? await this.deriveCartAbandon(q) : 0;
         const res: BehaviorJobResult = {
           skipped: false,
@@ -92,14 +94,23 @@ export class BehaviorJobsService implements OnModuleInit, OnModuleDestroy {
   }
 
   private async deriveCartAbandon(q: Queryable): Promise<number> {
-    const cand = await q.query<{ subject_key: string; subject_kind: 'device' | 'member'; event_id: string; channel_code: string | null; outlet_code: string | null }>(
+    // channel (web|app), channel_code, PT disalin dari cart_add terakhir: ETL menolak channel di luar web|app (fail closed)
+    const cand = await q.query<{
+      subject_key: string;
+      subject_kind: 'device' | 'member';
+      event_id: string;
+      channel: string;
+      channel_code: string | null;
+      outlet_code: string | null;
+      company_code: string;
+    }>(
       `WITH last_add AS (
-         SELECT DISTINCT ON (subject_key) subject_key, subject_kind, event_id, received_at, channel_code, outlet_code
+         SELECT DISTINCT ON (subject_key) subject_key, subject_kind, event_id, received_at, channel, channel_code, outlet_code, company_code
            FROM behavior.event_raw
           WHERE type = 'cart_add' AND received_at > now() - interval '48 hours'
           ORDER BY subject_key, received_at DESC, event_id
        )
-       SELECT l.subject_key, l.subject_kind, l.event_id::text AS event_id, l.channel_code, l.outlet_code
+       SELECT l.subject_key, l.subject_kind, l.event_id::text AS event_id, l.channel, l.channel_code, l.outlet_code, l.company_code
          FROM last_add l
         WHERE l.received_at <= now() - interval '24 hours'
           AND NOT EXISTS (SELECT 1 FROM behavior.event_raw e
@@ -118,9 +129,10 @@ export class BehaviorJobsService implements OnModuleInit, OnModuleDestroy {
       );
       if ((ins.rowCount ?? 0) === 0) continue;
       await q.query(
-        `INSERT INTO behavior.event_raw (received_at, batch_id, subject_key, subject_kind, channel, event_id, type, client_ts, channel_code, outlet_code)
-         VALUES (now(), $1::uuid, $2, $3, 'server', $4::uuid, 'cart_abandon', now(), $5, $6)`,
-        [deterministicUuid(`efn:cart_abandon:batch:${eventId}`), subject, c.subject_kind, eventId, c.channel_code, c.outlet_code],
+        `INSERT INTO behavior.event_raw
+           (received_at, batch_id, subject_key, subject_kind, channel, event_id, type, client_ts, channel_code, outlet_code, company_code)
+         VALUES (now(), $1::uuid, $2, $3, $7, $4::uuid, 'cart_abandon', now(), $5, $6, $8)`,
+        [deterministicUuid(`efn:cart_abandon:batch:${eventId}`), subject, c.subject_kind, eventId, c.channel_code, c.outlet_code, c.channel, c.company_code],
       );
       n += 1;
     }

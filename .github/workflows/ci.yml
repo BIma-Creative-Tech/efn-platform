@@ -55,9 +55,10 @@ jobs:
       api: ${{ github.event_name == 'push' && 'true' || steps.filter.outputs.api }}
       web: ${{ github.event_name == 'push' && 'true' || steps.filter.outputs.web }}
       insight: ${{ github.event_name == 'push' && 'true' || steps.filter.outputs.insight }}
+      waunofficial: ${{ github.event_name == 'push' && 'true' || steps.filter.outputs['wa-unofficial'] }}
       odoo: ${{ github.event_name == 'push' && 'true' || steps.filter.outputs.odoo }}
       python: ${{ github.event_name == 'push' && 'true' || steps.filter.outputs.python }}
-      pyservices: ${{ github.event_name == 'push' && '["ai-ocr-worker","etl","text2sql","esb-extract","esb-migrate","forecast-worker"]' || steps.filter.outputs.changes }}
+      pyservices: ${{ github.event_name == 'push' && '["ai-ocr-worker","etl","text2sql","esb-extract","esb-migrate","forecast-worker","segment-worker"]' || steps.filter.outputs.changes }}
       infra: ${{ github.event_name == 'push' && 'true' || steps.filter.outputs.infra }}
     steps:
       # Tanpa checkout: pada pull_request paths-filter membaca daftar file lewat API (pull-requests: read); pada push
@@ -71,27 +72,32 @@ jobs:
             api:    ['services/api-gateway/**', '.github/workflows/ci.yml']
             web:    ['services/superapp-web/**', '.github/workflows/ci.yml']
             insight: ['services/insight-web/**', '.github/workflows/ci.yml']   # G42 dashboard Insight (docs/04 §26)
+            wa-unofficial: ['services/wa-unofficial/**', '.github/workflows/ci.yml']   # G50 WA tidak resmi (ADR-044)
             odoo:   ['services/odoo/**', 'scripts/check-odoo-deps.sh', '.github/workflows/ci.yml']
-            python: ['services/ai-ocr-worker/**', 'services/etl/**', 'services/text2sql/**', 'services/esb-extract/**', 'services/forecast-worker/**', 'scripts/migration/**', '.github/workflows/ci.yml']
+            python: ['services/ai-ocr-worker/**', 'services/etl/**', 'services/text2sql/**', 'services/esb-extract/**', 'services/forecast-worker/**', 'services/segment-worker/**', 'scripts/migration/**', '.github/workflows/ci.yml']
             ai-ocr-worker: ['services/ai-ocr-worker/**', '.github/workflows/ci.yml']
             etl:           ['services/etl/**', '.github/workflows/ci.yml']
             text2sql:      ['services/text2sql/**', '.github/workflows/ci.yml']
             esb-extract:   ['services/esb-extract/**', '.github/workflows/ci.yml']   # G41 (docs/04 §25)
             forecast-worker: ['services/forecast-worker/**', '.github/workflows/ci.yml']   # G44 (docs/04 §28.2, ADR-046)
+            segment-worker: ['services/segment-worker/**', '.github/workflows/ci.yml']     # G50 (docs/04 §28.7, ADR-047)
             esb-migrate:   ['scripts/migration/**', '.github/workflows/ci.yml']      # G43 (docs/04 §27.2)
             infra:  ['infra/**', 'services/**/Dockerfile', '.github/workflows/**', 'scripts/**', 'Makefile']
 
   node:
     name: Node (${{ matrix.service }})
     needs: changes
-    if: needs.changes.outputs.api == 'true' || needs.changes.outputs.web == 'true' || needs.changes.outputs.insight == 'true'
+    if: >-
+      needs.changes.outputs.api == 'true' || needs.changes.outputs.web == 'true' ||
+      needs.changes.outputs.insight == 'true' || needs.changes.outputs.waunofficial == 'true'
     runs-on: ubuntu-24.04
     permissions:
       contents: read
     strategy:
       fail-fast: false
       matrix:
-        service: [api-gateway, superapp-web, insight-web]   # insight-web: G42 (docs/04 §26, ADR-041)
+        # insight-web: G42 (docs/04 §26, ADR-041); wa-unofficial: G50 (ADR-044, Baileys di-pin exact + lockfile)
+        service: [api-gateway, superapp-web, insight-web, wa-unofficial]
     defaults:
       run:
         working-directory: services/${{ matrix.service }}
@@ -101,7 +107,8 @@ jobs:
       CHANGED: >-
         ${{ (matrix.service == 'api-gateway' && needs.changes.outputs.api == 'true') ||
         (matrix.service == 'superapp-web' && needs.changes.outputs.web == 'true') ||
-        (matrix.service == 'insight-web' && needs.changes.outputs.insight == 'true') }}
+        (matrix.service == 'insight-web' && needs.changes.outputs.insight == 'true') ||
+        (matrix.service == 'wa-unofficial' && needs.changes.outputs.waunofficial == 'true') }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
         if: env.CHANGED == 'true'
@@ -121,6 +128,10 @@ jobs:
       - name: Lint
         if: env.CHANGED == 'true'
         run: npm run lint --if-present
+      # G50: wa-unofficial punya skrip typecheck (tsc --noEmit termasuk spec); service lain tanpa skrip dilewati.
+      - name: Typecheck
+        if: env.CHANGED == 'true'
+        run: npm run typecheck --if-present
       - name: Test
         if: env.CHANGED == 'true'
         run: npm test --if-present   # CI=true di-set runner; Jest & Vitest membacanya (vitest tidak menerima --ci)
@@ -156,7 +167,7 @@ jobs:
         run: |
           dirs=""
           for d in services/ai-ocr-worker services/etl services/text2sql services/esb-extract services/forecast-worker \
-                   scripts/migration \
+                   services/segment-worker scripts/migration \
                    services/odoo/addons; do
             [ -d "$d" ] && dirs="$dirs $d"
           done
@@ -171,7 +182,8 @@ jobs:
         run: |
           for f in services/ai-ocr-worker/requirements.txt services/etl/requirements.txt \
                    services/text2sql/requirements.txt services/esb-extract/requirements.txt \
-                   services/forecast-worker/requirements.txt services/odoo/requirements.txt \
+                   services/forecast-worker/requirements.txt services/segment-worker/requirements.txt \
+                   services/odoo/requirements.txt \
                    scripts/migration/requirements.txt; do   # G43: cryptography (bundel AES-GCM) ikut gate pip-audit
             [ -f "$f" ] || continue
             pip-audit -r "$f" --strict || exit 1
@@ -189,7 +201,8 @@ jobs:
       matrix:
         # esb-extract: G41 (docs/04 §25); esb-migrate: G43 mesin migrasi scripts/migration (docs/04 §27.2);
         # forecast-worker: G44 (docs/04 §28.2, data sintetis G48). Fixture sintetis saja (repo publik, tanpa data klien).
-        service: [ai-ocr-worker, etl, text2sql, esb-extract, esb-migrate, forecast-worker]
+        # segment-worker: G50 (docs/04 §28.7, ADR-047), tanpa ClickHouse/BFF/Odoo (fake transport).
+        service: [ai-ocr-worker, etl, text2sql, esb-extract, esb-migrate, forecast-worker, segment-worker]
         include:
           - { service: ai-ocr-worker, dir: services/ai-ocr-worker }
           - { service: etl, dir: services/etl }
@@ -197,6 +210,7 @@ jobs:
           - { service: esb-extract, dir: services/esb-extract }
           - { service: esb-migrate, dir: scripts/migration }
           - { service: forecast-worker, dir: services/forecast-worker }
+          - { service: segment-worker, dir: services/segment-worker }
     defaults:
       run:
         working-directory: ${{ matrix.dir }}
@@ -615,7 +629,7 @@ jobs:
           openssl x509 -in secrets/tls_clickhouse_crt.txt -noout -ext subjectAltName | grep -q 'IP Address:127.0.0.1'
           # Klien mTLS (docs/04 §8.5) punya clientAuth; server murni TIDAK
           for s in traefik prometheus grafana promtail ocr_worker blackbox_exporter cadvisor etl metabase_provision \
-                   api_gateway odoo_rpc_gateway forecast_worker; do
+                   api_gateway odoo_rpc_gateway forecast_worker segment_worker wa_operator; do
             openssl x509 -in "secrets/tls_${s}_crt.txt" -noout -ext extendedKeyUsage | grep -q 'Client Authentication'
           done
           if openssl x509 -in secrets/tls_postgres_crt.txt -noout -ext extendedKeyUsage | grep -q 'Client Authentication'; then
@@ -676,6 +690,19 @@ jobs:
               -f docker-compose.forecast.yml \
               --profile core --profile data --profile ai --profile observability --profile ops config -q
           done
+      # G50 (docs/04 §28.7/§28.9): overlay segment-worker dan WA tidak resmi (profil wa-unofficial), sendiri dan bersama
+      # overlay lain yang menambah network ke clickhouse/odoo-rpc-gateway/api-gateway/traefik/prometheus.
+      - name: docker compose config (dev + prod, overlay segment + wa-unofficial)
+        working-directory: infra/compose
+        run: |
+          set -euo pipefail
+          P=(--profile core --profile data --profile ai --profile observability --profile ops --profile wa-unofficial)
+          for env in dev prod; do
+            docker compose -f docker-compose.yml -f "docker-compose.${env}.yml" -f docker-compose.segment.yml "${P[@]}" config -q
+            docker compose -f docker-compose.yml -f "docker-compose.${env}.yml" -f docker-compose.wa-unofficial.yml "${P[@]}" config -q
+            docker compose -f docker-compose.yml -f "docker-compose.${env}.yml" -f docker-compose.esb.yml \
+              -f docker-compose.forecast.yml -f docker-compose.segment.yml -f docker-compose.wa-unofficial.yml "${P[@]}" config -q
+          done
       - name: Prod hanya mem-publish port Traefik
         working-directory: infra/compose
         run: |
@@ -698,11 +725,15 @@ jobs:
           # G41: esb_core_password_* hanya di-mount docker-compose.esb.yml (ekstraksi ESB) -> ikut juga.
           # G43: migration_bundle_key hanya di-mount esb-migrate (profil migrate) + odoo via docker-compose.migration.yml.
           # G44: odoo_api_key_forecast_* + tls_forecast_worker_* hanya di overlay docker-compose.forecast.yml -> ikut juga.
+          # G50: odoo_api_key_segment_smd + tls_segment_worker_* (overlay segment) dan wa_unofficial_* +
+          # rabbitmq_password_wa_unofficial + tls_wa_unofficial_* (overlay wa-unofficial, profil wa-unofficial) -> ikut juga.
           cfg=$(docker compose -f docker-compose.yml -f docker-compose.prod.yml -f docker-compose.payment.yml \
             -f docker-compose.pii.yml -f docker-compose.llm.yml -f docker-compose.llm-text2sql.yml \
             -f docker-compose.esb.yml -f docker-compose.migration.yml -f docker-compose.forecast.yml \
+            -f docker-compose.segment.yml -f docker-compose.wa-unofficial.yml \
             "${overlays[@]}" \
             --profile core --profile data --profile ai --profile observability --profile ops --profile migrate \
+            --profile wa-unofficial \
             config --format json)
           defined=$(echo "$cfg" | jq -r '.secrets | keys[]' | sort)
           listed=$(awk '!/^[[:space:]]*#/ && NF {print $1}' ../../scripts/secrets.list | sort)
@@ -711,9 +742,11 @@ jobs:
       - name: promtool (prometheus.yml + alert-rules.yml + web-config.yml)
         run: |
           chmod 755 secrets
+          # G50: job wa-unofficial memakai credentials_file token metrik (overlay wa-unofficial me-mount-nya ke prometheus)
           docker run --rm -v "$PWD/infra/observability:/etc/prometheus:ro" \
             -v "$PWD/secrets/efn_ca_crt.txt:/run/secrets/efn_ca_crt:ro" \
             -v "$PWD/secrets/minio_prometheus_token.txt:/run/secrets/minio_prometheus_token:ro" \
+            -v "$PWD/secrets/wa_unofficial_metrics_token.txt:/run/secrets/wa_unofficial_metrics_token:ro" \
             -v "$PWD/secrets/tls_prometheus_crt.txt:/run/secrets/tls_server_crt:ro" \
             -v "$PWD/secrets/tls_prometheus_key.txt:/run/secrets/tls_server_key:ro" \
             --entrypoint promtool prom/prometheus:v2.55.1@sha256:2659f4c2ebb718e7695cb9b25ffa7d6be64db013daba13e05c875451cf51b0d3 check config /etc/prometheus/prometheus.yml
@@ -761,6 +794,12 @@ jobs:
             -v "$PWD/infra/odoo-rpc-gateway/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro" \
             -v /tmp/odoo-rpc-gateway.pem:/tmp/haproxy/odoo-rpc-gateway.pem:ro \
             -v "$PWD/secrets/efn_ca_crt.txt:/run/secrets/efn_ca_crt:ro" \
+            haproxy:3.2.25-alpine@sha256:5d97434a423c2533cfeb42874d45cf6d69a840b60334582dfbfd5008e94c80be \
+            haproxy -c -f /usr/local/etc/haproxy/haproxy.cfg
+      # G50 (ADR-044 §3.6): proxy egress WA tidak resmi (TLS passthrough allowlist SNI) - sintaks HAProxy valid
+      - name: haproxy -c (infra/wa-egress/haproxy.cfg)
+        run: |
+          docker run --rm -v "$PWD/infra/wa-egress/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro" \
             haproxy:3.2.25-alpine@sha256:5d97434a423c2533cfeb42874d45cf6d69a840b60334582dfbfd5008e94c80be \
             haproxy -c -f /usr/local/etc/haproxy/haproxy.cfg
       # SEC-36/SEC-42/SEC-50: wrapper deploy host diuji dengan cosign palsu di container sekali pakai (87 kasus: replay/

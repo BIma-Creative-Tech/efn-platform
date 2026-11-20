@@ -17,14 +17,16 @@
 --    - `event_raw`       staging event, PARTISI HARIAN (RANGE received_at, UTC), retensi 7 hari (drop partisi)
 --    - `event_dedup`     unik (subject_key, event_id) lintas partisi (kontrak §28.6 "Dedup")
 --    - `segment_chunk` / `segment_member`  anggota segmen dari segment-worker (§28.7), retensi 30 hari
---    - `erased_subject`  subject_key subjek terhapus → job erasure ClickHouse (L-154), retensi 100 hari
+--    - `erased_subject`  subject_key subjek terhapus (BFF: tolak di ingest segmen), retensi 100 hari
+--    - `subject_erasure` antrean erasure ClickHouse untuk ETL (per request_id DSAR, append-only), retensi 100 hari
+--    - kolom `event_raw.company_code` + `ingested_at` (cursor ETL) — revisi G50-A, idempoten di DB versi awal
 --    - fungsi SECURITY DEFINER `ensure_event_partitions` / `drop_old_event_partitions` (efn_bff tidak punya hak DDL)
 -- 2. `platform.member_wishlist`, `restock_alert`, `price_alert` (§28.8, L-161) + state pengamat stok/harga.
 -- 3. `platform.campaign`, `member_voucher`, `campaign_delivery`, `member_inbox` (§28.7, L-155, L-164).
 -- PII: tidak ada kolom nama/HP/email/IP. `device_key`/`subject_key` = pseudonim (data pribadi, ADR-047 §1.2) → ikut
 -- DSAR export & erasure. Kode voucher terenkripsi (`code_enc`, AES-256-GCM BFF, AAD per kolom) + `code_hash` HMAC.
--- Hak: efn_bff DML seperlunya; efn_etl hanya SELECT `behavior.event_raw` + `behavior.erased_subject` (ETL → ClickHouse,
--- ADR-003); efn_readonly/efn_ocr TIDAK diberi akses.
+-- Hak: efn_bff DML seperlunya; efn_etl hanya SELECT per kolom `behavior.event_raw` + `behavior.subject_erasure`
+-- (= services/etl/sql/platform-behavior-grants.sql; ETL → ClickHouse, ADR-003); efn_readonly/efn_ocr TIDAK diberi akses.
 -- Risiko: R-L13 (tracking/profiling), R-B17 (spam/anggaran promo), R-L01, R-S04.
 
 \connect efn_platform
@@ -100,12 +102,43 @@ CREATE TABLE IF NOT EXISTS behavior.event_raw (
   query          text        CHECK (query IS NULL OR length(query) <= 64),
   result_count   integer     CHECK (result_count IS NULL OR result_count >= 0),
   stock_status   text        CHECK (stock_status IS NULL OR stock_status IN ('in_stock', 'low', 'out')),
-  price_idr      bigint      CHECK (price_idr IS NULL OR price_idr >= 0)
+  price_idr      bigint      CHECK (price_idr IS NULL OR price_idr >= 0),
+  -- Revisi G50-A (selaras ETL `services/etl/efn_etl/behavior.py`): PT kanal (dari pemetaan kanal → PT BFF) dan waktu
+  -- baris masuk staging (cursor ETL `(ingested_at, subject_key||':'||event_id)`)
+  company_code   text        NOT NULL CHECK (company_code ~ '^[A-Z][A-Z0-9]{1,9}$'),
+  ingested_at    timestamptz NOT NULL DEFAULT clock_timestamp()
 ) PARTITION BY RANGE (received_at);
 CREATE INDEX IF NOT EXISTS ix_event_raw_subject ON behavior.event_raw (subject_key, received_at);
 CREATE INDEX IF NOT EXISTS ix_event_raw_type ON behavior.event_raw (type, received_at);
 -- Pengaman: baris tanpa partisi harian (job terlambat) tidak membuat insert gagal; dibersihkan job retensi
 CREATE TABLE IF NOT EXISTS behavior.event_raw_default PARTITION OF behavior.event_raw DEFAULT;
+
+-- DB yang sudah menjalankan versi awal 20 (tanpa company_code/ingested_at): tambah kolom tanpa default volatil, isi
+-- baris lama, baru pasang NOT NULL/DEFAULT/CHECK. Baris staging lama yang PT-nya tidak dapat diturunkan dibuang
+-- (staging 7 hari, bukan sumber kebenaran; lebih baik daripada menyimpan event tanpa PT).
+ALTER TABLE behavior.event_raw ADD COLUMN IF NOT EXISTS company_code text;
+ALTER TABLE behavior.event_raw ADD COLUMN IF NOT EXISTS ingested_at timestamptz;
+UPDATE behavior.event_raw e
+   SET company_code = s.channel_data ->> 'company_code'
+  FROM platform.online_catalog_sync s
+ WHERE e.company_code IS NULL AND s.channel_code = e.channel_code
+   AND (s.channel_data ->> 'company_code') ~ '^[A-Z][A-Z0-9]{1,9}$';
+DELETE FROM behavior.event_raw WHERE company_code IS NULL;
+UPDATE behavior.event_raw SET ingested_at = received_at WHERE ingested_at IS NULL;
+ALTER TABLE behavior.event_raw ALTER COLUMN company_code SET NOT NULL;
+ALTER TABLE behavior.event_raw ALTER COLUMN ingested_at SET DEFAULT clock_timestamp();
+ALTER TABLE behavior.event_raw ALTER COLUMN ingested_at SET NOT NULL;
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint
+                  WHERE conrelid = 'behavior.event_raw'::regclass AND contype = 'c'
+                    AND pg_get_constraintdef(oid) LIKE '%company_code%') THEN
+    ALTER TABLE behavior.event_raw ADD CONSTRAINT event_raw_company_code_check
+      CHECK (company_code ~ '^[A-Z][A-Z0-9]{1,9}$');
+  END IF;
+END $$;
+-- Cursor ETL job `behavior_events` (index di induk → terbentuk di setiap partisi, termasuk partisi baru)
+CREATE INDEX IF NOT EXISTS ix_event_raw_ingested ON behavior.event_raw (ingested_at);
 
 CREATE TABLE IF NOT EXISTS behavior.event_dedup (
   subject_key  char(64)    NOT NULL CHECK (subject_key ~ '^[0-9a-f]{64}$'),
@@ -141,6 +174,20 @@ CREATE TABLE IF NOT EXISTS behavior.erased_subject (
   erased_at    timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS ix_erased_subject_at ON behavior.erased_subject (erased_at);
+
+-- Antrean erasure untuk ETL (kontrak `SQL_BEHAVIOR_ERASURES` / `SQL_DSAR_SUBJECT_KEYS` di services/etl/efn_etl/behavior.py):
+-- append-only, satu baris per subject_key per permintaan DSAR (HMAC member + setiap device_key tertaut), ditulis dalam
+-- transaksi erasure platform yang sama dengan transisi `dsar_request` → processing; retensi ≥ 100 hari (> TTL CH 90 h).
+-- `erased_subject` tetap dipakai BFF (menolak subjek terhapus di ingest segmen).
+CREATE TABLE IF NOT EXISTS behavior.subject_erasure (
+  id           bigserial   PRIMARY KEY,
+  subject_key  char(64)    NOT NULL CHECK (subject_key ~ '^[0-9a-f]{64}$'),
+  request_id   uuid        NOT NULL,
+  reason       text        CHECK (reason IS NULL OR reason ~ '^[a-z_]{1,40}$'),
+  created_at   timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS ix_subject_erasure_created ON behavior.subject_erasure (created_at, id);
+CREATE INDEX IF NOT EXISTS ix_subject_erasure_request ON behavior.subject_erasure (request_id);
 
 -- Partisi harian (UTC) hari ini-1 .. hari ini+p_days_ahead. Kegagalan satu partisi (mis. baris sudah jatuh ke DEFAULT
 -- untuk rentang itu) → WARNING, partisi lain tetap dibuat; baris DEFAULT tetap terbaca & dipurge job retensi.
@@ -332,12 +379,19 @@ REVOKE ALL ON platform.member_wishlist, platform.restock_alert, platform.price_a
 
 GRANT USAGE ON SCHEMA behavior TO efn_bff, efn_etl;
 GRANT SELECT, INSERT, DELETE ON behavior.device_consent, behavior.event_raw, behavior.event_dedup, behavior.segment_chunk,
-                                behavior.segment_member, behavior.erased_subject TO efn_bff;
+                                behavior.segment_member, behavior.erased_subject, behavior.subject_erasure TO efn_bff;
 GRANT SELECT, INSERT, UPDATE, DELETE ON behavior.device_link, behavior.subject_member TO efn_bff;
-GRANT USAGE ON SEQUENCE behavior.device_consent_id_seq TO efn_bff;
+GRANT USAGE ON SEQUENCE behavior.device_consent_id_seq, behavior.subject_erasure_id_seq TO efn_bff;
 GRANT EXECUTE ON FUNCTION behavior.ensure_event_partitions(integer), behavior.drop_old_event_partitions(integer) TO efn_bff;
--- ETL (ADR-003): baca staging + daftar erasure saja (tanpa tautan device ↔ member)
-GRANT SELECT ON behavior.event_raw, behavior.erased_subject TO efn_etl;
+-- ETL (ADR-003): grant level kolom = isi services/etl/sql/platform-behavior-grants.sql (dipasang di sini agar deploy.sh
+-- tidak butuh file terpisah). Grant tabel penuh dari versi awal file ini dicabut dulu (idempoten).
+REVOKE ALL ON behavior.event_raw, behavior.erased_subject, behavior.subject_erasure FROM efn_etl;
+GRANT SELECT (event_id, subject_key, subject_kind, company_code, channel, channel_code, outlet_code, type, product_id,
+              duration_s, qty, query, result_count, stock_status, price_idr, received_at, ingested_at)
+    ON behavior.event_raw TO efn_etl;
+GRANT SELECT (id, subject_key, request_id, created_at) ON behavior.subject_erasure TO efn_etl;
+-- Pertahanan berlapis: tabel penaut identitas tidak pernah terbaca ETL/Text-to-SQL
+REVOKE ALL ON behavior.device_link, behavior.device_consent, behavior.subject_member FROM efn_etl, efn_readonly;
 
 GRANT SELECT, INSERT, DELETE ON platform.member_wishlist TO efn_bff;
 GRANT SELECT, INSERT, UPDATE, DELETE ON platform.restock_alert, platform.price_alert, platform.alert_stock_state,

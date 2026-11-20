@@ -11,6 +11,7 @@ import { AuthUser } from '../common/security/access-token.service';
 import { UNKNOWN_TEXT_SHA256 } from '../privacy/consent.service';
 import { BEHAVIOR_EVENT_QUEUE, BehaviorEventMessage, BehaviorQueueEvent, behaviorIdempotencyKey } from './behavior-message';
 import { memberConsentGranted } from './behavior-privacy';
+import { resolveChannelCompanies } from './channel-company';
 import { MAX_BODY_BYTES, ParsedEvent, RejectCode, parseDeviceConsent, parseEventBatch } from './dto/behavior.dto';
 import { deviceKey, memberSubjectKey } from './subject-key';
 
@@ -195,8 +196,15 @@ export class BehaviorService {
       );
       for (const r of res.rows) prices.set(`${channel}:${Number(r.product_id)}`, priceRows(r.data?.prices));
     }
+    // Revisi G50-A: setiap event wajib punya PT (kolom `event_raw.company_code`, mart ETL per PT)
+    const companies = await resolveChannelCompanies(this.db, events.map((e) => e.event.channel_code));
     const out: BehaviorQueueEvent[] = [];
     for (const { index, event } of events) {
+      const company = companies.get(event.channel_code);
+      if (!company) {
+        rejected.push({ index, code: 'unknown_channel' });
+        continue;
+      }
       let price: number | null = null;
       let stock: BehaviorQueueEvent['stock_status'] = null;
       if (event.product_id !== null) {
@@ -217,6 +225,7 @@ export class BehaviorService {
         type: event.type as BehaviorQueueEvent['type'],
         client_ts: event.client_ts,
         channel_code: event.channel_code,
+        company_code: company,
         outlet_code: event.outlet_code,
         product_id: event.product_id,
         duration_s: event.duration_s,

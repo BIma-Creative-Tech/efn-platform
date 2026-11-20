@@ -93,6 +93,22 @@
   forecast, body 300 KB lolos / 600 KB 413, BFF 600 KB 413, forecast langsung ke `odoo-tls` gagal handshake);
   **belum dijalankan** terhadap stack nyata (modul Odoo G44 belum ada; kasus positif `pass` karena status dari Odoo).
   Odoo wajib memuat 5 metode yang sama di `RPC_ALLOWLIST` (efn-odoo-engineer).
+- **G50 (20 Nov 2026, docs/04 §28.7, ADR-047 Proposed): kampanye supermarket.** Tiga path baru, allowlist per CN:
+
+  | # | Path | Klien (CN) / user teknis | Sifat |
+  |---|---|---|---|
+  | 30 | `/json/2/efn.campaign/efn_campaign_claim` | api-gateway, `efn_campaign_<pt>` | tulis (`queued -> claimed`), respons memuat kode voucher |
+  | 31 | `/json/2/efn.campaign/efn_campaign_ack` | idem | tulis, idempoten |
+  | 32 | `/json/2/efn.campaign/efn_campaign_proposal_upsert` | **segment-worker** (klien ketiga), `efn_segment_<pt>` | tulis ringkasan tanpa data member, idempoten `(run_id, segment_code)` |
+
+  CN `segment-worker` hanya #32 (ditolak `why=path` ke path BFF/forecast); CN `api-gateway` ditolak ke #32. segment-worker
+  memakai backend `odoo_forecast` (maxconn 1, antrean 4) bersama forecast-worker: jadwal tidak bertabrakan (forecast
+  23:30, segmen 02:15 WIB). Keputusan devsecops G50: user teknis Odoo **terpisah** per service (`efn_campaign_<pt>` untuk
+  BFF, `efn_segment_<pt>` untuk segment-worker; secret `odoo_api_key_campaign_<pt>` vs `odoo_api_key_segment_<pt>`),
+  keduanya `group_campaign_bot` satu company (docs/04 §7.3 kredensial per service). Network: overlay
+  `docker-compose.segment.yml` menambahkan gateway ke `segment-rpc` (hanya gateway + segment-worker). Odoo wajib memuat
+  ketiga metode di `RPC_ALLOWLIST` (`efn_core/tests/test_rpc_surface.py`). Kasus uji `test-gateway.sh` untuk #30-#32
+  **belum ditambahkan** (backlog; pola kasus G44).
 - **Belum / batas:**
   - Tidak ada metrik HAProxy ke Prometheus (log akses → Loki; alert `EfnOdooRpcGatewayDenied`). Kandidat: PROMEX di
     loopback + sidecar mTLS.

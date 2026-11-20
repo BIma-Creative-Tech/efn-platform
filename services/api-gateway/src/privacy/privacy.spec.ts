@@ -31,6 +31,7 @@ import { OnlinePrivacyService, openOnlineOrders } from '../orders/online-privacy
 import { parseErasurePendingArgs } from '../cli/online-erasure-pending';
 import { listErasurePending } from './erasure-pending';
 import { DsarController } from './privacy.controller';
+import { memberSubjectKey } from '../behavior/subject-key';
 
 const PHONE = '6281234567890';
 const MEMBER_ID = '8d7b5a1e-2c3f-4a5b-9c8d-7e6f5a4b3c2d';
@@ -284,6 +285,31 @@ describe('ErasureService (§8.4)', () => {
     const svc = new ErasureService(config, db, storage);
     return { svc, db, storage, hash, config, stores: () => stores };
   }
+
+  it('G50 (ETL behavior_erasure): subject_erasure memuat HMAC member + device_key tertaut dengan request_id, satu transaksi dengan processing', async () => {
+    const pepper = 'p'.repeat(40);
+    const device = 'f'.repeat(64);
+    const db = new FakeDb((t) => {
+      if (t.includes('pg_try_advisory_xact_lock')) return { rows: [{ ok: true }], rowCount: 1 };
+      if (t.includes("SET status = 'processing'")) return { rows: [{ member_id: MEMBER_ID, member_hash: 'd'.repeat(64) }], rowCount: 1 };
+      if (t.includes("to_regclass('behavior.device_link')")) return { rows: [{ ok: true }], rowCount: 1 };
+      if (t.includes('FROM behavior.subject_member WHERE member_id')) return { rows: [{ k: device }], rowCount: 1 };
+      if (t.includes('array_remove')) return { rows: [{ status: 'processing' }], rowCount: 1 };
+      return undefined;
+    });
+    const svc = new ErasureService(testConfig({ BEHAVIOR_SUBJECT_PEPPER: pepper }), db, { put: jest.fn(), remove: jest.fn() });
+    expect(await svc.processDue(REQ_ID)).toBe(true);
+    const se = db.find('INSERT INTO behavior.subject_erasure')[0]!;
+    expect(se.params[0]).toEqual(expect.arrayContaining([device, memberSubjectKey(pepper, MEMBER_ID)]));
+    expect(se.params[1]).toBe(REQ_ID);
+    // urutan di transaksi yang sama: transisi processing → antrean erasure → hapus staging
+    const texts = db.queries.map((q) => q.text);
+    const iProc = texts.findIndex((x) => x.includes("SET status = 'processing'"));
+    const iSe = texts.findIndex((x) => x.includes('INSERT INTO behavior.subject_erasure'));
+    expect(iProc).toBeGreaterThanOrEqual(0);
+    expect(iSe).toBeGreaterThan(iProc);
+    expect(texts.findIndex((x) => x.includes('DELETE FROM behavior.event_raw'))).toBeGreaterThan(iSe);
+  });
 
   it('setelah masa tenggang: processing + erasure platform dalam satu transaksi (tombstone, forfeit per PT, NULL PII, hapus member)', async () => {
     const ctx = erasureSetup();

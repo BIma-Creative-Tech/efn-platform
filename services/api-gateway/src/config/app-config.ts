@@ -2168,9 +2168,12 @@ export class AppConfig {
   get segmentRetentionDays(): number {
     return this.int('SEGMENT_RETENTION_DAYS', 30, 1, 90);
   }
-  /** Daftar `subject_key` terhapus untuk job erasure ClickHouse (> TTL `fact_visitor_event` 90 hari). */
+  /**
+   * Retensi `behavior.subject_erasure` (antrean erasure ETL) dan `behavior.erased_subject`: minimal 100 hari (> TTL
+   * `fact_visitor_event` 90 hari, keputusan lead revisi G50-A).
+   */
   get behaviorErasedSubjectRetentionDays(): number {
-    return this.int('BEHAVIOR_ERASED_SUBJECT_RETENTION_DAYS', 100, 91, 400);
+    return this.int('BEHAVIOR_ERASED_SUBJECT_RETENTION_DAYS', 100, 100, 400);
   }
   /** Interval job behavior (partisi, retensi, cart_abandon). 0 = mati (test). Default 1 jam. */
   get behaviorJobIntervalMs(): number {

@@ -37,14 +37,29 @@ export async function subjectKeysOf(q: Queryable, memberId: string, pepper: stri
 }
 
 /**
- * Erasure (L-154): hapus tautan device, pemetaan subject, event staging, dedup, anggota segmen; catat subject_key di
- * `behavior.erased_subject` agar job ETL menghapusnya dari ClickHouse (`fact_visitor_event`). Bukti consent device
- * (`device_consent`, tanpa PII) dipertahankan — setelah tautan dihapus tidak lagi dapat dikaitkan ke member.
+ * Erasure (L-154): catat SEMUA subject_key subjek (HMAC member + setiap device_key tertaut) di
+ * `behavior.subject_erasure` dengan `request_id` DSAR — antrean job ETL `behavior_erasure` (ALTER DELETE
+ * `fact_visitor_event`) dan `BehaviorDsarHook` (menahan `privacy.erasure.completed` sampai kunci hilang dari ClickHouse);
+ * lalu hapus event staging, dedup, anggota segmen, tautan device, pemetaan subject; `erased_subject` dipakai BFF untuk
+ * menolak subjek terhapus di ingest segmen. Dipanggil di DALAM transaksi ErasureService yang sama dengan transisi
+ * `dsar_request` → `processing` (atomik: ETL tidak pernah melihat `processing` tanpa baris `subject_erasure`).
+ * Bukti consent device (`device_consent`, tanpa PII) dipertahankan — setelah tautan dihapus tidak dapat dikaitkan.
  */
-export async function eraseBehaviorMember(q: Queryable, memberId: string, pepper: string | null): Promise<number> {
+export async function eraseBehaviorMember(
+  q: Queryable,
+  memberId: string,
+  pepper: string | null,
+  requestId: string,
+  reason = 'dsar_erasure',
+): Promise<number> {
   if (!(await behaviorSchemaReady(q))) return 0;
   const keys = await subjectKeysOf(q, memberId, pepper);
   if (keys.length > 0) {
+    await q.query(
+      `INSERT INTO behavior.subject_erasure (subject_key, request_id, reason)
+       SELECT k, $2::uuid, $3 FROM unnest($1::text[]) AS k`,
+      [keys, requestId, reason],
+    );
     await q.query(`DELETE FROM behavior.event_raw WHERE subject_key = ANY($1::text[])`, [keys]);
     await q.query(`DELETE FROM behavior.event_dedup WHERE subject_key = ANY($1::text[])`, [keys]);
     await q.query(`DELETE FROM behavior.segment_member WHERE subject_key = ANY($1::text[])`, [keys]);

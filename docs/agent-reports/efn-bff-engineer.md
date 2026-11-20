@@ -1224,3 +1224,31 @@ Cron akrual harian Odoo `efn_loyalty_accounting` memanggil `GET /v1/pos/loyalty/
 - Dispatcher at-most-once (crash setelah commit = notifikasi terlewat, tidak pernah dobel).
 - Penghitung agregat tanpa consent (ADR-047 §3.1 no. 5), kelas rate limit CATALOG burst, cek kontak terverifikasi saat
   membuat alert: belum.
+
+### Revisi G50-A — selaras ETL `behavior_events` / `behavior_erasure` (20 Nov 2026, keputusan lead)
+> Belum dijalankan lokal (tanpa shell): Jest/tsc/eslint dan migrasi 20 (DB kosong + DB versi awal, dua kali) di container.
+
+- `infra/postgres/init/20-platform-g50a.sql`: `event_raw.company_code text NOT NULL` (CHECK `^[A-Z][A-Z0-9]{1,9}$`) +
+  `ingested_at timestamptz NOT NULL DEFAULT clock_timestamp()` + index induk `(ingested_at)`; jalur DB versi awal =
+  `ADD COLUMN IF NOT EXISTS` nullable → isi (`company_code` dari `online_catalog_sync.channel_data`, `ingested_at` =
+  `received_at`) → baris staging tanpa PT dibuang → NOT NULL/DEFAULT/CHECK (DO block idempoten). Tabel baru
+  `behavior.subject_erasure(id bigserial, subject_key, request_id uuid NOT NULL, reason, created_at)` + index
+  `(created_at, id)`, `(request_id)`. Grant `efn_etl` per kolom persis `platform-behavior-grants.sql` (grant tabel penuh
+  versi awal dicabut dulu); REVOKE `device_link`/`device_consent`/`subject_member` dari `efn_etl`, `efn_readonly`.
+  `erased_subject` dipertahankan (penolakan subjek terhapus di ingest segmen), tidak lagi terbaca ETL.
+- BFF: `src/behavior/channel-company.ts` (baru), `behavior.service.ts` (`unknown_channel`), `behavior-message.ts`
+  (`company_code` wajib ∈ `COMPANY_CODES`), `behavior-writer.consumer.ts` (PT diturunkan ulang saat tulis, kolom ke-18,
+  `ingested_at` dari DEFAULT), `behavior-jobs.service.ts` (purge `subject_erasure`; `cart_abandon` menyalin
+  channel/kanal/PT dari cart_add — sebelumnya `channel='server'` yang akan DITOLAK validasi ETL), `behavior-privacy.ts`
+  (`eraseBehaviorMember(q, memberId, pepper, requestId, reason)` menulis `subject_erasure` lebih dulu),
+  `dto/behavior.dto.ts`, `config/app-config.ts` (`BEHAVIOR_ERASED_SUBJECT_RETENTION_DAYS` minimum 100),
+  `privacy/erasure.service.ts` (meneruskan `requestId`), README `src/behavior`.
+- Spec: `behavior.service.spec` (unknown_channel, company_code), `behavior-writer.consumer.spec`,
+  `behavior-jobs.service.spec` (subject_erasure, retensi, cart_abandon), `privacy.spec` (ErasureService → subject_erasure
+  dengan request_id dalam transaksi processing). DSAR export tidak berubah bentuk.
+- **Asumsi pemetaan kanal → PT:** sumber = `platform.online_catalog_sync.channel_data` (blok `channel` Odoo, pola
+  `CatalogService.fromOdoo` L-11: `code` = kanal, `active=true`, PT ∈ `COMPANY_CODES`), TIDAK dibatasi `ONLINE_CHANNELS`
+  (kanal salinan QR/booking ikut), TIDAK menebak dari aturan G20 "kode kanal = kode PT". Akibat: kanal SMD baru
+  terpetakan setelah katalog kanal SMD tersinkron sukses; sebelum itu semua event SMD `unknown_channel`.
+- "Sebelum status processing": baris `subject_erasure` ditulis di transaksi yang sama dengan `UPDATE … SET status =
+  'processing'` (urutan statement sesudahnya, tetapi commit atomik → ETL tidak pernah melihat `processing` tanpa kunci).

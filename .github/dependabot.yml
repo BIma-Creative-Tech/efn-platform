@@ -39,6 +39,8 @@ updates:
       - /services/text2sql
       - /services/esb-extract
       - /scripts/migration          # G43 esb-migrate
+      - /services/segment-worker    # G50
+      - /services/wa-unofficial     # G50 (ADR-044)
       - /infra/backup/postgres
       - /infra/minio
       - /infra/metabase
@@ -104,6 +106,21 @@ updates:
       insight-web-security:
         applies-to: security-updates
         patterns: ["*"]
+  # G50 (ADR-044 Proposed): WA tidak resmi. Baileys di-pin EXACT (§3.11): PR Dependabot = usulan, wajib review manual
+  # (changelog + advisori) sebelum merge; jangan auto-merge.
+  - package-ecosystem: npm
+    directory: /services/wa-unofficial
+    schedule: { interval: weekly, day: monday, time: "03:00", timezone: Asia/Jakarta }
+    open-pull-requests-limit: 2
+    cooldown: { default-days: 7, semver-major-days: 14 }
+    groups:
+      wa-unofficial-minor-patch:
+        applies-to: version-updates
+        update-types: [minor, patch]
+        patterns: ["*"]
+      wa-unofficial-security:
+        applies-to: security-updates
+        patterns: ["*"]
 
   # Semua requirements Python dalam satu entri multi-direktori -> satu PR berkelompok.
   - package-ecosystem: pip
@@ -113,6 +130,7 @@ updates:
       - /services/text2sql
       - /services/esb-extract
       - /scripts/migration          # G43 esb-migrate (cryptography, clickhouse-connect)
+      - /services/segment-worker    # G50 (clickhouse-connect, requests; lock ber-hash diperbarui manual)
       - /services/odoo
     schedule: { interval: weekly, day: monday, time: "03:30", timezone: Asia/Jakarta }
     open-pull-requests-limit: 2

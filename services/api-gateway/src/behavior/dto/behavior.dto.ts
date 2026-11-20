@@ -47,7 +47,8 @@ const TOP_KEYS = new Set(['schema_version', 'device_id', 'channel', 'events']);
 const EVENT_KEYS = new Set(['event_id', 'type', 'client_ts', 'channel_code', 'outlet_code', 'product_id', 'duration_s', 'qty', 'query', 'result_count']);
 const CONSENT_KEYS = new Set(['device_id', 'granted', 'version']);
 
-export type RejectCode = 'invalid' | 'stale' | 'unknown_product';
+/** `unknown_channel` (revisi G50-A): `channel_code` tidak terpetakan ke PT → event tidak disimpan tanpa PT. */
+export type RejectCode = 'invalid' | 'stale' | 'unknown_channel' | 'unknown_product';
 
 export interface ParsedEvent {
   event_id: string;

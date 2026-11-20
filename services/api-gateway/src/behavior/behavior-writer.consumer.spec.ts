@@ -11,6 +11,7 @@ const event = (extra: Record<string, unknown> = {}): Record<string, unknown> => 
   type: 'product_view',
   client_ts: new Date(NOW - 1000).toISOString(),
   channel_code: 'SMD',
+  company_code: 'SMD',
   outlet_code: 'SMD01',
   product_id: 10,
   duration_s: 5,
@@ -32,9 +33,13 @@ const message = (events: unknown[], extra: Record<string, unknown> = {}): Record
   ...extra,
 });
 
-function setup(opts: { claimed?: boolean; freshIds?: (ids: string[]) => string[] } = {}) {
+function setup(opts: { claimed?: boolean; freshIds?: (ids: string[]) => string[]; mappedCompany?: string | null } = {}) {
   const db = new FakeDb((t, p) => {
     if (t.includes('INSERT INTO platform.processed_message')) return opts.claimed === false ? { rows: [], rowCount: 0 } : { rows: [{ consumer: 'x' }], rowCount: 1 };
+    if (t.includes('FROM platform.online_catalog_sync')) {
+      const c = opts.mappedCompany === undefined ? 'SMD' : opts.mappedCompany;
+      return c === null ? { rows: [], rowCount: 0 } : { rows: [{ channel_code: 'SMD', code: 'SMD', active: 'true', company_code: c }], rowCount: 1 };
+    }
     if (t.includes('INSERT INTO behavior.event_dedup')) {
       const ids = (opts.freshIds ?? ((x: string[]) => x))(p[1] as string[]);
       return { rows: ids.map((event_id) => ({ event_id })), rowCount: ids.length };
@@ -54,7 +59,28 @@ describe('BehaviorWriterConsumer (behavior.event → PG staging)', () => {
     const ins = ctx.db.find('INSERT INTO behavior.event_raw')[0]!;
     expect(ins.params[2]).toBe(SUBJECT);
     expect((ins.params[5] as string[]).length).toBe(2);
+    // company_code = kolom ke-18; ingested_at TIDAK dikirim (DEFAULT clock_timestamp(), cursor ETL)
+    expect(ins.params[17]).toEqual(['SMD', 'SMD']);
+    expect(ins.text).toContain('company_code');
+    expect(ins.text).not.toContain('ingested_at');
     expect(ctx.db.find('INSERT INTO platform.processed_message')[0]!.params[0]).toBe('bff.behavior-writer');
+  });
+
+  it('PT diturunkan ulang dari pemetaan kanal saat tulis; kanal sementara tak terpetakan → PT tervalidasi dari pesan', async () => {
+    const remap = setup({ mappedCompany: 'GL' });
+    await remap.consumer.handle(message([event()]), { userId: 'efn-bff' });
+    expect(remap.db.find('INSERT INTO behavior.event_raw')[0]!.params[17]).toEqual(['GL']);
+    const gone = setup({ mappedCompany: null });
+    await gone.consumer.handle(message([event()]), { userId: 'efn-bff' });
+    expect(gone.db.find('INSERT INTO behavior.event_raw')[0]!.params[17]).toEqual(['SMD']);
+  });
+
+  it('event tanpa company_code / PT di luar COMPANY_CODES → DLQ (tidak pernah disimpan tanpa PT)', async () => {
+    const ctx = setup();
+    const noCompany = event();
+    delete noCompany.company_code;
+    await expect(ctx.consumer.handle(message([noCompany]), { userId: 'efn-bff' })).rejects.toBeInstanceOf(PermanentMessageError);
+    await expect(ctx.consumer.handle(message([event({ company_code: 'ZZ' })]), { userId: 'efn-bff' })).rejects.toBeInstanceOf(PermanentMessageError);
   });
 
   it('event yang sudah ada di staging (subject_key, event_id) tidak ditulis ulang', async () => {
