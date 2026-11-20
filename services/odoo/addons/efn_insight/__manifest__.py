@@ -2,7 +2,10 @@
     "name": "EFN Dashboard Insight (SSO akun Odoo)",
     "summary": "G42 (ADR-041 Proposed, docs/04 §26): menu 'Dashboard Insight' membuka insight-web dengan token SSO "
     "eit1 sekali pakai (HMAC-SHA256, umur 60 dtk) berisi cakupan PT user; dikirim lewat POST form, bukan query.",
-    "version": "19.0.1.0.0",
+    # 19.0.2.0.0 (G47, docs/04 §28.13, ADR-041 §3.4): token eit2 (cakupan supermarket wids/persona/cats) default;
+    # eit1 untuk rollback (EFN_INSIGHT_TOKEN_VERSION=1); hook privat res.users._efn_insight_sm_scope (kosong) yang
+    # ditimpa efn_insight_sm; info no_outlet/scope_too_large; audit v2 (jumlah wids/cats saja).
+    "version": "19.0.2.0.0",
     "category": "EFN",
     "author": "Era Food and Nourishment",
     # LGPL-3. Tanpa dependency modul pihak ketiga (ADR-031, CLAUDE.md). `web` ikut lewat efn_core -> base_setup.

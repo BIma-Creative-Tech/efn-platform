@@ -4,14 +4,18 @@
         "Konfigurasi data-only PT Supermarket Demo (SMD, PLACEHOLDER). Tahap A: company + CoA l10n_id/PPN, DC SMDDC, "
         "kategori FEFO, nomenklatur GS1 + fallback; demo 5 outlet dipasok DC. Tahap B: ambang near-expiry/markdown/"
         "sisa umur minimum per kategori (placeholder Q-SM28/Q-SM9), DC assortment; demo capability outlet, kebijakan "
-        "assortment, zona + cycle count + putaway, jadwal kirim DC -> outlet, user demo per persona."
+        "assortment, zona + cycle count + putaway, jadwal kirim DC -> outlet, user demo per persona. G47: outlet demo "
+        "penerimaan dua langkah (Input -> Stock), persona EFN Insight supermarket di user demo."
     ),
     # G44 tahap A + G45 tahap B (docs/04 §28.1, §28.4, §28.5, §28.5a; fit-gap docs/fit-gap/G45_SUPERMARKET.md
     # S-01..S-16, §5). ADR-045 (DC satu PT + assortment, Proposed), ADR-046 (replenishment, Proposed), ADR-031 (tanpa
     # modul pihak ketiga). Risiko: R-L14 (struktur DC satu PT vs perizinan gudang/PPN), R-L03 (tarif pajak placeholder),
     # R-L07 (traceability lot).
     # 19.0.2.0.0: tahap B; post_init_hook dihapus (efn_is_dc di XML); migrations/19.0.2.0.0 untuk DB tahap A.
-    "version": "19.0.2.0.0",
+    # 19.0.3.0.0 (G47): outlet demo penerimaan dua langkah (Q-G47-2, keputusan pemilik proyek 21 Nov 2026) + persona
+    # Insight supermarket di user demo (docs/04 §28.13.2; fit-gap docs/fit-gap/G47_INSIGHT_SM.md);
+    # migrations/19.0.3.0.0 untuk DB demo lama.
+    "version": "19.0.3.0.0",
     "category": "EFN/Setup",
     "author": "Era Food and Nourishment",
     "license": "LGPL-3",
@@ -26,6 +30,9 @@
     # - efn_replenishment: efn.delivery.schedule + grup kepala toko/buyer (tahap B, demo).
     # - efn_expiry_monitor: field kategori efn_near_expiry_days/efn_markdown_days/efn_min_receipt_days + grup
     #   group_markdown_manager/group_expiry_override (tahap B; kontrak docs/04 §28.5a, dibangun efn-odoo-engineer G45).
+    # - efn_insight_sm (G47, dibangun efn-odoo-engineer paralel): grup persona group_insight_{exec,category,store,dc,
+    #   marketing} + res.users.efn_insight_categ_ids, hanya dipakai demo/res_users_insight_demo.xml. Menarik
+    #   efn_insight. Modul ini TIDAK bisa dipasang sebelum efn_insight_sm ada di addons path (satu PR G47).
     "depends": [
         "stock",
         "purchase_stock",
@@ -40,6 +47,7 @@
         "efn_assortment",
         "efn_replenishment",
         "efn_expiry_monitor",
+        "efn_insight_sm",
     ],
     "data": [
         # Urutan penting: company + CoA (try_loading) dulu, lalu gudang DC (butuh lokasi transit company).
@@ -57,6 +65,8 @@
         "demo/stock_location_demo.xml",
         "demo/efn_replenishment_demo.xml",
         "demo/res_users_demo.xml",
+        # G47: persona Insight (setelah user demo tahap B dibuat).
+        "demo/res_users_insight_demo.xml",
         "demo/ir_config_parameter_demo.xml",
     ],
     "installable": True,

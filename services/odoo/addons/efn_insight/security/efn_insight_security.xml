@@ -10,6 +10,8 @@
     <record id="res_groups_privilege_efn_insight" model="res.groups.privilege">
         <field name="name">EFN Dashboard Insight</field>
         <field name="category_id" ref="module_category_efn_insight"/>
+        <!-- G47: tampil pertama; privilege persona efn_insight_sm memakai sequence 20..70. -->
+        <field name="sequence">10</field>
     </record>
 
     <!-- Cakupan = PT ber-kode ESB di company_ids user (PT arsip tidak ikut). -->

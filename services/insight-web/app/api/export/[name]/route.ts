@@ -1,5 +1,6 @@
 import { API_CSP } from '@/lib/csp';
 import { authFromRequest } from '@/lib/auth';
+import { esbCodesOf } from '@/lib/claims';
 import { toCsv, type CsvCell } from '@/lib/csv';
 import { parseFilters } from '@/lib/filters';
 import { TABLE_LOADERS, TABLE_QUERIES, settle, type Ctx } from '@/lib/loaders';
@@ -39,7 +40,10 @@ export async function GET(req: Request, ctx: { params: Promise<{ name: string }>
     return empty(429, { 'Retry-After': String(rl.retryAfterSec) });
   }
 
-  const { filters, prev } = parseFilters(new URL(req.url).searchParams, auth.session.codes, new Date());
+  // Ekspor ESB hanya untuk sesi yang punya kode ESB (SMD-saja: tidak ada data ESB; G47).
+  const esb = esbCodesOf(auth.session.codes);
+  if (esb.length === 0) return empty(403);
+  const { filters, prev } = parseFilters(new URL(req.url).searchParams, esb, new Date());
   const c: Ctx = { session: auth.session, filters, prev, pool: 'export' };
   const audit = { table: name, query: TABLE_QUERIES[name], pt: filters.pt.join(','), from: filters.from, to: filters.to, sub: auth.session.sub };
   const res = await settle(TABLE_LOADERS[name](c));

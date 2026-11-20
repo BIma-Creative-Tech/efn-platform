@@ -1,14 +1,15 @@
-# efn_setup_supermarket — tahap A (G44) + tahap B (G45)
+# efn_setup_supermarket — tahap A (G44) + tahap B (G45) + G47
 
 Modul **data-only** untuk konfigurasi bisnis Supermarket (DC + 5 outlet) di PT Supermarket Demo. Isinya Odoo CE 19
 standar ditambah data untuk modul gap `efn_assortment`, `efn_replenishment`, dan `efn_expiry_monitor`.
 
-- Tidak ada model, field, atau hook. Satu-satunya Python adalah `migrations/19.0.2.0.0/post-migrate.py`, yang
-  menerapkan ulang data tahap B pada DB tahap A (lihat "Upgrade").
+- Tidak ada model, field, atau hook. Python hanya ada di dua migrasi: `migrations/19.0.2.0.0/post-migrate.py`
+  (menerapkan ulang data tahap B pada DB tahap A) dan `migrations/19.0.3.0.0/post-migrate.py` (G47, DB demo).
+  Lihat "Upgrade".
 - Dasar: fit-gap `docs/fit-gap/G45_SUPERMARKET.md` (S-01..S-16, §5) dan `docs/04_SERVICE_CONTRACTS.md` §28.1, §28.4,
   §28.5, §28.5a, §28.10.
 
-**Versi:** 19.0.2.0.0.
+**Versi:** 19.0.3.0.0 (G47: outlet dua langkah + persona Insight demo). ADR-041 §3.4 (**Proposed**) untuk persona.
 
 **ADR terkait:**
 - ADR-045: DC satu PT + restriksi assortment (**Proposed**).
@@ -43,12 +44,13 @@ masing-masing.
 
 | Butir | Konfigurasi | File |
 |---|---|---|
-| Outlet | `SMD01`..`SMD05` di 5 provinsi, `resupply_wh_ids` = DC. POS memakai lot yang ada dan tidak membuat lot | `demo/stock_warehouse_demo.xml` |
+| Outlet | `SMD01`..`SMD05` di 5 provinsi, `resupply_wh_ids` = DC, **`reception_steps = two_steps`** (G47, Q-G47-2). POS memakai lot yang ada dan tidak membuat lot | `demo/stock_warehouse_demo.xml` |
 | Harga | `account_price_include = tax_included` | `demo/res_company_demo.xml` |
 | **Capability & kebijakan** | Matriks di bawah. SMD02 punya baris *deny* Impor Premium. SMD03 `closed` dengan *allow* untuk 8 kategori | `demo/efn_assortment_demo.xml` |
 | **Zona + cycle count + putaway** | Zona Fresh/Chiller/Freezer/Dry di bawah Stock setiap outlet (SMD05 tanpa Freezer), dengan `cyclic_inventory_frequency`. Putaway rule per kategori ke zona. Stock DC dihitung tiap 30 hari | `demo/stock_location_demo.xml` |
 | **Jadwal kirim** | 44 `efn.delivery.schedule`: satu per outlet × kategori yang lolos assortment | `demo/efn_replenishment_demo.xml` |
 | **User per persona** | Kepala toko SMD01..05 (scope outlet sendiri), buyer DC, markdown manager, supervisor ops. Login placeholder, **tanpa password** | `demo/res_users_demo.xml` |
+| **Persona Insight (G47)** | Kepala toko → `store`; buyer DC → `dc`; markdown manager → `category` + kategori dikelola (Fresh, Dairy & Chilled, Frozen); user baru **Direksi SMD** → `exec`, **Marketing SMD** → `marketing`. `kpi_admin` tidak diberikan (Q-G47-1) | `demo/res_users_insight_demo.xml` |
 | **Sakelar** | `efn_replenishment.enabled = true` (hanya demo) | `demo/ir_config_parameter_demo.xml` |
 
 ### Ambang per kategori (hari)
@@ -159,10 +161,65 @@ Semua file `noupdate`, jadi upgrade biasa tidak menulis record lama dan tidak me
 
 Depends baru (`efn_assortment`, `efn_replenishment`, `efn_expiry_monitor`) terpasang otomatis saat upgrade.
 
+## G47 (19.0.3.0.0): penerimaan outlet dua langkah
+
+Keputusan pemilik proyek 21 Nov 2026 (Q-G47-2): outlet SMD menerima barang **dua langkah sejak awal**.
+
+**Rantai DC → outlet:**
+1. DC Stock → DC Output (pick);
+2. DC Output → transit (ship);
+3. transit → **outlet Input** (receipt; lokasi tujuan akhir Stock);
+4. **Input → Stock** (storage, rule push rute penerimaan outlet).
+
+Putaway zona berlaku di langkah 4. Fakta source 19.0 [V]: lihat komentar di `demo/stock_warehouse_demo.xml`. Rantai
+runtime dikunci oleh `test_demo_resupply_chain_two_steps`.
+
+**DC tetap `two_steps` + `pick_ship`.** Penerimaan supplier ke Input DC memberi titik cek kualitas/kuantitas sebelum
+stok bisa dialokasikan. Langkah QC terpisah (`three_steps`) tetap keputusan Q-SM2.
+
+**Konsekuensi operasional:** POS menjual dari lokasi di bawah Stock. Barang yang sudah diterima tetapi belum disimpan
+(masih di Input) **belum bisa dijual**. Kepala toko perlu memvalidasi dua dokumen: *Receipt*, lalu *Storage*.
+
+### Dampak ke modul lain
+
+Semua dampak di bawah dibaca dari kode. Butir yang ditandai [test] dikunci test modul ini. Belum ada yang dijalankan.
+
+| Modul | Dampak | Status |
+|---|---|---|
+| `efn_assortment` | Langkah transit → Input dinilai karena tujuannya gudang outlet (`_efn_transit_leg_target`). Input → Stock tidak dinilai, karena sumbernya gudang outlet non-DC dan bukan lokasi antara. Leg pick/ship DC dinilai lewat `location_final_id`/`move_dest_ids`. **Tidak ada perubahan** | aman |
+| `efn_replenishment` | `qty_available`/`incoming_qty` dibaca dengan konteks `warehouse_id` outlet. Stok di Input ikut `on_hand`, receipt masuk `in_transit`, dan storage internal tidak dihitung dua kali. `proposal.picking_id` tetap picking ship DC. **Tidak ada perubahan** | aman; picking ship [test] |
+| ETL `qty_received` (C-3) | Dua move `done` berujung di gudang outlet (receipt dan storage). Rumus wajib menghitung hanya move yang **melintasi** batas outlet, yaitu receipt transit → Input. Rumus kontrak lama akan menghitung dua kali | C-3 **wajib** [test] |
+| `efn_expiry_monitor` | Cek sisa umur minimum berjalan di `_action_done` picking **receipt** (sumber transit → tujuan gudang outlet non-DC). Storage Input → Stock tidak dicek ulang karena sumbernya gudang outlet. Override ditautkan ke picking receipt. Alert near-expiry memindai semua lokasi internal, termasuk Input | aman, cek sekali di langkah 1 penerimaan |
+| Seed `scripts/dev/seed_demo_supermarket.py` (worktree g48, belum di `main`) | Stok awal dibuat dengan `inventory_quantity` + `action_apply_inventory` di **zona di bawah Stock** (`zone_location`, fallback `lot_stock_id`), bukan di Input. Tidak bergantung pada langkah penerimaan | aman. Jangan menaruh quant di Input: barang itu tidak terjual di POS dan tidak punya move storage |
+
+## Persona EFN Insight (G47, demo)
+
+Grup persona dan field kategori adalah milik `efn_insight_sm`, yang sedang dibangun efn-odoo-engineer secara paralel.
+
+**xmlid yang dipakai:**
+- persona: `efn_insight_sm.group_insight_{exec,category,store,dc,marketing}`;
+- kpi_admin: `efn_insight_sm.group_insight_kpi_admin` (hanya diuji tidak diberikan);
+- field: `res.users.efn_insight_categ_ids`.
+
+**Koordinasi:** bila nama di modul engineer berbeda, ubah `demo/res_users_insight_demo.xml`, konstanta
+`PERSONA_GROUPS` di test, dan README ini. Modul ini **gagal dipasang** bila `efn_insight_sm` belum ada di addons path.
+Keduanya wajib masuk PR G47 yang sama.
+
+Test `test_persona_groups_one_per_privilege` mengunci rekomendasi fit-gap C-2: satu privilege per persona. Alasannya,
+widget hak akses Odoo 19 menghapus grup kedua di privilege yang sama.
+
+## Upgrade 19.0.2.x → 19.0.3.0.0
+
+`migrations/19.0.3.0.0/post-migrate.py` hanya bekerja di DB demo:
+- outlet demo yang masih `one_step` diubah ke `two_steps` lewat `write()` ORM. Langkah ini mengaktifkan Input dan
+  memperbarui picking type & rule penerimaan; rute resupply tidak berubah. Nilai lain, mis. `three_steps`, tidak
+  disentuh. Transfer masuk yang sudah terbuka tetap satu langkah;
+- menerapkan ulang `demo/res_users_insight_demo.xml` (`mode="init"`, idempoten).
+
 ## Checklist operasional (DB nyata, bukan demo)
 
-1. Gudang outlet baru (UI): isi **Resupply From** = DC. Pada operasi *PoS Orders*, centang *Use Existing Lots* dan
-   hapus centang *Create New Lots*.
+1. Gudang outlet baru (UI): isi **Resupply From** = DC dan **Incoming Shipments = Receive and Store (2 steps)**
+   (Q-G47-2). Pada operasi *PoS Orders*, centang *Use Existing Lots* dan hapus centang *Create New Lots*.
 2. POS config baru: buat saat company aktif = PT Supermarket, atau isi *Fallback Nomenclature* = "EFN Retail (IDR)".
 3. Sebelum pilot, **uji seluruh katalog barcode** dengan nomenklatur GS1 (prefiks `13`/`15`/`17`, fit-gap §2).
 4. Produk: isi `is_storable`, `tracking = lot`, `use_expiration_date`, umur simpan, dan
@@ -189,7 +246,9 @@ Depends baru (`efn_assortment`, `efn_replenishment`, `efn_expiry_monitor`) terpa
 | **Q-SM11** | jadwal kirim dan cut-off per kelompok produk; kelayakan pasok fresh dari DC ke outlet luar Jawa (SMD05) |
 | **Q-SM13 / Q-SM21** | outlet berizin alkohol dan outlet boleh non-halal; apakah alkohol juga dihitung non-halal |
 | **Q-SM28** | ambang near-expiry/markdown per kategori |
-| **Q-SM29 / Q-SM4** | pemetaan persona (kepala toko per outlet, buyer, markdown manager) |
+| **Q-SM29 / Q-SM4** | pemetaan persona (kepala toko per outlet, buyer, markdown manager) dan persona Insight per jabatan |
+| **Q-G47-1** | siapa pengelola definisi KPI Insight (`kpi_admin`) dan SoD terhadap kepala toko/DC |
+| Q-G47-2 | *diputuskan 21 Nov 2026*: outlet penerimaan dua langkah |
 
 ## Apa yang belum
 
@@ -199,3 +258,8 @@ Depends baru (`efn_assortment`, `efn_replenishment`, `efn_expiry_monitor`) terpa
 - Kapasitas rak per produk dan syarat capability produk: seed G48.
 - Jadwal supplier (`efn.supplier.schedule`) dan supplierinfo DC: butuh supplier dan produk, jadi masuk seed G48.
 - Zona DC dan langkah QC DC (`three_steps`): Q-SM2.
+- G47: belum dijalankan. Yang belum terverifikasi:
+  - rantai dua langkah runtime: receipt mendarat di Input dengan `location_final_id` Stock, push storage dibuat setelah
+    receipt, dan putaway di langkah storage;
+  - migrasi `write(reception_steps)` pada DB demo yang sudah berisi transaksi;
+  - install bersama `efn_insight_sm` (belum ada di worktree saat ditulis).

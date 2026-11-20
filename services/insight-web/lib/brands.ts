@@ -28,6 +28,7 @@ const BRAND_INFO: Record<string, { name: string; color: SeriesColor }> = {
 };
 
 export function codeName(code: string): string {
+  if (code === 'SMD') return 'PT Supermarket Demo';
   return CODE_INFO[code as EsbCode]?.name ?? code;
 }
 export function codeColor(code: string): SeriesColor {

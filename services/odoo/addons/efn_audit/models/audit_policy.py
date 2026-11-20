@@ -91,7 +91,23 @@ CONTROL_SPECS = {
     # ---- SEC-49 (Gelombang 13): perubahan hak akses. Odoo CE 19 tidak mencatatnya di chatter.
     # Keanggotaan grup (relasi res_groups_users_rel) bisa diubah dari dua sisi: `res.users.group_ids`
     # dan `res.groups.user_ids` -> keduanya dilacak. `share` = compute stored (ikut bila ada di vals).
-    "res.users": (("group_ids", "active", "login", "company_ids", "company_id", "share"), None),
+    # G47 (fit-gap G47 §3.2 opsi A): field CAKUPAN DATA = hak akses -> ikut model kontrol. Field yang tidak ada di
+    # model (modul pemilik belum terpasang) dilewati `_efn_builtin_rule`. `efn_outlet_warehouse_ids` (efn_assortment,
+    # G44: record rule efn_replenishment/efn_expiry_monitor + wids Insight) dan `efn_insight_categ_ids`
+    # (efn_insight_sm: cats Insight). Jangan buat efn.audit.rule res.users di modul lain (unik per model).
+    "res.users": (
+        (
+            "group_ids",
+            "active",
+            "login",
+            "company_ids",
+            "company_id",
+            "share",
+            "efn_outlet_warehouse_ids",
+            "efn_insight_categ_ids",
+        ),
+        None,
+    ),
     # Grup: anggota, implikasi dua arah, rule/menu/ACL terkait, nama. None = semua field memenuhi syarat
     # (o2m `model_access` tidak ikut — perubahannya tercatat di ir.model.access sendiri).
     "res.groups": (None, None),

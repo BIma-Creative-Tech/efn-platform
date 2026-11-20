@@ -42,6 +42,19 @@ Alur `write`: aturan dari `ormcache` (namedtuple + frozenset, bukan recordset) �
 - `@api.autovacuum _gc_efn_audit_logs` (cron *Base: Auto-vacuum internal data*, harian): hari = `rule.retention_days` (>0) atau `ir.config_parameter` `efn.audit.retention_days` (tidak valid/hilang → 730; `0` = simpan selamanya), keduanya minimal 365 (SEC-43). Log `purge` dan log model kontrol tidak pernah dihapus. Maks 10.000 log per jalan; satu log `purge` dengan `note="retensi: n log"` (ikut dikirim ke sink).
 - Erasure UU PDP: `env["efn.audit.log"]._efn_audit_purge_records(model_name, res_ids)` → hapus log record tsb, kosongkan `old/new_value` + `old/new_ref` di baris log model lain yang menunjuk record tsb, tulis satu log `purge` tanpa id/nama. Dipakai `efn_privacy`.
 
+## G47 (19.0.1.4.0; fit-gap `docs/fit-gap/G47_INSIGHT_SM.md` §3.2, §8)
+- `CONTROL_SPECS["res.users"]` + `efn_outlet_warehouse_ids` (efn_assortment, G44) dan `efn_insight_categ_ids`
+  (efn_insight_sm, G47). Field cakupan data = hak akses: selalu diaudit tanpa aturan admin, log tidak ikut GC, masuk
+  sink. Field yang modulnya belum terpasang dilewati. Ini menutup celah G44 (perubahan outlet kepala toko yang
+  menentukan record rule replenishment/expiry dan `wids` Insight sebelumnya tidak teraudit). **Jangan** membuat
+  `efn.audit.rule` untuk `res.users` di modul lain (constraint unik per model).
+- `group_manager` dipindah ke privilege sendiri `res_groups_privilege_efn_audit_manager`. Widget hak akses Odoo 19
+  menampilkan satu pilihan per privilege dan menyimpan `Command.set`: Manager + Auditor Data Pribadi (tidak saling
+  implied) di satu privilege tidak bisa dipegang bersamaan, dan menyimpan form user diam-diam menghapus salah satunya.
+  Hanya `privilege_id` grup yang berubah; keanggotaan grup user dan hak efektif tetap (tanpa migrasi). User yang
+  sudah kehilangan grup sebelum upgrade tidak dipulihkan otomatis (cek review akses `efn_role`).
+- Test: `tests/test_audit_g47.py` (log field cakupan, emulasi simpan widget).
+
 ## Tampilan
 Menu atas **Audit** (grup Auditor): *Log* (list/form + baris; search model/record/user/operasi/company/field; filter *Hari ini*, *7 hari* (default), *Harga*, *Promo*, *Pelanggan*, per operasi; group by model/user/tanggal) dan *Aturan* (grup Manager).
 

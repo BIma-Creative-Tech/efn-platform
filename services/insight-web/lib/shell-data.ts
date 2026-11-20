@@ -4,6 +4,7 @@
  */
 import 'server-only';
 import { brandName, codeName } from './brands';
+import { esbCodesOf } from './claims';
 import { chQuery } from './clickhouse';
 import { addDays, wibYesterday } from './dates';
 import type { FilterOptions } from '@/components/FilterBar';
@@ -28,7 +29,7 @@ export interface ShellData {
 export async function loadShellData(session: Session, now: Date = new Date()): Promise<ShellData> {
   const yesterday = wibYesterday(now);
   const defaults = { from: addDays(yesterday, -29), to: yesterday };
-  const base = { pt: session.codes as string[] };
+  const base = { pt: esbCodesOf(session.codes) as string[] };
   const range = { from: addDays(yesterday, -365), to: yesterday };
 
   const [branches, categories, products, fresh] = await Promise.allSettled([

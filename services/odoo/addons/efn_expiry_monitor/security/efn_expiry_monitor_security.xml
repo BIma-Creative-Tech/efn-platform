@@ -3,9 +3,22 @@
      rule multi-company (global) + cakupan outlet kepala toko (stock user: warehouse_id ∈ efn_outlet_warehouse_ids)
      + semua outlet di company user untuk Markdown Manager / supervisor override / Inventory Administrator. -->
 <odoo>
+    <!-- G47 (fit-gap docs/fit-gap/G47_INSIGHT_SM.md §8): satu privilege per grup (widget hak akses Odoo 19 = satu
+         pilihan per privilege + Command.set; supervisor yang juga Markdown Manager kehilangan satu grup saat form user
+         disimpan). Hak efektif dan keanggotaan grup tidak berubah; xmlid privilege lama dipakai Markdown Manager. -->
     <record id="res_groups_privilege_efn_expiry" model="res.groups.privilege">
-        <field name="name">EFN Kedaluwarsa &amp; Markdown</field>
+        <field name="name">EFN Kedaluwarsa: Markdown Manager</field>
         <field name="category_id" ref="base.module_category_supply_chain"/>
+        <field name="sequence">63</field>
+        <field name="placeholder">–</field>
+        <field name="description">Markdown per lot di semua outlet PT sampai batas diskon manager; override penerimaan lot umur pendek.</field>
+    </record>
+    <record id="res_groups_privilege_efn_expiry_override" model="res.groups.privilege">
+        <field name="name">EFN Kedaluwarsa: Supervisor override POS</field>
+        <field name="category_id" ref="base.module_category_supply_chain"/>
+        <field name="sequence">64</field>
+        <field name="placeholder">–</field>
+        <field name="description">Menyetujui penjualan lot kedaluwarsa di POS (PIN); baca alert/markdown semua outlet.</field>
     </record>
     <record id="group_markdown_manager" model="res.groups">
         <field name="name">Markdown Manager</field>
@@ -16,7 +29,7 @@
     <record id="group_expiry_override" model="res.groups">
         <field name="name">Supervisor override kedaluwarsa POS</field>
         <field name="comment">Boleh menyetujui penjualan lot kedaluwarsa / lewat removal date di POS (sendiri sebagai kasir, atau dengan PIN persetujuan untuk kasir lain). Setiap override dicatat saat sync order.</field>
-        <field name="privilege_id" ref="res_groups_privilege_efn_expiry"/>
+        <field name="privilege_id" ref="res_groups_privilege_efn_expiry_override"/>
         <field name="implied_ids" eval="[(4, ref('point_of_sale.group_pos_user'))]"/>
     </record>
 

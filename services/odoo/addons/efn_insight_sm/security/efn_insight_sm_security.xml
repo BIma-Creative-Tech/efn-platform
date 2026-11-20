@@ -1,0 +1,99 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- G47 (docs/04 §28.13.2, fit-gap G47 §2.1-§2.2). SATU privilege per grup: widget hak akses Odoo 19
+     (res_user_group_ids_field) menampilkan setiap privilege sebagai satu pilihan dan menulis Command.set, sehingga
+     dua grup tidak-berantai dalam satu privilege tidak bisa dipegang bersamaan dan grup kedua terhapus saat form user
+     disimpan. Persona = hak DATA saja: tidak meng-implies grup tindakan (replenishment/expiry/campaign) dan sebaliknya.
+     Sensitif (efn_role SENSITIVE_GROUP_XMLIDS): exec, category, dc, marketing, kpi_admin (bukan store).
+     Q-G47-1 (pemilik proyek 21 Nov 2026): kpi_admin boleh diberikan ke user mana pun lewat form user; tanpa SoD kode. -->
+<odoo>
+    <!-- ================================================================== privilege (satu per grup) -->
+    <record id="res_groups_privilege_insight_sm_exec" model="res.groups.privilege">
+        <field name="name">Insight Supermarket: Direksi</field>
+        <field name="category_id" ref="efn_insight.module_category_efn_insight"/>
+        <field name="sequence">20</field>
+        <field name="placeholder">–</field>
+        <field name="description">Melihat semua toko dan DC PT supermarket, termasuk margin, GMROI, nilai stok, dan PO. Tidak memberi hak menyetujui apa pun.</field>
+    </record>
+    <record id="res_groups_privilege_insight_sm_category" model="res.groups.privilege">
+        <field name="name">Insight Supermarket: Category manager/buyer</field>
+        <field name="category_id" ref="efn_insight.module_category_efn_insight"/>
+        <field name="sequence">30</field>
+        <field name="placeholder">–</field>
+        <field name="description">Melihat semua toko PT supermarket termasuk margin dan GMROI; filter awal = "Kategori dikelola (Insight)" di form user. Tidak memberi hak menyetujui apa pun.</field>
+    </record>
+    <record id="res_groups_privilege_insight_sm_store" model="res.groups.privilege">
+        <field name="name">Insight Supermarket: Kepala toko</field>
+        <field name="category_id" ref="efn_insight.module_category_efn_insight"/>
+        <field name="sequence">40</field>
+        <field name="placeholder">–</field>
+        <field name="description">Hanya outlet di "Outlet dikelola (kepala toko)". Omzet, waste (HPP), near-expiry tokonya; tanpa margin, GMROI, nilai stok total, PO. Tidak memberi hak menyetujui usulan.</field>
+    </record>
+    <record id="res_groups_privilege_insight_sm_dc" model="res.groups.privilege">
+        <field name="name">Insight Supermarket: DC/logistik</field>
+        <field name="category_id" ref="efn_insight.module_category_efn_insight"/>
+        <field name="sequence">50</field>
+        <field name="placeholder">–</field>
+        <field name="description">Melihat semua toko dan DC PT supermarket: fill rate, usulan, nilai stok, PO supplier; tanpa margin/GMROI. Tidak memberi hak menyetujui apa pun.</field>
+    </record>
+    <record id="res_groups_privilege_insight_sm_marketing" model="res.groups.privilege">
+        <field name="name">Insight Supermarket: Marketing</field>
+        <field name="category_id" ref="efn_insight.module_category_efn_insight"/>
+        <field name="sequence">60</field>
+        <field name="placeholder">–</field>
+        <field name="description">Funnel pengunjung (agregat, k-anonim), segmen, kampanye, harga vs pasar tingkat PT. Tidak memberi hak kampanye di Odoo.</field>
+    </record>
+    <record id="res_groups_privilege_insight_sm_kpi_admin" model="res.groups.privilege">
+        <field name="name">Insight Supermarket: pengelola definisi KPI</field>
+        <field name="category_id" ref="efn_insight.module_category_efn_insight"/>
+        <field name="sequence">70</field>
+        <field name="placeholder">–</field>
+        <field name="description">Mengubah definisi &amp; ambang KPI Insight per PT (Inventory &gt; Configuration &gt; Definisi KPI Insight). Setiap perubahan teraudit. Tidak memberi akses dashboard.</field>
+    </record>
+
+    <!-- ================================================================== grup -->
+    <record id="group_insight_exec" model="res.groups">
+        <field name="name">Insight SM: Direksi</field>
+        <field name="comment">Persona exec: semua warehouse PT supermarket + baris tingkat PT (wids 0); margin/GMROI. Hak data saja.</field>
+        <field name="privilege_id" ref="res_groups_privilege_insight_sm_exec"/>
+        <field name="implied_ids" eval="[Command.link(ref('efn_insight.group_insight_user'))]"/>
+    </record>
+    <record id="group_insight_category" model="res.groups">
+        <field name="name">Insight SM: Category manager/buyer</field>
+        <field name="comment">Persona category: semua warehouse PT supermarket + wids 0; margin/GMROI; cats = kategori dikelola. Hak data saja.</field>
+        <field name="privilege_id" ref="res_groups_privilege_insight_sm_category"/>
+        <field name="implied_ids" eval="[Command.link(ref('efn_insight.group_insight_user'))]"/>
+    </record>
+    <record id="group_insight_store" model="res.groups">
+        <field name="name">Insight SM: Kepala toko</field>
+        <field name="comment">Persona store: hanya outlet di efn_outlet_warehouse_ids (tanpa wids 0). Hak data saja.</field>
+        <field name="privilege_id" ref="res_groups_privilege_insight_sm_store"/>
+        <field name="implied_ids" eval="[Command.link(ref('efn_insight.group_insight_user'))]"/>
+    </record>
+    <record id="group_insight_dc" model="res.groups">
+        <field name="name">Insight SM: DC/logistik</field>
+        <field name="comment">Persona dc: semua warehouse PT supermarket + wids 0; nilai stok &amp; PO, tanpa margin/GMROI. Hak data saja.</field>
+        <field name="privilege_id" ref="res_groups_privilege_insight_sm_dc"/>
+        <field name="implied_ids" eval="[Command.link(ref('efn_insight.group_insight_user'))]"/>
+    </record>
+    <record id="group_insight_marketing" model="res.groups">
+        <field name="name">Insight SM: Marketing</field>
+        <field name="comment">Persona marketing: semua warehouse PT supermarket + wids 0; funnel/segmen/kampanye agregat. Hak data saja.</field>
+        <field name="privilege_id" ref="res_groups_privilege_insight_sm_marketing"/>
+        <field name="implied_ids" eval="[Command.link(ref('efn_insight.group_insight_user'))]"/>
+    </record>
+    <record id="group_insight_kpi_admin" model="res.groups">
+        <field name="name">Insight SM: pengelola definisi KPI</field>
+        <field name="comment">Create/write/unlink efn.insight.sm.kpi PT-nya (record rule multi-company), teraudit efn_audit. Tidak meng-implies persona/dashboard.</field>
+        <field name="privilege_id" ref="res_groups_privilege_insight_sm_kpi_admin"/>
+        <field name="implied_ids" eval="[Command.link(ref('base.group_user'))]"/>
+    </record>
+
+    <!-- ================================================================== record rule -->
+    <data noupdate="1">
+        <record id="efn_insight_sm_kpi_rule_company" model="ir.rule">
+            <field name="name">EFN Insight SM KPI: multi-company</field>
+            <field name="model_id" ref="model_efn_insight_sm_kpi"/>
+            <field name="domain_force">[('company_id', 'in', company_ids)]</field>
+        </record>
+    </data>
+</odoo>

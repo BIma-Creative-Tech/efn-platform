@@ -11,8 +11,9 @@ import { buildCsp } from './lib/csp';
 import { authenticate } from './lib/gate';
 import { getConfig, getKey } from './lib/runtime';
 import { SESSION_COOKIE, clearCookieHeader } from './lib/session';
+import { DENIAL_PATH, smRouteDenial } from './lib/sm-personas';
 
-const PUBLIC_PATHS = new Set(['/belum-aktif', '/sesi-berakhir', '/keluar']);
+const PUBLIC_PATHS = new Set(['/belum-aktif', '/sesi-berakhir', '/keluar', '/sm-belum-aktif', '/tidak-berwenang', '/buka-ulang']);
 
 // Rewrite internal ke halaman publik (URL di browser tetap). Redirect dengan Location relatif membuat proxy Next 16
 // melempar `TypeError: Invalid URL` (500, ditemukan uji E2E G42); URL absolut dari request.url akan memuat host
@@ -55,12 +56,16 @@ export function proxy(request: NextRequest): NextResponse {
       cfg.enabled,
       getKey('session'),
       Math.floor(Date.now() / 1000),
+      cfg.acceptEit1,
     );
     if (auth.status === 'disabled' || auth.status === 'misconfigured') {
       return rewriteTo(request, '/belum-aktif', csp, nonce, false);
     }
     if (auth.status === 'unauthenticated') return rewriteTo(request, '/sesi-berakhir', csp, nonce, false);
     if (auth.status === 'invalid') return rewriteTo(request, '/sesi-berakhir', csp, nonce, true);
+    // Lapis pertama akses persona (lapis kedua di halaman: lib/sm-page.ts). Rewrite = status 200 + halaman ramah.
+    const denial = smRouteDenial(path, auth.session, cfg.smEnabled);
+    if (denial) return rewriteTo(request, DENIAL_PATH[denial], csp, nonce, false);
   }
 
   const requestHeaders = new Headers(request.headers);

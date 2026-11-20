@@ -13,6 +13,7 @@ export async function POST(req: Request): Promise<Response> {
     odooOpenUrl: odooOpenUrl(cfg),
     ssoKey: getKey('sso'),
     sessionKey: getKey('session'),
+    acceptEit1: cfg.acceptEit1,
     nowMs: () => Date.now(),
     jti: getJtiCache(),
     limiter: getSsoLimiter(),

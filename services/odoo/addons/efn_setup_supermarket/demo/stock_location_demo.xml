@@ -19,6 +19,9 @@
      Frekuensi PLACEHOLDER (Q-SM10): Fresh 7 hari, Chiller 14, Freezer 30, Dry 30; Stock DC 30.
      SMD05 tanpa freezer (konsisten dengan capability efn_assortment_demo.xml) -> tidak ada zona Freezer.
      Lokasi zona = anak Stock outlet (lot_stock_id), sehingga lokasi sumber POS (child_of) tetap melihat stoknya.
+     19.0.3.0.0 (outlet two_steps, Q-G47-2): putaway tetap dipasang di Stock (location_in_id = lot_stock_id), BUKAN di
+     Input. Receipt transit -> Input tidak memakai putaway zona; langkah storage Input -> Stock (push) yang menaruh
+     barang ke zona. Lokasi Input tidak diberi frekuensi hitung (barang singgah; masuk opname tahunan bila tertahan).
      noupdate="1": perubahan pengguna tidak ditimpa upgrade. <function> di noupdate hanya jalan saat install; untuk DB
      demo tahap A, migrasi 19.0.2.0.0 menerapkan ulang file ini. -->
 <odoo noupdate="1">

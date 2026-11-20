@@ -22,6 +22,13 @@ const ICON_PATHS: Record<string, string> = {
   warn: 'M12 3l10 18H2zM12 10v5M12 18h.01',
   bad: 'M12 3a9 9 0 1 0 0.01 0M9 9l6 6M15 9l-6 6',
   empty: 'M4 7h16v12H4zM4 7l3-3h10l3 3M9 12h6',
+  // G47 (persona supermarket): ikon sederhana, stroke saja.
+  briefcase: 'M3 8h18v11H3zM9 8V5h6v3M3 13h18',
+  grid: 'M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z',
+  store: 'M3 9l2-5h14l2 5M3 9h18v2a3 3 0 0 1-6 0 3 3 0 0 1-6 0 3 3 0 0 1-6 0zM5 13v7h14v-7',
+  megaphone: 'M3 10v4h4l8 4V6L7 10zM18 9a4 4 0 0 1 0 6',
+  external: 'M14 4h6v6M20 4l-9 9M18 14v5H5V6h5',
+  clock: 'M12 3a9 9 0 1 0 0.01 0M12 7v5l3 2',
 };
 
 export function Icon({ name, size = 18 }: { name: string; size?: number }): ReactNode {
@@ -156,16 +163,19 @@ export function EmptyState({
   title,
   reason,
   tone = 'neutral',
+  icon,
   children,
 }: {
   title: string;
   reason?: string;
   tone?: 'neutral' | 'positive';
+  /** Ikon eksplisit (G47: empat keadaan "tidak ada angka" memakai check/clock/info/warn). */
+  icon?: string;
   children?: ReactNode;
 }): ReactNode {
   return (
     <div className={`empty empty-${tone}`}>
-      <Icon name={tone === 'positive' ? 'check' : 'empty'} size={28} />
+      <Icon name={icon ?? (tone === 'positive' ? 'check' : 'empty')} size={28} />
       <p className="empty-title">{title}</p>
       {reason ? <p className="empty-reason">{reason}</p> : null}
       {children}

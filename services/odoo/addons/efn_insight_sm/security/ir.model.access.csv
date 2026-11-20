@@ -1,0 +1,3 @@
+id,name,model_id:id,group_id:id,perm_read,perm_write,perm_create,perm_unlink
+access_efn_insight_sm_kpi_admin,efn.insight.sm.kpi pengelola KPI,model_efn_insight_sm_kpi,group_insight_kpi_admin,1,1,1,1
+access_efn_insight_sm_kpi_system,efn.insight.sm.kpi admin sistem baca,model_efn_insight_sm_kpi,base.group_system,1,0,0,0

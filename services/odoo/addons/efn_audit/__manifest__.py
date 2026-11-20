@@ -4,7 +4,9 @@
         "Log audit nilai lama/baru per aturan model (create/write/unlink), PII ter-mask, "
         "immutable, multi-company, retensi otomatis. Pengganti OCA auditlog (ADR-031)."
     ),
-    "version": "19.0.1.3.0",
+    # 19.0.1.4.0 (G47): CONTROL_SPECS res.users + efn_outlet_warehouse_ids / efn_insight_categ_ids (cakupan data);
+    # group_manager di privilege sendiri (widget Odoo 19). Tanpa perubahan skema/keanggotaan grup.
+    "version": "19.0.1.4.0",
     "category": "EFN",
     "author": "Era Food and Nourishment",
     # LGPL-3. Tanpa dependency OCA/Cybrosys (ADR-031). OCA `auditlog` (AGPL-3) dan Cybrosys

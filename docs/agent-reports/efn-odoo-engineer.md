@@ -2984,3 +2984,64 @@ dijalankan; lead menjalankan di container (`docs/runbooks/dev-stack-boot.md`).
 - `efn_core` test_rpc_surface: teks entri `("pos.session", "load_data")` diperbarui.
 - Belum: penegakan "akun perangkat/pos_hr tanpa grup override" (hanya dokumentasi), `employee_id` di event, entri
   `PDP_DATA_INVENTORY.md`, aturan alert Loki (devsecops), cek ulang assortment setelah ubah tujuan pasca-confirm.
+
+---
+
+# G47 — EFN Insight supermarket per persona, sisi Odoo (21 Nov 2026) — BELUM DIJALANKAN
+
+Worktree `efn-platform-g47`, branch `feat/wave-47-insight-supermarket`. Dasar: docs/04 §28.13 (v20.3, L-186..L-203),
+**fit-gap `docs/fit-gap/G47_INSIGHT_SM.md`** (menang untuk detail Odoo), ADR-041 §3.3–§3.4. Keputusan pemilik proyek
+21 Nov 2026 (Q-G47-1, via lead): `kpi_admin` boleh diberikan ke siapa pun lewat form user; tanpa SoD di kode.
+
+## Modul & file
+| Modul | Versi | File |
+|---|---|---|
+| `efn_insight` | 19.0.1.0.0 → **19.0.2.0.0** | `lib/insight_token.py` (eit2: `SM_CODES`, `PERSONAS`, `ORG_PERSONAS`, `validate_claims_v2`, `build_payload_v2`, `encode_token_v2`, `verify_token_v2`; `encode_token(prefix=)`), `controllers/main.py` (`EFN_INSIGHT_TOKEN_VERSION`, `INSIGHT_SM_ENABLED`, `merge_scope`, info `no_outlet`/`scope_too_large`, audit v2), `models/res_users.py` (hook privat `_efn_insight_sm_scope` kosong), `security/efn_insight_security.xml` (privilege sequence 10), `tests/test_insight_token_v2.py` (baru), `tests/test_insight_sso.py` (default eit2 + rollback), README |
+| `efn_insight_sm` | **baru 19.0.1.0.0** (auto_install; depends `stock`, `efn_insight`, `efn_assortment`, `efn_audit`) | `models/kpi_registry.py` (39 kunci, 10 pasangan, kanonik), `models/efn_insight_sm_kpi.py`, `models/res_users.py` (`efn_insight_categ_ids` + override scope), `models/res_company.py` (seed saat PT jadi SM), `hooks.py`, `security/*` (6 privilege + 6 grup + rule + ACL), `data/efn_audit_rule_data.xml`, `views/*`, `tests/{common,test_scope,test_kpi,test_privilege,test_sm_sso}.py`, README |
+| `efn_role` | → 19.0.1.2.2 | `models/role_policy.py` (+5 xmlid sensitif), `tests/test_g47.py`, README |
+| `efn_audit` | → 19.0.1.4.0 | `models/audit_policy.py` (`CONTROL_SPECS["res.users"]` + `efn_outlet_warehouse_ids`, `efn_insight_categ_ids`), `security/efn_audit_groups.xml` (Manager di privilege sendiri), `tests/test_audit_g47.py`, README |
+| `efn_replenishment` | → 19.0.1.2.1 | `security/efn_replenishment_security.xml` (3 privilege), `tests/test_privilege.py`, README |
+| `efn_expiry_monitor` | → 19.0.1.1.1 | `security/efn_expiry_monitor_security.xml` (2 privilege), `tests/test_privilege.py`, README |
+
+`efn_core/tests/test_rpc_surface.py` **tidak diubah**: tidak ada metode publik baru (semua `_…` / override ORM).
+
+## Keputusan
+- Satu privilege per grup (persona, kpi_admin, dan perbaikan 3 modul lama). Hanya `privilege_id`/teks privilege yang
+  berubah; tanpa `implied_ids` baru, keanggotaan grup user tetap → **tanpa migrasi**. User yang sudah kehilangan grup
+  karena widget sebelum upgrade tidak dipulihkan (tidak bisa direkonstruksi).
+- Hook scope di `efn_insight` mengembalikan juga `no_outlet` (selain 5 kunci fit-gap) agar controller bisa memilih
+  halaman `no_outlet` tanpa tahu grup `efn_insight_sm`.
+- `wids > 200` / `cats > 50` juga dipetakan ke halaman `scope_too_large` (bukan 500); `cids > 32` tetap 500 seperti G42.
+- KPI: nilai dikanonikkan saat create/write → semantik C-1 `is_default` (`value = literal default`) bisa dibandingkan
+  byte-exact di ClickHouse. Validasi pasangan memakai nilai efektif (aktif atau default), juga saat arsip/hapus.
+  Tambahan di luar fit-gap: constraint `kpi_company` (baris hanya untuk PT `SM_CODES`) dan seed otomatis saat
+  `res.company` mendapat kode SM (di DB baru `efn_setup_supermarket` membuat SMD setelah modul ini terpasang, sehingga
+  `post_init_hook` saja tidak mencakupnya).
+- ACL KPI: `kpi_admin` CRUD, `base.group_system` baca (admin sistem tidak melewati ACL di 19 — koreksi kecil atas
+  fit-gap §4.2).
+- Menu di Inventory → Configuration sesuai fit-gap; menu induk butuh hak Inventory → pengelola KPI tanpa hak Inventory
+  memakai tautan `/odoo/action-efn_insight_sm.action_efn_insight_sm_kpi` (README). Mohon lead putuskan bila perlu menu
+  tingkat atas.
+
+## Vektor uji (untuk dibandingkan dengan insight-web)
+Saya tidak bisa menjalankan Python. `tests/test_insight_token_v2.py::test_vectors_byte_exact_and_printed` menegaskan
+JSON kanonik = literal kontrak A/B/C, `payload_b64` = base64url literal, sig = HMAC kunci ASCII, lalu **mencetak**:
+`EFN_G47_VECTOR eit2 <A|B|C> payload_b64=… sig_b64=… sig_hexdecoded_N1=…` dan
+`test_scope_sig2_vectors_printed`: `EFN_G47_VECTOR sig2 <A|C> input=KEY|… sig2=<hex>`. Lead: `grep EFN_G47_VECTOR` di
+log run, bandingkan dengan Node, tulis ke docs/04 §28.13.4/§28.13.6, lalu jadikan konstanta di test.
+
+## Test — BELUM DIJALANKAN (tanpa shell; lead menjalankan di container Odoo 19)
+Modul untuk `-i/-u`: `efn_insight,efn_insight_sm,efn_role,efn_audit,efn_replenishment,efn_expiry_monitor`; plus
+regresi `efn_core` (rpc/route surface) dan `efn_setup_supermarket` (functional menambahkan depends `efn_insight_sm`).
+Parity JSON di-skip bila `docs/contracts/insight_sm_kpi_defaults.json` tidak terjangkau dari container; set
+`EFN_KPI_DEFAULTS_JSON=/path/insight_sm_kpi_defaults.json` (mount read-only) agar dijalankan.
+
+## Belum diverifikasi / titik rawan test
+- Perilaku runtime widget hak akses: test memakai **emulasi** logika `res_user_group_ids_field.js` (findLast per
+  privilege + `Command.set`), bukan tour UI. Bagian "shadowed group" widget tidak diemulasi.
+- `Selection(selection="_selection_key")` + `readonly="id"` di list editable; `decoration-*` pada field compute.
+- Pesan `_()` dengan `%(raw)r`; `models.Constraint` unik memunculkan galat saat flush (test memakai `assertRaises(Exception)`).
+- Pengarsipan `stock.warehouse` di `test_store_without_outlet_is_no_outlet` (asumsi tidak ada blokir CE pada gudang
+  tanpa stok); pengarsipan company di test.
+- `efn_audit` mencatat m2m `efn_outlet_warehouse_ids` dengan nama gudang di `new_value` (bukan data pribadi).
+- Nilai vektor eit2/sig2 belum ada (lihat atas).

@@ -4,6 +4,8 @@ Data (selalu dimuat): company SMD, CoA/PPN, nomenklatur GS1 + fallback, gudang D
 kedaluwarsa per kategori (placeholder Q-SM28/Q-SM9), sakelar fitur tetap mati.
 Demo (hanya DB --with-demo): 5 outlet SMD01..SMD05 dipasok DC; capability & kebijakan assortment; zona + cycle count +
 putaway; jadwal kirim; user per persona (kepala toko berscope outlet, buyer, markdown manager, supervisor).
+19.0.3.0.0 (G47): outlet demo penerimaan dua langkah (Q-G47-2) + rantai resupply runtime; persona EFN Insight di user
+demo (grup efn_insight_sm, fit-gap docs/fit-gap/G47_INSIGHT_SM.md §2.2).
 """
 
 import json
@@ -75,6 +77,27 @@ SCHEDULE_CATEGORIES = {
     "SMD05": set(_BASE) | {"imported_premium"},
 }
 ZONE_FREQUENCY = {"fresh": 7, "chiller": 14, "freezer": 30, "dry": 30}
+
+# G47 (19.0.3.0.0): persona Insight per user demo (demo/res_users_insight_demo.xml; xmlid fit-gap G47 §2.2).
+PERSONA_GROUPS = {
+    persona: f"efn_insight_sm.group_insight_{persona}" for persona in ("exec", "category", "store", "dc", "marketing")
+}
+PERSONA_USERS = {
+    **{f"user_smd0{i}_store_head": {"store"} for i in range(1, 6)},
+    "user_smd_buyer_dc": {"dc"},
+    "user_smd_markdown_manager": {"category"},
+    "user_smd_director": {"exec"},
+    "user_smd_marketing": {"marketing"},
+}
+ACTION_GROUPS = (
+    "efn_replenishment.group_replenishment_store",
+    "efn_replenishment.group_replenishment_buyer",
+    "efn_replenishment.group_replenishment_admin",
+    "efn_expiry_monitor.group_markdown_manager",
+    "efn_expiry_monitor.group_expiry_override",
+    "efn_assortment.group_assortment_manager",
+    "purchase.group_purchase_user",
+)
 
 
 @tagged("post_install", "-at_install", "efn")
@@ -407,3 +430,159 @@ class TestSetupSupermarket(TransactionCase):
         self.assertEqual(
             self.env["efn.replenishment.proposal"].with_user(buyer).search([("id", "in", proposals.ids)]), proposals
         )
+
+    # ======================================= 19.0.3.0.0 (G47) ===============================================
+    # --- Outlet penerimaan dua langkah (Q-G47-2) -----------------------------------------------------------------
+    def test_demo_outlets_two_step_reception(self):
+        transit = self.company.internal_transit_location_id
+        for outlet in self._outlets():
+            with self.subTest(outlet=outlet.code):
+                self.assertEqual(outlet.reception_steps, "two_steps")
+                self.assertEqual(outlet.delivery_steps, "ship_only", "outlet tidak mengirim ke pelanggan lewat stock")
+                input_loc = outlet.wh_input_stock_loc_id
+                self.assertTrue(input_loc.active, "lokasi Input aktif untuk two_steps")
+                self.assertEqual(input_loc.warehouse_id, outlet)
+                self.assertFalse(
+                    input_loc.parent_path.startswith(outlet.lot_stock_id.parent_path),
+                    "Input bukan anak Stock: POS (child_of Stock) tidak menjual barang yang belum disimpan",
+                )
+                # _get_input_output_locations / _get_picking_type_update_values [V 19.0].
+                self.assertEqual(outlet.in_type_id.default_location_dest_id, input_loc)
+                push = self.env["stock.rule"].search(
+                    [
+                        ("action", "=", "push"),
+                        ("location_src_id", "=", input_loc.id),
+                        ("location_dest_id", "=", outlet.lot_stock_id.id),
+                        ("picking_type_id", "=", outlet.store_type_id.id),
+                    ]
+                )
+                self.assertTrue(push, "rule push Input -> Stock (get_rules_dict 'two_steps')")
+                # Leg resupply transit -> outlet tetap bertujuan Stock (rute resupply tidak bergantung reception).
+                route = outlet.resupply_route_ids.filtered(lambda r, dc=self.dc: r.supplier_wh_id == dc)
+                leg = route.rule_ids.filtered(lambda r, t=transit: r.location_src_id == t)
+                self.assertEqual(len(leg), 1)
+                self.assertEqual(leg.location_dest_id, outlet.lot_stock_id)
+                self.assertEqual(leg.picking_type_id, outlet.in_type_id)
+                self.assertEqual(leg.action, "pull")
+        # DC tidak berubah (tahap A): two_steps + pick_ship.
+        self.assertEqual((self.dc.reception_steps, self.dc.delivery_steps), ("two_steps", "pick_ship"))
+
+    def test_demo_resupply_chain_two_steps(self):
+        """Usulan disetujui (jalur efn_replenishment: orderpoint manual + action_replenish) -> pick -> ship -> receipt
+        ke Input -> storage (push) ke zona Stock. Mengunci asumsi fit-gap G47 §6.1 (C-3) secara runtime."""
+        outlet = self.env.ref(f"{MODULE}.warehouse_smd01", raise_if_not_found=False)
+        if not outlet:
+            self.skipTest("demo efn_setup_supermarket tidak dimuat")
+        transit = self.company.internal_transit_location_id
+        product = self.env["product.product"].create(
+            {
+                "name": "Mi instan uji dua langkah",
+                "type": "consu",
+                "is_storable": True,
+                "categ_id": self.env.ref(f"{MODULE}.product_category_smd_dry_grocery").id,
+                "company_id": self.company.id,
+            }
+        )
+        self.env["stock.quant"]._update_available_quantity(product, self.dc.lot_stock_id, 10)
+        route = outlet.resupply_route_ids.filtered(lambda r: r.supplier_wh_id == self.dc)
+        Orderpoint = self.env["stock.warehouse.orderpoint"].with_company(self.company)
+        op = Orderpoint._efn_managed_orderpoint(outlet, product, route)
+        op.write({"qty_to_order_manual": 4})
+        op.action_replenish()
+
+        moves = self.env["stock.move"].search([("product_id", "=", product.id)])
+        pick = moves.filtered(lambda m: m.location_id == self.dc.lot_stock_id)
+        ship = moves.filtered(lambda m: m.location_dest_id == transit)
+        receipt = moves.filtered(lambda m: m.location_id == transit)
+        self.assertEqual((len(pick), len(ship), len(receipt)), (1, 1, 1), "tiga leg: pick, ship, receipt")
+        self.assertEqual(pick.location_dest_id, self.dc.wh_output_stock_loc_id)
+        self.assertEqual(ship.location_id, self.dc.wh_output_stock_loc_id)
+        self.assertEqual(receipt.location_dest_id, outlet.wh_input_stock_loc_id, "receipt mendarat di Input")
+        self.assertEqual(receipt.location_final_id, outlet.lot_stock_id)
+        self.assertEqual(receipt.picking_type_id, outlet.in_type_id)
+        self.assertIn(ship, pick.move_dest_ids)
+        self.assertIn(receipt, ship.move_dest_ids)
+        self.assertEqual(sum(receipt.mapped("product_uom_qty")), 4)
+
+        for move in (pick, ship, receipt):
+            picking = move.picking_id
+            picking.action_assign()
+            picking.move_ids.picked = True
+            picking.button_validate()
+            self.assertEqual(picking.state, "done", f"{picking.picking_type_id.name} selesai")
+
+        store = receipt.move_dest_ids
+        self.assertEqual(len(store), 1, "push Input -> Stock dibuat setelah receipt selesai")
+        self.assertEqual(
+            (store.location_id, store.location_dest_id), (outlet.wh_input_stock_loc_id, outlet.lot_stock_id)
+        )
+        self.assertEqual(store.picking_type_id, outlet.store_type_id)
+        store.picking_id.action_assign()
+        self.assertEqual(
+            store.move_line_ids.location_dest_id,
+            self.env.ref(f"{MODULE}.location_smd01_dry"),
+            "putaway kategori tetap berlaku pada langkah storage",
+        )
+        store.picking_id.move_ids.picked = True
+        store.picking_id.button_validate()
+        self.assertEqual(store.state, "done")
+
+        # C-3: tepat satu move done yang MELINTASI batas outlet (receipt), walau dua move berujung di gudang outlet.
+        done = self.env["stock.move"].search([("product_id", "=", product.id), ("state", "=", "done")])
+        into_outlet = done.filtered(lambda m: m.location_dest_id.warehouse_id == outlet)
+        crossing = into_outlet.filtered(lambda m: m.location_id.warehouse_id != outlet)
+        self.assertEqual(len(into_outlet), 2)
+        self.assertEqual(crossing, receipt)
+        # efn_replenishment (_efn_create_supply_document): move DC pertama (urut id) = ship, bukan pick (fit-gap §6.1).
+        self.assertEqual(moves.filtered(lambda m: m.location_id.warehouse_id == self.dc).sorted("id")[:1], ship)
+
+    # --- Persona Insight (G47) -----------------------------------------------------------------------------------
+    def test_demo_insight_personas(self):
+        self._outlets()  # skip bila demo tidak dimuat
+        insight_user = self.env.ref("efn_insight.group_insight_user")
+        for xmlid, expected in PERSONA_USERS.items():
+            with self.subTest(user=xmlid):
+                user = self.env.ref(f"{MODULE}.{xmlid}")
+                held = {p for p, group in PERSONA_GROUPS.items() if user.has_group(group)}
+                self.assertEqual(held, expected)
+                self.assertIn(insight_user, user.all_group_ids, "persona implies Insight: pengguna")
+                self.assertEqual(user.company_ids, self.company)
+                self.assertFalse(user.has_group("efn_insight_sm.group_insight_kpi_admin"), "kpi_admin menunggu Q-G47-1")
+        # Persona tidak memberi grup tindakan: user baru hanya Internal User + persona.
+        for xmlid in ("user_smd_director", "user_smd_marketing"):
+            user = self.env.ref(f"{MODULE}.{xmlid}")
+            for group in ACTION_GROUPS:
+                with self.subTest(user=xmlid, group=group):
+                    self.assertFalse(user.has_group(group))
+        # Grup tindakan lama tetap (Command.link, tidak menimpa).
+        self.assertTrue(self.env.ref(f"{MODULE}.user_smd01_store_head").has_group(ACTION_GROUPS[0]))
+        self.assertTrue(self.env.ref(f"{MODULE}.user_smd_buyer_dc").has_group("purchase.group_purchase_user"))
+
+    def test_demo_category_manager_categories(self):
+        self._outlets()
+        user = self.env.ref(f"{MODULE}.user_smd_markdown_manager")
+        expected = {
+            self.env.ref(f"{MODULE}.product_category_smd_{key}") for key in ("fresh", "dairy_chilled", "frozen")
+        }
+        self.assertEqual(set(user.efn_insight_categ_ids), expected)
+        for xmlid, personas in PERSONA_USERS.items():
+            if "category" not in personas:
+                with self.subTest(user=xmlid):
+                    self.assertFalse(self.env.ref(f"{MODULE}.{xmlid}").efn_insight_categ_ids)
+
+    def test_demo_store_persona_scope_matches_outlet(self):
+        # wids persona store = efn_outlet_warehouse_ids (docs/04 §28.13.3): satu outlet per kepala toko demo.
+        for outlet in self._outlets():
+            with self.subTest(outlet=outlet.code):
+                user = self.env.ref(f"{MODULE}.user_{outlet.code.lower()}_store_head")
+                self.assertTrue(user.has_group(PERSONA_GROUPS["store"]))
+                self.assertEqual(user.efn_outlet_warehouse_ids, outlet)
+
+    def test_persona_groups_one_per_privilege(self):
+        # Fit-gap G47 §2.1 / C-2: widget hak akses Odoo 19 = satu pilihan per privilege; persona harus berada di
+        # privilege sendiri agar user demo bisa memegang lebih dari satu persona tanpa hilang saat form disimpan.
+        for persona, xmlid in PERSONA_GROUPS.items():
+            with self.subTest(persona=persona):
+                group = self.env.ref(xmlid)
+                self.assertTrue(group.privilege_id)
+                self.assertEqual(group.privilege_id.group_ids, group)

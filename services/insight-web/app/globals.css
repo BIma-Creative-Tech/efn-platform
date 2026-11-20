@@ -991,6 +991,237 @@ body[data-busy] main {
   padding: 0 16px;
 }
 
+/* ---- supermarket (G47): token G42 tanpa warna baru ---- */
+.nav-group-title {
+  margin: 12px 12px 4px;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--chrome-muted);
+}
+.persona-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 10px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface-2);
+  font-size: 13px;
+  font-weight: 600;
+}
+.sm-card {
+  scroll-margin-top: calc(var(--header-h) + 64px);
+}
+.sm-card h2 {
+  font-size: 16px;
+  font-weight: 600;
+  margin: 0;
+}
+.sm-card h2:focus {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+.sm-asof {
+  margin: 2px 0 8px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.sm-banner {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  padding: 6px 10px;
+  margin: 0 0 8px;
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  background: var(--warn-soft);
+  border: 1px solid var(--warn);
+}
+.sm-banner-bad {
+  background: var(--bad-soft);
+  border-color: var(--bad);
+}
+.sm-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+  margin-top: 16px;
+}
+.sm-grid > .wide {
+  grid-column: 1 / -1;
+}
+.rows {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+.rows > li {
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border);
+}
+.rows > li:last-child {
+  border-bottom: 0;
+}
+.rows dl {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 2px 12px;
+  margin: 4px 0 0;
+  font-size: 13px;
+}
+.rows dt {
+  color: var(--text-muted);
+}
+.rows dd {
+  margin: 0;
+}
+.rows .row-title {
+  font-weight: 600;
+  margin-right: 6px;
+}
+.action-link {
+  font-size: 14px;
+  min-height: 40px;
+}
+.action-link-big {
+  width: 100%;
+  min-height: 48px;
+  justify-content: center;
+}
+.anchors {
+  position: sticky;
+  top: var(--header-h);
+  z-index: 5;
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 8px 0;
+  background: var(--bg);
+}
+.anchors a {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  padding: 0 14px;
+  border: 1px solid var(--text-muted);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--text);
+  text-decoration: none;
+  font-weight: 600;
+}
+.store-page {
+  scroll-padding-top: calc(var(--header-h) + 64px);
+}
+.big-status {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 4px 0 8px;
+}
+.big-time {
+  font-size: 22px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.sm-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 16px;
+  align-items: flex-end;
+  margin-bottom: 12px;
+  padding: 12px 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+.sm-filters label,
+.sm-filters legend {
+  display: block;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-muted);
+  margin-bottom: 2px;
+}
+.sm-filters fieldset {
+  border: 0;
+  margin: 0;
+  padding: 0;
+}
+.sm-filters .check {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-right: 12px;
+  font-size: 13px;
+  font-weight: 400;
+  color: var(--text);
+}
+.funnel {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.funnel-bar {
+  height: 14px;
+  min-width: 2px;
+  border-radius: 4px;
+  background: var(--c1);
+}
+.funnel-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  font-size: 13px;
+}
+.funnel-count {
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.bar-mini {
+  display: inline-block;
+  height: 8px;
+  background: var(--c1);
+  border-radius: 3px;
+  vertical-align: middle;
+  margin-left: 6px;
+}
+.stack-bar {
+  display: flex;
+  height: 14px;
+  border-radius: 4px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  margin: 6px 0;
+}
+.stack-bar > span {
+  display: block;
+  height: 100%;
+}
+.sm-card .chart-card {
+  border: 0;
+  box-shadow: none;
+  padding: 0;
+}
+.note-block {
+  margin: 0 0 12px;
+  padding: 8px 12px;
+  border: 1px solid var(--info);
+  background: var(--info-soft);
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+}
+@media (max-width: 1279px) {
+  .sm-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
 /* ---- responsif ---- */
 @media (max-width: 1279px) {
   .shell {

@@ -1952,6 +1952,16 @@ services:
       # efn_legacy_history + grant G46.
       ETL_ENABLE_FORECAST: ${ETL_ENABLE_FORECAST:-false}
       ETL_ENABLE_FORECAST_LEGACY: ${ETL_ENABLE_FORECAST_LEGACY:-false}
+      # G47 (docs/04 §28.13): mart Insight supermarket; butuh ETL_ENABLE_ODOO + grant G47 (stok: + ETL_ENABLE_STOCK).
+      # EXPIRY/CAMPAIGN butuh ETL_ENABLE_SM; CAMPAIGN ditolak di production selama PROMO_CAMPAIGN_ENABLED != true.
+      ETL_ENABLE_SM: ${ETL_ENABLE_SM:-false}
+      ETL_SM_COMPANIES: ${ETL_SM_COMPANIES:-SMD}
+      ETL_ENABLE_SM_EXPIRY: ${ETL_ENABLE_SM_EXPIRY:-false}
+      ETL_ENABLE_SM_CAMPAIGN: ${ETL_ENABLE_SM_CAMPAIGN:-false}
+      ETL_SM_FILL_RECALC_DAYS: ${ETL_SM_FILL_RECALC_DAYS:-14}
+      ETL_SM_CAMPAIGN_ATTR_DAYS: ${ETL_SM_CAMPAIGN_ATTR_DAYS:-30}
+      ETL_SM_STOCK_BACKFILL_DAYS: ${ETL_SM_STOCK_BACKFILL_DAYS:-90}
+      PROMO_CAMPAIGN_ENABLED: ${PROMO_CAMPAIGN_ENABLED:-false}
       # G50 (docs/04 §28.6/§28.7, ADR-047 Proposed): behavior.event_raw (PG platform) -> efn_dwh.fact_visitor_event +
       # agregat anonim. Default MATI di semua env; production ditolak deploy-validate selama BEHAVIOR_TRACKING_ENABLED
       # mati. Prasyarat: grant services/etl/sql/platform-behavior-grants.sql (skema PG harus cocok, lihat laporan G50).

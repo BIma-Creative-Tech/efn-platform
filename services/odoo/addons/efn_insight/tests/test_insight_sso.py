@@ -18,7 +18,7 @@ from odoo.addons.efn_insight.lib import insight_token as it
 CTRL = "odoo.addons.efn_insight.controllers.main"
 TEST_KEY = "0123456789abcdef" * 4  # sintetis, 64 hex  # gitleaks:allow (kunci uji palsu)
 URL = "https://insight.test"
-TOKEN_RE = re.compile(r'value="(eit1\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]{43})"')
+TOKEN_RE = re.compile(r'value="(eit[12]\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]{43})"')
 
 
 @tagged("efn", "post_install", "-at_install")
@@ -88,6 +88,9 @@ class TestInsightSso(HttpCase):
             "EFN_INSIGHT_SSO_KEY_FILE": self.key_file,
             "APP_ENV": "production",
             "EFN_ALLOW_PLAINTEXT": "false",
+            # G47: default eit2, bagian SM mati (test SM ada di efn_insight_sm).
+            "EFN_INSIGHT_TOKEN_VERSION": "2",
+            "INSIGHT_SM_ENABLED": "false",
         }
         values.update(overrides)
         return patch.dict(os.environ, values)
@@ -100,11 +103,18 @@ class TestInsightSso(HttpCase):
     def _token(self, response):
         self.assertEqual(response.status_code, 200)
         match = TOKEN_RE.search(response.text)
-        self.assertTrue(match, "halaman form harus berisi token eit1")
+        self.assertTrue(match, "halaman form harus berisi token eit1/eit2")
         return match.group(1)
 
     def _verify(self, token):
+        if token.startswith("eit2."):
+            return it.verify_token_v2(token, TEST_KEY, now=int(time.time()))
         return it.verify_token(token, TEST_KEY, now=int(time.time()))
+
+    def _assert_no_token(self, text):
+        self.assertNotIn("eit1.", text)
+        self.assertNotIn("eit2.", text)
+        self.assertNotIn('name="t"', text)
 
     def _log_count(self):
         return self.env["ir.logging"].sudo().search_count([("name", "=", "efn_insight")])
@@ -115,12 +125,12 @@ class TestInsightSso(HttpCase):
             response = self.url_open("/efn/insight/open", allow_redirects=False)
         self.assertIn(response.status_code, (302, 303))
         self.assertIn("/web/login", response.headers.get("Location", ""))
-        self.assertNotIn("eit1.", response.text)
+        self._assert_no_token(response.text)
 
     def test_user_without_group_forbidden(self):
         response = self._open("efn_ins_plain")
         self.assertEqual(response.status_code, 403)
-        self.assertNotIn("eit1.", response.text)
+        self._assert_no_token(response.text)
 
     def test_kill_switch(self):
         # Hanya "true" persis yang menyalakan (sama dengan insight-web, docs/04 §26.2): "1"/"yes"/"on"/"True" = mati.
@@ -145,7 +155,7 @@ class TestInsightSso(HttpCase):
         with self._env(INSIGHT_ENABLED="false"):
             response = self.url_open("/efn/insight/open", allow_redirects=False)
         self.assertEqual(response.status_code, 200)
-        self.assertNotIn("eit1.", response.text)
+        self._assert_no_token(response.text)
         self.assertEqual(self._log_count(), before)
 
     # ------------------------------------------------------------------ token & cakupan
@@ -161,9 +171,11 @@ class TestInsightSso(HttpCase):
         self.assertEqual(payload["sub"], self.user.id)
         self.assertEqual(payload["name"], "Staf Uji Insight")
         self.assertEqual(payload["exp"] - payload["iat"], 60)
-        self.assertEqual((payload["v"], payload["aud"], payload["iss"]), (1, "insight-web", "odoo"))
+        self.assertEqual((payload["v"], payload["aud"], payload["iss"]), (2, "insight-web", "odoo"))
+        self.assertTrue(token.startswith("eit2."))
+        self.assertEqual((payload["wids"], payload["cats"]), ([], []))
         self.assertRegex(payload["jti"], r"^[0-9a-f]{32}$")
-        self.assertEqual(set(payload), it.PAYLOAD_KEYS)
+        self.assertEqual(set(payload), it.PAYLOAD_KEYS_V2)
         for forbidden in ("login", "email", "phone"):
             self.assertNotIn(forbidden, payload)
         # form POST ke /sso, token tidak di URL
@@ -186,11 +198,45 @@ class TestInsightSso(HttpCase):
         self.assertEqual(self._log_count(), before + 1)
         entry = self.env["ir.logging"].sudo().search([("name", "=", "efn_insight")], order="id desc", limit=1)
         self.assertIn(f"uid={self.user.id}", entry.message)
+        self.assertIn(" v=2 ", entry.message)
+        self.assertIn("wids_n=0 cats_n=0", entry.message)
         self.assertIn("codes=BCF,PB", entry.message)
         self.assertIn(f"jti={payload['jti']}", entry.message)
         output = "\n".join(logs.output) + entry.message
         for secret in (token, token.split(".")[2], token.split(".")[1], "Staf Uji Insight", "efn_ins_user", TEST_KEY):
             self.assertNotIn(secret, output)
+
+    def test_token_version_rollback_eit1(self):
+        """G47 docs/04 §28.13.3 butir 7: EFN_INSIGHT_TOKEN_VERSION=1 -> eit1 persis §26.3; nilai lain -> eit2."""
+        token = self._token(self._open("efn_ins_user", EFN_INSIGHT_TOKEN_VERSION="1"))
+        self.assertTrue(token.startswith("eit1."))
+        payload = self._verify(token)
+        self.assertEqual(set(payload), it.PAYLOAD_KEYS)
+        self.assertEqual(payload["v"], 1)
+        self.assertEqual(payload["codes"], ["BCF", "PB"])
+        entry = self.env["ir.logging"].sudo().search([("name", "=", "efn_insight")], order="id desc", limit=1)
+        self.assertIn(" v=1 ", entry.message)
+        self.assertNotIn("wids_n", entry.message)
+        # Bagian SM diabaikan walau INSIGHT_SM_ENABLED=true.
+        token = self._token(self._open("efn_ins_user", EFN_INSIGHT_TOKEN_VERSION="1", INSIGHT_SM_ENABLED="true"))
+        self.assertTrue(token.startswith("eit1."))
+        for value in ("2", "3", "", "v1", " 2 "):
+            with self.subTest(value=value):
+                token = self._token(self._open("efn_ins_user", EFN_INSIGHT_TOKEN_VERSION=value))
+                self.assertTrue(token.startswith("eit2."))
+
+    def test_token_version_unset_defaults_to_eit2(self):
+        self.authenticate("efn_ins_user", "efn_ins_user")
+        with self._env():
+            os.environ.pop("EFN_INSIGHT_TOKEN_VERSION", None)
+            response = self.url_open("/efn/insight/open", allow_redirects=False)
+        self.assertTrue(self._token(response).startswith("eit2."))
+
+    def test_sm_enabled_without_sm_module_scope_is_esb_only(self):
+        # Hook dasar efn_insight = cakupan SM kosong; bila efn_insight_sm terpasang, user ini tetap tanpa persona.
+        payload = self._verify(self._token(self._open("efn_ins_user", INSIGHT_SM_ENABLED="true")))
+        self.assertEqual(payload["roles"], ["user"])
+        self.assertEqual((payload["wids"], payload["cats"]), ([], []))
 
     def test_jti_unique_per_request(self):
         first = self._verify(self._token(self._open("efn_ins_user")))
@@ -239,6 +285,7 @@ class TestInsightSso(HttpCase):
         with self._env():
             response = self.url_open("/efn/insight/open", data={"x": "1"}, allow_redirects=False)
         self.assertNotIn("eit1.", response.text)
+        self.assertNotIn("eit2.", response.text)
 
     # ------------------------------------------------------------------ konfigurasi salah
     def _assert_config_page(self, response):

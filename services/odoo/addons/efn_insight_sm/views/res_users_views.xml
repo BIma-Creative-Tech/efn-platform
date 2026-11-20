@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- G47 (fit-gap G47 §3.1): kategori dikelola persona category. Page hanya untuk base.group_erp_manager (ACL res.users
+     CE sudah membatasi tulis ke grup itu). -->
+<odoo>
+    <record id="view_users_form_efn_insight_sm" model="ir.ui.view">
+        <field name="name">res.users.form.efn.insight.sm</field>
+        <field name="model">res.users</field>
+        <field name="inherit_id" ref="base.view_users_form"/>
+        <field name="arch" type="xml">
+            <xpath expr="//notebook" position="inside">
+                <page string="Insight Supermarket" name="efn_insight_sm" groups="base.group_erp_manager">
+                    <group>
+                        <field name="efn_insight_categ_ids" widget="many2many_tags"/>
+                    </group>
+                    <p class="text-muted">
+                        Persona Insight diatur di bagian hak akses "EFN Dashboard Insight". Persona Kepala toko memakai
+                        tab "Outlet (kepala toko)". Kategori di sini hanya filter awal untuk persona Category manager
+                        (maks 50).
+                    </p>
+                </page>
+            </xpath>
+        </field>
+    </record>
+</odoo>
