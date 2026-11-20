@@ -147,7 +147,7 @@ def test_transform_valid_row() -> None:
 @pytest.mark.parametrize(
     "override",
     [
-        {"subject_key": "6f1c2d4e-5a6b-4c7d-8e9f-0a1b2c3d4e5f"},  # device ID mentah, bukan HMAC
+        {"subject_key": "6f1c2d4e-5a6b-4c7d-8e9f-0a1b2c3d4e5f"},  # device ID mentah, bukan HMAC  gitleaks:allow
         {"subject_key": "62812345678"},  # nomor HP
         {"subject_key": "A" * 64},  # hex huruf besar = bukan keluaran BFF
         {"subject_kind": "anon"},
