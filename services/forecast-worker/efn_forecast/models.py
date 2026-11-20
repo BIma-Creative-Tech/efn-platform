@@ -20,6 +20,10 @@ import numpy as np
 
 MODEL_NAMES = ("AutoETS", "AutoARIMA", "CrostonOptimized", "ADIDA", "category_mean")
 CANDIDATE_MODELS = ("AutoETS", "AutoARIMA")
+# Default kandidat = AutoETS saja. Benchmark histori sintetis SMD 24 bulan (20 Nov 2026), outlet 400 seri:
+# AutoETS CV 4 = WAPE 0,6496 dalam 91 s; AutoARIMA CV 1 = WAPE 0,6499 dalam 1.156 s.
+# AutoARIMA tetap bisa dipilih lewat FORECAST_MODELS.
+DEFAULT_MODELS = ("AutoETS",)
 Z80 = 1.2815515655446004  # kuantil normal 0,9 -> interval 80 % = p10..p90
 CV2_LUMPY = 0.49
 

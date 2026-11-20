@@ -65,7 +65,7 @@ python -m efn_forecast seed-calendar --company SMD [--dry-run]
 | `FORECAST_DAILY_CRON`, `FORECAST_TZ`, `FORECAST_MINMAX_WEEKDAY` | `30 23 * * *`, `Asia/Jakarta`, `6` (Minggu; `-1` = mati) |
 | `FORECAST_HORIZON_DAYS`, `FORECAST_CHUNK_SIZE` | `28` (7..60), `500` (1..500) |
 | `FORECAST_HISTORY_DAYS`, `FORECAST_STOCK_DAYS`, `FORECAST_FIT_DAYS` | `800`, `400`, `365` |
-| `FORECAST_MODELS`, `FORECAST_CV_WINDOWS`, `FORECAST_MIN_HISTORY_DAYS`, `FORECAST_INTERMITTENT_ZERO_RATIO` | `AutoETS,AutoARIMA`, `4`, `56`, `0.6` |
+| `FORECAST_MODELS`, `FORECAST_CV_WINDOWS`, `FORECAST_MIN_HISTORY_DAYS`, `FORECAST_INTERMITTENT_ZERO_RATIO` | `AutoETS` (pilihan `AutoETS,AutoARIMA`), `4`, `56`, `0.6` |
 | `FORECAST_JOBS` | `1` (1..32): proses paralel per gudang (G46b, `spawn`; hasil identik dengan 1). Log `forecast gudang i/N` per gudang. Uji PB 112 hari: `AutoETS,AutoARIMA` + CV 4 + backtest = jam-an di 1 core; untuk run cepat `FORECAST_MODELS=AutoETS` (tanpa CV) |
 | `FORECAST_INACTIVE_DAYS` | `28` (0..365; 0 = mati): seri tanpa jual dan tanpa hari OOS selama N hari terakhir → ramalan 0 (`inactive`), **tidak dikirim** ke Odoo (tanpa usulan forecast/min-max), tetap dihitung di backtest (L-168). Level `category_mean` = median seri pembanding |
 | `FORECAST_PAYDAY_TAIL_DAYS`, `FORECAST_PAYDAY_HEAD_DAYS`, `FORECAST_WEEKEND_DAYS` | `7`, `7`, `5,6` (0=Senin) — **samakan dengan parameter Odoo per company** |
