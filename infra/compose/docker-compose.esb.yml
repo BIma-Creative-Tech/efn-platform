@@ -29,7 +29,7 @@
 # Hanya GET ke ESB (kecuali POST /auth/login), ditegakkan kode efn_esb + test. ESB_ENABLED=false -> service idle.
 services:
   esb-extract:
-    image: ${IMAGE_ESB_EXTRACT:-ghcr.io/efn/esb-extract:dev}
+    image: ${IMAGE_ESB_EXTRACT:-ghcr.io/${EFN_STACK:-efn}/esb-extract:dev}
     build:
       context: ../../services/esb-extract
     profiles: ["data"]
@@ -147,7 +147,7 @@ services:
   #     (docker-compose.migration.yml) harus bisa membacanya; hasil impor (0600 milik odoo) dibaca balik oleh writeback.
   #     Default 65534 (nobody) = aman tetapi pertukaran dengan Odoo gagal terlihat sampai diisi.
   esb-migrate:
-    image: ${IMAGE_ESB_MIGRATE:-ghcr.io/efn/esb-migrate:dev}
+    image: ${IMAGE_ESB_MIGRATE:-ghcr.io/${EFN_STACK:-efn}/esb-migrate:dev}
     build:
       context: ../../scripts/migration
     profiles: ["migrate"]
@@ -226,17 +226,20 @@ services:
   clickhouse:
     networks: [data, esb]
 
+# K25-06: nama `<EFN_STACK>_<key>` + subnet <EFN_SUBNET_BASE>.7/.8 (peta oktet di docker-compose.yml).
 networks:
   esb:           # hanya clickhouse <-> esb-extract / esb-migrate (dicek scripts/check-encryption.sh)
+    name: ${EFN_STACK:-efn}_esb
     internal: true
     ipam:
-      config: [{ subnet: 172.30.7.0/24 }]
+      config: [{ subnet: "${EFN_SUBNET_BASE:-172.30}.7.0/24" }]
   egress-esb:    # SEC-183: keluar internet HANYA esb-extract (dicek check-encryption); tanpa komunikasi antar-container
+    name: ${EFN_STACK:-efn}_egress-esb
     driver: bridge
     driver_opts:
       com.docker.network.bridge.enable_icc: "false"
     ipam:
-      config: [{ subnet: 172.30.8.0/24 }]
+      config: [{ subnet: "${EFN_SUBNET_BASE:-172.30}.8.0/24" }]
 
 secrets:
   esb_core_password_pb: { file: ../../secrets/esb_core_password_pb.txt }

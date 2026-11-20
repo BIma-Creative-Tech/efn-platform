@@ -1,5 +1,83 @@
 # Laporan Agent: efn-devsecops-engineer
 
+## K25-06 identitas stack (20 Nov 2026, worktree efn-platform-k2506, branch feat/k25-06-stack-name, belum di-commit) — compose jalan dengan nama project & subnet apa pun
+
+Pemicu: gladi prod lokal `efn-prod` (lead menambal `sed`): label/konfigurasi memakai nama network `efn_*`, subnet tetap
+`172.30.x`, tag image `:dev` dipakai bersama semua env. Tanpa shell: belum ada `docker compose config` yang dijalankan.
+
+### Keputusan
+1. **Satu variabel `EFN_STACK`** (default `efn`): `name: ${EFN_STACK:-efn}` (project), `networks.<n>.name:
+   ${EFN_STACK:-efn}_<n>` (base, esb, forecast), semua label `traefik.docker.network`, tag image default
+   `ghcr.io/${EFN_STACK:-efn}/<svc>:dev` (dev overlay `${EFN_STACK:-efn}/<svc>:dev`). Default me-render string identik.
+   Produksi server tidak berubah: `IMAGE_*` digest dari deploy.sh menimpa default; deploy.sh kini menolak
+   `EFN_STACK`/`EFN_SUBNET_BASE` non-default (`efn_validate_stack_identity server`, karena TRUSTED_PROXIES dipin 172.30).
+2. **`EFN_SUBNET_BASE`** (default `172.30`): IPAM `"${EFN_SUBNET_BASE:-172.30}.<n>.0/24"` (dikutip: `{`/`}` di flow
+   mapping). `TRUSTED_PROXIES` default `${TRUSTED_PROXIES:-${EFN_SUBNET_BASE:-172.30}.1.0/24}`; baris di `.env.example`
+   dikomentari. `EFN_INTERNAL_EXTRA_CIDR` dev overlay jadi `${EFN_INTERNAL_EXTRA_CIDR:-172.16.0.0/12}`.
+3. **pg_hba → `samenet`** (postgres hanya di network `data`; CI menolak network tambahan). Cakupan = data subnet +
+   loopback container postgres sendiri (hanya role aplikasi, bukan superuser). Tanpa entrypoint/template baru.
+4. **Traefik + Promtail: render template saat start** (`infra/stack/render-config.sh`, sh, tmpfs `/tmp`): konfigurasi
+   statis Traefik tidak bisa membaca env bila memakai file, dan Promtail `-config.expand-env` mengubah backslash regex
+   redaksi. Ditemukan masalah tambahan yang tidak disebut di brief: `docker-socket-proxy` melihat SEMUA container host,
+   sehingga Traefik stack A memuat router stack B / project lain dan Promtail menelan log stack lain (prod → dev Loki).
+   Diperbaiki dengan `providers.docker.constraints: Label(com.docker.compose.project, @EFN_STACK@)` dan filter docker_sd
+   `label=com.docker.compose.project=@EFN_STACK@`. `providers.docker.network: "@EFN_STACK@_internal"` dipertahankan
+   sebagai fallback; setiap router tetap wajib label eksplisit (dicek).
+5. **Prometheus**: dns_sd ke alias ber-scope network `api-gateway-metrics` / `ocr-worker-metrics` (hanya di
+   `networks.internal.aliases` service pemilik; juga di overlay llm untuk ocr-worker). Relabel keep dipertahankan,
+   diubah ke `\d{1,3}\.\d{1,3}\.1\.\d{1,3}:<port>` (oktet ketiga 1 = network internal untuk base apa pun).
+   `docker_sd_configs` lewat socket proxy ditolak: menambah akses API Docker ke Prometheus (least privilege).
+6. Port host Traefik `${EFN_HTTP_PORT:-80}` / `${EFN_HTTPS_PORT:-443}` agar stack kedua bisa hidup bersamaan.
+7. Overlay baru `docker-compose.local-edge.yml` (sertifikat edge self-signed untuk gladi tanpa domain publik; tidak
+   dipakai deploy.sh).
+
+### File
+- `infra/compose/docker-compose.yml`, `docker-compose.dev.yml`, `docker-compose.esb.yml`, `docker-compose.forecast.yml`,
+  `docker-compose.llm.yml`, `docker-compose.local-edge.yml` (baru), `.env.example`
+- `infra/stack/render-config.sh` (baru), `infra/traefik/traefik.yml`, `infra/observability/promtail.yml`,
+  `infra/observability/prometheus.yml`, `infra/postgres/pg_hba.conf`
+- `scripts/check-encryption.sh` (aturan 10 `check_stack_identity` + `check_stack_files`; render `prod-stack`
+  EFN_STACK=efn-prod/10.250 dan `dev-stack` efn-dev/10.252; `kind` agar render paksaan memakai aturan prod/dev penuh),
+  `scripts/lib/deploy-validate.sh` (`efn_validate_stack_identity`), `scripts/deploy.sh` (panggilan mode server),
+  `scripts/restore-test.sh` (`COMPOSE_PROJECT` default `EFN_STACK`), `scripts/smoke/run-e2e-smoke.sh`,
+  `infra/odoo-rpc-gateway/test-gateway.sh`, `test-gateway-load.sh` (network/container dari `EFN_STACK`)
+- `.github/workflows/ci.yml` (shellcheck `infra/stack/*.sh`)
+- `docs/runbooks/multi-env-local.md` (baru), `docs/runbooks/README.md`
+
+### Perbedaan `docker compose config` stack `efn` (yang diharapkan)
+Identik kecuali: traefik & promtail (+`entrypoint` render-config, `command` menunjuk `/tmp/...`, +env `EFN_STACK`,
++volume skrip; healthcheck traefik membaca `/tmp/traefik.yml`); api-gateway & ocr-worker (+`networks.internal.aliases`).
+Container itu ter-recreate sekali.
+
+### Belum terverifikasi
+- Interpolasi `name:` top-level dan nested default `${A:-${B:-x}}` di Compose v2 CI (dokumentasi: didukung).
+- Traefik image alpine punya `/bin/sh`+`sed`; Promtail image debian (`bash` ada di healthcheck). Constraint & filter
+  docker_sd belum diuji runtime. Sumber IP koneksi port publish Docker Desktop (asumsi gateway edge `<base>.0.1`).
+- `CH_FORECAST_READER_HOST_CIDR` tidak ada di main (mungkin cabang lain) — tidak diubah.
+- `tests/load/run.sh` masih memakai `efn_*` / `efn-*-1` (uji beban dev, stack default).
+- `CLAUDE.md` tidak diubah (aturan K25-06 sudah mencakup; runbook menjadi rujukan teknis).
+
+### Lanjutan 21 Nov 2026 (merge origin/main G45/G50 ke PR #121, belum di-commit)
+- Konflik diselesaikan: laporan ini (kedua bagian), `.env.example`, `docker-compose.yml` (komentar oktet + api-gateway:
+  secret G50 dipertahankan + networks map ber-alias), `check-encryption.sh` (`check_stack_files` + blok G50/SEC-215/SEC-223).
+- K25-06 diterapkan ke tambahan main: overlay `docker-compose.segment.yml` dan `docker-compose.wa-unofficial.yml`,
+  network `mail` (dev) dan `wa-ingress`: nama `${EFN_STACK:-efn}_<n>`, subnet `"${EFN_SUBNET_BASE:-172.30}.<n>.0/24"`,
+  label `traefik.docker.network` berparameter, IP statis relay `.21.10` / proxy egress `.14.10` + `extra_hosts` dari base.
+  `admin-relay.cfg` bind `"${WA_RELAY_BIND_IP}:8443"` (env HAProxy, dari compose) dengan pagar `.if !defined` + `.alert`
+  (tanpa env = gagal start, bukan bind semua interface); CI `haproxy -c` memberi env + uji negatif tanpa env.
+- Prometheus job wa-unofficial: alias `wa-admin-relay-ingress` (hanya di wa-ingress), keep `\d+\.\d+\.21\.10:8443`.
+- SEC-215: `CH_FORECAST_READER_HOST_CIDR` default compose `<base>.11.0/24` (baris `.env.example` dikomentari); BARU
+  `CH_SEGMENT_READER_HOST_CIDR` default `<base>.17.0/24`, `efn_segment_reader` kini `HOST IP` (sebelumnya HOST ANY),
+  divalidasi `private_cidr_ok`; check-encryption: CIDR /24../32, sama dengan ipam segment-ch, grep create_user.
+- `IMAGE_FORECAST_WORKER`/`IMAGE_SEGMENT_WORKER`/`IMAGE_WA_UNOFFICIAL` dikomentari; default `ghcr.io/${EFN_STACK:-efn}/...`.
+- api-gateway di overlay segment dan dev memakai bentuk map + alias (aman terhadap merge list).
+- `prod-stack`/`dev-stack` kini memuat overlay segment + wa-unofficial (`--profile wa-unofficial`); kill switch
+  esb/forecast/segment/wa ikut dicek di `prod-stack`. Alias check digeneralisasi (svc:alias:network).
+- Runbook: `multi-env-local.md` (peta oktet 13-21, turunan SEC-215/WA), `supermarket-campaign-channels.md`.
+- Belum pasti: semantik `.alert` HAProxy 3.2 (diharapkan fatal, diuji CI negatif); bentuk JSON `extra_hosts` di Compose
+  CI (jq menerima list `host:ip`/`host=ip` dan map); user `efn_segment_reader` di volume lama dipersempit saat
+  clickhouse-init berikutnya (segment-worker di mesin lain perlu CIDR WireGuard).
+
 ## G50 perbaikan security review (20 Nov 2026, `docs/reviews/SECURITY_REVIEW_2026-11-20.md`)
 
 Tanpa shell; belum dijalankan.

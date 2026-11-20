@@ -1,4 +1,6 @@
 # Traefik v3 static configuration (docs/04 §7.1, §7.4, §7.5; ADR-022).
+# K25-06: file ini TEMPLATE. `@EFN_STACK@` diganti infra/stack/render-config.sh saat container start (konfigurasi statis
+# Traefik tidak bisa membaca env bila memakai file). Jangan menambah placeholder lain tanpa memperbarui skrip itu.
 global:
   checkNewVersion: false
   sendAnonymousUsage: false
@@ -110,7 +112,12 @@ providers:
       cert: /run/secrets/tls_traefik_crt
       key: /run/secrets/tls_traefik_key
     exposedByDefault: false
-    network: efn_internal
+    # K25-06: docker-socket-proxy melihat SEMUA container di host (stack EFN lain, project non-EFN). Constraint ini
+    # membatasi discovery ke project compose stack ini (project = EFN_STACK, `name:` di docker-compose.yml) sehingga
+    # router stack lain tidak ikut termuat/ter-load-balance. Default network = fallback; setiap router WAJIB punya label
+    # traefik.docker.network eksplisit (dicek scripts/check-encryption.sh).
+    constraints: "Label(`com.docker.compose.project`, `@EFN_STACK@`)"
+    network: "@EFN_STACK@_internal"
   file:
     directory: /etc/traefik/dynamic
     watch: true

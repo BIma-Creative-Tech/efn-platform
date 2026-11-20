@@ -28,7 +28,7 @@
 #   efn_ca_crt                     bundle CA internal
 services:
   segment-worker:
-    image: ${IMAGE_SEGMENT_WORKER:-ghcr.io/efn/segment-worker:dev}
+    image: ${IMAGE_SEGMENT_WORKER:-ghcr.io/${EFN_STACK:-efn}/segment-worker:dev}
     build:
       context: ../../services/segment-worker
     profiles: ["data"]
@@ -110,22 +110,33 @@ services:
     networks: [data, insight-data, segment-ch]
   odoo-rpc-gateway:
     networks: [internal, segment-rpc]
+  # Bentuk map + alias sama dengan base (K25-06): alias scrape Prometheus `api-gateway-metrics` hanya di `internal`.
   api-gateway:
-    networks: [internal, data, cache, egress, segment-bff]
+    networks:
+      internal:
+        aliases: [api-gateway-metrics]
+      data:
+      cache:
+      egress:
+      segment-bff:
 
+# K25-06: nama `<EFN_STACK>_<key>` + subnet <EFN_SUBNET_BASE>.17/.18/.19 (peta oktet di docker-compose.yml).
 networks:
   segment-ch:     # hanya clickhouse <-> segment-worker (dicek scripts/check-encryption.sh)
+    name: ${EFN_STACK:-efn}_segment-ch
     internal: true
     ipam:
-      config: [{ subnet: 172.30.17.0/24 }]
+      config: [{ subnet: "${EFN_SUBNET_BASE:-172.30}.17.0/24" }]
   segment-rpc:    # hanya odoo-rpc-gateway <-> segment-worker
+    name: ${EFN_STACK:-efn}_segment-rpc
     internal: true
     ipam:
-      config: [{ subnet: 172.30.18.0/24 }]
+      config: [{ subnet: "${EFN_SUBNET_BASE:-172.30}.18.0/24" }]
   segment-bff:    # hanya api-gateway <-> segment-worker (listener mTLS :9466)
+    name: ${EFN_STACK:-efn}_segment-bff
     internal: true
     ipam:
-      config: [{ subnet: 172.30.19.0/24 }]
+      config: [{ subnet: "${EFN_SUBNET_BASE:-172.30}.19.0/24" }]
 
 secrets:
   odoo_api_key_segment_smd: { file: ../../secrets/odoo_api_key_segment_smd.txt }

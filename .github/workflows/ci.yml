@@ -803,7 +803,7 @@ jobs:
           shellcheck -x infra/odoo-rpc-gateway/test-gateway.sh infra/odoo-rpc-gateway/test-gateway-load.sh
           shellcheck -s sh infra/odoo-rpc-gateway/entrypoint.sh
           shellcheck -s sh infra/minio/*.sh infra/redis/*.sh infra/rabbitmq/*.sh infra/clickhouse/*.sh infra/s3-gateway/*.sh \
-            infra/acme/*.sh scripts/acme-test/*.sh infra/metabase/*.sh
+            infra/acme/*.sh scripts/acme-test/*.sh infra/metabase/*.sh infra/stack/*.sh
       # Filter L7 object storage (ADR-030): sintaks HAProxy valid dengan sertifikat dummy dari gen-pki.sh
       - name: haproxy -c (infra/s3-gateway/haproxy.cfg)
         run: |
@@ -830,11 +830,19 @@ jobs:
       # SEC-G50-06: relay admin satu arah (admin-relay.cfg) juga diperiksa
       - name: haproxy -c (infra/wa-egress/haproxy.cfg, admin-relay.cfg)
         run: |
+          # K25-06: admin-relay.cfg bind "${WA_RELAY_BIND_IP}:8443" (compose: <EFN_SUBNET_BASE>.21.10)
           for cfg in haproxy.cfg admin-relay.cfg; do
-            docker run --rm -v "$PWD/infra/wa-egress/${cfg}:/usr/local/etc/haproxy/haproxy.cfg:ro" \
+            docker run --rm -e WA_RELAY_BIND_IP=172.30.21.10 \
+              -v "$PWD/infra/wa-egress/${cfg}:/usr/local/etc/haproxy/haproxy.cfg:ro" \
               haproxy:3.2.25-alpine@sha256:5d97434a423c2533cfeb42874d45cf6d69a840b60334582dfbfd5008e94c80be \
               haproxy -c -f /usr/local/etc/haproxy/haproxy.cfg
           done
+          # Tanpa env WA_RELAY_BIND_IP relay WAJIB gagal (bukan bind :8443 di semua interface)
+          if docker run --rm -v "$PWD/infra/wa-egress/admin-relay.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro" \
+               haproxy:3.2.25-alpine@sha256:5d97434a423c2533cfeb42874d45cf6d69a840b60334582dfbfd5008e94c80be \
+               haproxy -c -f /usr/local/etc/haproxy/haproxy.cfg > /dev/null 2>&1; then
+            echo "::error::admin-relay.cfg lolos tanpa WA_RELAY_BIND_IP (fail-open)"; exit 1
+          fi
       # SEC-36/SEC-42/SEC-50: wrapper deploy host diuji dengan cosign palsu di container sekali pakai (87 kasus: replay/
       # downgrade, IMAGE_* lewat env, registry asing, trust anchor PKI, tanda tangan, allowlist env, topologi dipin di
       # deploy.conf, config manifest, karakter kontrol/multi-baris, kontrol keamanan production, lib deploy-validate,

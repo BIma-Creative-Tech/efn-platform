@@ -171,6 +171,33 @@ efn_list_has() { # nilai elemen...
   return 1
 }
 
+# ── K25-06: identitas stack compose (docs/runbooks/multi-env-local.md) ─────────────────────────────────────────────
+# EFN_STACK       : nama project compose + prefix network <stack>_<network> + filter discovery Traefik/Promtail.
+#                   Pola sama dengan infra/stack/render-config.sh dan scripts/check-encryption.sh.
+# EFN_SUBNET_BASE : dua oktet subnet IPAM (<base>.0.0/24 .. <base>.12.0/24); privat RFC1918, bukan subnet WireGuard.
+# Mode `server` (scripts/deploy.sh): HANYA default (efn / 172.30). deploy.sh menulis .env tanpa kedua variabel dan
+# TRUSTED_PROXIES=172.30.1.0/24; nilai lain di env proses deploy menimpa .env compose -> project/subnet tidak konsisten
+# dengan TRUSTED_PROXIES dan nama container yang dipakai skrip host. Multi-env hanya untuk gladi lokal (K25-06).
+efn_validate_stack_identity() { # [server]
+  local mode="${1:-}" stack="${EFN_STACK:-efn}" base="${EFN_SUBNET_BASE:-172.30}"
+  efn_no_cntrl EFN_STACK "$stack" || return 1
+  efn_no_cntrl EFN_SUBNET_BASE "$base" || return 1
+  [[ "$stack" =~ ^[a-z][a-z0-9-]{0,30}[a-z0-9]$ ]] \
+    || _efn_err "EFN_STACK '${stack}' tidak valid (huruf kecil/angka/'-', diawali huruf, 2..32, tanpa '_')" || return 1
+  efn_is_ipv4 "${base}.0.0" || _efn_err "EFN_SUBNET_BASE '${base}' bukan dua oktet IPv4 (mis. 172.30)" || return 1
+  efn_cidr_within "${base}.0.0/16" 10.0.0.0/8 || efn_cidr_within "${base}.0.0/16" 172.16.0.0/12 \
+    || efn_cidr_within "${base}.0.0/16" 192.168.0.0/16 \
+    || _efn_err "EFN_SUBNET_BASE ${base} harus di rentang privat RFC1918" || return 1
+  ! efn_cidr_within "${base}.0.0/16" "$EFN_WG_SUPERNET" \
+    || _efn_err "EFN_SUBNET_BASE ${base} bertabrakan dengan subnet WireGuard ${EFN_WG_SUPERNET}" || return 1
+  if [[ "$mode" == server ]]; then
+    [[ "$stack" == efn && "$base" == 172.30 ]] \
+      || _efn_err "deploy server hanya stack default (EFN_STACK=efn, EFN_SUBNET_BASE=172.30); multi-env = gladi lokal (K25-06)" \
+      || return 1
+  fi
+  return 0
+}
+
 # ── Topologi host (deploy.conf) ────────────────────────────────────────────────────────────────────────────────
 # Mengisi default yang sama dengan deploy.sh lama lalu memvalidasi. Variabel global diubah (default).
 efn_validate_topology() { # app_env

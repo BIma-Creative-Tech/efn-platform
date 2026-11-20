@@ -60,9 +60,21 @@
 #           me-mount kode migrasi read-write (render prod-esb-migrate, prod-migration)
 #   - (SEC-215/SEC-223) clickhouse-init tanpa CH_FORECAST_READER_HOST_CIDR /24../32 atau != subnet ipam forecast-ch;
 #           user efn_forecast_reader tidak dibuat dengan HOST IP; pagar allowlist objek efn_forecast hilang; pagar
-#           definisi view efn_forecast (SQL SECURITY DEFINER + definer) hilang
+#           definisi view efn_forecast (SQL SECURITY DEFINER + definer) hilang; pola sama untuk efn_segment_reader
+#           (CH_SEGMENT_READER_HOST_CIDR = subnet ipam segment-ch, HOST IP $SEGMENT_CIDR, K25-06)
 #   - (at rest) service metabase tanpa secret metabase_encryption_key / dengan MB_ENCRYPTION_SECRET_KEY di env /
 #     dengan override entrypoint apa pun termasuk `[]`/`''` / dengan image resmi metabase/metabase (G16b, SEC-86)
+#   - (K25-06, identitas stack) nama project != EFN_STACK; network tanpa nama `<EFN_STACK>_<key>` atau subnet di luar
+#     `<EFN_SUBNET_BASE>.<n>.0/24` / duplikat; router Traefik tanpa traefik.enable + label traefik.docker.network
+#     `<EFN_STACK>_<network yang dipakai service dan Traefik>`; postgres di network selain `data` (pg_hba samenet);
+#     alias scrape api-gateway-metrics / ocr-worker-metrics (internal), wa-admin-relay-ingress (wa-ingress) hilang atau
+#     di network lain; TRUSTED_PROXIES tanpa `<EFN_SUBNET_BASE>.1.0/24`; IP statis relay WA / WA_RELAY_BIND_IP != <base>.21.10,
+#     extra_hosts wa-unofficial / IP wa-egress-proxy != <base>.14.10; Traefik/Promtail tanpa render-config.sh + EFN_STACK;
+#     stack selain `efn` memakai tag image lokal bersama (ghcr.io/efn/<svc>:dev, efn/<svc>:dev). Render tambahan
+#     EFN_STACK=efn-prod EFN_SUBNET_BASE=10.250 (prod + local-edge + esb + forecast + segment + wa-unofficial) dan
+#     EFN_STACK=efn-dev EFN_SUBNET_BASE=10.252 (dev + forecast + segment + wa-unofficial) wajib lolos SEMUA aturan.
+#     File: traefik.yml (constraint + network ber-placeholder), promtail.yml (filter project), prometheus.yml (tanpa nama
+#     network / subnet literal), pg_hba.conf (samenet, tanpa CIDR literal), wa-egress/admin-relay.cfg (bind env + .alert).
 # Pengecualian hanya lewat ADR-022; tambahkan di sini dengan komentar alasan.
 set -euo pipefail
 
@@ -71,6 +83,25 @@ COMPOSE_DIR="${ROOT_DIR}/infra/compose"
 PROFILES=(--profile core --profile data --profile ai --profile observability --profile ops)
 fail=0
 err() { echo "::error::check-encryption: $*"; fail=1; }
+# K25-06: identitas stack paksaan untuk render berikutnya (kosong = dari env shell / infra/compose/.env / default).
+CC_STACK=""
+CC_BASE=""
+
+# Nilai efektif EFN_STACK / EFN_SUBNET_BASE seperti yang dilihat compose: paksaan render > env shell > .env > default.
+stack_setting() {
+  local var="$1" def="$2" v=""
+  case "$var" in
+    EFN_STACK) v="$CC_STACK" ;;
+    EFN_SUBNET_BASE) v="$CC_BASE" ;;
+  esac
+  [[ -n "$v" ]] || v="${!var:-}"
+  if [[ -z "$v" && -f "${COMPOSE_DIR}/.env" ]]; then
+    v="$(sed -n "s/^[[:space:]]*${var}=//p" "${COMPOSE_DIR}/.env" | tail -n 1)"
+    v="${v%%[[:space:]#]*}"
+    v="${v#\"}"; v="${v%\"}"; v="${v#\'}"; v="${v%\'}"
+  fi
+  printf '%s' "${v:-$def}"
+}
 
 command -v jq > /dev/null || { echo "jq dibutuhkan" >&2; exit 2; }
 
@@ -106,9 +137,17 @@ check_value() {
 
 check_compose() {
   local label="$1"; shift
-  local json
+  local json kind="$label"
+  # K25-06: render stack paksaan (prod-stack/dev-stack) memakai aturan prod/dev penuh.
+  case "$label" in
+    prod-stack) kind=prod ;;
+    dev-stack) kind=dev ;;
+  esac
+  local -a envp=()
+  [[ -n "$CC_STACK" ]] && envp+=("EFN_STACK=${CC_STACK}")
+  [[ -n "$CC_BASE" ]] && envp+=("EFN_SUBNET_BASE=${CC_BASE}")
   command -v docker > /dev/null || { echo "docker (compose) dibutuhkan" >&2; exit 2; }
-  json="$(cd "$COMPOSE_DIR" && docker compose "$@" "${PROFILES[@]}" config --format json)"
+  json="$(cd "$COMPOSE_DIR" && env "${envp[@]}" docker compose "$@" "${PROFILES[@]}" config --format json)"
 
   # 1) environment + command + entrypoint per service
   while IFS=$'\t' read -r svc key val; do
@@ -491,6 +530,16 @@ check_compose() {
          or ((($c.environment // {}).CH_FORECAST_READER_HOST_CIDR // "") == (($n.ipam.config // [])[0].subnet // "-"))' \
       <<< "$json" > /dev/null \
     || err "[$label] clickhouse-init: CH_FORECAST_READER_HOST_CIDR != subnet ipam network forecast-ch (SEC-215)"
+  # K25-06 + pola SEC-215: user efn_segment_reader HOST IP = subnet network segment-ch (overlay segment).
+  jq -e '(.services["clickhouse-init"] // null) as $c | $c == null
+         or ((($c.environment // {}).CH_SEGMENT_READER_HOST_CIDR // "") | test("^[0-9]{1,3}(\\.[0-9]{1,3}){3}/(2[4-9]|3[0-2])$"))' \
+      <<< "$json" > /dev/null \
+    || err "[$label] clickhouse-init: CH_SEGMENT_READER_HOST_CIDR wajib CIDR IPv4 /24../32 (HOST user efn_segment_reader, pola SEC-215/SEC-223)"
+  jq -e '(.networks["segment-ch"] // null) as $n | (.services["clickhouse-init"] // null) as $c
+         | $n == null or $c == null
+         or ((($c.environment // {}).CH_SEGMENT_READER_HOST_CIDR // "") == (($n.ipam.config // [])[0].subnet // "-"))' \
+      <<< "$json" > /dev/null \
+    || err "[$label] clickhouse-init: CH_SEGMENT_READER_HOST_CIDR != subnet ipam network segment-ch (pola SEC-215)"
   jq -e '[.services | to_entries[] | select((.value.networks // {}) | has("forecast-ch")) | .key]
          - ["clickhouse", "forecast-worker"] | length == 0' <<< "$json" > /dev/null \
     || err "[$label] network forecast-ch dipakai service selain clickhouse/forecast-worker (docs/04 §28.2)"
@@ -629,21 +678,33 @@ check_compose() {
       <<< "$json" > /dev/null \
     || err "[$label] wa-unofficial: wajib hanya network rmq/wa-egress/wa-admin, read_only, cap_drop ALL tanpa cap_add, tanpa port, profil wa-unofficial, user non-root, AMQP amqps://, tanpa WA_UNOFFICIAL_PROXY_URL, flag boolean, tanpa label Traefik (rute admin lewat wa-admin-relay, SEC-G50-06)"
   # SEC-G50-06: relay admin = satu-satunya jalur Traefik/Prometheus -> wa-unofficial; listen hanya IP wa-ingress
-  jq -e '(.services["wa-admin-relay"] // null) as $w | $w == null
+  # K25-06: IP statis = <EFN_SUBNET_BASE>.21.10, WA_RELAY_BIND_IP (bind admin-relay.cfg) = IP itu, label network
+  # <EFN_STACK>_wa-ingress; extra_hosts wa-unofficial menunjuk IP statis wa-egress-proxy (<base>.14.10).
+  local wstack wbase
+  wstack="$(stack_setting EFN_STACK efn)"
+  wbase="$(stack_setting EFN_SUBNET_BASE 172.30)"
+  jq -e --arg b "$wbase" --arg s "$wstack" '(.services["wa-admin-relay"] // null) as $w | $w == null
          or (((($w.networks // {}) | keys | sort) == ["wa-admin", "wa-ingress"])
-             and ((($w.networks // {})["wa-ingress"].ipv4_address // "") == "172.30.21.10")
+             and ((($w.networks // {})["wa-ingress"].ipv4_address // "") == ($b + ".21.10"))
+             and ((($w.environment // {}).WA_RELAY_BIND_IP // "") == ($b + ".21.10"))
              and ($w.read_only == true)
              and ((($w.cap_drop // []) | index("ALL")) != null)
              and ((($w.cap_add // []) | length) == 0)
              and ((($w.ports // []) | length) == 0)
-             and ((($w.labels // {})["traefik.docker.network"] // "") == "efn_wa-ingress")
+             and ((($w.labels // {})["traefik.docker.network"] // "") == ($s + "_wa-ingress"))
              and ((($w.labels // {})["traefik.http.routers.wa-admin.entrypoints"] // "") == "wg-https")
              and ((($w.labels // {})["traefik.http.routers.wa-admin.tls.options"] // "") == "efn-mtls@file")
              and ((($w.labels // {})["traefik.http.routers.wa-admin.middlewares"] // "") | split(",") | index("internal-ops@file") != null))' \
       <<< "$json" > /dev/null \
-    || err "[$label] wa-admin-relay: wajib network wa-admin + wa-ingress (IP 172.30.21.10), read_only, cap_drop ALL, tanpa port, router admin wg-https + internal-ops + efn-mtls di network efn_wa-ingress (SEC-G50-06)"
-  grep -qE '^[[:space:]]*bind[[:space:]]+172\.30\.21\.10:8443([[:space:]]|$)' "${ROOT_DIR}/infra/wa-egress/admin-relay.cfg" \
-    || err "infra/wa-egress/admin-relay.cfg: relay wajib bind hanya 172.30.21.10:8443 (tidak listen di sisi wa-admin, SEC-G50-06)"
+    || err "[$label] wa-admin-relay: wajib network wa-admin + wa-ingress (IP + WA_RELAY_BIND_IP ${wbase}.21.10), read_only, cap_drop ALL, tanpa port, router admin wg-https + internal-ops + efn-mtls di network ${wstack}_wa-ingress (SEC-G50-06, K25-06)"
+  jq -e --arg b "$wbase" '(.services["wa-unofficial"] // null) as $w | $w == null
+         or ((($w.extra_hosts // []) | if type == "object" then to_entries | map(.key + ":" + (.value | if type == "array" then .[0] else . end | tostring)) else . end
+              | map(select(startswith("web.whatsapp.com"))) | map(sub("^web\\.whatsapp\\.com[:=]"; ""))) == [$b + ".14.10"])' \
+      <<< "$json" > /dev/null \
+    || err "[$label] wa-unofficial: extra_hosts web.whatsapp.com wajib ${wbase}.14.10 (IP statis wa-egress-proxy, K25-06)"
+  jq -e --arg b "$wbase" '(.services["wa-egress-proxy"] // null) as $w | $w == null
+         or ((($w.networks // {})["wa-egress"].ipv4_address // "") == ($b + ".14.10"))' <<< "$json" > /dev/null \
+    || err "[$label] wa-egress-proxy: ipv4_address wa-egress wajib ${wbase}.14.10 (tujuan extra_hosts wa-unofficial, K25-06)"
   jq -e '(.services["wa-egress-proxy"] // null) as $w | $w == null
          or (((($w.networks // {}) | keys) - ["wa-egress", "wa-internet"] | length == 0)
              and ($w.read_only == true)
@@ -686,15 +747,15 @@ check_compose() {
   #     blind index, token nama) dengan env *_FILE yang cocok; tanpa kunci token nama pencarian nama terenkripsi gagal.
   #     G21 AC-13: sama untuk render prod-pii (overlay docker-compose.pii.yml) + EFN_ODOO_PII_REQUIRED=true (mode terkunci).
   #     Render prod/prod-online TANPA overlay tidak boleh me-mount kunci PII ke odoo (aktivasi PO, L-59).
-  if [[ "$label" == prod || "$label" == prod-online ]]; then
+  if [[ "$kind" == prod || "$kind" == prod-online ]]; then
     jq -e '[.services.odoo.secrets[]? | (.source // .) | select(startswith("odoo_pii_"))] | length == 0' <<< "$json" > /dev/null \
       || err "[$label] odoo: kunci odoo_pii_* ter-mount tanpa overlay docker-compose.pii.yml (aktivasi PII = EFN_ODOO_PII_ENABLED, L-59)"
   fi
-  if [[ "$label" == prod-pii ]]; then
+  if [[ "$kind" == prod-pii ]]; then
     jq -e '(.services.odoo.environment // {}).EFN_ODOO_PII_REQUIRED == "true"' <<< "$json" > /dev/null \
       || err "[$label] odoo: EFN_ODOO_PII_REQUIRED wajib true di render produksi ber-PII (AC-13)"
   fi
-  if [[ "$label" == dev || "$label" == prod-pii ]]; then
+  if [[ "$kind" == dev || "$kind" == prod-pii ]]; then
     local pk
     for pk in odoo_pii_key_v1:EFN_ODOO_PII_KEY_V1_FILE odoo_pii_bidx_key:EFN_ODOO_PII_BIDX_KEY_FILE \
               odoo_pii_name_key:EFN_ODOO_PII_NAME_KEY_FILE; do
@@ -706,7 +767,7 @@ check_compose() {
   fi
 
   # 7) G17: saklar khusus dev tidak boleh aktif di render prod (simulator bayar frontend, stub json2 BFF L-7)
-  if [[ "$label" == prod ]]; then
+  if [[ "$kind" == prod ]]; then
     jq -e '(.services["superapp-web"].environment.EFN_PAYMENT_SIMULATOR // "false") == "false"' <<< "$json" > /dev/null \
       || err "[$label] superapp-web: EFN_PAYMENT_SIMULATOR harus false di prod (simulator pembayaran hanya dev)"
     jq -e '(.services["api-gateway"].environment.ODOO_ONLINE_MOCK // "false") == "false"' <<< "$json" > /dev/null \
@@ -752,7 +813,7 @@ check_compose() {
   fi
 
   # 8) G41: kill switch ekstraksi ESB default MATI di render prod + overlay (aktivasi lewat .env/config, runbook esb-extract)
-  if [[ "$label" == prod-esb ]]; then
+  if [[ "$kind" == prod-esb || "$label" == prod-stack ]]; then
     jq -e '.services["esb-extract"] != null' <<< "$json" > /dev/null \
       || err "[$label] esb-extract tidak ter-render (overlay docker-compose.esb.yml / profil data)"
     jq -e '(.services["esb-extract"].environment.ESB_ENABLED // "") == "false"' <<< "$json" > /dev/null \
@@ -774,20 +835,21 @@ check_compose() {
   fi
 
   # 9) G44 (docs/04 §28.10): kill switch forecast default MATI di render prod + overlay (aktivasi lewat .env/config)
-  if [[ "$label" == prod-forecast ]]; then
+  if [[ "$kind" == prod-forecast || "$label" == prod-stack ]]; then
     jq -e '.services["forecast-worker"] != null' <<< "$json" > /dev/null \
       || err "[$label] forecast-worker tidak ter-render (overlay docker-compose.forecast.yml / profil data)"
     jq -e '(.services["forecast-worker"].environment.FORECAST_ENABLED // "") == "false"' <<< "$json" > /dev/null \
       || err "[$label] forecast-worker: FORECAST_ENABLED harus diteruskan dengan default false di render prod (docs/04 §28.10)"
   fi
   # 10) G50 (docs/04 §28.10): kill switch overlay kampanye default MATI di render prod
-  if [[ "$label" == prod-segment ]]; then
+  # K25-06: render paksaan prod-stack memuat overlay esb/forecast/segment/wa-unofficial -> aturan kill switch ikut.
+  if [[ "$label" == prod-segment || "$label" == prod-stack ]]; then
     jq -e '.services["segment-worker"] != null' <<< "$json" > /dev/null \
       || err "[$label] segment-worker tidak ter-render (overlay docker-compose.segment.yml / profil data)"
     jq -e '(.services["segment-worker"].environment.SEGMENT_ENABLED // "") == "false"' <<< "$json" > /dev/null \
       || err "[$label] segment-worker: SEGMENT_ENABLED harus diteruskan dengan default false di render prod (docs/04 §28.10)"
   fi
-  if [[ "$label" == prod-wa-unofficial ]]; then
+  if [[ "$label" == prod-wa-unofficial || "$label" == prod-stack ]]; then
     jq -e '.services["wa-unofficial"] != null and .services["wa-egress-proxy"] != null and .services["wa-admin-relay"] != null' <<< "$json" > /dev/null \
       || err "[$label] wa-unofficial/wa-egress-proxy/wa-admin-relay tidak ter-render (overlay docker-compose.wa-unofficial.yml / --profile wa-unofficial)"
     for svc in wa-unofficial api-gateway; do
@@ -796,7 +858,93 @@ check_compose() {
     done
   fi
 
+  check_stack_identity "$label" "$json"
   echo "check-encryption: compose ${label} diperiksa"
+}
+
+# 10) K25-06 (docs/runbooks/multi-env-local.md): stack bisa jalan dengan nama project & subnet apa pun, berdampingan
+#     dengan stack EFN / project Docker lain, tanpa melonggarkan isolasi network.
+check_stack_identity() {
+  local label="$1" json="$2" stack base bad
+  local stack_re='^[a-z][a-z0-9-]{0,30}[a-z0-9]$'
+  local octet='(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])'
+  local base_re="^${octet}\\.${octet}\$"
+  stack="$(stack_setting EFN_STACK efn)"
+  base="$(stack_setting EFN_SUBNET_BASE 172.30)"
+  [[ "$stack" =~ $stack_re ]] \
+    || err "[$label] EFN_STACK '${stack}' tidak valid (^[a-z][a-z0-9-]*[a-z0-9]\$, 2..32, tanpa '_')"
+  [[ "$base" =~ $base_re ]] \
+    || err "[$label] EFN_SUBNET_BASE '${base}' tidak valid (dua oktet, mis. 172.30 / 10.250)"
+
+  # (a) project compose = EFN_STACK (label com.docker.compose.project = dasar constraint Traefik + filter Promtail)
+  jq -e --arg s "$stack" '.name == $s' <<< "$json" > /dev/null \
+    || err "[$label] nama project '$(jq -r '.name' <<< "$json")' != EFN_STACK '${stack}' (jangan memakai -p berbeda)"
+
+  # (b) setiap network bernama <stack>_<key>, subnet <base>.<n>.0/24 (n 0..255), tanpa duplikat
+  bad="$(jq -r --arg s "$stack" '.networks // {} | to_entries[] | select((.value.name // "") != ($s + "_" + .key)) | .key' <<< "$json")"
+  [[ -z "$bad" ]] || err "[$label] network tanpa nama ${stack}_<key>: ${bad//$'\n'/ }"
+  bad="$(jq -r --arg b "$base" '.networks // {} | to_entries[] | .key as $k
+      | [(.value.ipam.config // [])[] | (.subnet // "")] as $sn
+      | select(($sn | length) == 0 or any($sn[]; (startswith($b + ".") and test("^[0-9]+\\.[0-9]+\\.[0-9]{1,3}\\.0/24$")) | not))
+      | $k' <<< "$json")"
+  [[ -z "$bad" ]] || err "[$label] network tanpa subnet ${base}.<n>.0/24: ${bad//$'\n'/ }"
+  jq -e '[.networks // {} | .[] | (.ipam.config // [])[] | .subnet] | length == (unique | length)' <<< "$json" > /dev/null \
+    || err "[$label] subnet network duplikat"
+
+  # (c) router Traefik: traefik.enable=true + traefik.docker.network = <stack>_<network milik service DAN Traefik>
+  bad="$(jq -r --arg s "$stack" '((.services.traefik.networks // {}) | keys) as $tn
+      | .services | to_entries[]
+      | (.value.labels // {}) as $l | ((.value.networks // {}) | keys) as $n
+      | select(([$l | keys[] | select(test("^traefik\\.(http|tcp|udp)\\."))] | length) > 0
+               or ($l["traefik.enable"] // "") == "true")
+      | select((($l["traefik.enable"] // "") != "true")
+               or (($l["traefik.docker.network"] // "") as $dn
+                   | [$n[] | . as $x | select(($s + "_" + $x) == $dn and ($tn | index($x)) != null)] | length) == 0)
+      | .key' <<< "$json")"
+  [[ -z "$bad" ]] \
+    || err "[$label] router Traefik tanpa traefik.enable=true + traefik.docker.network=${stack}_<network bersama Traefik>: ${bad//$'\n'/ }"
+
+  # (d) pg_hba `samenet` = subnet interface postgres -> postgres HANYA di network data (least privilege)
+  jq -e '(.services.postgres == null) or (((.services.postgres.networks // {}) | keys) == ["data"])' <<< "$json" > /dev/null \
+    || err "[$label] postgres wajib hanya di network data (pg_hba.conf memakai samenet)"
+
+  # (e) alias scrape Prometheus hanya di network internal service pemiliknya
+  local spec svc alias
+  local anet
+  for spec in api-gateway:api-gateway-metrics:internal ocr-worker:ocr-worker-metrics:internal \
+              wa-admin-relay:wa-admin-relay-ingress:wa-ingress; do
+    IFS=: read -r svc alias anet <<< "$spec"
+    jq -e --arg svc "$svc" --arg a "$alias" --arg n "$anet" '
+        (.services[$svc] == null)
+        or ((((.services[$svc].networks // {})[$n] // {}).aliases // []) | index($a) != null)' <<< "$json" > /dev/null \
+      || err "[$label] ${svc}: alias ${alias} hilang dari network ${anet} (target Prometheus hilang)"
+    jq -e --arg svc "$svc" --arg a "$alias" --arg n "$anet" '
+        [.services | to_entries[] | .key as $k | (.value.networks // {}) | to_entries[]
+         | select(((.value // {}).aliases // []) | index($a) != null) | ($k + "/" + .key)]
+        - [$svc + "/" + $n] | length == 0' <<< "$json" > /dev/null \
+      || err "[$label] alias ${alias} dipakai di luar ${svc}/${anet} (scrape lewat network lain)"
+  done
+
+  # (f) TRUSTED_PROXIES BFF memuat subnet internal stack ini
+  jq -e --arg b "$base" '(.services["api-gateway"] == null)
+      or (((.services["api-gateway"].environment.TRUSTED_PROXIES // "") | split(",") | index($b + ".1.0/24")) != null)' \
+      <<< "$json" > /dev/null \
+    || err "[$label] api-gateway: TRUSTED_PROXIES tanpa ${base}.1.0/24 (hapus TRUSTED_PROXIES lama dari .env atau sesuaikan)"
+
+  # (g) Traefik + Promtail merender filter discovery dengan EFN_STACK yang sama
+  for svc in traefik promtail; do
+    jq -e --arg svc "$svc" --arg s "$stack" '(.services[$svc] == null)
+        or (((.services[$svc].environment // {}).EFN_STACK // "") == $s
+            and ((.services[$svc].entrypoint // [])[1] // "") == "/efn/render-config.sh")' <<< "$json" > /dev/null \
+      || err "[$label] ${svc}: wajib entrypoint infra/stack/render-config.sh + EFN_STACK=${stack} (filter discovery per stack)"
+  done
+
+  # (h) stack selain efn tidak boleh memakai tag image lokal bersama (build satu env menimpa env lain)
+  if [[ "$stack" != efn ]]; then
+    bad="$(jq -r '.services | to_entries[] | select((.value.image // "") | test("^(ghcr\\.io/)?efn/[^@]+$")) | .key' <<< "$json")"
+    [[ -z "$bad" ]] || err "[$label] image lokal bersama stack efn (set ulang IMAGE_* di .env): ${bad//$'\n'/ }"
+  fi
+  return 0
 }
 
 check_files() {
@@ -869,6 +1017,7 @@ check_files() {
   if grep -qE 'verify[[:space:]]+none|^[[:space:]]*(stats|option[[:space:]]+forwardfor)' "$hap"; then
     err "infra/odoo-rpc-gateway/haproxy.cfg: verify none / stats / forwardfor dilarang"
   fi
+  check_stack_files
   # G50 (SEC-G50-10, docs/04 §28.10): ref persetujuan production tidak boleh berisi nilai di file repo (.env.example /
   # compose) - ref hanya dari config rilis bertanda tangan; nilai contoh akan memenuhi gerbang deploy-validate diam-diam.
   local ref_var ref_line
@@ -889,6 +1038,13 @@ check_files() {
   # shellcheck disable=SC2016  # literal $FORECAST_CIDR di file target, bukan ekspansi
   grep -qE '^create_user efn_forecast_reader /run/secrets/clickhouse_password_forecast "\$FORECAST_CIDR"$' "$chi" \
     || err "infra/clickhouse/clickhouse-init.sh: efn_forecast_reader wajib dibuat dengan HOST IP \$FORECAST_CIDR (SEC-215)"
+  # K25-06 + pola SEC-215: efn_segment_reader HOST IP subnet segment-ch, divalidasi private_cidr_ok (/24../32)
+  # shellcheck disable=SC2016  # literal $SEGMENT_CIDR di file target, bukan ekspansi
+  grep -qE '^create_user efn_segment_reader /run/secrets/clickhouse_password_segment "\$SEGMENT_CIDR"$' "$chi" \
+    || err "infra/clickhouse/clickhouse-init.sh: efn_segment_reader wajib dibuat dengan HOST IP \$SEGMENT_CIDR (pola SEC-215)"
+  # shellcheck disable=SC2016  # literal $SEGMENT_CIDR di file target, bukan ekspansi
+  grep -qE '^private_cidr_ok "\$SEGMENT_CIDR"' "$chi" \
+    || err "infra/clickhouse/clickhouse-init.sh: SEGMENT_CIDR wajib divalidasi private_cidr_ok (pola SEC-223)"
   grep -qF 'REVOKE SELECT ON efn_forecast.* FROM forecast_reader' "$chi" \
     || err "infra/clickhouse/clickhouse-init.sh: pagar objek efn_forecast (REVOKE bila di luar allowlist) hilang (SEC-215)"
   # SEC-223 (G45): pagar definisi view (DEFINER + SQL SECURITY DEFINER + sumber efn_dwh.v_fc_*) lewat create_table_query
@@ -903,6 +1059,49 @@ check_files() {
     || err "infra/clickhouse/clickhouse-init.sh: private_cidr_ok wajib menolak prefix < /24 (SEC-223)"
   check_esb_users
   echo "check-encryption: file konfigurasi infra diperiksa"
+}
+
+# K25-06: file konfigurasi yang tidak bisa diinterpolasi compose tidak boleh mengandung nama network / subnet tetap.
+check_stack_files() {
+  local tf="${ROOT_DIR}/infra/traefik/traefik.yml" pt="${ROOT_DIR}/infra/observability/promtail.yml"
+  local pm="${ROOT_DIR}/infra/observability/prometheus.yml" hba="${ROOT_DIR}/infra/postgres/pg_hba.conf"
+  # shellcheck disable=SC2016  # backtick di regex = karakter literal sintaks constraint Traefik, bukan substitusi shell
+  grep -qE '^[[:space:]]+constraints:[[:space:]]*"Label\(`com\.docker\.compose\.project`,[[:space:]]*`@EFN_STACK@`\)"[[:space:]]*$' "$tf" \
+    || err "infra/traefik/traefik.yml: providers.docker.constraints Label(com.docker.compose.project, @EFN_STACK@) hilang (K25-06)"
+  grep -qE '^[[:space:]]+network:[[:space:]]*"@EFN_STACK@_internal"[[:space:]]*$' "$tf" \
+    || err "infra/traefik/traefik.yml: providers.docker.network wajib \"@EFN_STACK@_internal\" (K25-06)"
+  local body
+  local net_re='efn_(internal|edge|data|egress|cache|socket-proxy|objstore|insight-[a-z]+|esb|egress-esb|forecast-[a-z]+|segment-[a-z]+|rmq|wa-[a-z]+|mail)([^a-z_-]|$)'
+  body="$(grep -vE "$COMMENT_RE" "$tf" || true)"
+  if grep -qE "$net_re" <<< "$body"; then
+    err "infra/traefik/traefik.yml: nama network tetap efn_* (pakai @EFN_STACK@_<network>)"
+  fi
+  grep -qE 'com\.docker\.compose\.project=@EFN_STACK@' "$pt" \
+    || err "infra/observability/promtail.yml: filter docker_sd label com.docker.compose.project=@EFN_STACK@ hilang (K25-06)"
+  body="$(grep -vE "$COMMENT_RE" "$pm" || true)"
+  if grep -qE "${net_re}|172\\\\?\\.30" <<< "$body"; then
+    err "infra/observability/prometheus.yml: nama network (<svc>.efn_*) / subnet 172.30 literal (K25-06: alias ber-scope network)"
+  fi
+  body="$(grep -vE "$COMMENT_RE" "$hba" || true)"
+  if grep -qE '^host(ssl|nossl)?[[:space:]].*[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+/[0-9]+' <<< "$body"; then
+    err "infra/postgres/pg_hba.conf: CIDR literal (K25-06: pakai samenet; postgres hanya di network data)"
+  fi
+  grep -qE '^hostssl[[:space:]]+[^[:space:]]+[[:space:]]+efn_odoo[[:space:]]+samenet[[:space:]]+scram-sha-256' "$hba" \
+    || err "infra/postgres/pg_hba.conf: baris efn_odoo wajib hostssl ... samenet scram-sha-256"
+  # SEC-G50-06 + K25-06: relay admin WA bind HANYA "${WA_RELAY_BIND_IP}:8443" (IP wa-ingress dari compose) + loopback
+  # health; env tidak ada/kosong = .alert (start gagal), bukan bind semua interface.
+  local rc="${ROOT_DIR}/infra/wa-egress/admin-relay.cfg" binds
+  binds="$({ grep -E '^[[:space:]]*bind[[:space:]]' "$rc" || true; } | sed -E 's/^[[:space:]]+//; s/[[:space:]]+/ /g' | sort)"
+  # shellcheck disable=SC2016  # literal ${WA_RELAY_BIND_IP} di file target (ekspansi env HAProxy), bukan shell
+  [[ "$binds" == "$(printf '%s\n%s' 'bind "${WA_RELAY_BIND_IP}:8443"' 'bind 127.0.0.1:8408' | sort)" ]] \
+    || err "infra/wa-egress/admin-relay.cfg: bind wajib persis \"\${WA_RELAY_BIND_IP}:8443\" + 127.0.0.1:8408 (SEC-G50-06/K25-06), ditemukan: ${binds//$'\n'/; }"
+  { grep -qE '^\.if !defined\(WA_RELAY_BIND_IP\)$' "$rc" && grep -qE '^[[:space:]]*\.alert ' "$rc"; } \
+    || err "infra/wa-egress/admin-relay.cfg: pagar .if !defined(WA_RELAY_BIND_IP) + .alert hilang (fail-open bind)"
+  body="$(grep -vE "$COMMENT_RE" "$rc" || true)"
+  if grep -qE '172\.30\.' <<< "$body"; then
+    err "infra/wa-egress/admin-relay.cfg: IP 172.30.x literal (K25-06: pakai WA_RELAY_BIND_IP)"
+  fi
+  return 0
 }
 
 # SEC-180 (G41): username akun API ESB (saat ini berhak admin, Q-ESB1) tidak boleh ada di repo publik.
@@ -985,6 +1184,17 @@ case "$MODE" in
       --profile migrate
     check_compose prod-migration -f docker-compose.yml -f docker-compose.prod.yml -f docker-compose.esb.yml \
       -f docker-compose.migration.yml --profile migrate
+    # K25-06 (docs/runbooks/multi-env-local.md): stack bernama lain + subnet lain (gladi prod lokal di host yang rentang
+    # 172.16-31-nya dipakai project lain) wajib lolos SEMUA aturan di atas + identitas stack. Overlay esb, forecast,
+    # segment, wa-unofficial (+ mail di dev) ikut agar semua network (oktet 0..21) ter-render.
+    CC_STACK=efn-prod CC_BASE=10.250
+    check_compose prod-stack -f docker-compose.yml -f docker-compose.prod.yml -f docker-compose.local-edge.yml \
+      -f docker-compose.esb.yml -f docker-compose.forecast.yml -f docker-compose.segment.yml \
+      -f docker-compose.wa-unofficial.yml --profile wa-unofficial
+    CC_STACK=efn-dev CC_BASE=10.252
+    check_compose dev-stack -f docker-compose.yml -f docker-compose.dev.yml -f docker-compose.forecast.yml \
+      -f docker-compose.segment.yml -f docker-compose.wa-unofficial.yml --profile wa-unofficial
+    CC_STACK="" CC_BASE=""
     check_files
     ;;
   *) echo "pemakaian: $0 [all|files]" >&2; exit 2 ;;

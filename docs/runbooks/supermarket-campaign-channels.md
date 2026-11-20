@@ -140,6 +140,11 @@ Lihat §5.
 4. Pantau log `EFN_SEGMENT_RUN` (status `failed`/`partial`). Belum ada metrik Prometheus.
 
 Jaringan: `segment-ch` (ClickHouse), `segment-rpc` (odoo-rpc-gateway), `segment-bff` (api-gateway); tanpa egress.
+User ClickHouse `efn_segment_reader` hanya bisa login dari subnet `segment-ch` (`HOST IP`, pola SEC-215 forecast):
+`CH_SEGMENT_READER_HOST_CIDR` di `clickhouse-init`, default `<EFN_SUBNET_BASE>.17.0/24` (= ipam `segment-ch`, dicek
+check-encryption; divalidasi `private_cidr_ok` /24../32). Volume ClickHouse lama: user dipersempit otomatis saat
+`clickhouse-init` berikutnya (`ALTER USER ... HOST IP`). Login segment-worker ditolak (`AUTHENTICATION_FAILED`) = CIDR
+tidak sama dengan subnet segment-ch (mis. nilai lama di `.env`) atau worker di mesin lain (K25-02: isi subnet WireGuard).
 
 ## 5. WA tidak resmi (overlay `docker-compose.wa-unofficial.yml`) - NON-PRODUCTION
 
@@ -164,7 +169,8 @@ DIVERIFIKASI**: bila pairing/kirim gagal, lihat log proxy (`sni=... ts=...`): SN
 Tambah host hanya lewat perubahan devsecops (ACL + backend + `extra_hosts`) dengan catatan di ADR-044.
 
 Jalur masuk admin & metrik (SEC-G50-06): Traefik dan Prometheus -> `wa-admin-relay` (HAProxy TCP, TLS passthrough,
-`infra/wa-egress/admin-relay.cfg`, network `wa-ingress`, listen hanya `172.30.21.10:8443`) -> `wa-unofficial:8443`
+`infra/wa-egress/admin-relay.cfg`, network `wa-ingress`, listen hanya `<EFN_SUBNET_BASE>.21.10:8443`, default
+`172.30.21.10`; IP dari env `WA_RELAY_BIND_IP` compose, tanpa env relay gagal start) -> `wa-unofficial:8443`
 (network `wa-admin`). wa-unofficial tidak berbagi network dengan Traefik/Prometheus dan relay tidak listen di sisi
 `wa-admin`, jadi wa-unofficial yang dikompromi tidak bisa membuka koneksi ke Traefik, Prometheus, maupun relay. TLS
 tetap diverifikasi end-to-end terhadap sertifikat `wa-unofficial`. Bila rute admin/scrape gagal: cek
@@ -209,7 +215,13 @@ Pemulihan:
 ### 5.3 Mematikan darurat
 `WA_UNOFFICIAL_ENABLED=false` di `.env` lalu recreate `wa-unofficial` + `api-gateway` (BFF berhenti publish; pesan di
 antrean kedaluwarsa <= 24 jam -> `notify.wa_unofficial.dlq`, tidak diputar ulang). Hapus sesi: endpoint logout, atau
-`docker compose $F down wa-unofficial && docker volume rm efn_wa-unofficial-state`.
+`docker compose $F down wa-unofficial && docker volume rm ${EFN_STACK:-efn}_wa-unofficial-state` (K25-06: volume diberi
+prefix nama stack, mis. `efn-prod_wa-unofficial-state`).
+
+Stack lain (K25-06, [multi-env-local.md](multi-env-local.md)): nama network `<EFN_STACK>_wa-*`/`<EFN_STACK>_rmq`,
+subnet `<EFN_SUBNET_BASE>.13-16` dan `.21`, IP statis proxy egress `<base>.14.10` (tujuan `extra_hosts`) dan relay
+`<base>.21.10`, scrape Prometheus lewat alias `wa-admin-relay-ingress` (hanya di `wa-ingress`). Semua turunan otomatis;
+check-encryption memeriksanya di render `prod-stack`/`dev-stack`.
 
 ### EfnWaUnofficialDown
 Kanal aktif tetapi sesi terputus > 15 menit. Dampak: promo/notify-me WA masuk DLQ; push/email tetap jalan; transaksi

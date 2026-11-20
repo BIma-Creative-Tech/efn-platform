@@ -268,10 +268,11 @@ create_user efn_insight /run/secrets/clickhouse_password_insight
 # clickhouse_password_forecast ke clickhouse-init di base compose (semua env; scripts/secrets.list `random`) -> WAJIB
 # seperti efn_insight: secret hilang = init gagal (fail closed, bukan user tanpa password).
 # SEC-215 (pertahanan berlapis di atas isolasi network): login HANYA dari subnet network `forecast-ch`
-# (overlay docker-compose.forecast.yml, ipam 172.30.11.0/24) -> password yang bocor tidak berguna dari network lain
-# (data/insight-data/esb). CH_FORECAST_READER_HOST_CIDR (compose clickhouse-init) WAJIB = subnet itu
-# (scripts/check-encryption.sh); antar-mesin (K25-02) = subnet WireGuard mesin data (runbook forecast-worker §7).
-FORECAST_CIDR="${CH_FORECAST_READER_HOST_CIDR:-172.30.11.0/24}"
+# (overlay docker-compose.forecast.yml, ipam <EFN_SUBNET_BASE>.11.0/24) -> password yang bocor tidak berguna dari network
+# lain (data/insight-data/esb). CH_FORECAST_READER_HOST_CIDR (compose clickhouse-init, default turunan EFN_SUBNET_BASE,
+# K25-06) WAJIB = subnet itu (scripts/check-encryption.sh); antar-mesin (K25-02) = subnet WireGuard mesin data (runbook
+# forecast-worker §7). Fallback di bawah hanya bila skrip dijalankan tanpa compose.
+FORECAST_CIDR="${CH_FORECAST_READER_HOST_CIDR:-${EFN_SUBNET_BASE:-172.30}.11.0/24}"
 private_cidr_ok "$FORECAST_CIDR" \
   || { echo "clickhouse-init: CH_FORECAST_READER_HOST_CIDR harus CIDR IPv4 privat /24../32 (dapat: ${FORECAST_CIDR}; SEC-223)" >&2; exit 1; }
 create_user efn_forecast_reader /run/secrets/clickhouse_password_forecast "$FORECAST_CIDR"
@@ -279,7 +280,12 @@ create_user efn_forecast_reader /run/secrets/clickhouse_password_forecast "$FORE
 # Pola efn_forecast_reader: secret clickhouse_password_segment di-mount ke clickhouse-init di base compose (semua env;
 # scripts/secrets.list `random`) -> secret hilang = init gagal (fail closed). segment-worker hanya di overlay
 # docker-compose.segment.yml.
-create_user efn_segment_reader /run/secrets/clickhouse_password_segment
+# K25-06 + pola SEC-215/SEC-223: login HANYA dari subnet network `segment-ch` (ipam <EFN_SUBNET_BASE>.17.0/24).
+# CH_SEGMENT_READER_HOST_CIDR (compose clickhouse-init) WAJIB = subnet itu (scripts/check-encryption.sh).
+SEGMENT_CIDR="${CH_SEGMENT_READER_HOST_CIDR:-${EFN_SUBNET_BASE:-172.30}.17.0/24}"
+private_cidr_ok "$SEGMENT_CIDR" \
+  || { echo "clickhouse-init: CH_SEGMENT_READER_HOST_CIDR harus CIDR IPv4 privat /24../32 (dapat: ${SEGMENT_CIDR}; SEC-223)" >&2; exit 1; }
+create_user efn_segment_reader /run/secrets/clickhouse_password_segment "$SEGMENT_CIDR"
 # G43 (docs/04 §27.10): user mesin migrasi `efn_mig` HANYA selama program migrasi. Secret tidak di-mount / kosong /
 # placeholder (`disabled`, scripts/secrets.list) -> user dihapus (bukan gagal: stack normal tidak butuh migrasi).
 # Secret ada tetapi tidak valid (charset/panjang) -> init gagal (create_user, fail closed).
