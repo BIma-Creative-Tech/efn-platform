@@ -189,6 +189,14 @@ def transform_warehouse(row: dict[str, Any]) -> list[Any]:
 # ---------------------------------------------------------------- efn_online_outlet -> dim_online_outlet
 _OUTLET_VERSION = "GREATEST(o.write_date, ch.write_date)"
 
+# efn_online_outlet/efn_online_channel milik efn_online_order (F&B online). Supermarket tidak boleh bergantung padanya:
+# job `sm_dims_online_outlet` hanya jalan bila kedua tabel terlihat oleh efn_etl (ada + di-grant; information_schema
+# hanya menampilkan tabel yang punya hak akses). Dideteksi tiap siklus di sm_cycle.run_sm_online_outlets.
+SQL_ONLINE_OUTLET_VISIBLE: Final = """
+SELECT count(*) AS n FROM information_schema.tables
+WHERE table_schema = 'public' AND table_name IN ('efn_online_outlet', 'efn_online_channel')
+"""
+
 
 def _sql_online_outlets(codes: Sequence[str]) -> str:
     v = _OUTLET_VERSION
@@ -719,14 +727,6 @@ def sm_jobs(codes: Sequence[str] = DEFAULT_SM_COMPANIES, expiry: bool = False) -
             transform_warehouse,
         ),
         Job(
-            JOB_DIMS_OUTLET,
-            "odoo",
-            _sql_online_outlets(codes),
-            "dim_online_outlet",
-            ONLINE_OUTLET_COLUMNS,
-            transform_online_outlet,
-        ),
-        Job(
             JOB_REPLENISHMENT,
             "odoo",
             _sql_replenishment(codes),
@@ -745,6 +745,18 @@ def sm_jobs(codes: Sequence[str] = DEFAULT_SM_COMPANIES, expiry: bool = False) -
             Job(JOB_MARKDOWN, "odoo", _sql_markdown(codes), "fact_lot_markdown", MARKDOWN_COLUMNS, transform_markdown)
         )
     return tuple(jobs)
+
+
+def sm_online_outlet_job(codes: Sequence[str]) -> Job:
+    """Job opsional `sm_dims_online_outlet` (bukan bagian sm_jobs; lihat SQL_ONLINE_OUTLET_VISIBLE)."""
+    return Job(
+        JOB_DIMS_OUTLET,
+        "odoo",
+        _sql_online_outlets(codes),
+        "dim_online_outlet",
+        ONLINE_OUTLET_COLUMNS,
+        transform_online_outlet,
+    )
 
 
 # ---------------------------------------------------------------- fill rate DC (fit-gap C-3)

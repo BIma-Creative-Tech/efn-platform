@@ -451,10 +451,10 @@ CREATE INDEX CONCURRENTLY IF NOT EXISTS efn_etl_efn_legacy_sales_daily_write_dat
 --     Bersyarat (psql \if): dilewati sampai modul terkait terpasang -> jalankan ulang skrip setelah -i/-u.
 --     ETL membaca hanya bila ETL_ENABLE_SM (+ _EXPIRY / _CAMPAIGN) = true.
 --
--- (a) Inti (main: efn_replenishment G44, efn_assortment efn_is_dc, efn_online_order, purchase_stock, scrap CE).
+-- (a) Inti (main: efn_replenishment G44, efn_assortment efn_is_dc, purchase_stock, scrap CE). TANPA efn_online_order:
+--     supermarket tidak bergantung pada modul online F&B (pemetaan outlet online = blok (a1) opsional).
 SELECT to_regclass('public.efn_replenishment_proposal_line') IS NOT NULL
    AND to_regclass('public.efn_replenishment_bias_log') IS NOT NULL
-   AND to_regclass('public.efn_online_outlet') IS NOT NULL
    AND to_regclass('public.stock_move_move_rel') IS NOT NULL
    AND EXISTS (SELECT 1 FROM information_schema.columns
                 WHERE table_schema = 'public' AND table_name = 'stock_warehouse' AND column_name = 'efn_is_dc')
@@ -463,8 +463,6 @@ SELECT to_regclass('public.efn_replenishment_proposal_line') IS NOT NULL
    AS efn_g47_sm \gset
 \if :efn_g47_sm
 GRANT SELECT (id, code, name, company_id, active, write_date, efn_is_dc) ON public.stock_warehouse TO efn_etl;
-GRANT SELECT (id, channel_id, company_id, code, warehouse_id, active, write_date) ON public.efn_online_outlet TO efn_etl;
-GRANT SELECT (id, code, company_id, active, write_date) ON public.efn_online_channel TO efn_etl;
 GRANT SELECT (id, company_id, warehouse_id, supply_warehouse_id, schedule_id, delivery_date, cutoff_at, run_id, state,
               approved_at, picking_id, write_date)
     ON public.efn_replenishment_proposal TO efn_etl;
@@ -522,7 +520,18 @@ CREATE INDEX CONCURRENTLY IF NOT EXISTS efn_etl_purchase_order_line_write_date_i
 CREATE INDEX CONCURRENTLY IF NOT EXISTS efn_etl_purchase_order_write_date_id_idx
     ON public.purchase_order (write_date, id);
 \else
-\echo 'efn_replenishment/efn_assortment/efn_online_order/purchase_stock belum lengkap: grant G47 inti dilewati'
+\echo 'efn_replenishment/efn_assortment/purchase_stock belum lengkap: grant G47 inti dilewati'
+\endif
+
+-- (a1) Opsional: pemetaan outlet kanal online (L-190) bila efn_online_order terpasang. ETL mendeteksi tabel tiap siklus
+--      (sm_cycle.run_sm_online_outlets); tanpa blok ini job sm_dims_online_outlet dilewati, mart SM lain tetap jalan.
+SELECT to_regclass('public.efn_online_outlet') IS NOT NULL AND to_regclass('public.efn_online_channel') IS NOT NULL
+   AS efn_g47_online_outlet \gset
+\if :efn_g47_online_outlet
+GRANT SELECT (id, channel_id, company_id, code, warehouse_id, active, write_date) ON public.efn_online_outlet TO efn_etl;
+GRANT SELECT (id, code, company_id, active, write_date) ON public.efn_online_channel TO efn_etl;
+\else
+\echo 'efn_online_order belum terpasang: grant G47 pemetaan outlet online dilewati (opsional)'
 \endif
 
 -- (a2) Nilai scrap dari valuasi CE (stock_account 19.0 stock_move.value tersimpan; C-6). Bersyarat kolom.

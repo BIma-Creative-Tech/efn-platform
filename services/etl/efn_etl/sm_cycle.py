@@ -112,6 +112,24 @@ def run_sm_bias(
     return PagedResult(written, pages, watermark)
 
 
+# ---------------------------------------------------------------- sm_dims_online_outlet (opsional)
+def run_sm_online_outlets(
+    odoo: PgQuery,
+    sink: Sink,
+    store: WatermarkStore,
+    codes: Sequence[str],
+    overlap: timedelta,
+    batch_size: int,
+    max_pages: int,
+) -> PagedResult | None:
+    """Pemetaan outlet kanal online (L-190) hanya bila efn_online_order terpasang + di-grant; None = dilewati."""
+    rows = odoo.query(sm.SQL_ONLINE_OUTLET_VISIBLE, {})
+    if not rows or int(rows[0]["n"]) < 2:
+        return None
+    res = run_job(sm.sm_online_outlet_job(codes), odoo, sink, store, overlap, batch_size, max_pages)
+    return PagedResult(res.rows, res.pages, res.watermark)
+
+
 # ---------------------------------------------------------------- sm_scraps (fit-gap C-6)
 def run_sm_scraps(
     odoo: PgQuery,
@@ -308,6 +326,12 @@ def run_sm_cycle(
         return res.rows, res.pages, res.watermark
 
     status[sm.JOB_DIMS_KPI] = _guard(sm.JOB_DIMS_KPI, heartbeat, kpi)
+
+    def outlets() -> tuple[int, int, datetime | None]:
+        res = run_sm_online_outlets(odoo, sink, store, cfg.codes, cfg.overlap, cfg.batch_size, cfg.max_pages)
+        return (0, 0, None) if res is None else (res.rows, res.pages, res.watermark)
+
+    status[sm.JOB_DIMS_OUTLET] = _guard(sm.JOB_DIMS_OUTLET, heartbeat, outlets)
     status[sm.JOB_SCRAPS] = _guard(sm.JOB_SCRAPS, heartbeat, scraps)
     status[sm.JOB_BIAS] = _guard(sm.JOB_BIAS, heartbeat, bias)
     status[sm.JOB_FILL] = _guard(sm.JOB_FILL, heartbeat, fill)

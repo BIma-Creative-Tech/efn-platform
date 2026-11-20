@@ -91,7 +91,9 @@ def test_settings_sm_campaign_allowed_when_promo_on(tls_env: dict[str, str]) -> 
 
 def test_enabled_jobs_sm_wiring() -> None:
     names = {j.name for j in enabled_jobs(True)}
-    core = {sm.JOB_DIMS_WAREHOUSE, sm.JOB_DIMS_OUTLET, sm.JOB_REPLENISHMENT, sm.JOB_PURCHASE, sm.JOB_SUPPLIER}
+    core = {sm.JOB_DIMS_WAREHOUSE, sm.JOB_REPLENISHMENT, sm.JOB_PURCHASE, sm.JOB_SUPPLIER}
+    # Supermarket independen: pemetaan outlet online (efn_online_order) bukan job tetap; lihat run_sm_online_outlets.
+    assert sm.JOB_DIMS_OUTLET not in {j.name for j in enabled_jobs(True, sm=True, sm_expiry=True)}
     assert not names & (core | {sm.JOB_EXPIRY, sm.JOB_MARKDOWN})
     with_sm = {j.name: j for j in enabled_jobs(True, sm=True)}
     assert core <= set(with_sm) and sm.JOB_EXPIRY not in with_sm
@@ -121,6 +123,7 @@ FORBIDDEN = (
 
 def _all_sm_sql() -> dict[str, str]:
     out = {j.name: j.sql for j in sm.sm_jobs(("SMD",), expiry=True)}
+    out[sm.JOB_DIMS_OUTLET] = sm.sm_online_outlet_job(("SMD",)).sql
     out.update(
         {
             "kpi": sm.sql_kpi_all(("SMD",)),
@@ -160,7 +163,7 @@ def test_incremental_jobs_keyset_and_company_filter() -> None:
 def test_supplier_never_reads_res_partner_directly() -> None:
     for sql in _all_sm_sql().values():
         assert not re.search(r"\bres_partner\b", sql)
-    assert "efn_etl.purchase_partner" in sm.sm_jobs(("SMD",))[3].sql
+    assert "efn_etl.purchase_partner" in next(j for j in sm.sm_jobs(("SMD",)) if j.name == sm.JOB_PURCHASE).sql
 
 
 def test_online_redemption_uses_reward_id_and_confirmed_so() -> None:
@@ -813,3 +816,34 @@ def test_run_sm_cycle_isolates_failures() -> None:
     assert status[sm.JOB_FILL] and status[sm.JOB_BIAS] and status[sm.JOB_EXPIRY_AGG] and status[sm.JOB_SCRAPS]
     assert sm.JOB_STOCK_AGG not in status and sm.JOB_CAMPAIGN not in status
     assert {b.job: b.status for b in beats}[sm.JOB_DIMS_KPI] == "error"
+
+
+# ---------------------------------------------------------------- outlet online opsional (supermarket independen)
+def _outlet_src(visible: int) -> KeysetSource:
+    row = {
+        "channel_code": "Web-SMD",
+        "outlet_code": "smd-01",
+        "outlet_id": 3,
+        "company_id": 11,
+        "warehouse_id": 21,
+        "active": True,
+        "write_date": WD,
+        "_cursor_ts": WD,
+        "_cursor_key": "3",
+    }
+    return KeysetSource([row], {"information_schema.tables": [{"n": visible}]})
+
+
+def test_online_outlet_job_skipped_without_efn_online_order() -> None:
+    sink, store = FakeSink(), FakeStore()
+    args = (("SMD",), timedelta(minutes=5), 100, 5)
+    assert sm_cycle.run_sm_online_outlets(_outlet_src(0), sink, store, *args) is None
+    assert sm_cycle.run_sm_online_outlets(_outlet_src(1), sink, store, *args) is None  # channel tanpa outlet
+    assert sink.inserts == []
+
+
+def test_online_outlet_job_runs_when_tables_visible() -> None:
+    sink, store = FakeSink(), FakeStore()
+    res = sm_cycle.run_sm_online_outlets(_outlet_src(2), sink, store, ("SMD",), timedelta(minutes=5), 100, 5)
+    assert res is not None and res.rows == 1
+    assert sink.inserts[0][0] == "dim_online_outlet"
