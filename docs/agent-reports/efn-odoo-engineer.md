@@ -2879,3 +2879,39 @@ dan run belum dijalankan; lead menjalankan di container (DB `efn_smd_demo`). **T
   `available_in_pos` (dijaga `in _fields`); pembuatan `pos.config`/metode bayar (dalam savepoint, gagal = peringatan);
   aktivasi markdown oleh user demo (record rule); `env(user=..., context=...)` di shell 19.
 - ETL/forecast di atas `efn_smd_demo` butuh `ODOO_DB=efn_smd_demo` + grant read-only ke DB itu (runbook §4).
+
+## G48: tour expiry (`efn_expiry_monitor`, 20 Nov 2026) — BELUM DIJALANKAN
+
+Tanpa shell: tour, ruff, dan format belum dijalankan; lead menjalankan di container (job "Odoo POS UI tours").
+
+### File
+- Baru `services/odoo/addons/efn_expiry_monitor/tests/test_expiry_tour.py` (`TestPointOfSaleHttpCommon`, tag
+  `post_install`, `-at_install`, `efn_tour`; 2 test) dan `static/tests/tours/efn_expiry_tour.js` (2 tour).
+- Diubah: `__manifest__.py` (bundle `web.assets_tests`, pola efn_pos_refund_origin), `tests/__init__.py`, README
+  (Batasan + catatan perbaikan), docstring `tests/test_pos_expiry.py`, `.github/workflows/ci.yml`
+  (`EFN_TOUR_MODULES` + `efn_expiry_monitor`, `EFN_TOUR_MIN_TESTS` 29 -> 31).
+- **Perbaikan bug** `static/src/app/services/pos_store_patch.js` (`addLineToOrder`): kartu produk CE 19
+  (`ProductScreen.addProductToOrder` -> `addLineToCurrentOrder({ product_tmpl_id: product })`, diverifikasi source 19.0)
+  tidak mengirim `product_id`, jadi patch lama keluar lewat `super` sebelum menerapkan pilihan lot: dari kartu produk,
+  `efn_lot_source`, harga markdown, dan `efn_expiry_override` tidak pernah dipasang (server lalu mencatat
+  `pos_expired_no_override` walau supervisor sudah menyetujui dengan PIN). Sekarang `lineProduct()` menurunkan produk
+  dari template (varian pertama, sama dengan core), pilihan lot membawa `productId`, dan dicocokkan dengan
+  `line.product_id` aktual. Jalur barcode/GS1 tidak berubah.
+
+### Skenario
+1. `EfnExpiryFefoMarkdownTour`: produk A (lot MD +1 hr markdown aktif, SOON +3, LATE +20) -> FEFO memilih SOON tanpa
+   popup; produk B (hanya lot MD harga markdown 12.000 + lot kedaluwarsa) -> popup lot CE
+   (`ProductScreen.enterExistingLotNumber`) -> harga baris 12.000 -> bayar Bank -> sync. Python: `efn_lot_source`
+   fefo/manual, `efn_markdown_id`, `qty_sold` = 1, tanpa event.
+2. `EfnExpiryOverrideTour`: produk B lot kedaluwarsa -> dialog supervisor -> Batal (baris tidak masuk) -> ulangi ->
+   PIN salah (pesan server) -> PIN benar + alasan -> baris `efn_expiry_override` -> bayar -> sync. Python: 1 baris,
+   event `pos_expired_override` (approver = supervisor), persetujuan `failed` + `consumed` untuk uuid order.
+
+### Belum diverifikasi
+- Belum dijalankan di Odoo 19 nyata. Helper CE (`enterExistingLotNumber` = edit `.o-autocomplete input` +
+  `Dialog.confirm()`, `negate`, `clickDisplayedProduct`) dibaca dari source 19.0 lewat WebFetch (ringkasan).
+- Asumsi: tidak ada removal strategy fifo/lifo di kategori produk uji (bila ada, core memilih lot sendiri tanpa
+  popup); runner tour menunggu `run` async (dipakai untuk menunggu baris async ditambahkan setelah dialog tertutup).
+- Menambah `efn_expiry_monitor` ke DB tour ikut memasang `product_expiry`, `purchase_stock`, `efn_assortment`,
+  `efn_region`, `efn_audit`: belum dicek apakah tour modul lain tetap hijau di DB itu (flag expiry default `false`).
+- Tidak dicakup: pindaian GS1 `(01)(10)`, batas `qty_cap` lewat `setQuantity`, override lokal kasir ber-grup, offline.
