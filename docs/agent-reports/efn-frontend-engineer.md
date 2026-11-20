@@ -643,3 +643,14 @@ Referensi: docs/04 §28.6/§28.8/§28.10, ADR-047 (Proposed). Tanpa shell: **bel
 - Kontrak BFF belum ada saat ini ditulis (dibangun paralel): semua bentuk respons di §2 adalah pembacaan dokumen. Nama flag `features.*` selain `tracking` dan nama kode error batas jumlah adalah tebakan.
 - Teks consent `TRACKING_TEXT` DRAFT: menunggu DPO/Legal (Q-SM16/17/26); mengubah `body` wajib menaikkan `version` dan memperbarui env BFF (`text_sha256`). Belum ada test hash karena tidak ada shell untuk menghitung sha256; lead/BFF perlu menghitung `sha256(TRACKING_TEXT.body)` (UTF-8) untuk env.
 - Tidak ada uji komponen (tidak ada runner DOM) dan tidak ada E2E.
+
+## G47 — Insight supermarket (insight-web), 21 Nov 2026
+
+Kontrak: docs/04 §28.13 v20.3, desain `docs/design/insight-supermarket.md`, ADR-041 (Proposed).
+
+- **SSO eit2** (`lib/token.ts` `verifySsoTokenV2`, `lib/sso-handler.ts`): klaim `wids`/`roles`/`cats`; sesi `eis2`; eit1 tetap diterima untuk F&B.
+- **Cakupan ClickHouse** (`lib/scope.ts`, `lib/clickhouse.ts`): setting `SQL_efn_wids/personas/cats` + `SQL_efn_sig2` dari sesi terverifikasi, tidak pernah dari query string. Vektor `scripts/print-eit2-vectors.mjs` identik dengan Odoo (diverifikasi lead).
+- **Halaman** `app/(sm)/{store,exec,category,dc,marketing}`; halaman bantu `tidak-berwenang`, `sm-belum-aktif`, `buka-ulang`. KPI dibaca dari `v_sm_kpi_config` (default kontrak bila gagal baca).
+- **Perbaikan lead saat verifikasi:** `cleanText` merapikan spasi sebelum membuang karakter kontrol; tipe reduce di `exec/page.tsx`; `<Link>` di `tidak-berwenang`; tipe array di test.
+- **Verifikasi:** `tsc --noEmit` bersih, `eslint` 0 error (1 warning: param `now` tidak dipakai di `lib/sm-data.ts`), `vitest` 499 lulus / 1 skip, `next build` sukses.
+- **Belum:** uji browser end-to-end per persona di stack prod-lokal; test komponen visual.
