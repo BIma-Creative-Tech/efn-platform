@@ -1509,6 +1509,7 @@ services:
       - ../clickhouse/config.d/tls.xml:/etc/clickhouse-server/config.d/tls.xml:ro
       - ../clickhouse/config.d/prometheus.xml:/etc/clickhouse-server/config.d/prometheus.xml:ro
       - ../clickhouse/config.d/encrypted-storage.xml:/etc/clickhouse-server/config.d/encrypted-storage.xml:ro
+      - ../clickhouse/config.d/system-logs.xml:/etc/clickhouse-server/config.d/system-logs.xml:ro
       - ../clickhouse/client-config.xml:/etc/clickhouse-client/config.xml:ro
     # insight-data (G42): klien insight-web saja (user efn_insight, HTTPS 8443); sertifikat ber-SAN `clickhouse` berlaku
     # di network mana pun. Overlay docker-compose.esb.yml menambah `esb` (union).

@@ -136,6 +136,8 @@ class Params:
                 cv_windows=_int(e, "FORECAST_CV_WINDOWS", 4, 0, 12),
                 fit_days=_int(e, "FORECAST_FIT_DAYS", 365, 56, 1500),
                 shrink_days=_float(e, "FORECAST_FACTOR_SHRINK_DAYS", 5.0, 0.0, 100.0),
+                jobs=_int(e, "FORECAST_JOBS", 1, 1, 32),
+                inactive_days=_int(e, "FORECAST_INACTIVE_DAYS", 28, 0, 365),
             ),
             calendar=CalendarConfig(
                 payday_tail_days=_int(e, "FORECAST_PAYDAY_TAIL_DAYS", 7, 0, 15),

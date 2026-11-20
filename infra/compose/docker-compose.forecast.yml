@@ -64,6 +64,10 @@ services:
       FORECAST_HORIZON_DAYS: ${FORECAST_HORIZON_DAYS:-28}
       # <= 500 baris per panggilan (§28.2; gateway menolak body > 512 KiB)
       FORECAST_CHUNK_SIZE: ${FORECAST_CHUNK_SIZE:-500}
+      # G46b: proses paralel per gudang (1..32); tiap proses memegang data gudangnya sendiri -> naikkan FORECAST_CPUS
+      # dan FORECAST_MEMORY_LIMIT bersamaan. FORECAST_MODELS (default AutoETS,AutoARIMA) menentukan beban per seri.
+      FORECAST_JOBS: ${FORECAST_JOBS:-1}
+      FORECAST_MODELS: ${FORECAST_MODELS:-AutoETS,AutoARIMA}
       # Odoo /json/2 HANYA lewat filter (bukan odoo:8443 langsung; odoo-tls tidak mengizinkan CN forecast-worker).
       # Nama host = SAN sertifikat gateway; antar-mesin tetap nama ini (extra_hosts/WireGuard, runbook §7).
       ODOO_RPC_URL: https://odoo-rpc-gateway:8443

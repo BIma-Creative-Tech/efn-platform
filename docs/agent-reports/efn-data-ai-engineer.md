@@ -1519,3 +1519,20 @@ proyeksi Odoo = ClickHouse; run `ok`, 0 baris ditolak. Angka bisnis klien tidak 
 - Histori 7 hari → semua seri `category_mean`, WAPE backtest belum bermakna; butuh backfill ≥ 112 hari.
 - Lingkungan dry-run memakai PostgreSQL tanpa TLS (`EFN_ALLOW_PLAINTEXT`, jaringan Docker lokal terisolasi) dan Odoo
   HTTP tanpa gateway mTLS; ClickHouse tetap HTTPS + CA internal.
+
+## G46b — backtest 112 hari data nyata + perbaikan performa/akurasi worker (20 Nov 2026, efn-lead)
+- Backfill penjualan PB 105 hari (jendela malam, GET saja, 0 error) → impor histori Odoo → ETL → worker. Run pertama
+  (`AutoETS,AutoARIMA` + CV 4 + backtest) dihentikan setelah 3,5 jam tanpa progres terlihat (satu core, tanpa log).
+- Perbaikan: `FORECAST_JOBS` (proses `spawn` per gudang, hasil identik dengan 1; test), log `forecast gudang i/N`.
+  Run `FORECAST_MODELS=AutoETS`, 4 jobs: ±5 menit untuk ±5.100 seri.
+- Diagnosa backtest (as-of = H-1 cutover; as-of hari ini memasukkan hari tanpa POS di dry-run sebagai nol):
+  AutoETS (mayoritas volume) sudah mengalahkan baseline; error didominasi (a) Croston pada seri yang berhenti terjual,
+  (b) `category_mean` yang ditarik menu terlaris. Faktor kalender tidak berpengaruh berarti pada 112 hari histori.
+- Perbaikan akurasi (L-168): seri tidak aktif (`FORECAST_INACTIVE_DAYS`, default 28; hari OOS dihitung aktif) →
+  ramalan 0, tidak dikirim ke Odoo (forecast & min/max), tetap dihitung di backtest; level `category_mean` = median.
+  Hasil: WAPE total turun ke bawah baseline v1, setara seasonal naive (angka rinci di laporan ke user, bukan di repo).
+- ClickHouse: `config.d/system-logs.xml` (OOM dry-run akibat merge `system.metric_log`): log yang redundan dengan
+  Prometheus dimatikan, `query_log` 90 hari (audit), `part_log` 14 hari; diverifikasi di 24.8 (container uji sekali pakai).
+- Belum: AutoARIMA vs AutoETS pada histori panjang (24 bulan) belum dibandingkan; `category_mean` masih di atas baseline
+  untuk menu baru (sebagian artefak backtest: seri yang baru muncul di periode uji); penghapusan baris Odoo legacy tidak
+  dipropagasi ETL (selisih 2 baris pada uji).

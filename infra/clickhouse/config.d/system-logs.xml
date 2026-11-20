@@ -1,0 +1,32 @@
+<!--
+  G46b: batas log sistem ClickHouse (K25-06 profil kecil). Uji E2E data nyata PB 19 Nov 2026: merge background
+  `system.metric_log` di container berbatas 3 GB memakan > 2,7 GiB -> MEMORY_LIMIT_EXCEEDED -> INSERT backfill ESB gagal.
+  - Dimatikan (redundan dengan Prometheus /metrics atau tidak dipakai): metric_log, asynchronous_metric_log, trace_log,
+    processors_profile_log, opentelemetry_span_log, query_views_log, session_log,
+    text_log (log server sudah ke file / Loki).
+  - Dipertahankan dengan TTL: query_log 90 hari (audit "siapa query apa", runbook breach-response-72h / security-incident),
+    query_thread_log dimatikan (detail per thread tidak dipakai), part_log 14 hari (diagnosa merge), crash_log 90 hari.
+  Mengubah TTL membuat ClickHouse mengganti nama tabel lama (mis. query_log_0) lalu membuat tabel baru; tabel lama boleh
+  di-DROP manual setelah diperiksa.
+-->
+<clickhouse>
+    <metric_log remove="1"/>
+    <asynchronous_metric_log remove="1"/>
+    <trace_log remove="1"/>
+    <processors_profile_log remove="1"/>
+    <opentelemetry_span_log remove="1"/>
+    <query_views_log remove="1"/>
+    <session_log remove="1"/>
+    <query_thread_log remove="1"/>
+    <text_log remove="1"/>
+
+    <query_log>
+        <ttl>event_date + INTERVAL 90 DAY DELETE</ttl>
+    </query_log>
+    <part_log>
+        <ttl>event_date + INTERVAL 14 DAY DELETE</ttl>
+    </part_log>
+    <crash_log>
+        <ttl>event_date + INTERVAL 90 DAY DELETE</ttl>
+    </crash_log>
+</clickhouse>
