@@ -27,6 +27,11 @@ function rewriteTo(
   const url = request.nextUrl.clone();
   url.pathname = path;
   url.search = '';
+  // Rewrite = proxy internal ke server Next.js sendiri, yang HANYA mendengarkan HTTP di loopback (TLS + mTLS oleh
+  // sidecar insight-web-tls). nextUrl mewarisi `https` dari X-Forwarded-Proto Traefik -> tanpa baris ini Next memproxy
+  // lewat TLS ke port plaintext (EPROTO "wrong version number", 500 di /belum-aktif & /sesi-berakhir; ditemukan di
+  // gladi prod lokal 20 Nov 2026). Bukan downgrade: hop ini tetap di loopback namespace container.
+  url.protocol = 'http:';
   const requestHeaders = new Headers(request.headers);
   requestHeaders.set('x-nonce', nonce);
   requestHeaders.set('Content-Security-Policy', csp);

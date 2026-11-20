@@ -1,0 +1,36 @@
+{
+  "name": "@efn/wa-unofficial",
+  "version": "0.1.0",
+  "private": true,
+  "description": "EFN WhatsApp tidak resmi (Baileys) — HANYA promo & notify-me supermarket, terisolasi (ADR-044 Proposed, K18-01). OFF default.",
+  "license": "GPL-3.0-only",
+  "type": "commonjs",
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "start": "node dist/main.js",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "jest"
+  },
+  "dependencies": {
+    "@whiskeysockets/baileys": "6.7.24",
+    "amqplib": "^0.10.5",
+    "https-proxy-agent": "^7.0.6"
+  },
+  "devDependencies": {
+    "@types/amqplib": "^0.10.6",
+    "@types/jest": "^29.5.14",
+    "@types/node": "^22.10.2",
+    "jest": "^29.7.0",
+    "ts-jest": "^29.2.5",
+    "typescript": "^5.7.2"
+  },
+  "jest": {
+    "rootDir": "src",
+    "testRegex": ".*\\.spec\\.ts$",
+    "transform": { "^.+\\.ts$": "ts-jest" },
+    "moduleFileExtensions": ["js", "json", "ts"],
+    "testEnvironment": "node",
+    "clearMocks": true
+  }
+}

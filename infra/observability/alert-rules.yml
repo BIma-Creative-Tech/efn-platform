@@ -126,8 +126,10 @@ groups:
           runbook_url: https://github.com/efn/efn-platform/blob/main/docs/runbooks/rabbitmq-ocr-backlog.md
 
       - alert: EfnDeadLetterNotEmpty
-        # DLQ order.* (penjualan online, G17) ditangani EfnOnlineDlqNotEmpty (runbook online-orders.md)
-        expr: sum by (queue) (rabbitmq_queue_messages{queue=~".+\\.dlq", queue!~"order\\..+"}) > 0
+        # DLQ order.* (penjualan online, G17) ditangani EfnOnlineDlqNotEmpty (runbook online-orders.md).
+        # G50: notify.wa_unofficial.dlq dikecualikan - pesan promo kedaluwarsa (TTL <= 24 jam) dan sesi terputus/banned
+        # memang di-dead-letter (bukan kegagalan yang perlu replay); kondisi sesi ditangani EfnWaUnofficialDown/Banned.
+        expr: sum by (queue) (rabbitmq_queue_messages{queue=~".+\\.dlq", queue!~"order\\..+", queue!="notify.wa_unofficial.dlq"}) > 0
         for: 5m
         labels:
           severity: warning
@@ -231,6 +233,34 @@ groups:
           summary: "Poin hangus: {{ $value | humanize }} notifikasi WA T-30 gagal dalam 26 jam"
           description: "Pesan pengingat hangus (template efn_loyalty_inactivity_notice) gagal permanen (DLQ notify.push). Member tetap akan kehilangan poin pada due_at; tinjau DLQ/template Meta dan informasikan CRM/Legal."
           runbook_url: https://github.com/efn/efn-platform/blob/main/docs/runbooks/loyalty-inactivity-expiry.md#efnloyaltyexpirynoticefailed
+
+  # ─────────────────────────── WhatsApp tidak resmi (G50, ADR-044 Proposed, docs/04 §28.9) ───────────────────────────
+  # Metrik services/wa-unofficial/src/metrics.ts (scrape job wa-unofficial, hanya ada bila overlay
+  # docker-compose.wa-unofficial.yml dipakai). Kanal promo/notify-me, BUKAN jalur transaksi (OTP/pesanan/pembayaran tetap
+  # Cloud API resmi) -> warning, jam kerja. Mode idle (WA_UNOFFICIAL_ENABLED bukan true) = efn_wa_unofficial_enabled 0
+  # -> EfnWaUnofficialDown diam. Production: kanal OFF (deploy-validate), alert ini praktis hanya staging/dev.
+  - name: efn-wa-unofficial
+    rules:
+      - alert: EfnWaUnofficialDown
+        expr: max(efn_wa_unofficial_enabled{job="wa-unofficial"}) == 1 and max(efn_wa_unofficial_session_up{job="wa-unofficial"}) == 0
+        for: 15m
+        labels:
+          severity: warning
+          team: ops
+        annotations:
+          summary: "WA tidak resmi: kanal aktif tetapi sesi WhatsApp terputus > 15 menit"
+          description: "Pesan promo/notify-me WA tidak resmi masuk DLQ (disconnected). Notifikasi push/email tetap berjalan; transaksi tidak terdampak. Cek status sesi lewat endpoint admin; pairing ulang hanya non-production."
+          runbook_url: https://github.com/efn/efn-platform/blob/main/docs/runbooks/supermarket-campaign-channels.md#efnwaunofficialdown
+      - alert: EfnWaUnofficialBanned
+        expr: max(efn_wa_unofficial_session_banned{job="wa-unofficial"}) == 1
+        for: 1m
+        labels:
+          severity: warning
+          team: ops
+        annotations:
+          summary: "WA tidak resmi: nomor diblokir WhatsApp (banned)"
+          description: "Risiko R-B16 terjadi. Matikan kanal (WA_UNOFFICIAL_ENABLED=false) dan JANGAN pairing nomor pengganti tanpa keputusan pemilik risiko (ADR-044). Kanal resmi tidak terdampak (nomor terpisah)."
+          runbook_url: https://github.com/efn/efn-platform/blob/main/docs/runbooks/supermarket-campaign-channels.md#efnwaunofficialbanned
 
   # ─────────────────────────── Penjualan online (G17, docs/04 §10.11) ───────────────────────────
   # Metrik BFF (services/api-gateway/src/odoo-rpc/online-metrics.ts), scrape job api-gateway (mTLS :9464). Selama
@@ -399,6 +429,63 @@ groups:
           summary: "Erasure dipaksa setelah 14 hari dengan pesanan online terbuka ({{ $value | humanize }} dalam 1 jam)"
           description: "Jalankan sudo efn-online-cs online-erasure-pending; selesaikan unlinked_open_parts (refund/serah terima terverifikasi)."
           runbook_url: https://github.com/efn/efn-platform/blob/main/docs/runbooks/online-orders.md#erasure-paksa
+
+  # ─────────────────────────── Forecast (G44, SEC-215, R-T15) ───────────────────────────
+  # API key Odoo user teknis forecast (efn_forecast_<pt>) dibuat MANUAL, durasi <= 35 hari, TANPA rotasi otomatis.
+  # Metrik textfile ditulis scripts/host/efn-forecast-key-status (timer harian, hanya membaca; deret per PT hanya ada
+  # bila FORECAST_ENABLED=true di .env deploy). Kegagalan run/dead-man forecast: loki-rules/efn-forecast.yml.
+  # Dampak kedaluwarsa: tidak ada usulan reorder baru (bukan transaksi) -> warning saja.
+  - name: efn-forecast-key
+    rules:
+      - alert: EfnForecastApiKeyExpiringSoon
+        expr: (max by (company) (efn_forecast_api_key_expiry_timestamp_seconds) > 0) - time() < 7 * 86400
+        labels:
+          severity: warning
+          team: ops
+        annotations:
+          summary: "API key Odoo bot forecast PT {{ $labels.company }} kedaluwarsa < 7 hari"
+          description: "Buat key baru user efn_forecast_<pt>, pasang ke secret, recreate forecast-worker, lalu hapus key lama (runbook §4). Setelah kedaluwarsa run forecast gagal 401."
+          runbook_url: https://github.com/efn/efn-platform/blob/main/docs/runbooks/forecast-worker.md#rotasi
+      - alert: EfnForecastApiKeyMissing
+        expr: max by (company) (efn_forecast_api_key_active_keys) == 0
+        for: 1h
+        labels:
+          severity: warning
+          team: ops
+        annotations:
+          summary: "Forecast aktif tetapi user efn_forecast_{{ $labels.company }} tanpa API key aktif"
+          description: "Key kedaluwarsa/dihapus; run forecast berikutnya ditolak Odoo (401). Buat key baru (runbook §3)."
+          runbook_url: https://github.com/efn/efn-platform/blob/main/docs/runbooks/forecast-worker.md#api-key
+      # SEC-223 (G45): key tanpa tanggal kedaluwarsa = pelanggaran kebijakan <= 35 hari (R-T15); key itu tidak pernah
+      # memicu EfnForecastApiKeyExpiringSoon sehingga bocornya tidak terbatas waktu. Metrik harian -> tanpa `for`.
+      - alert: EfnForecastApiKeyNoExpiry
+        expr: max by (company) (efn_forecast_api_key_no_expiry_keys) > 0
+        labels:
+          severity: warning
+          team: ops
+        annotations:
+          summary: "User efn_forecast_{{ $labels.company }} punya {{ $value }} API key tanpa tanggal kedaluwarsa"
+          description: "Kebijakan: key bot forecast wajib berdurasi <= 35 hari. Buat key berdurasi, pasang ke secret, recreate forecast-worker, lalu hapus key tanpa kedaluwarsa (runbook §4b)."
+          runbook_url: https://github.com/efn/efn-platform/blob/main/docs/runbooks/forecast-worker.md#key-tanpa-kedaluwarsa
+      - alert: EfnForecastApiKeyCheckFailed
+        expr: max(efn_forecast_api_key_check_last_run_ok) == 0
+        for: 1h
+        labels:
+          severity: warning
+          team: ops
+        annotations:
+          summary: "Pemeriksaan masa berlaku API key forecast gagal"
+          description: "efn-forecast-key-status tidak dapat membaca key (container odoo mati, user teknis hilang/nonaktif). Lihat journald tag efn-forecast-key-status."
+          runbook_url: https://github.com/efn/efn-platform/blob/main/docs/runbooks/forecast-worker.md#pengingat-key
+      - alert: EfnForecastApiKeyCheckNotRunning
+        expr: time() - max(efn_forecast_api_key_check_last_run_timestamp_seconds) > 2 * 86400 + 3600
+        labels:
+          severity: warning
+          team: ops
+        annotations:
+          summary: "Timer efn-forecast-key-status tidak berjalan > 2 hari"
+          description: "Pengingat kedaluwarsa API key forecast buta. systemctl status efn-forecast-key-status.timer."
+          runbook_url: https://github.com/efn/efn-platform/blob/main/docs/runbooks/forecast-worker.md#pengingat-key
 
   # ─────────────────────────── Backup & DR (R-T08) ───────────────────────────
   # Metrik efn_backup_* / efn_restore_test_* ditulis scripts/backup.sh & scripts/restore-test.sh (textfile collector).

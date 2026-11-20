@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- docs/04 §28.5a: markdown, kejadian (override/selisih sync), persetujuan override POS, dan ambang kategori
+     teraudit efn_audit (nilai lama/baru). efn.audit.rule unik per model: product.category belum punya aturan lain
+     (efn_setup_audit tidak mengaudit product.category per 19 Nov 2026) -> hanya 3 field ambang dilacak. -->
+<odoo>
+    <record id="audit_rule_efn_lot_markdown" model="efn.audit.rule">
+        <field name="name">EFN - Markdown lot</field>
+        <field name="model_id" ref="model_efn_lot_markdown"/>
+        <field name="log_create" eval="True"/>
+        <field name="log_write" eval="True"/>
+        <field name="log_unlink" eval="True"/>
+        <field name="capture_unlink_values" eval="True"/>
+    </record>
+    <record id="audit_rule_efn_expiry_event" model="efn.audit.rule">
+        <field name="name">EFN - Kejadian kedaluwarsa/markdown</field>
+        <field name="model_id" ref="model_efn_expiry_event"/>
+        <field name="log_create" eval="True"/>
+        <field name="log_write" eval="True"/>
+        <field name="log_unlink" eval="True"/>
+        <field name="capture_unlink_values" eval="True"/>
+    </record>
+    <record id="audit_rule_efn_expiry_pos_approval" model="efn.audit.rule">
+        <field name="name">EFN - Persetujuan override kedaluwarsa POS</field>
+        <field name="model_id" ref="model_efn_expiry_pos_approval"/>
+        <field name="log_create" eval="True"/>
+        <field name="log_write" eval="True"/>
+        <field name="log_unlink" eval="True"/>
+        <field name="capture_unlink_values" eval="True"/>
+    </record>
+    <record id="audit_rule_product_category_expiry" model="efn.audit.rule">
+        <field name="name">EFN - Ambang kedaluwarsa kategori</field>
+        <field name="model_id" ref="product.model_product_category"/>
+        <field name="log_create" eval="True"/>
+        <field name="log_write" eval="True"/>
+        <field name="log_unlink" eval="False"/>
+        <field name="tracked_field_ids" eval="[(6, 0, [
+            ref('efn_expiry_monitor.field_product_category__efn_near_expiry_days'),
+            ref('efn_expiry_monitor.field_product_category__efn_markdown_days'),
+            ref('efn_expiry_monitor.field_product_category__efn_min_receipt_days'),
+        ])]"/>
+    </record>
+</odoo>

@@ -1,10 +1,3 @@
-# Data-only (ADR-031, ADR-045): tidak ada model. Satu post_init_hook (QA-1 G44) tanpa dependency baru.
-
-
-def post_init_hook(env):
-    """Tandai DC SMDDC sebagai DC assortment bila efn_assortment sudah terpasang (field ``efn_is_dc`` ada).
-
-    Bila efn_assortment dipasang belakangan, post_init_hook efn_assortment yang men-set field ini."""
-    warehouse = env.ref("efn_setup_supermarket.warehouse_smd_dc", raise_if_not_found=False)
-    if warehouse and "efn_is_dc" in warehouse._fields and not warehouse.efn_is_dc:
-        warehouse.sudo().efn_is_dc = True
+# Data-only (ADR-031, ADR-045): tidak ada model dan tidak ada hook.
+# Tahap B (19.0.2.0.0) menghapus post_init_hook tahap A: efn_is_dc DC kini diisi di data/stock_config_data.xml karena
+# efn_assortment sudah menjadi depends. Satu-satunya Python = migrations/19.0.2.0.0/post-migrate.py (upgrade dari 1.x).

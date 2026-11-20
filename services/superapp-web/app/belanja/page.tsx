@@ -8,6 +8,9 @@ import { OnlineUnavailable } from '@/components/online/OnlineUnavailable';
 import { ProductImage } from '@/components/online/ProductImage';
 import styles from '@/components/online/online.module.css';
 import { OrderModePicker } from '@/components/booking/OrderModePicker';
+import { SearchTracker } from '@/components/engage/BehaviorTrackers';
+import { WishlistButton } from '@/components/engage/WishlistButton';
+import engage from '@/components/engage/engage.module.css';
 import { orderModes, parseModeParam } from '@/lib/order-modes';
 
 export const metadata: Metadata = { title: 'Belanja' };
@@ -132,16 +135,28 @@ export default async function BelanjaPage({ searchParams }: { searchParams: SP }
           Produk belum dapat dimuat. Silakan muat ulang beberapa saat lagi.
         </p>
       ) : products.data.items.length === 0 ? (
-        <p className="card">{q ? `Tidak ada produk yang cocok dengan "${q}".` : 'Belum ada produk di kategori ini.'}</p>
+        <>
+          <p className="card">{q ? `Tidak ada produk yang cocok dengan "${q}".` : 'Belum ada produk di kategori ini.'}</p>
+          {q && !cursor && <SearchTracker channelCode={channel.channel_code} query={q} resultCount={0} />}
+        </>
       ) : (
         <>
           <p className="visually-hidden" role="status">
             {products.data.items.length} produk ditampilkan
           </p>
+          {q && !cursor && <SearchTracker channelCode={channel.channel_code} query={q} resultCount={products.data.items.length} />}
           <ul className={styles.productGrid}>
             {products.data.items.map((p) => (
-              <li key={p.product_id}>
+              <li key={p.product_id} className={engage.cardItem}>
                 <ProductCard product={p} channel={channel.channel_code} businessType={channelBusinessType(channel)} />
+                {/* G50: hati wishlist = saudara kartu (tombol tidak boleh di dalam tautan); hanya tampil bila flag menyala. */}
+                <WishlistButton
+                  channelCode={channel.channel_code}
+                  productId={p.product_id}
+                  name={p.name}
+                  variant="card"
+                  returnPath={href({ channel: base.channel, category, q })}
+                />
               </li>
             ))}
           </ul>

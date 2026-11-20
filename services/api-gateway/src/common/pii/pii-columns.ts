@@ -1,4 +1,4 @@
-import { PII_AAD } from './crypto';
+import { PII_AAD, piiAad } from './crypto';
 
 /**
  * Daftar SEMUA kolom `*_enc` di skema `platform` (docs/04 §7.2, §8.2, §8.4). Dipakai oleh job/CLI re-encrypt
@@ -42,6 +42,24 @@ export const PII_COLUMNS: readonly PiiColumn[] = [
   },
   // G27 §18.2: token push Expo (pengenal perangkat = data pribadi)
   { table: 'push_token', column: 'token_enc', pk: 'id', aad: PII_AAD.PUSH_TOKEN },
+  // G50 (docs/04 §28.7/§28.9): alamat email member (ADR-048) dan kode voucher kampanye yang ditugaskan BFF.
+  // SEC-G50-11 (pola SEC-102): AAD v2 terikat member_id (= notification/email/email.constants.ts memberEmailAad);
+  // `aad` v1 = format lama, dibaca re-encrypt sebagai cadangan lalu ditulis ulang ke v2.
+  {
+    table: 'member_email',
+    column: 'email_enc',
+    pk: 'member_id',
+    aad: piiAad('member_email', 'email_enc'),
+    rowAad: (pk) => `efn:member_email.email_enc:v2:${pk.toLowerCase()}`,
+  },
+  // SEC-G50-11 (pola SEC-102): kode voucher bearer terikat id baris; v1 kolom hanya dibaca (cadangan)
+  {
+    table: 'member_voucher',
+    column: 'code_enc',
+    pk: 'id',
+    aad: piiAad('member_voucher', 'code_enc'),
+    rowAad: (pk) => `efn:member_voucher.code_enc:v2:${pk.toLowerCase()}`,
+  },
 ];
 
 const IDENT_RE = /^[a-z_][a-z0-9_]*$/;

@@ -17,7 +17,9 @@ Superadmin.
 | Service compose | `forecast-worker` (profil `data`, overlay `docker-compose.forecast.yml`) |
 | Perintah | `python -m efn_forecast run --company SMD` (loop internal, jadwal `FORECAST_DAILY_CRON`, zona `FORECAST_TZ`) |
 | Kill switch | `FORECAST_ENABLED` (default `false`; `false` = proses hidup tetapi idle) |
-| Baca | ClickHouse `clickhouse:8443` HTTPS, user `efn_forecast_reader` (role `forecast_reader`, `SELECT efn_forecast.*` saja) |
+| Baca | ClickHouse `clickhouse:8443` HTTPS, user `efn_forecast_reader` (role `forecast_reader`, `SELECT efn_forecast.*` saja; SEC-215: login hanya dari `CH_FORECAST_READER_HOST_CIDR` = subnet `forecast-ch` 172.30.11.0/24; database `efn_forecast` hanya boleh berisi 6 view allowlist, objek lain → clickhouse-init mencabut grant dan gagal) |
+| Image | `IMAGE_FORECAST_WORKER` (staging/prod: digest bertanda tangan dari manifest rilis); dependency dari `requirements.lock` ber-hash (SEC-214, [python-dependency-lock.md](python-dependency-lock.md)) |
+| Alert | Loki `EfnForecastRunFailed`, `EfnForecastOdooAuthFailure`, `EfnForecastRunStale` (`loki-rules/efn-forecast.yml`); Prometheus `EfnForecastApiKey*` (`alert-rules.yml` grup `efn-forecast-key`) |
 | Tulis | Odoo hanya lewat `https://odoo-rpc-gateway:8443/json/2/...` (mTLS CN `forecast-worker`) |
 | Path RPC | #25 `efn.forecast.calendar/efn_forecast_calendar_upsert`, #26 `efn.forecast.run/efn_forecast_run_open`, #27 `efn.forecast.daily/efn_forecast_ingest`, #28 `efn.demand.forecast.line/efn_minmax_ingest`, #29 `efn.forecast.run/efn_forecast_run_close` |
 | User teknis Odoo | `efn_forecast_smd` = grup `efn_demand_forecast.group_forecast_bot`, **tepat satu company** (SMD) |
@@ -97,9 +99,50 @@ Dilakukan Superadmin di Odoo (belum ada modul setup / rotasi otomatis):
 
 | Rahasia | Cara | Frekuensi |
 |---|---|---|
-| `odoo_api_key_forecast_smd` | Buat key baru (§3 langkah 2–3) → recreate worker → setelah run berikut `ok`, hapus key lama di Odoo (*Account Security*). Dugaan bocor: hapus key lama **dulu**, lalu pasang baru. | Sebelum kedaluwarsa (≤ 35 hari) — manual, pasang pengingat. `efn-rotate-online-key` belum mendukung `FORECAST-*` (§8). |
+| `odoo_api_key_forecast_smd` | Buat key baru (§3 langkah 2–3) → recreate worker → setelah run berikut `ok`, hapus key lama di Odoo (*Account Security*). Dugaan bocor: hapus key lama **dulu**, lalu pasang baru. | Sebelum kedaluwarsa (≤ 35 hari) — manual. Pengingat otomatis: alert `EfnForecastApiKeyExpiringSoon` (sisa < 7 hari, §4a). `efn-rotate-online-key` belum mendukung `FORECAST-*`. |
 | `tls_forecast_worker_crt/_key` | Otomatis: `gen-pki.sh` menerbitkan ulang leaf bila < 30 hari (deploy.sh / `make secrets`). Manual: `bash scripts/gen-pki.sh forecast-worker` lalu recreate worker. | 90 hari (leaf) |
 | `clickhouse_password_forecast` | Tulis nilai baru (`openssl rand -base64 36`), jalankan ulang `clickhouse-init` (ALTER USER), recreate worker. Staging/prod: GitHub Environment `CLICKHOUSE_PASSWORD_FORECAST`. | Sesuai `secret-rotation.md` |
+
+### 4a. Pengingat kedaluwarsa API key (SEC-215) {#pengingat-key}
+
+Key bot forecast tidak dirotasi otomatis. Skrip host `efn-forecast-key-status` (hanya membaca `res.users.apikeys`
+lewat `odoo shell`: id + tanggal kedaluwarsa, **tanpa** nilai key) menulis metrik textfile node-exporter
+`efn_forecast_api_key_*` setiap hari 07:30 WIB. Deret per PT hanya ditulis bila `.env` deploy memuat
+`FORECAST_ENABLED=true`, sehingga env yang mematikan forecast tidak mendapat alert.
+
+Pasang sekali per host staging/prod (Superadmin, root):
+
+```bash
+install -o root -g root -m 0755 scripts/host/efn-forecast-key-status /usr/local/sbin/efn-forecast-key-status
+sha256sum /usr/local/sbin/efn-forecast-key-status         # cocokkan dengan sha256 file di PR yang di-review
+install -o root -g root -m 0644 scripts/host/systemd/efn-forecast-key-status.{service,timer} /etc/systemd/system/
+systemctl daemon-reload && systemctl enable --now efn-forecast-key-status.timer
+systemctl start efn-forecast-key-status.service && journalctl -t efn-forecast-key-status -n 20
+cat /var/lib/efn/node-exporter/efn_forecast_api_key.prom
+```
+
+| Alert | Arti | Tindakan |
+|---|---|---|
+| `EfnForecastApiKeyExpiringSoon` | Key aktif terbaru PT itu habis < 7 hari | Rotasi (tabel §4), lalu `systemctl start efn-forecast-key-status.service` agar alert padam |
+| `EfnForecastApiKeyMissing` | Forecast aktif tetapi user tanpa key aktif | Buat key (§3); sampai itu run berikutnya 401 |
+| `EfnForecastApiKeyNoExpiry` | User `efn_forecast_<pt>` punya key **tanpa** tanggal kedaluwarsa (metrik `efn_forecast_api_key_no_expiry_keys`, SEC-223) | §4b |
+| `EfnForecastApiKeyCheckFailed` | Skrip gagal membaca (container `odoo` mati, user `efn_forecast_<pt>` hilang/nonaktif) | `journalctl -t efn-forecast-key-status`; perbaiki user/Odoo |
+| `EfnForecastApiKeyCheckNotRunning` | Timer tidak jalan > 2 hari | `systemctl status efn-forecast-key-status.timer` |
+
+Dev lokal tidak memasang skrip ini (tanpa systemd/node-exporter textfile).
+
+### 4b. Key tanpa tanggal kedaluwarsa (SEC-223) {#key-tanpa-kedaluwarsa}
+
+Alert `EfnForecastApiKeyNoExpiry` (warning, `alert-rules.yml` grup `efn-forecast-key`): `efn-forecast-key-status`
+menemukan ≥ 1 API key user `efn_forecast_<pt>` dengan `expiration_date` kosong. Key seperti itu tidak pernah memicu
+`EfnForecastApiKeyExpiringSoon`, jadi bila bocor berlaku tanpa batas waktu (R-T15). Kebijakan: key bot forecast
+berdurasi ≤ 35 hari (§3 langkah 2). Penyebab umum: key dibuat oleh admin dengan hak "tanpa batas" atau lewat shell.
+
+1. Buat key baru **berdurasi** (§3 langkah 2–3), pasang ke secret `odoo_api_key_forecast_<pt>`, recreate worker.
+2. Tunggu satu run `ok` (atau uji manual §5 langkah 7).
+3. Hapus key tanpa kedaluwarsa di Odoo (*Settings → Users → efn_forecast_<pt> → Account Security*). Bila tidak jelas
+   siapa yang membuatnya, cek `efn_audit`/chatter user dan perlakukan sebagai dugaan pelanggaran (`security-incident.md`).
+4. `systemctl start efn-forecast-key-status.service` → metrik kembali 0, alert padam.
 
 ## 5. Troubleshooting: run gagal {#run-gagal}
 
@@ -123,8 +166,15 @@ tidak ada run baru pagi ini. Usulan hari itu tidak dibuat (bukan insiden transak
    (overlay tidak ikut di `-f`).
 4. **Odoo menolak**: `401` key; `403 company_mismatch`; `400 {"error": "<code>"}` validasi chunk (lihat log worker
    `rejected[{index, code}]`, mis. `warehouse_code` bukan milik company). `5xx` → `odoo-http-5xx.md`.
-5. **ClickHouse**: `Authentication failed` → password/clickhouse-init; `ACCESS_DENIED` → role `forecast_reader` belum
-   terpasang (`docker compose ... logs clickhouse-init`, cari `forecast`). Data kosong → ETL 15 menit belum mengisi mart
+5. **ClickHouse**: `Authentication failed` → password/clickhouse-init, **atau** worker login dari IP di luar
+   `CH_FORECAST_READER_HOST_CIDR` (SEC-215: worker harus di network `forecast-ch`, nilai env = subnet ipam
+   `forecast-ch`; cek `docker inspect <worker> --format '{{json .NetworkSettings.Networks}}'`). `ACCESS_DENIED` → role
+   `forecast_reader` belum terpasang atau grant dicabut pagar SEC-215 (`docker compose ... logs clickhouse-init`, cari
+   `forecast` / `di luar allowlist`: objek baru di `efn_forecast` harus ditambahkan ke allowlist clickhouse-init.sh,
+   forecast-access.sql dan test data-AI dalam satu PR; atau `definisi view efn_forecast menyimpang` (SEC-223): setiap
+   view wajib `DEFINER = efn_forecast_definer SQL SECURITY DEFINER AS SELECT <kolom polos> FROM efn_dwh.v_fc_<nama>`,
+   tanpa fungsi/JOIN/subquery/UNION; transformasi diletakkan di view `efn_dwh.v_fc_*`. Cek dengan
+   `SELECT name, create_table_query FROM system.tables WHERE database = 'efn_forecast'`). Data kosong → ETL 15 menit belum mengisi mart
    (`ETL_ENABLE_ODOO`), lihat log `etl`.
 6. **OOM / lambat**: `docker inspect forecast-worker --format '{{.State.OOMKilled}}'` = true → naikkan
    `FORECAST_MEMORY_LIMIT` (maks. wajar 4G; di atas itu tinjau ulang ADR-046 §7). Durasi > 2 jam = pemicu tinjau ulang.
@@ -132,8 +182,34 @@ tidak ada run baru pagi ini. Usulan hari itu tidak dibuat (bukan insiden transak
    `docker compose ... exec forecast-worker python -m efn_forecast run --company SMD --once` (opsi `--once` milik
    worker; cek `--help` versi terpasang).
 
-Alert Prometheus `EfnForecastRunFailed` (ADR-046 §3.1) **belum ada**: worker tidak punya endpoint metrik dan status run
-ada di Odoo. Sementara: pemeriksaan pagi oleh planner di menu Runs.
+### Alert run (SEC-215, ruler Loki `infra/observability/loki-rules/efn-forecast.yml`)
+
+Worker tidak punya endpoint metrik; alert dibuat dari baris log ringkasan run (`EFN_FORECAST_RUN {...}`, logger
+`efn_forecast.runner`) dan galat start batch (`ERROR efn_forecast batch <kind> tidak dapat dimulai`). Semua severity
+**warning** (bukan insiden transaksi).
+
+| Alert | Kondisi | Tindakan |
+|---|---|---|
+| `EfnForecastRunFailed` | Run `failed` atau batch tidak dapat dimulai dalam 2 jam terakhir (label `forecast_kind`) | Langkah 1–7 di atas; kode galat ada di field `error` log (mis. `odoo_transport:http_503`, `no_data`, `ClickHouseError`) |
+| `EfnForecastOdooAuthFailure` | Run gagal dengan `error` `odoo_auth*` / `odoo_company_mismatch*` | Key kedaluwarsa/dicabut atau company user salah → §3/§4 |
+
+Kueri Grafana (Explore → Loki) untuk melihat riwayat run:
+`{service="forecast-worker"} |= "EFN_FORECAST_RUN"`.
+
+## 5a. Troubleshooting: tidak ada run sukses (basi) {#run-basi}
+
+`EfnForecastRunStale`: tidak ada `EFN_FORECAST_RUN` harian `status":"ok"` > 26 jam (tahan 30 menit), **dan** worker
+terbukti aktif (`FORECAST_ENABLED=true`) dalam 4 hari terakhir. Penyebab umum:
+
+1. Worker crash loop / OOM (`docker compose ... ps forecast-worker`, `docker inspect ... OOMKilled`) → §5 langkah 1 & 6.
+2. Batch hang (> 26 jam tanpa ringkasan): `docker compose ... logs --since 30h forecast-worker | tail -n 50`; restart
+   worker; run open > 6 jam ditutup `failed` oleh cron Odoo.
+3. Jadwal salah: `FORECAST_DAILY_CRON` / `FORECAST_TZ` (log `batch berikutnya <waktu>` menunjukkan jadwal berikutnya).
+4. Forecast **sengaja** dimatikan setelah aktif: alert ini bisa menyala sampai 4 hari (jendela bukti aktif). Silence
+   di Alertmanager dengan alasan "forecast dimatikan", sampai 4 hari.
+
+Batas: worker yang mati/hang > 4 hari berhenti memicu alert ini; tertangkap `EfnServiceDown` (container) dan
+pemeriksaan pagi planner di menu *Demand Forecast → Runs*.
 
 ## 6. Sizing worker Odoo {#sizing}
 
@@ -146,15 +222,38 @@ atau naikkan `ODOO_WORKERS` (lihat `online-orders.md#sizing-worker`).
 
 Overlay ini mengasumsikan satu host. Bila `efn-data` dipindah ke mesin lain: gateway perlu listener di antarmuka
 WireGuard (bukan port publik) dengan allowlist IP mesin data, worker memakai `extra_hosts: odoo-rpc-gateway:<IP WG>`
-(nama tetap = SAN sertifikat, verify-full), dan ClickHouse lokal di mesin data. Desain + uji = tindak lanjut devsecops.
+(nama tetap = SAN sertifikat, verify-full), dan ClickHouse lokal di mesin data. Bila ClickHouse tetap di mesin inti,
+`CH_FORECAST_READER_HOST_CIDR` diganti subnet/IP WireGuard mesin data (SEC-215; check-encryption memaksa sama dengan
+`forecast-ch` hanya untuk render satu host). Prefix wajib /24../32 (SEC-223; disarankan `/32` = IP WG mesin data):
+/16../23 ditolak `deploy-validate.sh`, `check-encryption.sh`, dan `clickhouse-init.sh` karena 172.30.0.0/16 mencakup
+semua network EFN. Desain + uji = tindak lanjut devsecops.
 
-## 8. Production — belum di rantai rilis {#produksi}
+## 8. Production / staging lewat rilis bertanda tangan {#produksi}
 
-Belum: `IMAGE_FORECAST_WORKER` di `deploy.yml`/`efn-deploy`/`deploy.sh`, `FORECAST_*` di `EFN_RELEASE_CONFIG_VARS`
-(deploy-validate), deploy.sh menyertakan overlay bila `FORECAST_ENABLED=true`, gerbang `EFN_ALLOW_FEATURE_ON`, dan
-`efn-rotate-online-key --channel=FORECAST-SMD`. Sebelum deploy staging/prod pertama yang memuat G44:
+Sejak 19 Nov 2026 forecast-worker ikut rantai rilis: `deploy.yml` memverifikasi cosign image `forecast-worker` dan
+menulis `IMAGE_FORECAST_WORKER` ke manifest; `efn-deploy` memverifikasi ulang di host; `deploy.sh` menulis `.env` dan
+**menyertakan overlay `docker-compose.forecast.yml` hanya bila `FORECAST_ENABLED=true`**. Variabel (GitHub Environment
+`vars`, masuk manifest `config` bertanda tangan; kosong = default compose): `FORECAST_ENABLED`, `FORECAST_DAILY_CRON`,
+`FORECAST_TZ`, `FORECAST_HORIZON_DAYS`, `FORECAST_CHUNK_SIZE`, `FORECAST_ODOO_RPC_TIMEOUT_SECONDS`,
+`FORECAST_MEMORY_LIMIT`, `FORECAST_CPUS`, `CH_FORECAST_READER_HOST_CIDR` (rentang divalidasi `deploy-validate.sh`).
 
+Gerbang saat `FORECAST_ENABLED=true`:
+
+- Production: `FORECAST_ENABLED` wajib tercantum di `EFN_ALLOW_FEATURE_ON` (`/etc/efn/deploy.conf`, Superadmin) setelah
+  backtest G44 lulus (ADR-046) dan user teknis dibuat. Manifest saja ditolak.
+- `COMPOSE_PROFILES` memuat `data`; setiap PT di `EFN_FORECAST_COMPANY_CODES` (saat ini `SMD`) punya
+  `/opt/efn/secrets/odoo_api_key_forecast_<pt>.txt` nyata (bukan `disabled`), dibuat §3. Tanpa itu deploy berhenti.
+- `FORECAST_ENABLED=false` (default): overlay tidak dipasang, container dihapus `--remove-orphans`, key tidak di-mount.
+
+Sebelum deploy staging/prod pertama yang memuat G44:
+
+- Superadmin **memasang ulang wrapper** `/usr/local/sbin/efn-deploy` dari rilis ini (IMAGE_VARS bertambah 1 → manifest
+  lama/baru tidak kompatibel; key-custody.md §4) dan memasang `efn-forecast-key-status` (§4a).
 - Superadmin **menerbitkan ulang intermediate** (nameConstraints memuat `forecast-worker`), lihat
   [internal-pki.md](internal-pki.md#service-baru) — tanpa ini `deploy.sh` berhenti di langkah PKI.
 - GitHub Environment `CLICKHOUSE_PASSWORD_FORECAST` diisi (clickhouse-init me-mount-nya di semua env).
 - Migrasi `19-platform-g44.sql` (CHECK kode PT + `SMD`) wajib ada di bundel (deploy.sh menolak bila hilang).
+- `services/forecast-worker/requirements.lock` sudah dibuat (SEC-214); tanpa itu build image gagal dan deploy.yml tidak
+  menemukan image bertanda tangan untuk tag rilis.
+
+Belum: rotasi otomatis key (`efn-rotate-online-key --channel=FORECAST-SMD`).

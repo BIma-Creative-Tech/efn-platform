@@ -56,10 +56,19 @@ freezer). Audit `efn_audit`: baris assortment, capability, override.
   (produk) hanya boleh ditulis **Assortment Manager** (guard `create`/`write` server-side; sudo/data modul lolos).
   Gudang diaudit (aturan `audit_rule_stock_warehouse_assortment`, 3 field); produk diaudit aturan
   `efn_setup_audit.audit_rule_product_template` (semua field).
-- QA-1: `post_init_hook` men-set `efn_is_dc=True` pada `efn_setup_supermarket.warehouse_smd_dc` bila ada (dan
-  sebaliknya hook `efn_setup_supermarket` bila efn_assortment terpasang lebih dulu).
-- SEC-209 (sisa): transfer manual dua langkah DC → transit lalu transit → outlet tidak dicek di picking kedua; hanya
-  tertangkap laporan harian.
+- QA-1: `post_init_hook` men-set `efn_is_dc=True` pada `efn_setup_supermarket.warehouse_smd_dc` bila ada — kini
+  hanya pengaman untuk DB lama: sejak G45 data `efn_setup_supermarket` mengisi `efn_is_dc=True` langsung (hook di sana
+  dihapus).
+- SEC-209 (G45, 19.0.1.2.0): transfer dua langkah DC → transit lalu transit → outlet **dicek di langkah kedua**
+  (`stock.move._efn_transit_leg_target`): move bersumber lokasi `transit` milik PT yang sama ke gudang non-DC, hanya
+  di PT yang punya gudang `efn_is_dc` (PT F&B/CK tanpa DC tidak terpengaruh). Langkah pertama DC → transit tanpa
+  tujuan akhir tetap lolos (tidak ada outlet untuk dinilai); keputusan jatuh di picking transit → outlet (override
+  Assortment Manager berlaku di picking itu). Transit antar-PT (lokasi tanpa company) dilewati. Pada rute resupply
+  CE, langkah transit → outlet kini ikut dinilai juga (keputusan sama dengan langkah DC, jadi tidak mengubah hasil).
+  Belum diuji: `warehouse_id` lokasi transit CE 19 di runtime (test memakai `company.internal_transit_location_id`).
+- SEC-221 (G45 security, 19.0.1.3.0): lokasi antara juga mencakup lokasi `internal` tanpa gudang dan transit antar-PT
+  (company kosong; kalimat "transit antar-PT dilewati" di atas tidak berlaku lagi). Sisa: mengubah `location_dest_id`
+  setelah konfirmasi tidak dicek ulang (penegakan hanya di `_action_confirm`); laporan harian menangkap stoknya.
 - Override wajib per transfer draft; transfer hasil procurement yang gagal karena restriksi harus dibuat ulang setelah
   data diperbaiki.
 - `efn.assortment.override.picking_id` wajib → transfer yang punya override tidak bisa dihapus (jejak audit).

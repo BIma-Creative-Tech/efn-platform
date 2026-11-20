@@ -172,6 +172,35 @@ class EfnDeliverySchedule(models.Model):
             if rec.warehouse_id == rec.supply_warehouse_id:
                 raise ValidationError(_("efn_replenishment:same_wh — outlet dan DC harus berbeda."))
 
+    @staticmethod
+    def _efn_groups_overlap(group_a, group_b):
+        """Dua kelompok produk tumpang-tindih bila salah satu kosong (semua kategori), sama, atau saling induk/anak."""
+        if not group_a or not group_b:
+            return True
+        path_a, path_b = group_a.parent_path or "", group_b.parent_path or ""
+        return group_a == group_b or path_a.startswith(path_b) or path_b.startswith(path_a)
+
+    @api.constrains("warehouse_id", "product_group", "active", "company_id")
+    def _check_efn_schedule_overlap(self):
+        """G45 (masukan efn-odoo-functional): satu produk hanya boleh tercakup SATU jadwal aktif per outlet, agar
+        tidak diusulkan dua kali (jadwal berkategori sama, saling induk/anak, atau jadwal tanpa kategori bersama
+        jadwal berkategori)."""
+        for rec in self.filtered("active"):
+            others = self.sudo().search(
+                [("id", "!=", rec.id), ("warehouse_id", "=", rec.warehouse_id.id), ("active", "=", True)]
+            )
+            clash = others.filtered(lambda o, r=rec: self._efn_groups_overlap(r.product_group, o.product_group))
+            if clash:
+                raise ValidationError(
+                    _(
+                        "efn_replenishment:schedule_overlap — jadwal kirim %(name)s tumpang-tindih dengan %(other)s "
+                        "(kategori sama, saling induk/anak, atau salah satu tanpa kategori). Produk akan diusulkan "
+                        "dua kali.",
+                        name=rec.name,
+                        other=clash[0].name,
+                    )
+                )
+
     def _efn_cutoff_at(self, delivery_date):
         """Cut-off (UTC naive) = jam cut-off lokal pada (tanggal kirim − lead)."""
         self.ensure_one()
@@ -539,8 +568,11 @@ class EfnReplenishmentProposal(models.Model):
     @api.model
     def _efn_min_remaining_days(self, product):
         """Sisa umur minimum saat terima (hari). Field kategori ``efn_min_receipt_days`` (efn_expiry_monitor, G45)
-        dipakai bila ada; selain itu 0 (fit-gap Q-SM9 belum dijawab)."""
+        dipakai bila ada (dengan pewarisan dari induk terdekat yang terisi, helper efn_expiry_monitor
+        ``_efn_effective_days``); selain itu 0 (fit-gap Q-SM9 belum dijawab)."""
         categ = product.categ_id
+        if hasattr(categ, "_efn_effective_days"):
+            return max(int(categ._efn_effective_days("efn_min_receipt_days") or 0), 0) if categ else 0
         if "efn_min_receipt_days" in categ._fields:
             return max(int(categ.efn_min_receipt_days or 0), 0)
         return 0

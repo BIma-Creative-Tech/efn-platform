@@ -9,6 +9,9 @@
 #   G43: + service sekali jalan esb-migrate di profil `migrate`). docker-compose.migration.yml (G43) = kunci bundel +
 #   direktori pertukaran ke odoo HANYA selama jendela migrasi (docs/runbooks/migrasi-esb-odoo.md).
 #   docker-compose.forecast.yml (G44, forecast-worker: baca ClickHouse, tulis Odoo lewat odoo-rpc-gateway).
+#   docker-compose.segment.yml (G50, segment-worker: baca ClickHouse, anggota segmen -> BFF :9466, ringkasan -> Odoo).
+# Overlay opsional profil wa-unofficial: docker-compose.wa-unofficial.yml (G50, ADR-044: WhatsApp tidak resmi terisolasi,
+#   OFF di production; runbook supermarket-campaign-channels.md).
 # Semua image di-pin versi. Dependabot (.github/dependabot.yml) mengusulkan bump.
 #
 # ENKRIPSI DI SETIAP TRANSAKSI DATA (docs/04 §7, ADR-022) - gelombang 3:
@@ -91,7 +94,10 @@ networks:
   #   insight-data    : insight-web <-> clickhouse (HTTPS 8443) saja
   # Traefik dan ClickHouse sengaja tidak berbagi network (edge internet-facing tidak bisa menjangkau gudang data).
   # Subnet 172.30.7.0/24 dan 172.30.8.0/24 dipakai overlay docker-compose.esb.yml (G41); 172.30.11.0/24 dan
-  # 172.30.12.0/24 dipakai overlay docker-compose.forecast.yml (G44).
+  # 172.30.12.0/24 dipakai overlay docker-compose.forecast.yml (G44). G50: 172.30.13-16.0/24 overlay
+  # docker-compose.wa-unofficial.yml (rmq, wa-egress, wa-internet, wa-admin), 172.30.17-19.0/24 overlay
+  # docker-compose.segment.yml (segment-ch, segment-rpc, segment-bff), 172.30.20.0/24 network `mail` dev (Mailpit),
+  # 172.30.21.0/24 wa-ingress (overlay wa-unofficial: traefik/prometheus -> relay admin, SEC-G50-06).
   insight-ingress:
     internal: true
     ipam:
@@ -165,6 +171,10 @@ secrets:
   # di base; dipakai service forecast-worker yang HANYA ada di overlay docker-compose.forecast.yml (API key Odoo per PT +
   # sertifikat klien mTLS juga hanya di overlay itu).
   clickhouse_password_forecast: { file: ../../secrets/clickhouse_password_forecast.txt }
+  # G50 (docs/04 §28.7, ADR-047): user ClickHouse efn_segment_reader (baca view efn_segment.* saja). Dibuat clickhouse-init
+  # di base; dipakai segment-worker yang HANYA ada di overlay docker-compose.segment.yml (API key Odoo segmen + sertifikat
+  # klien mTLS juga hanya di overlay itu).
+  clickhouse_password_segment: { file: ../../secrets/clickhouse_password_segment.txt }
   # G42 (docs/04 §26.10, ADR-041): SSO Odoo -> insight-web, cookie sesi, tanda tangan cakupan PT (row policy
   # efn_insight_scope), user ClickHouse efn_insight. Mount least privilege dicek scripts/check-encryption.sh.
   insight_sso_key: { file: ../../secrets/insight_sso_key.txt }
@@ -227,6 +237,15 @@ secrets:
   odoo_pii_key_v1: { file: ../../secrets/odoo_pii_key_v1.txt }
   odoo_pii_bidx_key: { file: ../../secrets/odoo_pii_bidx_key.txt }
   odoo_pii_name_key: { file: ../../secrets/odoo_pii_name_key.txt }
+  # G50 (docs/04 §28.6-§28.10; ADR-044/047/048 Proposed). Mount least privilege dicek scripts/check-encryption.sh:
+  #   behavior_*_pepper, email_*, odoo_api_key_campaign_smd -> HANYA api-gateway (base, flag default false)
+  #   odoo_api_key_segment_smd, tls_segment_worker_*        -> HANYA segment-worker (overlay docker-compose.segment.yml)
+  #   wa_unofficial_*, rabbitmq_password_wa_unofficial, tls_wa_unofficial_* -> HANYA overlay docker-compose.wa-unofficial.yml
+  behavior_subject_pepper: { file: ../../secrets/behavior_subject_pepper.txt }
+  behavior_device_pepper: { file: ../../secrets/behavior_device_pepper.txt }
+  email_smtp_password: { file: ../../secrets/email_smtp_password.txt }
+  email_unsubscribe_key: { file: ../../secrets/email_unsubscribe_key.txt }
+  odoo_api_key_campaign_smd: { file: ../../secrets/odoo_api_key_campaign_smd.txt }
   # turunan (scripts/derive-secrets.sh)
   member_hash_pepper: { file: ../../secrets/member_hash_pepper.txt }
   minio_prometheus_token: { file: ../../secrets/minio_prometheus_token.txt }
@@ -1339,6 +1358,63 @@ services:
       # di keranjang diabaikan). Slot juga harus diaktifkan per outlet di Odoo (efn_online_slot).
       ONLINE_SLOTS_ENABLED: ${ONLINE_SLOTS_ENABLED:-false}
       MINIO_CATALOG_BUCKET: catalog
+      # ── G50 (docs/04 §28.6-§28.10; ADR-044/047/048 Proposed). SEMUA flag default false di semua env. Production:
+      # BEHAVIOR_TRACKING_ENABLED / PROMO_CAMPAIGN_ENABLED / WA_UNOFFICIAL_ENABLED = OFF; deploy-validate menolak true
+      # tanpa ref persetujuan (+ izin Superadmin EFN_ALLOW_FEATURE_ON). Runbook: docs/runbooks/supermarket-campaign-channels.md
+      BEHAVIOR_TRACKING_ENABLED: ${BEHAVIOR_TRACKING_ENABLED:-false}
+      BEHAVIOR_SUBJECT_PEPPER_FILE: /run/secrets/behavior_subject_pepper
+      BEHAVIOR_DEVICE_PEPPER_FILE: /run/secrets/behavior_device_pepper
+      BEHAVIOR_RL_DEVICE_PER_MIN: ${BEHAVIOR_RL_DEVICE_PER_MIN:-120}
+      BEHAVIOR_RL_IP_PER_MIN: ${BEHAVIOR_RL_IP_PER_MIN:-600}
+      # L-153: staging event 1..7 hari (lebih lama = keputusan DPO)
+      BEHAVIOR_EVENT_RETENTION_DAYS: ${BEHAVIOR_EVENT_RETENTION_DAYS:-7}
+      BEHAVIOR_DEVICE_LINK_IDLE_DAYS: ${BEHAVIOR_DEVICE_LINK_IDLE_DAYS:-180}
+      BEHAVIOR_DEVICE_CONSENT_RETENTION_DAYS: ${BEHAVIOR_DEVICE_CONSENT_RETENTION_DAYS:-400}
+      BEHAVIOR_ERASED_SUBJECT_RETENTION_DAYS: ${BEHAVIOR_ERASED_SUBJECT_RETENTION_DAYS:-100}
+      SEGMENT_RETENTION_DAYS: ${SEGMENT_RETENTION_DAYS:-30}
+      # Teks consent `tracking` aktif (versi + sha256 UTF-8 body teks frontend). Kosong = banner tidak tampil, grant 503.
+      CONSENT_TRACKING_VERSION: ${CONSENT_TRACKING_VERSION:-}
+      CONSENT_TRACKING_TEXT_SHA256: ${CONSENT_TRACKING_TEXT_SHA256:-}
+      WISHLIST_ENABLED: ${WISHLIST_ENABLED:-false}
+      RESTOCK_ALERT_ENABLED: ${RESTOCK_ALERT_ENABLED:-false}
+      PRICE_ALERT_ENABLED: ${PRICE_ALERT_ENABLED:-false}
+      ALERT_WATCH_INTERVAL_SECONDS: ${ALERT_WATCH_INTERVAL_SECONDS:-300}
+      PROMO_CAMPAIGN_ENABLED: ${PROMO_CAMPAIGN_ENABLED:-false}
+      CAMPAIGN_FREQUENCY_CAP_ENABLED: ${CAMPAIGN_FREQUENCY_CAP_ENABLED:-false}
+      CAMPAIGN_BUDGET_CAP_ENABLED: ${CAMPAIGN_BUDGET_CAP_ENABLED:-false}
+      CAMPAIGN_MAX_PER_MEMBER_PER_WEEK: ${CAMPAIGN_MAX_PER_MEMBER_PER_WEEK:-2}
+      CAMPAIGN_COMPANIES: ${CAMPAIGN_COMPANIES:-SMD}
+      CAMPAIGN_SYNC_SECONDS: ${CAMPAIGN_SYNC_SECONDS:-60}
+      # API key user teknis efn_campaign_<pt> (path #30-#31). PT baru = secret + env + mount + regex check-encryption.
+      ODOO_API_KEY_CAMPAIGN_SMD_FILE: /run/secrets/odoo_api_key_campaign_smd
+      # §28.7: listener HTTPS mTLS terpisah untuk POST /internal/v1/segments/*/members (hanya dibuka bila
+      # PROMO_CAMPAIGN_ENABLED=true). Port TIDAK dipublish dan tanpa label Traefik; klien hanya CN segment-worker lewat
+      # network segment-bff (overlay docker-compose.segment.yml).
+      SEGMENT_INTERNAL_PORT: "9466"
+      SEGMENT_TLS_CLIENT_ALLOWED_CN: segment-worker
+      SEGMENT_CLIENT_CA_FILE: /run/secrets/efn_ca_crt
+      # ADR-048 kanal email: implicit|starttls saja (tanpa mode plaintext, L-160). Production butuh penyedia + DPA +
+      # SPF/DKIM/DMARC (Q-SM19). EMAIL_SMTP_CA_FILE kosong = CA sistem (penyedia publik); dev = CA internal (Mailpit).
+      EMAIL_ENABLED: ${EMAIL_ENABLED:-false}
+      EMAIL_SMTP_HOST: ${EMAIL_SMTP_HOST:-}
+      EMAIL_SMTP_PORT: ${EMAIL_SMTP_PORT:-}
+      EMAIL_SMTP_TLS_MODE: ${EMAIL_SMTP_TLS_MODE:-implicit}
+      EMAIL_SMTP_USER: ${EMAIL_SMTP_USER:-}
+      EMAIL_SMTP_PASSWORD_FILE: /run/secrets/email_smtp_password
+      EMAIL_SMTP_CA_FILE: ${EMAIL_SMTP_CA_FILE:-}
+      EMAIL_FROM: ${EMAIL_FROM:-}
+      EMAIL_RATE_PER_MIN: ${EMAIL_RATE_PER_MIN:-60}
+      EMAIL_UNSUBSCRIBE_KEY_FILE: /run/secrets/email_unsubscribe_key
+      EMAIL_UNSUBSCRIBE_URL: ${EMAIL_UNSUBSCRIBE_URL:-}
+      EMAIL_UNSUBSCRIBE_MAILTO: ${EMAIL_UNSUBSCRIBE_MAILTO:-}
+      EMAIL_UNSUBSCRIBE_TTL_DAYS: ${EMAIL_UNSUBSCRIBE_TTL_DAYS:-30}
+      EMAIL_UNSUBSCRIBE_RATE_PER_MIN: ${EMAIL_UNSUBSCRIBE_RATE_PER_MIN:-10}
+      EMAIL_BRAND_NAME: ${EMAIL_BRAND_NAME:-EFN}
+      # ADR-044: BFF mematikan kanal (log error) bila production tanpa ref; kunci HMAC to_hash (wa_unofficial_hash_key)
+      # HANYA di-mount overlay docker-compose.wa-unofficial.yml (tanpa overlay = kanal mati: hash_key_missing).
+      WA_UNOFFICIAL_ENABLED: ${WA_UNOFFICIAL_ENABLED:-false}
+      WA_UNOFFICIAL_RISK_ACCEPTANCE_REF: ${WA_UNOFFICIAL_RISK_ACCEPTANCE_REF:-}
+      CHANNEL_RETENTION_INTERVAL_MS: ${CHANNEL_RETENTION_INTERVAL_MS:-21600000}
     secrets:
       - efn_ca_crt
       - tls_api_gateway_crt
@@ -1363,6 +1439,12 @@ services:
       - fnb_table_token_key
       - odoo_fnb_event_hmac
       - odoo_booking_event_hmac
+      # G50 (docs/04 §28.10): hanya BFF
+      - behavior_subject_pepper
+      - behavior_device_pepper
+      - email_smtp_password
+      - email_unsubscribe_key
+      - odoo_api_key_campaign_smd
     networks: [internal, data, cache, egress]
     read_only: true
     tmpfs: [/tmp]
@@ -1546,6 +1628,10 @@ services:
       CH_MART_RETENTION_YEARS: ${CH_MART_RETENTION_YEARS:-10}
       CH_PSEUDONYM_RETENTION_YEARS: ${CH_PSEUDONYM_RETENTION_YEARS:-5}
       CH_GEO_RETENTION_DAYS: ${CH_GEO_RETENTION_DAYS:-90}
+      # SEC-215 (G44): user efn_forecast_reader hanya boleh login dari subnet network forecast-ch (overlay
+      # docker-compose.forecast.yml). WAJIB sama dengan ipam forecast-ch (dicek scripts/check-encryption.sh); antar-mesin
+      # (K25-02, belum dibangun) = subnet WireGuard mesin data. Divalidasi clickhouse-init (CIDR privat /24../32, SEC-223).
+      CH_FORECAST_READER_HOST_CIDR: ${CH_FORECAST_READER_HOST_CIDR:-172.30.11.0/24}
     secrets:
       - clickhouse_password
       - clickhouse_password_etl
@@ -1553,6 +1639,7 @@ services:
       - clickhouse_password_metabase
       - clickhouse_password_esb   # G41: user efn_esb (docs/04 §25); service esb-extract di overlay docker-compose.esb.yml
       - clickhouse_password_forecast   # G44: user efn_forecast_reader (docs/04 §28.2); forecast-worker di overlay forecast
+      - clickhouse_password_segment    # G50: user efn_segment_reader (docs/04 §28.7); segment-worker di overlay segment
       - text2sql_scope_key   # G38: kunci row policy cakupan PT efn_t2s (docs/04 §23.3)
       # G42 (docs/04 §26.7): user efn_insight + row policy efn_insight_scope. WAJIB di setiap env: clickhouse-init gagal
       # (fail closed) bila salah satu tidak terbaca, sehingga profil `data` tidak naik.
@@ -1865,6 +1952,15 @@ services:
       # efn_legacy_history + grant G46.
       ETL_ENABLE_FORECAST: ${ETL_ENABLE_FORECAST:-false}
       ETL_ENABLE_FORECAST_LEGACY: ${ETL_ENABLE_FORECAST_LEGACY:-false}
+      # G50 (docs/04 §28.6/§28.7, ADR-047 Proposed): behavior.event_raw (PG platform) -> efn_dwh.fact_visitor_event +
+      # agregat anonim. Default MATI di semua env; production ditolak deploy-validate selama BEHAVIOR_TRACKING_ENABLED
+      # mati. Prasyarat: grant services/etl/sql/platform-behavior-grants.sql (skema PG harus cocok, lihat laporan G50).
+      ETL_ENABLE_BEHAVIOR: ${ETL_ENABLE_BEHAVIOR:-false}
+      ETL_BEHAVIOR_AGG_DAYS: ${ETL_BEHAVIOR_AGG_DAYS:-3}
+      ETL_BEHAVIOR_AGG_INTERVAL_SECONDS: ${ETL_BEHAVIOR_AGG_INTERVAL_SECONDS:-3600}
+      ETL_BEHAVIOR_K_MIN: ${ETL_BEHAVIOR_K_MIN:-10}
+      ETL_BEHAVIOR_ERASURE_RECHECK_HOURS: ${ETL_BEHAVIOR_ERASURE_RECHECK_HOURS:-24}
+      ETL_BEHAVIOR_ERASURE_BATCH_SIZE: ${ETL_BEHAVIOR_ERASURE_BATCH_SIZE:-500}
       LOYALTY_POINT_VALUE_IDR: ${LOYALTY_POINT_VALUE_IDR:-100}   # SEC-118: wajib sama dengan api-gateway
       # W-19: harus sama dengan clickhouse-init (TTL kolom pseudonim / geo; ETL gagal start bila di luar rentang)
       CH_PSEUDONYM_RETENTION_YEARS: ${CH_PSEUDONYM_RETENTION_YEARS:-5}

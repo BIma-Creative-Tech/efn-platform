@@ -4,12 +4,15 @@ import { AppConfig } from '../config/app-config';
 import { DB, Db, Queryable } from '../common/db/db';
 import { ApiError, Errors } from '../common/errors/api-error';
 import { PII_AAD, PiiCipher } from '../common/pii/crypto';
+import { withdrawBehaviorTracking } from '../behavior/behavior-privacy';
 
 /**
  * `privacy` (G27 §18.3a): persetujuan Kebijakan Privasi + pemrosesan data akun, dicentang WAJIB di layar masuk/daftar.
  * Tidak bisa ditarik lewat toggle (akun tidak berjalan tanpa data pribadi) → penarikan = penghapusan akun (DSAR §8.9).
  */
-export const CONSENT_PURPOSES = ['location', 'marketing', 'privacy'] as const;
+// G50 (ADR-047 §3.1 no. 1, docs/04 §28.6): `tracking` = pelacakan perilaku untuk rekomendasi & promo (default tidak
+// diberikan; consent device TIDAK otomatis menjadi consent akun). Penarikan menghapus tautan device ↔ member.
+export const CONSENT_PURPOSES = ['location', 'marketing', 'privacy', 'tracking'] as const;
 export type ConsentPurpose = (typeof CONSENT_PURPOSES)[number];
 /** SHA-256 string kosong: penanda "teks tidak diketahui" untuk penarikan saat teks aktif belum dikonfigurasi. */
 export const UNKNOWN_TEXT_SHA256 = 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855';
@@ -92,12 +95,17 @@ export class ConsentService {
       textSha256 = active?.textSha256 ?? UNKNOWN_TEXT_SHA256;
     }
     const ipEnc = ip && isIP(ip) ? this.cipher.encrypt(ip, PII_AAD.CONSENT_IP) : null;
-    const res = await this.db.query<{ created_at: Date | string }>(
-      `INSERT INTO platform.consent (member_id, purpose, granted, version, text_sha256, source, ip_enc)
-       VALUES ($1, $2, $3, $4, $5, 'superapp', $6)
-       RETURNING created_at`,
-      [memberId, purpose, input.granted, input.version, textSha256, ipEnc],
-    );
+    const res = await this.db.tx(async (q) => {
+      const ins = await q.query<{ created_at: Date | string }>(
+        `INSERT INTO platform.consent (member_id, purpose, granted, version, text_sha256, source, ip_enc)
+         VALUES ($1, $2, $3, $4, $5, 'superapp', $6)
+         RETURNING created_at`,
+        [memberId, purpose, input.granted, input.version, textSha256, ipEnc],
+      );
+      // G50 ADR-047 §3.1 no. 4: cabut `tracking` → tautan device & pemetaan subject dihapus (atomik dengan baris consent)
+      if (purpose === 'tracking' && !input.granted) await withdrawBehaviorTracking(q, memberId);
+      return ins;
+    });
     return { purpose, granted: input.granted, version: input.version, updated_at: toIso(res.rows[0]?.created_at ?? new Date()) };
   }
 }

@@ -39,6 +39,12 @@ http:
       certificates:
         - certFile: /run/secrets/tls_traefik_crt
           keyFile: /run/secrets/tls_traefik_key
+    # G50 (docs/04 §28.9, ADR-044): server admin HTTPS wa-unofficial :8443, dijangkau lewat relay TCP wa-admin-relay
+    # (network wa-ingress, SEC-G50-06; overlay docker-compose.wa-unofficial.yml). serverName = sertifikat wa-unofficial
+    # (relay TLS passthrough). Tidak dipakai bila overlay tidak aktif.
+    efn-wa-unofficial:
+      serverName: wa-unofficial
+      rootCAs: [/run/secrets/efn_ca_crt]
     efn-grafana:
       serverName: grafana
       rootCAs: [/run/secrets/efn_ca_crt]
@@ -61,6 +67,9 @@ http:
 
 tls:
   options:
+    # G50: dipakai router admin wa-unofficial (host wa-admin.<domain>, entrypoint wg-https): operator wajib sertifikat
+    # klien dari CA internal (leaf `wa-operator`, scripts/gen-pki.sh, non-production). Traefik tidak bisa membatasi CN:
+    # lapis berikutnya = IP allowlist internal-ops + token admin di service (docs/runbooks/supermarket-campaign-channels.md).
     efn-mtls:
       minVersion: VersionTLS12
       sniStrict: true

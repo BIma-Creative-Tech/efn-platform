@@ -1,0 +1,93 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="efn_expiry_alert_view_list" model="ir.ui.view">
+        <field name="name">efn.expiry.alert.list</field>
+        <field name="model">efn.expiry.alert</field>
+        <field name="arch" type="xml">
+            <list create="0" delete="0" decoration-danger="stage == 'expired'" decoration-warning="stage == 'markdown'">
+                <field name="warehouse_id"/>
+                <field name="product_id"/>
+                <field name="lot_id"/>
+                <field name="expiration_date"/>
+                <field name="days_left"/>
+                <field name="qty"/>
+                <field name="stage"/>
+                <field name="state"/>
+                <field name="date" optional="hide"/>
+                <field name="company_id" groups="base.group_multi_company"/>
+            </list>
+        </field>
+    </record>
+    <record id="efn_expiry_alert_view_form" model="ir.ui.view">
+        <field name="name">efn.expiry.alert.form</field>
+        <field name="model">efn.expiry.alert</field>
+        <field name="arch" type="xml">
+            <form create="0" delete="0">
+                <header>
+                    <button name="action_efn_create_markdown" type="object" string="Buat markdown" class="btn-primary"
+                            invisible="state == 'closed'"/>
+                    <button name="action_efn_transfer" type="object" string="Usulkan transfer antar outlet"
+                            invisible="state == 'closed' or stage == 'expired'"/>
+                    <button name="action_efn_close" type="object" string="Tutup" invisible="state == 'closed'"/>
+                    <field name="state" widget="statusbar"/>
+                </header>
+                <sheet>
+                    <group>
+                        <group>
+                            <field name="warehouse_id"/>
+                            <field name="product_id"/>
+                            <field name="categ_id"/>
+                            <field name="lot_id"/>
+                        </group>
+                        <group>
+                            <field name="expiration_date"/>
+                            <field name="days_left"/>
+                            <field name="qty"/>
+                            <field name="stage"/>
+                            <field name="date"/>
+                            <field name="last_run_date"/>
+                            <field name="transfer_picking_id"/>
+                            <field name="company_id" groups="base.group_multi_company"/>
+                        </group>
+                    </group>
+                    <field name="markdown_ids" readonly="1">
+                        <list>
+                            <field name="date_from"/>
+                            <field name="date_to"/>
+                            <field name="price"/>
+                            <field name="discount_pct"/>
+                            <field name="qty_cap"/>
+                            <field name="qty_sold"/>
+                            <field name="state"/>
+                        </list>
+                    </field>
+                </sheet>
+                <chatter/>
+            </form>
+        </field>
+    </record>
+    <record id="efn_expiry_alert_view_search" model="ir.ui.view">
+        <field name="name">efn.expiry.alert.search</field>
+        <field name="model">efn.expiry.alert</field>
+        <field name="arch" type="xml">
+            <search>
+                <field name="warehouse_id"/>
+                <field name="product_id"/>
+                <field name="lot_id"/>
+                <filter name="not_closed" string="Belum ditutup" domain="[('state', '!=', 'closed')]"/>
+                <filter name="expired" string="Kedaluwarsa" domain="[('stage', '=', 'expired')]"/>
+                <filter name="markdown" string="Perlu markdown" domain="[('stage', '=', 'markdown')]"/>
+                <group>
+                    <filter name="by_wh" string="Outlet" context="{'group_by': 'warehouse_id'}"/>
+                    <filter name="by_stage" string="Tahap" context="{'group_by': 'stage'}"/>
+                </group>
+            </search>
+        </field>
+    </record>
+    <record id="efn_expiry_alert_action" model="ir.actions.act_window">
+        <field name="name">Alert Kedaluwarsa</field>
+        <field name="res_model">efn.expiry.alert</field>
+        <field name="view_mode">list,form</field>
+        <field name="context">{'search_default_not_closed': 1}</field>
+    </record>
+</odoo>

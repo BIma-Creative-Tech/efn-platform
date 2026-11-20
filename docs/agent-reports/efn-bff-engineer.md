@@ -1040,3 +1040,228 @@ Cron akrual harian Odoo `efn_loyalty_accounting` memanggil `GET /v1/pos/loyalty/
 - Komponen di luar BFF yang juga memvalidasi kode PT tidak saya sentuh: ETL `COMPANY_CODES`/`dim_company`, ClickHouse, text2sql semantic layer, `infra/postgres` di stack `efn-data` (bila ada), smoke test, Odoo. Perlu dicek efn-data-ai-engineer/efn-odoo-engineer.
 - Volume dev lama: jalankan `18-platform-g43.sql` manual (perintah di header file) sebelum BFF baru start, atau lewat `scripts/deploy.sh`.
 - Data PT IMD/CUP placeholder (Q-ESB5); kebijakan poin/MGM per PT IMD/CUP belum dipublikasi — tanpa kebijakan PT, earn memakai fallback env/aturan §13.1 yang berlaku untuk PT lain.
+
+## G50-B — kanal email (ADR-048) dan WhatsApp tidak resmi terisolasi (ADR-044) (docs/04 §28.7/§28.9/§28.10; 20 Nov 2026)
+
+> **Build/test/lint BELUM dijalankan lokal** (tanpa shell di sesi ini). Semua spec belum dieksekusi; `npm install`
+> belum dijalankan (lockfile api-gateway belum memuat `nodemailer`; `services/wa-unofficial` belum punya
+> `package-lock.json`); migrasi `21-platform-g50b.sql` belum dijalankan ke PostgreSQL. Baileys **tidak pernah**
+> dijalankan terhadap WhatsApp nyata.
+
+### File
+- BFF `src/notification/email/`: `email.module.ts` (`EmailModule`, ekspor `EmailNotifier`), `email.notifier.ts`,
+  `email-sender.consumer.ts`, `email-unsubscribe.{controller,service}.ts`, `unsubscribe-token.ts`, `smtp-transport.ts`,
+  `email-templates.ts`, `email.config.ts`, `email.constants.ts`, `marketing-consent.ts`, `channel-env.ts`,
+  `email-retention.job.ts`, `channel-testing.ts` (fake test), `README.md`; spec: `email.config`, `unsubscribe-token`,
+  `email.notifier`, `email-sender.consumer`, `email-unsubscribe.service`.
+- BFF `src/notification/wa-unofficial/`: `wa-unofficial.module.ts` (`WaUnofficialModule`, ekspor
+  `WaUnofficialNotifier`), `wa-unofficial.notifier.ts`, `wa-unofficial.publisher.ts`, `wa-unofficial-result.consumer.ts`,
+  `wa-unofficial.contract.ts`, `wa-unofficial.config.ts`, `wa-unofficial-retention.job.ts`, `README.md`; spec:
+  `wa-unofficial.notifier`, `wa-unofficial-result.consumer`, `wa-unofficial.publisher`.
+- Service baru `services/wa-unofficial/` (Node 22, TS strict, tanpa framework): `package.json`, `tsconfig*.json`,
+  `Dockerfile`, `.dockerignore`, `README.md`, `src/{main,config,processor,amqp,admin-server,contract,templates,state,
+  encrypted-files,aead,jid,log,metrics,wa-client,healthcheck}.ts`, `src/baileys/{baileys-client,encrypted-auth-state}.ts`,
+  `src/testing/fakes.ts`; spec: `config`, `processor`, `encrypted-files`, `admin-server`, `templates`.
+- Migrasi `infra/postgres/init/21-platform-g50b.sql` (tabel `member_email`, `email_outbound`, `email_unsubscribe_used`,
+  `wa_unofficial_recipient`, `wa_unofficial_outbound`; grant `efn_bff` DML).
+- `services/api-gateway/package.json`: `nodemailer`, `@types/nodemailer`.
+
+### Antarmuka untuk BFF-A (sesuai brief, nama & signature persis)
+- `EmailNotifier.enqueue({ memberId, source, sourceRef, template, params })` → `queued | skipped_disabled |
+  skipped_no_consent | skipped_no_email`. Template: `promo_generic`/`markdown_near_expiry` (campaign),
+  `restock_available` (restock), `price_drop` (price_alert); `transactional` belum punya template. Kesalahan pemanggil
+  → `EmailTemplateError`.
+- `WaUnofficialNotifier.enqueue({ memberId, category, source, sourceRef, template, params, expiresAt })` →
+  `queued | skipped_disabled | skipped_no_consent | skipped_no_phone`. Template sama namanya (kategori: promo /
+  notify_restock / price_alert). Kesalahan pemanggil → `WaContractError`. `expiresAt` dipangkas ≤ 24 jam.
+- Keduanya memeriksa flag kanal + consent `marketing` sendiri (Q-SM25 default: wajib untuk semua sumber promo &
+  notify-me). `sourceRef` `^[A-Za-z0-9:_.-]{1,128}$`, WA `source` `^[a-z_]{1,32}$`.
+
+### Dependency
+| Paket | Versi | Lisensi | Di mana |
+|---|---|---|---|
+| `nodemailer` | ^7.0.7 | MIT-0 (nodemailer ≥ 6.x; **verifikasi saat install**) | api-gateway |
+| `@types/nodemailer` | ^6.4.17 (dev) | MIT | api-gateway |
+| `@whiskeysockets/baileys` | **6.7.18 exact** | MIT | wa-unofficial — versi belum diverifikasi ke npm; 6.x menarik `libsignal` dari GitHub (Dockerfile memasang git di stage build) |
+| `amqplib` | ^0.10.5 | MIT | wa-unofficial |
+| `https-proxy-agent` | ^7.0.6 | MIT | wa-unofficial (opsional proxy egress) |
+| `typescript`, `jest`, `ts-jest`, `@types/{node,jest,amqplib}` | sama dengan api-gateway | Apache-2.0 / MIT | wa-unofficial (dev) |
+
+### Untuk devsecops (overlay compose, secret, broker)
+- **Queue (quorum + DLQ `<q>.dlq`, didefinisikan broker):** `notify.email`, `notify.wa_unofficial`,
+  `notify.wa_unofficial.result`. Per-message TTL di `notify.wa_unofficial` (quorum ≥ 3.10) → pesan kedaluwarsa
+  di-dead-letter ke `.dlq` (wajar). Queue harus ada **sebelum** flag dinyalakan (consumer BFF tidak di passive check).
+- **Izin RabbitMQ:** `efn-bff` + write `notify.email`, `notify.wa_unofficial`; read `notify.email`,
+  `notify.wa_unofficial.result`. User baru **`efn-wa-unofficial`**: read `notify.wa_unofficial` saja, write
+  `notify.wa_unofficial.result` saja, configure kosong, vhost sama, tanpa tag management.
+- **Secret BFF:** `email_smtp_password`, `email_unsubscribe_key` (≥ 32 karakter acak), `wa_unofficial_hash_key`
+  (≥ 32 karakter acak, **juga** dipasang ke wa-unofficial).
+- **Secret wa-unofficial:** `rabbitmq_password_wa_unofficial`, `wa_unofficial_session_key` (32 byte base64),
+  `wa_unofficial_hash_key`, `wa_unofficial_admin_token` (≥ 32), opsional `wa_unofficial_metrics_token` (≠ admin),
+  `wa_unofficial_tls_crt`/`wa_unofficial_tls_key` (CN/SAN `wa-unofficial`, CA internal), `efn_ca_crt`.
+- **Env BFF:** `EMAIL_ENABLED`, `EMAIL_SMTP_HOST`, `EMAIL_SMTP_PORT`, `EMAIL_SMTP_TLS_MODE` (`implicit|starttls`),
+  `EMAIL_SMTP_USER`, `EMAIL_SMTP_PASSWORD_FILE`, `EMAIL_SMTP_CA_FILE` (dev Mailpit: CA dev), `EMAIL_FROM`,
+  `EMAIL_RATE_PER_MIN`, `EMAIL_UNSUBSCRIBE_KEY_FILE`, `EMAIL_UNSUBSCRIBE_URL` (https halaman web, mis.
+  `https://<superapp>/berhenti-langganan`), `EMAIL_UNSUBSCRIBE_MAILTO` (opsional), `EMAIL_UNSUBSCRIBE_TTL_DAYS`,
+  `EMAIL_UNSUBSCRIBE_RATE_PER_MIN`, `EMAIL_BRAND_NAME`, `WA_UNOFFICIAL_ENABLED`, `WA_UNOFFICIAL_RISK_ACCEPTANCE_REF`,
+  `WA_UNOFFICIAL_HASH_KEY_FILE`, `CHANNEL_RETENTION_INTERVAL_MS`.
+- **Env wa-unofficial:** lihat tabel `services/wa-unofficial/README.md` (APP_ENV, WA_UNOFFICIAL_*, AMQP_URL
+  `amqps://efn-wa-unofficial@rabbitmq:5671`, TLS_*, PORT 8443, WA_UNOFFICIAL_PROXY_URL).
+- **Container wa-unofficial:** user non-root `app`, `read_only: true`, `tmpfs: /tmp`, `cap_drop: [ALL]`,
+  `no-new-privileges`, volume sendiri `wa_unofficial_state:/var/lib/wa-unofficial` (ikut backup terenkripsi saja),
+  network `rmq` + `wa-egress` saja (tanpa db/redis/odoo), healthcheck `node dist/healthcheck.js`
+  (`HEALTHCHECK_SERVERNAME=wa-unofficial`). Router Traefik `wg-https` + `internal-ops` + mTLS CN operator ke
+  `https://wa-unofficial:8443/v1/admin/*`. `/metrics` di-scrape dengan `bearer_token_file` token metrik.
+- **Alert:** `EfnWaUnofficialDown` = `efn_wa_unofficial_enabled == 1 and efn_wa_unofficial_session_up == 0` for 15m;
+  `EfnWaUnofficialBanned` = `efn_wa_unofficial_session_banned == 1`.
+- **deploy-validate:** tolak `WA_UNOFFICIAL_ENABLED=true` + `APP_ENV=production` tanpa ref (service juga menolak start,
+  exit 78; BFF mematikan kanal + log error). Secret `email_*` hanya BFF; `wa_unofficial_*` sesuai daftar di atas.
+- **deploy.sh:** `21-platform-g50b.sql` masuk daftar migrasi WAJIB (setelah 20 milik G50-A).
+- **Dev:** Mailpit dengan TLS dari CA dev; tanpa relai internet.
+
+### Usulan untuk efn-lead / file milik bersama (tidak saya sunting)
+1. `common/pii/pii-columns.ts`: tambah `{ table: 'member_email', column: 'email_enc', pk: 'member_id', aad:
+   'efn:member_email.email_enc:v1' }` (rotasi kunci + cek versi pensiun).
+2. `config/secrets.loader.ts`: tambah `EMAIL_SMTP_PASSWORD`, `EMAIL_UNSUBSCRIBE_KEY`, `WA_UNOFFICIAL_HASH_KEY` ke
+   `KNOWN_SECRET_FILES` agar `assertStartupSecrets` menolak literal env di luar dev (pembaca kanal sendiri sudah menolak
+   saat dipakai).
+3. `common/amqp/amqp.service.ts`: parameter opsi `publish(queue, payload, messageId, { expiration })` → ganti
+   `AmqpWaPublisher` (koneksi AMQP kedua) dengan adaptor; tambah daftar queue G50 ke passive check bersyarat flag (pola
+   `MGM_QUEUES`) agar queue hilang = gagal start yang jelas, bukan reconnect berulang.
+4. `common/route-pii-audit.spec.ts`: daftarkan `EmailUnsubscribeController` (tanpa @Query/@Param).
+5. `src/privacy`: DSAR export memuat email (didekripsi), `email_outbound`, `wa_unofficial_outbound` (erasure sudah
+   lewat FK CASCADE).
+6. Alur isi + verifikasi email member (`PUT /v1/me/email` + verifikasi) belum ada → kanal email efektif `skipped_no_email`
+   sampai dibangun; perlu kontrak §8 (architect).
+7. Frontend: halaman `/berhenti-langganan` di superapp-web membaca token dari `location.hash` (`#t=`) lalu
+   `POST /v1/email/unsubscribe` `{ token }`.
+
+### Usulan revisi kontrak docs/04 §28.7 (untuk architect)
+- `to_e164` = digit E.164 **tanpa `+`** (format `member_ref`); HMAC dihitung atas string itu.
+- `notify.wa_unofficial.result` menambah field opsional `reason` (`expired`, `invalid_category`, `hash_mismatch`,
+  `not_on_whatsapp`, `opted_out`, `max_per_day`, `max_per_member_per_day`, `send_error`, …).
+- `message_id` hasil = `warslt:<idempotency_key>:<status>` (bukan hanya `<idempotency_key>`): pesan yang di-DLQ
+  `disconnected` lalu diputar ulang dan `sent` menghasilkan hasil kedua yang tidak boleh di-dedup BFF; BFF hanya
+  memperbarui dari `queued`/`disconnected`.
+- Consent per purpose: STOP/unsubscribe mencabut `marketing` untuk semua kanal promo (bukan per kanal). Consent per
+  kanal butuh revisi §8.4.
+- `/v1/admin/session` mengembalikan `status` kontrak + `detail` (`logged_out`/`connecting`/…).
+
+### Belum terverifikasi
+- tsc/eslint/Jest kedua paket; tipe `@types/nodemailer` 6.x terhadap `nodemailer` 7.x (`SMTPPool.Options`, `Transporter`).
+- Versi `nodemailer` 7.0.7+ dan `@whiskeysockets/baileys` 6.7.18 ada di registry & bebas CVE saat install.
+- Seluruh perilaku Baileys nyata: pairing QR/kode, reconnect, pemetaan kode putus 401/403/515, `onWhatsApp`,
+  `sendMessage`, bentuk ekspor modul CJS/ESM, apakah 6.7.x masih kompatibel dengan protokol WhatsApp Nov 2026 (bisa
+  perlu garis 7.x RC).
+- STOP dari pengguna beralamat LID (`@lid`): field nomor alternatif belum dipastikan → bisa tidak terpetakan.
+- `npm ci --ignore-scripts` cukup untuk dependensi Baileys; daftar host egress WhatsApp untuk proxy allowlist.
+- SMTP nyata (STARTTLS wajib, Mailpit dengan CA dev, klasifikasi 5xx RCPT pada penyedia terpilih).
+- Pembacaan `pg` untuk `to_timestamp($n / 1000.0)` dan `to_timestamp($n)` dengan parameter angka (diharapkan aman).
+
+### G50-B review keamanan (SECURITY_REVIEW_2026-11-20: SEC-G50-05, SEC-G50-11) — belum dijalankan lokal
+- **SEC-G50-05:** `src/notification/email/channel-privacy.ts` (`exportChannelMember`) dipanggil `privacy/dsar.service.ts`
+  → field export baru `email` (alamat terdekripsi untuk subjek, `verified`/`verified_at`, status), `email_deliveries`,
+  `wa_unofficial.{recipients (to_hash + nomor subjek sendiri), deliveries}`; ikut `truncated`. Cipher dari
+  `PiiCipher.fromConfig(config)` (konstruktor DsarService tidak diubah). Bagian wishlist/behavior/campaign BFF-A tidak
+  diubah. Spec: `channel-privacy.spec.ts` (baru), asersi tambahan di `privacy.spec.ts` (export).
+- **SEC-G50-11:** AAD v2 terikat baris `efn:member_email.email_enc:v2:<member_id lowercase>`; `email.constants.ts`
+  (`memberEmailAad`, `encryptMemberEmail`, `decryptMemberEmail` v2 → fallback v1), `email-sender.consumer.ts` memakai
+  `decryptMemberEmail`; `pii-columns.ts` entri `member_email` + `rowAad`. Spec: `email-sender.consumer.spec.ts`
+  (v2, v1 legacy, ciphertext ditukar gagal), `email.notifier.spec.ts` (data v2), `reencrypt.spec.ts` (rowAad +
+  re-encrypt v1 → v2). Belum ada penulis `member_email` di kode (alur isi email belum dibangun) — penulis kelak WAJIB
+  `encryptMemberEmail`.
+
+## G50-A — tracking perilaku, wishlist/notify-me/price alert, kampanye tertarget (docs/04 §28.6–§28.10, ADR-047 Proposed; 20 Nov 2026)
+
+> **Build/test/lint BELUM dijalankan lokal** (tanpa shell di sesi ini). tsc, eslint, Jest, dan eksekusi SQL
+> `20-platform-g50a.sql` (dua kali, uji idempoten) dijalankan lead di container. Semua flag G50-A default `false`.
+
+### File
+- `src/behavior/`: module, `behavior.controller.ts` (+ `GET /v1/config`), `behavior.service.ts`,
+  `behavior-writer.consumer.ts`, `behavior-jobs.service.ts`, `behavior-message.ts`, `behavior-privacy.ts`,
+  `subject-key.ts`, `dto/behavior.dto.ts`, README; spec: service, controller (+ audit URL), writer, jobs (+ privacy).
+- `src/wishlist/`: module, controller, service, `alert-watcher.service.ts`, `alert-dispatcher.consumer.ts`,
+  `alert-message.ts`, `wishlist-privacy.ts`, `dto/wishlist.dto.ts`, README; spec: service (+ privacy), watcher, dispatcher.
+- `src/campaign/`: module, `odoo-campaign.ts`, `campaign-sync.service.ts`, `campaign-message.ts`,
+  `campaign-dispatcher.consumer.ts`, `segment-ingest.service.ts`, `segment-internal.server.ts`,
+  `campaign-inbox.controller.ts`, `campaign-privacy.ts`, `channel-ports.ts`, `channel-bindings.ts` (ikat ke
+  `EmailNotifier`/`WaUnofficialNotifier` G50-B), `testing/campaign-fixtures.ts`, README; spec: odoo-campaign, sync,
+  dispatcher, segment (+ listener mTLS), inbox (+ privacy).
+- `src/config/app-config.ts` (bagian G50 + `g50StartupProblems`; mTLS gateway juga saat kampanye aktif),
+  `src/config/secrets.loader.ts` (2 pepper + 3 secret G50-B usulan BFF-B no. 2), `src/config/g50-config.spec.ts`.
+- `src/app.module.ts`: `EmailModule`, `WaUnofficialModule`, `BehaviorModule`, `WishlistModule`, `CampaignModule`.
+- **Di luar folder saya (minimal, wajib PDP):** `src/privacy/consent.service.ts` (purpose `tracking`; cabut → hapus
+  tautan device dalam transaksi yang sama), `erasure.service.ts` (3 hook), `dsar.service.ts` (export
+  wishlist/alert/behavior/inbox), `privacy.spec.ts` (daftar purpose + `tracking`).
+- Migrasi `infra/postgres/init/20-platform-g50a.sql`.
+
+### Untuk lead / devsecops
+- **Env (non-rahasia):** `BEHAVIOR_TRACKING_ENABLED`, `BEHAVIOR_RL_DEVICE_PER_MIN`(120), `BEHAVIOR_RL_IP_PER_MIN`(600),
+  `BEHAVIOR_EVENT_RETENTION_DAYS`(7, maks 7), `BEHAVIOR_DEVICE_LINK_IDLE_DAYS`(180), `BEHAVIOR_DEVICE_CONSENT_RETENTION_DAYS`(400),
+  `BEHAVIOR_ERASED_SUBJECT_RETENTION_DAYS`(100), `BEHAVIOR_JOB_INTERVAL_MS`(3600000), `SEGMENT_RETENTION_DAYS`(30),
+  `CONSENT_TRACKING_VERSION` + `CONSENT_TRACKING_TEXT_SHA256` (teks Legal), `WISHLIST_ENABLED`, `RESTOCK_ALERT_ENABLED`,
+  `PRICE_ALERT_ENABLED`, `ALERT_WATCH_INTERVAL_SECONDS`(300), `PROMO_CAMPAIGN_ENABLED`, `CAMPAIGN_FREQUENCY_CAP_ENABLED`,
+  `CAMPAIGN_BUDGET_CAP_ENABLED`, `CAMPAIGN_MAX_PER_MEMBER_PER_WEEK`(2), `CAMPAIGN_COMPANIES`(SMD), `CAMPAIGN_SYNC_SECONDS`(60),
+  `SEGMENT_INTERNAL_PORT`(9466), `SEGMENT_TLS_CLIENT_ALLOWED_CN`(segment-worker), `SEGMENT_CLIENT_CA_FILE`.
+- **Secret:** `behavior_subject_pepper`, `behavior_device_pepper` (wajib & berbeda bila tracking aktif; juga untuk job
+  erasure ETL bila ETL tidak memakai `behavior.erased_subject`); `odoo_api_key_campaign_<pt>` (wajib bila kampanye aktif).
+- **Queue (quorum + `.dlq`):** `behavior.event`, `promo.campaign.requested`, `notify.restock`, `notify.price_alert` — user
+  `efn-bff` publish + consume keempatnya. **Wajib (file common):** daftar bersyarat di `queues.ts` + passive check di
+  `amqp.service.ts` (pola `MGM_QUEUES`): tanpa itu `consume()` pada queue yang belum ada → loop reconnect, dan publish
+  outbox ke queue yang tidak ada hilang tanpa error. Consumer saya hanya didaftarkan bila flag aktif.
+- **Port:** listener mTLS segmen `:9466` (internal; CN `segment-worker`; tanpa TLS tidak dibuka).
+- **Gateway Odoo (allowlist, CN `api-gateway`):** `efn.campaign/efn_campaign_claim`, `efn.campaign/efn_campaign_ack`.
+- **Redis:** `rl:beh:*`, `rl:wl:*`, `ocat:alertwatch:lock` (prefix lama).
+- **PostgreSQL:** skema `behavior` (owner `efn_platform_owner`); `efn_bff` DML + EXECUTE 2 fungsi partisi; `efn_etl`
+  SELECT `behavior.event_raw`, `behavior.erased_subject`. `scripts/deploy.sh`: file 20 masuk daftar WAJIB (sebelum 21).
+- `src/common/pii/pii-columns.ts`: daftarkan `platform.member_voucher.code_enc` (AAD `efn:member_voucher.code_enc:v1`).
+- Template BFF-B yang dipakai: `promo_generic` {title, body, valid_to} (tanpa `voucher_code`), `restock_available`
+  {product_name, outlet_name}, `price_drop` {product_name, new_price_idr}.
+
+### Usulan kontrak (architect)
+1. Consumer `behavior.event` = `efn-bff` (bukan `efn-behavior`) selama satu koneksi AMQP.
+2. "`notify.push` dipakai ulang" diganti: consumer itu = WhatsApp Cloud API; push dikirim langsung via Expo.
+3. Publisher `notify.restock`/`notify.price_alert` = `AlertWatcherService` (hanya produk ber-alert), bukan catalog-sync.
+4. `promo.campaign.requested` + `voucher_mode`, `segment_code`, `voucher_value_idr`, `message{title≤48, body≤160}`,
+   `idempotency_key`, `schema_version`; kode voucher TIDAK di payload (disimpan terenkripsi saat klaim); klaim Odoo
+   `voucher_codes` ≤ 5000/baris, `public_code` (bentuk lengkap di `src/campaign/README.md`).
+5. §28.8 price alert `channels` opsional (default `["push"]`), `DELETE /v1/me/price-alerts/:id`.
+6. Endpoint baru `GET /v1/me/inbox`; `GET /v1/config` memuat `wishlist/restock_alert/price_alert/campaign_inbox` +
+   `tracking_consent.version`.
+7. `403 tracking_consent_required` berbentuk standar `{error:{code,message}}`; `POST /v1/events/consent` → `202`.
+
+### Belum terverifikasi / sisa
+- Kode & SQL belum dikompilasi/dijalankan. Perlu dicek: serialisasi `pg` `Buffer[]`→`bytea[]` dan array ber-`null` di
+  `unnest`; index pada tabel partisi + DEFAULT partition; fungsi SECURITY DEFINER membuat partisi saat dipanggil `efn_bff`.
+- Wishlist/alert hanya untuk kanal di `ONLINE_CHANNELS` (SMD belum punya kanal online).
+- Dispatcher at-most-once (crash setelah commit = notifikasi terlewat, tidak pernah dobel).
+- Penghitung agregat tanpa consent (ADR-047 §3.1 no. 5), kelas rate limit CATALOG burst, cek kontak terverifikasi saat
+  membuat alert: belum.
+
+### Revisi G50-A — selaras ETL `behavior_events` / `behavior_erasure` (20 Nov 2026, keputusan lead)
+> Belum dijalankan lokal (tanpa shell): Jest/tsc/eslint dan migrasi 20 (DB kosong + DB versi awal, dua kali) di container.
+
+- `infra/postgres/init/20-platform-g50a.sql`: `event_raw.company_code text NOT NULL` (CHECK `^[A-Z][A-Z0-9]{1,9}$`) +
+  `ingested_at timestamptz NOT NULL DEFAULT clock_timestamp()` + index induk `(ingested_at)`; jalur DB versi awal =
+  `ADD COLUMN IF NOT EXISTS` nullable → isi (`company_code` dari `online_catalog_sync.channel_data`, `ingested_at` =
+  `received_at`) → baris staging tanpa PT dibuang → NOT NULL/DEFAULT/CHECK (DO block idempoten). Tabel baru
+  `behavior.subject_erasure(id bigserial, subject_key, request_id uuid NOT NULL, reason, created_at)` + index
+  `(created_at, id)`, `(request_id)`. Grant `efn_etl` per kolom persis `platform-behavior-grants.sql` (grant tabel penuh
+  versi awal dicabut dulu); REVOKE `device_link`/`device_consent`/`subject_member` dari `efn_etl`, `efn_readonly`.
+  `erased_subject` dipertahankan (penolakan subjek terhapus di ingest segmen), tidak lagi terbaca ETL.
+- BFF: `src/behavior/channel-company.ts` (baru), `behavior.service.ts` (`unknown_channel`), `behavior-message.ts`
+  (`company_code` wajib ∈ `COMPANY_CODES`), `behavior-writer.consumer.ts` (PT diturunkan ulang saat tulis, kolom ke-18,
+  `ingested_at` dari DEFAULT), `behavior-jobs.service.ts` (purge `subject_erasure`; `cart_abandon` menyalin
+  channel/kanal/PT dari cart_add — sebelumnya `channel='server'` yang akan DITOLAK validasi ETL), `behavior-privacy.ts`
+  (`eraseBehaviorMember(q, memberId, pepper, requestId, reason)` menulis `subject_erasure` lebih dulu),
+  `dto/behavior.dto.ts`, `config/app-config.ts` (`BEHAVIOR_ERASED_SUBJECT_RETENTION_DAYS` minimum 100),
+  `privacy/erasure.service.ts` (meneruskan `requestId`), README `src/behavior`.
+- Spec: `behavior.service.spec` (unknown_channel, company_code), `behavior-writer.consumer.spec`,
+  `behavior-jobs.service.spec` (subject_erasure, retensi, cart_abandon), `privacy.spec` (ErasureService → subject_erasure
+  dengan request_id dalam transaksi processing). DSAR export tidak berubah bentuk.
+- **Asumsi pemetaan kanal → PT:** sumber = `platform.online_catalog_sync.channel_data` (blok `channel` Odoo, pola
+  `CatalogService.fromOdoo` L-11: `code` = kanal, `active=true`, PT ∈ `COMPANY_CODES`), TIDAK dibatasi `ONLINE_CHANNELS`
+  (kanal salinan QR/booking ikut), TIDAK menebak dari aturan G20 "kode kanal = kode PT". Akibat: kanal SMD baru
+  terpetakan setelah katalog kanal SMD tersinkron sukses; sebelum itu semua event SMD `unknown_channel`.
+- "Sebelum status processing": baris `subject_erasure` ditulis di transaksi yang sama dengan `UPDATE … SET status =
+  'processing'` (urutan statement sesudahnya, tetapi commit atomik → ETL tidak pernah melihat `processing` tanpa kunci).

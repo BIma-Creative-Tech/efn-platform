@@ -100,6 +100,16 @@ Desain & aturan: `docs/design/landing-pages.md`. Brand dengan entri di `lib/land
 
 Foto produk, etalase, gerai, menit siap, dan metode bayar diambil dari katalog BFF (foto lewat proxy same-origin `/api/catalog/images/:sha`); katalog mati → landing tetap tampil tanpa foto/etalase. Warna PB = warna resmi situs (navy `#002663`, putih, `#aebcd3`, kuning `#fcb134`) dengan `scheme: 'dark'` → seluruh halaman PB ikut tema gelap via `html[data-scheme='dark']`. `prefers-reduced-motion` → gerakan mati; tanpa gerakan otomatis (semua dipicu scroll/pointer).
 
+## Kampanye supermarket: consent tracking, event perilaku, wishlist, notify-me, price alert (G50)
+
+ADR-047 (Proposed), ADR-044/048 (kanal), docs/04 §28.6, §28.8, §28.10. Risiko: R-L13 (PDP tracking/profiling), R-S04.
+- Semua fitur **tersembunyi** sampai `GET /api/config` (-> BFF `/v1/config`) mengirim flag `true`; BFF mati/404 = semua mati, belanja tetap jalan.
+- Banner consent (`components/engage/TrackingBanner.tsx`): Izinkan/Tolak setara, teks **DRAFT menunggu DPO** (`lib/tracking.ts` `TRACKING_TEXT`; versi + sha256 body harus sama dengan env teks consent BFF). ID perangkat (UUID v4 acak) baru dibuat/disimpan setelah BFF mencatat persetujuan; menolak = tidak ada ID. Diubah di `/privasi/pelacakan`.
+- Consent perangkat tidak otomatis menjadi consent akun: tombol eksplisit di `/privasi/pelacakan` (`PUT /api/me/tracking-consent`); event hanya membawa sesi (`?link=1`) bila consent akun aktif.
+- Pengirim event: `lib/tracking.ts` (antrean + mesin status, murni, diuji) dan `lib/tracking-client.ts` (cookie/localStorage, fetch, `sendBeacon`). Hormati 429 `Retry-After`, berhenti bila `disabled: true`, berhenti bila `tracking_consent_required`.
+- Wishlist `/wishlist`, ikon hati di kartu/detail, `NotifyMe` (produk habis per toko), `PriceAlert` (detail produk).
+- Belum: uji browser/E2E; kontrak `/v1/config` & price-alert DELETE belum dikonfirmasi BFF (lihat laporan G50).
+
 ## Skrip
 
 `npm test` (Vitest: `tests/*.test.ts`), `npm run lint` (ESLint 9 flat, `eslint.config.mjs`), `npm run typecheck`.

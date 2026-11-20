@@ -41,6 +41,9 @@ RUN apk add --no-cache --upgrade musl musl-utils zlib \
               /usr/local/bin/yarn /usr/local/bin/yarnpkg /opt/yarn-v*
 COPY --from=build --chown=app:app /app/dist ./dist
 COPY --from=deps  --chown=app:app /app/node_modules ./node_modules
+# G31 overrides `file:vendor/*` -> node_modules berisi symlink ../vendor/*; tanpa folder ini runtime gagal
+# (MODULE_NOT_FOUND decode-uri-component, ditemukan di gladi prod lokal 20 Nov 2026).
+COPY --from=deps  --chown=app:app /app/vendor ./vendor
 COPY --chown=app:app package.json healthcheck.js ./
 USER app
 # 3000 = API (HTTPS); 9464 = /metrics (HTTPS mTLS, klien CN/SAN prometheus — docs/04 §8.10)

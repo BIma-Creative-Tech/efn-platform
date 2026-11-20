@@ -21,6 +21,9 @@ from odoo.exceptions import UserError
 APPROVAL_TTL_SECONDS = 300
 LOCK_THRESHOLD = 5
 LOCK_MINUTES = 15
+# SEC-216: batas per kasir lintas approver & lintas jalur PIN (retur tanpa struk + override kedaluwarsa).
+CASHIER_LOCK_THRESHOLD = 10
+CASHIER_WINDOW_MINUTES = 60
 DEFAULT_RETENTION_DAYS = 730
 MIN_RETENTION_DAYS = 365
 RETENTION_PARAM = "efn.pos.return_approval_retention_days"
@@ -110,9 +113,38 @@ class EfnPosReturnApproval(models.Model):
             domain.append(("id", ">", last_ok.id))
         return self.sudo().search_count(domain)
 
+    # SEC-216 (G45): penghitung kegagalan PIN E-41 BERSAMA lintas jalur yang memverifikasi PIN yang sama.
+    # `_efn_pin_failures_total` / `_efn_cashier_pin_failures_total` = titik perluasan: modul lain (mis.
+    # efn_expiry_monitor) meng-inherit model ini dan menambah hitungan tabelnya lewat super(). API lama
+    # `_efn_recent_failures` (hitungan tabel ini saja) tidak berubah.
+    @api.model
+    def _efn_pin_failures_total(self, approver):
+        return self._efn_recent_failures(approver)
+
+    @api.model
+    def _efn_cashier_pin_failures(self, cashier):
+        """PIN salah yang dicoba kasir ``cashier`` (lintas approver) dalam CASHIER_WINDOW_MINUTES terakhir."""
+        since = fields.Datetime.now() - timedelta(minutes=CASHIER_WINDOW_MINUTES)
+        return self.sudo().search_count(
+            [
+                ("cashier_user_id", "=", cashier.id),
+                ("state", "=", "failed"),
+                ("failure_reason", "=", "wrong_pin"),
+                ("create_date", ">=", since),
+            ]
+        )
+
+    @api.model
+    def _efn_cashier_pin_failures_total(self, cashier):
+        return self._efn_cashier_pin_failures(cashier)
+
+    @api.model
+    def _efn_cashier_locked(self, cashier):
+        return self._efn_cashier_pin_failures_total(cashier) >= CASHIER_LOCK_THRESHOLD
+
     @api.model
     def _efn_is_locked(self, approver):
-        return self._efn_recent_failures(approver) >= LOCK_THRESHOLD
+        return self._efn_pin_failures_total(approver) >= LOCK_THRESHOLD
 
     # ------------------------------------------------------------------- usage
     def _efn_usable_error(self, order, amount):

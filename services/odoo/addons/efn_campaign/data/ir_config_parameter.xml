@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- G50 (docs/04 §28.10 PROMO_CAMPAIGN_ENABLED): sakelar kampanye sisi Odoo, default MATI di semua environment.
+     Mati -> RPC bot (upsert/klaim/ack) membalas 422 efn_campaign:disabled dan approval ditolak. Override per PT:
+     tambahkan efn_campaign.enabled.<KODE> (mis. efn_campaign.enabled.SMD), menang atas nilai global.
+     Production tetap OFF sampai DPO (profiling) + Marketing (approver) + Finance (anggaran voucher). -->
+<odoo noupdate="1">
+    <record id="param_campaign_enabled" model="ir.config_parameter">
+        <field name="key">efn_campaign.enabled</field>
+        <field name="value">false</field>
+    </record>
+</odoo>

@@ -1,0 +1,98 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- DEMO tahap B — user per persona PT Supermarket Demo (docs/04 §28.4, §28.5, §28.5a, §28.11; ADR-045/046, Proposed).
+     Pola user demo efn_setup_online: login placeholder, TANPA password (user tidak bisa login sampai admin menetapkan
+     password lewat UI dan user mengaktifkan 2FA auth_totp, prinsip CLAUDE.md). Tidak ada email/nomor HP (PDP: data
+     pribadi minimal). Satu company (SMD) per user.
+
+       Persona                          | Grup                                                          | Cakupan outlet
+       Kepala toko SMD01..SMD05         | Replenishment: kepala toko                                    | outlet itu saja
+       Buyer DC                         | Replenishment: buyer DC + Purchase User                       | (semua, lewat grup)
+       Markdown manager (category mgr)  | efn_expiry_monitor.group_markdown_manager                     | -
+       Supervisor Ops                   | efn_expiry_monitor.group_expiry_override + Assortment Manager | -
+
+     SoD (docs/04 §28.4): kepala toko tidak mendapat grup Purchase/buyer; buyer tidak mendapat grup kepala toko; override
+     sisa umur / assortment dipegang supervisor, bukan kepala toko yang menerima barang. Pemetaan nyata = Q-SM29 (persona
+     Insight & outlet kepala toko) dan Q-SM4 (siapa boleh markdown). efn_outlet_warehouse_ids juga sumber klaim `wids`
+     Insight persona store (§28.11). noupdate="1". -->
+<odoo noupdate="1">
+    <record id="user_smd01_store_head" model="res.users">
+        <field name="name">Kepala Toko SMD01 (DEMO)</field>
+        <field name="login">efn_demo_smd01_kepala_toko</field>
+        <field name="company_id" ref="company_smd"/>
+        <field name="company_ids" eval="[Command.set([ref('company_smd')])]"/>
+        <field name="tz">Asia/Jakarta</field>
+        <field name="group_ids" eval="[Command.set([ref('base.group_user'), ref('efn_replenishment.group_replenishment_store')])]"/>
+        <field name="efn_outlet_warehouse_ids" eval="[Command.set([ref('warehouse_smd01')])]"/>
+    </record>
+    <record id="user_smd02_store_head" model="res.users">
+        <field name="name">Kepala Toko SMD02 (DEMO)</field>
+        <field name="login">efn_demo_smd02_kepala_toko</field>
+        <field name="company_id" ref="company_smd"/>
+        <field name="company_ids" eval="[Command.set([ref('company_smd')])]"/>
+        <field name="tz">Asia/Jakarta</field>
+        <field name="group_ids" eval="[Command.set([ref('base.group_user'), ref('efn_replenishment.group_replenishment_store')])]"/>
+        <field name="efn_outlet_warehouse_ids" eval="[Command.set([ref('warehouse_smd02')])]"/>
+    </record>
+    <record id="user_smd03_store_head" model="res.users">
+        <field name="name">Kepala Toko SMD03 (DEMO)</field>
+        <field name="login">efn_demo_smd03_kepala_toko</field>
+        <field name="company_id" ref="company_smd"/>
+        <field name="company_ids" eval="[Command.set([ref('company_smd')])]"/>
+        <field name="tz">Asia/Jakarta</field>
+        <field name="group_ids" eval="[Command.set([ref('base.group_user'), ref('efn_replenishment.group_replenishment_store')])]"/>
+        <field name="efn_outlet_warehouse_ids" eval="[Command.set([ref('warehouse_smd03')])]"/>
+    </record>
+    <record id="user_smd04_store_head" model="res.users">
+        <field name="name">Kepala Toko SMD04 (DEMO)</field>
+        <field name="login">efn_demo_smd04_kepala_toko</field>
+        <field name="company_id" ref="company_smd"/>
+        <field name="company_ids" eval="[Command.set([ref('company_smd')])]"/>
+        <field name="tz">Asia/Jakarta</field>
+        <field name="group_ids" eval="[Command.set([ref('base.group_user'), ref('efn_replenishment.group_replenishment_store')])]"/>
+        <field name="efn_outlet_warehouse_ids" eval="[Command.set([ref('warehouse_smd04')])]"/>
+    </record>
+    <record id="user_smd05_store_head" model="res.users">
+        <field name="name">Kepala Toko SMD05 (DEMO)</field>
+        <field name="login">efn_demo_smd05_kepala_toko</field>
+        <field name="company_id" ref="company_smd"/>
+        <field name="company_ids" eval="[Command.set([ref('company_smd')])]"/>
+        <field name="tz">Asia/Makassar</field>
+        <field name="group_ids" eval="[Command.set([ref('base.group_user'), ref('efn_replenishment.group_replenishment_store')])]"/>
+        <field name="efn_outlet_warehouse_ids" eval="[Command.set([ref('warehouse_smd05')])]"/>
+    </record>
+
+    <record id="user_smd_buyer_dc" model="res.users">
+        <field name="name">Buyer DC SMD (DEMO)</field>
+        <field name="login">efn_demo_smd_buyer_dc</field>
+        <field name="company_id" ref="company_smd"/>
+        <field name="company_ids" eval="[Command.set([ref('company_smd')])]"/>
+        <field name="tz">Asia/Jakarta</field>
+        <field name="group_ids" eval="[Command.set([
+            ref('base.group_user'),
+            ref('efn_replenishment.group_replenishment_buyer'),
+            ref('purchase.group_purchase_user'),
+        ])]"/>
+    </record>
+
+    <record id="user_smd_markdown_manager" model="res.users">
+        <field name="name">Markdown Manager SMD (DEMO)</field>
+        <field name="login">efn_demo_smd_markdown_manager</field>
+        <field name="company_id" ref="company_smd"/>
+        <field name="company_ids" eval="[Command.set([ref('company_smd')])]"/>
+        <field name="tz">Asia/Jakarta</field>
+        <field name="group_ids" eval="[Command.set([ref('base.group_user'), ref('efn_expiry_monitor.group_markdown_manager')])]"/>
+    </record>
+
+    <record id="user_smd_supervisor_ops" model="res.users">
+        <field name="name">Supervisor Ops SMD (DEMO)</field>
+        <field name="login">efn_demo_smd_supervisor_ops</field>
+        <field name="company_id" ref="company_smd"/>
+        <field name="company_ids" eval="[Command.set([ref('company_smd')])]"/>
+        <field name="tz">Asia/Jakarta</field>
+        <field name="group_ids" eval="[Command.set([
+            ref('base.group_user'),
+            ref('efn_expiry_monitor.group_expiry_override'),
+            ref('efn_assortment.group_assortment_manager'),
+        ])]"/>
+    </record>
+</odoo>

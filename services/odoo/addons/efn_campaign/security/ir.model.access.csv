@@ -1,0 +1,7 @@
+id,name,model_id:id,group_id:id,perm_read,perm_write,perm_create,perm_unlink
+access_efn_campaign_user,efn.campaign marketing,model_efn_campaign,group_campaign_user,1,1,1,1
+access_efn_campaign_outbox_user,efn.campaign.outbox marketing (baca),model_efn_campaign_outbox,group_campaign_user,1,0,0,0
+access_efn_campaign_loyalty_program_user,loyalty.program marketing kampanye (baca),loyalty.model_loyalty_program,group_campaign_user,1,0,0,0
+access_efn_campaign_loyalty_rule_user,loyalty.rule marketing kampanye (baca),loyalty.model_loyalty_rule,group_campaign_user,1,0,0,0
+access_efn_campaign_loyalty_reward_user,loyalty.reward marketing kampanye (baca),loyalty.model_loyalty_reward,group_campaign_user,1,0,0,0
+access_efn_campaign_warehouse_user,stock.warehouse marketing kampanye (baca),stock.model_stock_warehouse,group_campaign_user,1,0,0,0

@@ -18,7 +18,7 @@ from urllib.parse import urlsplit
 
 from efn_forecast.calendar import CalendarConfig
 from efn_forecast.contract import MAX_ITEMS, MAX_QTY_PER_LINE
-from efn_forecast.models import CANDIDATE_MODELS
+from efn_forecast.models import CANDIDATE_MODELS, DEFAULT_MODELS
 from efn_forecast.pipeline import MinMaxConfig, PipelineConfig
 from efn_forecast.schedule import parse_cron
 from efn_forecast.tls import TlsConfigError, ca_file, is_production, plaintext_allowed, require_readable_file
@@ -110,7 +110,7 @@ class Params:
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> Self:
         e: Mapping[str, str] = os.environ if env is None else env
-        candidates = _list(e, "FORECAST_MODELS", ",".join(CANDIDATE_MODELS))
+        candidates = _list(e, "FORECAST_MODELS", ",".join(DEFAULT_MODELS))
         if not candidates or any(c not in CANDIDATE_MODELS for c in candidates):
             raise RuntimeError(f"FORECAST_MODELS: pilihan {', '.join(CANDIDATE_MODELS)}")
         weekend = tuple(sorted({int(x) for x in _list(e, "FORECAST_WEEKEND_DAYS", "5,6")}))

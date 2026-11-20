@@ -1,0 +1,176 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="efn_campaign_view_list" model="ir.ui.view">
+        <field name="name">efn.campaign.list</field>
+        <field name="model">efn.campaign</field>
+        <field name="arch" type="xml">
+            <list string="Kampanye">
+                <field name="name"/>
+                <field name="kind"/>
+                <field name="origin" optional="show"/>
+                <field name="segment_code" optional="show"/>
+                <field name="segment_member_count" optional="show"/>
+                <field name="voucher_mode"/>
+                <field name="date_from"/>
+                <field name="date_to"/>
+                <field name="approval_rev" optional="hide"/>
+                <field name="state" widget="badge" decoration-info="state == 'proposed'" decoration-success="state in ('approved', 'sent')" decoration-muted="state == 'cancelled'"/>
+                <field name="company_id" groups="base.group_multi_company"/>
+            </list>
+        </field>
+    </record>
+
+    <record id="efn_campaign_view_form" model="ir.ui.view">
+        <field name="name">efn.campaign.form</field>
+        <field name="model">efn.campaign</field>
+        <field name="arch" type="xml">
+            <form string="Kampanye">
+                <header>
+                    <button name="action_efn_propose" type="object" string="Ajukan" class="btn-primary" invisible="state != 'draft'" groups="efn_campaign.group_campaign_user"/>
+                    <button name="action_efn_approve" type="object" string="Setujui &amp; buat voucher" class="btn-primary" invisible="state != 'proposed'" groups="efn_campaign.group_campaign_approver" confirm="Setujui kampanye ini? Voucher dibuat dan kampanye diantrekan untuk dikirim BFF. Mode voucher terkunci setelah ini."/>
+                    <button name="action_efn_reset_draft" type="object" string="Kembali ke draft" invisible="state not in ('proposed', 'cancelled')" groups="efn_campaign.group_campaign_user"/>
+                    <button name="action_efn_cancel" type="object" string="Batalkan" invisible="state not in ('draft', 'proposed', 'approved')" groups="efn_campaign.group_campaign_user" confirm="Batalkan kampanye ini? Voucher yang sudah dibuat dinonaktifkan."/>
+                    <field name="state" widget="statusbar" statusbar_visible="draft,proposed,approved,sent"/>
+                </header>
+                <sheet>
+                    <div class="oe_title"><h1><field name="name" placeholder="Nama kampanye" readonly="state not in ('draft', 'proposed')"/></h1></div>
+                    <group>
+                        <group string="Kampanye">
+                            <field name="kind" readonly="state not in ('draft', 'proposed')"/>
+                            <field name="origin"/>
+                            <field name="date_from" readonly="state not in ('draft', 'proposed')"/>
+                            <field name="date_to" readonly="state not in ('draft', 'proposed')"/>
+                            <field name="company_id" groups="base.group_multi_company" readonly="state != 'draft' or approval_rev &gt; 0"/>
+                        </group>
+                        <group string="Kanal">
+                            <field name="channel_inbox" readonly="state not in ('draft', 'proposed')"/>
+                            <field name="channel_push" readonly="state not in ('draft', 'proposed')"/>
+                            <field name="channel_email" readonly="state not in ('draft', 'proposed')"/>
+                            <field name="channel_wa_unofficial" readonly="state not in ('draft', 'proposed')"/>
+                            <div colspan="2" class="text-muted">Pesan hanya dikirim BFF ke member dengan consent pemasaran. WhatsApp unofficial mati di production (ADR-044).</div>
+                        </group>
+                    </group>
+                    <group string="Pesan">
+                        <field name="message_title" readonly="state not in ('draft', 'proposed')"/>
+                        <field name="message_body" readonly="state not in ('draft', 'proposed')"/>
+                    </group>
+                    <notebook>
+                        <page string="Voucher" name="voucher">
+                            <group>
+                                <group>
+                                    <field name="voucher_mode" readonly="state not in ('draft', 'proposed') or approval_rev &gt; 0"/>
+                                    <field name="program_id" readonly="state not in ('draft', 'proposed')" options="{'no_create': True}"/>
+                                    <field name="program_type" invisible="not program_id"/>
+                                    <field name="code_qty" invisible="voucher_mode == 'member_bound'" readonly="state not in ('draft', 'proposed')"/>
+                                    <field name="card_count" invisible="voucher_mode == 'public_code'"/>
+                                </group>
+                                <group string="Cap (opsional)">
+                                    <field name="cap_enabled" readonly="state not in ('draft', 'proposed')"/>
+                                    <field name="budget_idr" invisible="not cap_enabled" readonly="state not in ('draft', 'proposed')"/>
+                                    <field name="cap_per_member_week" invisible="not cap_enabled" readonly="state not in ('draft', 'proposed')"/>
+                                </group>
+                            </group>
+                            <field name="partner_ids" invisible="voucher_mode != 'member_bound'" readonly="state not in ('draft', 'proposed')" options="{'no_create': True}">
+                                <list><field name="name"/></list>
+                            </field>
+                            <div class="text-muted" invisible="voucher_mode != 'member_bound'">Mode terikat member memasukkan identitas member ke Odoo (L-164): hanya untuk promo khusus member, tercatat di inventaris PDP.</div>
+                        </page>
+                        <page string="Segmen" name="segment" invisible="kind != 'segment'">
+                            <group>
+                                <field name="segment_run_id"/>
+                                <field name="segment_code"/>
+                                <field name="segment_member_count"/>
+                                <field name="segment_generated_at"/>
+                                <field name="segment_summary"/>
+                                <field name="segment_metrics_display"/>
+                            </group>
+                        </page>
+                        <page string="Markdown" name="markdown" invisible="kind != 'markdown'">
+                            <group>
+                                <field name="markdown_product_ids" widget="many2many_tags" readonly="state not in ('draft', 'proposed')"/>
+                                <field name="markdown_warehouse_ids" widget="many2many_tags" readonly="state not in ('draft', 'proposed')"/>
+                                <field name="source_ref_model"/>
+                                <field name="source_ref_id"/>
+                            </group>
+                        </page>
+                        <page string="Approval" name="approval">
+                            <group>
+                                <field name="maker_id"/>
+                                <field name="editor_ids" widget="many2many_tags"/>
+                                <field name="approval_rev"/>
+                                <field name="approved_by_id"/>
+                                <field name="approved_at"/>
+                                <field name="sent_at"/>
+                                <field name="cancelled_by_id" invisible="not cancelled_by_id"/>
+                                <field name="cancel_reason" invisible="not cancel_reason"/>
+                            </group>
+                            <field name="outbox_ids">
+                                <list>
+                                    <field name="approval_rev"/>
+                                    <field name="state"/>
+                                    <field name="attempts"/>
+                                    <field name="claimed_at"/>
+                                    <field name="done_at"/>
+                                    <field name="last_error"/>
+                                </list>
+                            </field>
+                        </page>
+                    </notebook>
+                </sheet>
+                <chatter/>
+            </form>
+        </field>
+    </record>
+
+    <record id="efn_campaign_view_search" model="ir.ui.view">
+        <field name="name">efn.campaign.search</field>
+        <field name="model">efn.campaign</field>
+        <field name="arch" type="xml">
+            <search>
+                <field name="name"/>
+                <field name="segment_code"/>
+                <filter name="proposed" string="Menunggu approval" domain="[('state', '=', 'proposed')]"/>
+                <filter name="approved" string="Disetujui/terkirim" domain="[('state', 'in', ('approved', 'sent'))]"/>
+                <filter name="segment" string="Segmen" domain="[('kind', '=', 'segment')]"/>
+                <filter name="markdown" string="Markdown" domain="[('kind', '=', 'markdown')]"/>
+            </search>
+        </field>
+    </record>
+
+    <record id="efn_campaign_action" model="ir.actions.act_window">
+        <field name="name">Kampanye</field>
+        <field name="res_model">efn.campaign</field>
+        <field name="view_mode">list,form</field>
+        <field name="context">{'search_default_proposed': 1}</field>
+        <field name="help" type="html"><p class="o_view_nocontent_smiling_face">Belum ada kampanye</p><p>Usulan segmen dari segment-worker muncul di sini berstatus "Diusulkan". Lengkapi pesan dan voucher, lalu minta Marketing approver lain menyetujui.</p></field>
+    </record>
+
+    <record id="efn_campaign_outbox_view_list" model="ir.ui.view">
+        <field name="name">efn.campaign.outbox.list</field>
+        <field name="model">efn.campaign.outbox</field>
+        <field name="arch" type="xml">
+            <list string="Outbox kampanye" create="0" edit="0" delete="0">
+                <field name="idempotency_key"/>
+                <field name="campaign_id"/>
+                <field name="kind"/>
+                <field name="approval_rev"/>
+                <field name="state" widget="badge" decoration-danger="state == 'failed'" decoration-success="state == 'done'"/>
+                <field name="attempts"/>
+                <field name="claimed_at"/>
+                <field name="done_at"/>
+                <field name="last_error"/>
+                <field name="company_id" groups="base.group_multi_company"/>
+            </list>
+        </field>
+    </record>
+
+    <record id="efn_campaign_outbox_action" model="ir.actions.act_window">
+        <field name="name">Outbox kampanye</field>
+        <field name="res_model">efn.campaign.outbox</field>
+        <field name="view_mode">list</field>
+    </record>
+
+    <menuitem id="menu_efn_campaign_root" name="Kampanye" groups="group_campaign_user" sequence="61"/>
+    <menuitem id="menu_efn_campaign" name="Kampanye" parent="menu_efn_campaign_root" action="efn_campaign_action" sequence="10"/>
+    <menuitem id="menu_efn_campaign_outbox" name="Outbox ke BFF" parent="menu_efn_campaign_root" action="efn_campaign_outbox_action" sequence="20" groups="group_campaign_approver"/>
+</odoo>
