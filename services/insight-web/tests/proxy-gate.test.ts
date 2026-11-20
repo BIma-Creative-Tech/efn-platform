@@ -91,6 +91,14 @@ describe('proxy: gerbang sesi', () => {
     expect(res.headers.get('location')).toBeNull();
   });
 
+  it('rewrite internal selalu http: walau permintaan masuk lewat https (server Next hanya HTTP di loopback)', () => {
+    process.env.INSIGHT_ENABLED = 'false';
+    resetRuntime();
+    const target = rewriteOf(proxy(request('/', validCookie())));
+    expect(target).not.toBeNull();
+    expect(new URL(target as string).protocol).toBe('http:');
+  });
+
   it('INSIGHT_ENABLED selain "true" persis (mis. "1", "True") tetap mati', () => {
     for (const v of ['1', 'True', 'yes', '']) {
       process.env.INSIGHT_ENABLED = v;
