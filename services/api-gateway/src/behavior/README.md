@@ -45,6 +45,15 @@ ClickHouse (ADR-003; BFF tidak pernah menulis ClickHouse).
   (atomik), lalu hapus staging/dedup/segmen/tautan dan catat `behavior.erased_subject` (BFF: tolak subjek terhapus di
   ingest segmen). DSAR export tautan perangkat (tanpa device_key) + event staging; cabut consent `tracking` akun → hapus
   tautan & pemetaan subject.
+- **SEC-G50-07:** erasure juga menambah baris `device_consent (granted=false, version 'erasure', teks tidak diketahui)` untuk
+  setiap device tertaut → event berikutnya dari perangkat itu `403 tracking_consent_required` sampai consent baru di banner.
+- **Event server `purchase`** (QA G50 #7, `purchase-events.service.ts`, tiap 5 menit, advisory lock): bagian order online
+  lunas & dikonfirmasi (`online_order_part.confirmed_at`, status `confirmed|ready|handed_over`, ≤ 48 jam) → satu event per
+  produk (baris reward/qty 0 dibuang) untuk subject MEMBER, hanya bila consent `tracking` akun aktif; kanal/PT/outlet dari
+  bagian order; lewat outbox → `behavior.event` → writer (jalur sama, `event_id`/`batch_id` UUID v8 deterministik,
+  penanda `behavior.purchase_emitted`). `channel` = channel event terakhir subject di staging, tanpa jejak → `app`
+  (ASUMSI: order online tidak menyimpan asal web/app; usulan kontrak: kolom asal di `online_order`). **Pembelian POS belum
+  tercakup.** CHECK `event_raw.type` memuat `purchase` (ditulis ulang idempoten di migrasi 20).
 - Grant ETL (di `20-platform-g50a.sql`, = `services/etl/sql/platform-behavior-grants.sql`): `efn_etl` SELECT per kolom
   `event_raw` (tanpa `batch_id`/`client_ts`) dan `subject_erasure` (`id, subject_key, request_id, created_at`); tanpa akses
   `device_link`/`device_consent`/`subject_member`/`erased_subject`.

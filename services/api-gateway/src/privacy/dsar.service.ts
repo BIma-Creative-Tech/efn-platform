@@ -5,6 +5,8 @@ import { PgMgmStore } from '../loyalty/mgm/mgm.repository';
 import { exportBehaviorMember, optionalSubjectPepper } from '../behavior/behavior-privacy';
 import { exportCampaignMember } from '../campaign/campaign-privacy';
 import { exportWishlistMember } from '../wishlist/wishlist-privacy';
+import { exportChannelMember } from '../notification/email/channel-privacy';
+import { PiiCipher } from '../common/pii/crypto';
 import { AppConfig } from '../config/app-config';
 import { DB, Db } from '../common/db/db';
 import { ApiError, Errors } from '../common/errors/api-error';
@@ -211,6 +213,8 @@ export class DsarService {
     const wishlist = await exportWishlistMember(this.db, user.memberId);
     const behavior = await exportBehaviorMember(this.db, user.memberId, optionalSubjectPepper(this.config));
     const campaign = await exportCampaignMember(this.db, user.memberId);
+    // G50-B (SEC-G50-05): email (didekripsi untuk subjek sendiri), jejak kirim email & WA unofficial, pseudonim penerima WA
+    const channels = await exportChannelMember(this.db, PiiCipher.fromConfig(this.config), user.memberId, memberRef);
     const truncated = ledger.rows.length > EXPORT_ROW_LIMIT || reports.rows.length > EXPORT_ROW_LIMIT;
 
     await this.db.query(
@@ -276,9 +280,12 @@ export class DsarService {
       behavior: { linked_devices: behavior.linked_devices, events: behavior.events },
       campaign_inbox: campaign.inbox,
       campaign_vouchers: campaign.vouchers,
+      email: channels.email,
+      email_deliveries: channels.email_deliveries,
+      wa_unofficial: channels.wa_unofficial,
       requests: requests.items,
       processors: DATA_PROCESSORS,
-      truncated: truncated || onlineOrders.truncated || behavior.truncated,
+      truncated: truncated || onlineOrders.truncated || behavior.truncated || channels.truncated,
     };
   }
 

@@ -1,9 +1,9 @@
 """Klien /json/2 ke odoo-rpc-gateway: `efn.campaign/efn_campaign_proposal_upsert` (docs/04 §28.7, L-155/L-156).
 
 - `POST <ODOO_RPC_URL>/json/2/efn.campaign/efn_campaign_proposal_upsert`, TLS verify-full CA internal + sertifikat
-  klien CN `segment-worker`, `Authorization: bearer <API key PT>` dari `/run/secrets/odoo_api_key_campaign_<kode>`
-  (user teknis `efn_campaign_<kode>` = tepat satu company). Body = argumen bernama = payload ringkasan apa
-  adanya (tanpa `context`).
+  klien CN `segment-worker`, `Authorization: bearer <API key PT>` dari `/run/secrets/odoo_api_key_segment_<kode>`
+  (user teknis `efn_segment_<kode>` = tepat satu company; terpisah dari user BFF `efn_campaign_<kode>`). Body =
+  argumen bernama = payload ringkasan apa adanya (tanpa `context`).
 - Galat Odoo diasumsikan mengikuti pola efn_demand_forecast: `UserError("efn_campaign:<kode>")` (422),
   `AccessError("efn_campaign:company_mismatch|access_denied")` (403). 422/403 tidak diulang; 429/5xx/timeout diulang.
 - Idempotensi (ASUMSI G50): Odoo meng-upsert per `(run_id, segment_code)`; kirim ulang = tanpa duplikat.

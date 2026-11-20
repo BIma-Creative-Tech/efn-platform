@@ -33,8 +33,9 @@ const message = (events: unknown[], extra: Record<string, unknown> = {}): Record
   ...extra,
 });
 
-function setup(opts: { claimed?: boolean; freshIds?: (ids: string[]) => string[]; mappedCompany?: string | null } = {}) {
+function setup(opts: { claimed?: boolean; freshIds?: (ids: string[]) => string[]; mappedCompany?: string | null; erased?: boolean } = {}) {
   const db = new FakeDb((t, p) => {
+    if (t.includes('FROM behavior.erased_subject')) return opts.erased ? { rows: [{ '?column?': 1 }], rowCount: 1 } : { rows: [], rowCount: 0 };
     if (t.includes('INSERT INTO platform.processed_message')) return opts.claimed === false ? { rows: [], rowCount: 0 } : { rows: [{ consumer: 'x' }], rowCount: 1 };
     if (t.includes('FROM platform.online_catalog_sync')) {
       const c = opts.mappedCompany === undefined ? 'SMD' : opts.mappedCompany;
@@ -86,6 +87,15 @@ describe('BehaviorWriterConsumer (behavior.event → PG staging)', () => {
   it('event yang sudah ada di staging (subject_key, event_id) tidak ditulis ulang', async () => {
     const ctx = setup({ freshIds: (ids) => ids.slice(1) });
     expect(await ctx.consumer.handle(message([event(), event()]), { userId: 'efn-bff' })).toEqual({ status: 'written', inserted: 1, deduped: 1 });
+  });
+
+  it('erasure terjadi saat batch masih di antrean (erased_at >= received_at) → tidak ditulis ke staging', async () => {
+    const ctx = setup({ erased: true });
+    expect(await ctx.consumer.handle(message([event(), event()]), { userId: 'efn-bff' })).toEqual({ status: 'stale' });
+    expect(ctx.db.find('INSERT INTO behavior.event_raw')).toHaveLength(0);
+    expect(ctx.db.find('INSERT INTO behavior.event_dedup')).toHaveLength(0);
+    const q = ctx.db.find('FROM behavior.erased_subject')[0]!;
+    expect(q.params).toEqual([SUBJECT, new Date(NOW).toISOString()]);
   });
 
   it('batch yang sama dikirim ulang → duplicate tanpa insert', async () => {

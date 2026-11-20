@@ -103,6 +103,13 @@ queue_defs_limited() {
   printf '    {"name": "%s", "vhost": "/", "durable": true, "auto_delete": false, "arguments": {"x-queue-type": "quorum", "x-dead-letter-exchange": "", "x-dead-letter-routing-key": "%s.dlq", "x-delivery-limit": %s}}' "$1" "$1" "$2"
 }
 
+# SEC-G50-04 (security review 20 Nov 2026, UU PDP Pasal 16(2)): RabbitMQ MENGHAPUS properti `expiration` saat pesan
+# di-dead-letter -> tanpa policy, pesan notify.wa_unofficial (berisi to_e164 plaintext) yang kedaluwarsa/di-nack tertahan
+# selamanya di .dlq. Policy broker (bukan argumen queue: argumen quorum tidak bisa diubah setelah queue ada; policy bisa):
+#   - notify.wa_unofficial.dlq : TTL 24 jam + maks 1000 pesan (drop-head, tanpa DLX -> dibuang). Replay hanya < 24 jam.
+#   - notify.wa_unofficial     : TTL 24 jam (backstop per-message expiration BFF) + maks 5000 (drop-head -> DLQ -> TTL).
+#   - behavior.event.dlq       : TTL 7 hari (= retensi staging behavior.event_raw, L-153) + maks 100000.
+# Satu queue hanya dikenai SATU policy (prioritas tertinggi); jangan menambah policy operator yang cocok pola ini.
 cat > "$WORK/defs.json" <<EOF
 {
   "users": [
@@ -135,6 +142,14 @@ $(queue_defs_limited notify.price_alert 10),
 $(queue_defs_limited notify.email 10),
 $(queue_defs_limited notify.wa_unofficial 10),
 $(queue_defs_limited notify.wa_unofficial.result 10)
+  ],
+  "policies": [
+    {"name": "efn-wa-unofficial-dlq-retention", "vhost": "/", "pattern": "^notify\\\\.wa_unofficial\\\\.dlq\$", "apply-to": "queues", "priority": 10,
+     "definition": {"message-ttl": 86400000, "max-length": 1000, "overflow": "drop-head"}},
+    {"name": "efn-wa-unofficial-retention", "vhost": "/", "pattern": "^notify\\\\.wa_unofficial\$", "apply-to": "queues", "priority": 10,
+     "definition": {"message-ttl": 86400000, "max-length": 5000, "overflow": "drop-head"}},
+    {"name": "efn-behavior-dlq-retention", "vhost": "/", "pattern": "^behavior\\\\.event\\\\.dlq\$", "apply-to": "queues", "priority": 10,
+     "definition": {"message-ttl": 604800000, "max-length": 100000, "overflow": "drop-head"}}
   ]
 }
 EOF

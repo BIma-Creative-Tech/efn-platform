@@ -2887,3 +2887,35 @@ aktivitas, klaim melewati kampanye kedaluwarsa, isolasi multi-company, markdown 
 - Test membebaskan kode company `SMD`/`FARM` di transaksi uji (pola test forecast) — modul lain yang bereaksi atas
   perubahan `efn_brand_code` [B].
 - `res.users.group_ids` untuk menambah grup di test (nama field 19.0, sama dengan test forecast).
+
+## G50 putaran perbaikan — SEC-G50-01/02/03 + QA G50 + kontrak §28.7b-2 (20 Nov 2026) — BELUM DIJALANKAN
+
+Basis: run lead 70/70 hijau. Perbaikan di `efn_campaign/**` saja.
+
+- **SEC-G50-01** (`models/efn_campaign.py` `create`/`write`): pemanggil non-sudo hanya boleh key di `CONTENT_FIELDS`;
+  key lain (state/approval, ringkasan segmen, `outbox_ids`, `card_ids`, `message_ids`, ...) → `UserError
+  efn_campaign:field_not_writable` (tolak utuh, tidak ada yang tertulis). Isi ditulis **sebagai user** (bukan sudo);
+  hanya `editor_ids` (write) serta `state`/`maker_id`/`editor_ids` awal (create) lewat `_efn_sys_write`. Context
+  `default_<field>` non-konten dibuang saat create. Action lain hanya memakai `_efn_sys_write` dengan vals tetap.
+- **SEC-G50-02**: payload = bentuk parser BFF (`odoo-campaign.ts`), fixture bersama
+  `tests/fixtures/campaign_payload_v1.json` (anonymous_code, public_code, member_bound, no_voucher/markdown). Tanggal
+  ISO UTC (`valid_from` = date_from 00:00 WIB, `valid_to` = date_to+1 00:00 WIB eksklusif), `message{title,body}`,
+  `voucher_codes`/`public_code` hanya pada mode-nya (member_bound tanpa kode/partner), `voucher_program_ref`
+  `"loyalty.program:<id>"`, `voucher_value_idr` dari reward, `idempotency_key` di payload, `markdown.channel_code: null`.
+- **SEC-G50-03**: ACL baca `loyalty.card` untuk Marketing dicabut (approver juga tidak diberi — lebih ketat dari
+  arahan "approver/group_system"; bila approver perlu melihat kode, tambahkan satu baris ACL); `card_ids`
+  `groups=base.group_system`; `card_count` dihitung sudo tanpa `@api.depends`.
+- **QA #3 / konvensi final**: approval `kind=segment` tanpa `segment_run_id`+`segment_code` → `efn_campaign:segment_required`
+  (termasuk kode publik); tanpa kanal → `efn_campaign:no_channel` saat propose/approve; `segment_code` maks 40
+  (`^[a-z][a-z0-9_]{1,39}$`); `summary` ≤ 256; `generated_at` menerima `Z`/`+00:00`; kunci baku metrics
+  didokumentasikan di README. Validasi tambahan di approval: kode voucher `^[A-Za-z0-9_-]{4,40}$`, markdown 1..200 produk
+  / 1..50 outlet berkode `^[A-Za-z0-9_-]{1,32}$`.
+
+Test baru/diubah: `test_sec_g50_01_marketing_cannot_inject_outbox_or_cards`, `test_sec_g50_03_marketing_cannot_read_card_codes`,
+`test_segment_required_and_channel_required`, `test_payload_matches_shared_fixture` (bentuk + nilai deterministik +
+tanggal); `test_system_fields_guarded` (field_not_writable), validasi upsert (segment_code 41, summary 257,
+generated_at +07:00, metrics list), test voucher per mode memakai key payload baru.
+
+Belum diverifikasi: `discount_max_amount` di `loyalty.reward` 19.0 (dipakai hanya bila field ada); posting chatter /
+lampiran oleh Marketing tidak menulis field record sebagai user (asumsi: CE menulis `message_main_attachment_id` lewat
+sudo) — bila tidak, tambahkan field itu ke allowlist; ACL `loyalty.card` dari `sale_loyalty`/`pos_loyalty`.

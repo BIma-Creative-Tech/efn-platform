@@ -1,6 +1,7 @@
 import { PermanentMessageError } from '../common/amqp/amqp.service';
 import { isCompanyCode } from '../loyalty/loyalty.service';
-import { CLIENT_EVENT_TYPES, ClientEventType, MAX_EVENTS_PER_BATCH, isUuidV4 } from './dto/behavior.dto';
+import { isUuid } from '../common/validation';
+import { CLIENT_EVENT_TYPES, ClientEventType, MAX_EVENTS_PER_BATCH } from './dto/behavior.dto';
 
 /** docs/04 §28.7: queue `behavior.event` (DLQ `behavior.event.dlq`), `message_id` = `behavior:<batch_id>`. */
 export const BEHAVIOR_EVENT_QUEUE = 'behavior.event';
@@ -10,9 +11,16 @@ export const BEHAVIOR_EVENT_QUEUE = 'behavior.event';
  */
 export const BEHAVIOR_PUBLISHERS: readonly string[] = ['efn-bff'];
 
+/**
+ * Event SERVER yang boleh lewat antrean (tidak pernah dari `POST /v1/events`): `purchase` = baris order online lunas
+ * (QA G50 #7, `purchase-events.service.ts`). `cart_abandon` ditulis langsung job staging (bukan antrean).
+ */
+export const SERVER_QUEUE_EVENT_TYPES = ['purchase'] as const;
+export type QueueEventType = ClientEventType | (typeof SERVER_QUEUE_EVENT_TYPES)[number];
+
 export interface BehaviorQueueEvent {
   event_id: string;
-  type: ClientEventType;
+  type: QueueEventType;
   client_ts: string;
   channel_code: string;
   /** PT pemilik kanal (`channel-company.ts`); wajib — kolom `event_raw.company_code` (cursor/partisi mart ETL). */
@@ -54,7 +62,8 @@ export function parseBehaviorMessage(payload: unknown): BehaviorEventMessage {
   if (typeof payload !== 'object' || payload === null || Array.isArray(payload)) throw new PermanentMessageError('payload bukan object');
   const o = payload as Record<string, unknown>;
   if (o.schema_version !== 1) throw new PermanentMessageError('schema_version tidak didukung');
-  if (!isUuidV4(o.batch_id)) throw new PermanentMessageError('batch_id tidak valid');
+  // v4 (klien) atau v8 deterministik (event server, `deterministicUuid`)
+  if (!isUuid(o.batch_id)) throw new PermanentMessageError('batch_id tidak valid');
   if (typeof o.received_at !== 'string' || !ISO_RE.test(o.received_at) || !Number.isFinite(Date.parse(o.received_at))) {
     throw new PermanentMessageError('received_at tidak valid');
   }
@@ -68,9 +77,9 @@ export function parseBehaviorMessage(payload: unknown): BehaviorEventMessage {
     if (typeof raw !== 'object' || raw === null) throw new PermanentMessageError('event tidak valid');
     const e = raw as Record<string, unknown>;
     const ok =
-      isUuidV4(e.event_id) &&
+      isUuid(e.event_id) &&
       typeof e.type === 'string' &&
-      (CLIENT_EVENT_TYPES as readonly string[]).includes(e.type) &&
+      ((CLIENT_EVENT_TYPES as readonly string[]).includes(e.type) || (SERVER_QUEUE_EVENT_TYPES as readonly string[]).includes(e.type)) &&
       typeof e.client_ts === 'string' &&
       Number.isFinite(Date.parse(e.client_ts)) &&
       typeof e.channel_code === 'string' &&
@@ -87,7 +96,7 @@ export function parseBehaviorMessage(payload: unknown): BehaviorEventMessage {
     if (!ok) throw new PermanentMessageError('event tidak valid');
     return {
       event_id: String(e.event_id).toLowerCase(),
-      type: e.type as ClientEventType,
+      type: e.type as QueueEventType,
       client_ts: new Date(String(e.client_ts)).toISOString(),
       channel_code: String(e.channel_code),
       company_code: String(e.company_code),

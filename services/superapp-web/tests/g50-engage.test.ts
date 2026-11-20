@@ -105,6 +105,12 @@ describe('peta error', () => {
     expect(mapEngageCode(422, 'x')).toBe('invalid_request');
     expect(mapEngageCode(500, 'x')).toBe('upstream_error');
   });
+  it('kode nyata BFF (wishlist_full, invalid_target_price, alert_limit_reached) dipetakan ke kode klien', () => {
+    expect(mapEngageCode(409, 'wishlist_full')).toBe('wishlist_limit');
+    expect(mapEngageCode(409, 'alert_limit_reached')).toBe('limit_reached');
+    expect(mapEngageCode(400, 'invalid_target_price')).toBe('price_not_lower');
+    expect(mapEngageCode(400, 'channel_unavailable')).toBe('channel_unavailable');
+  });
   it('flag mati = 404/501 atau feature_unavailable', () => {
     expect(isFeatureOff(404, 'http_404')).toBe(true);
     expect(isFeatureOff(501, 'x')).toBe(true);

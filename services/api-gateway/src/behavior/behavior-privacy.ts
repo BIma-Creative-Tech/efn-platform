@@ -9,6 +9,13 @@ import { memberSubjectKey } from './subject-key';
  */
 
 const EXPORT_LIMIT = 1000;
+/** SEC-G50-07: versi baris penarikan consent device saat erasure akun (lolos CHECK `^[A-Za-z0-9._@-]{1,32}$`). */
+export const ERASURE_CONSENT_VERSION = 'erasure';
+/**
+ * = `UNKNOWN_TEXT_SHA256` (`privacy/consent.service.ts`, SHA-256 string kosong). Disalin lokal agar tidak ada import
+ * melingkar (consent.service mengimpor modul ini).
+ */
+const UNKNOWN_TEXT_SHA256_LOCAL = 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855';
 
 export async function behaviorSchemaReady(q: Queryable): Promise<boolean> {
   const r = await q.query<{ ok: boolean }>(`SELECT to_regclass('behavior.device_link') IS NOT NULL AS ok`);
@@ -43,7 +50,9 @@ export async function subjectKeysOf(q: Queryable, memberId: string, pepper: stri
  * lalu hapus event staging, dedup, anggota segmen, tautan device, pemetaan subject; `erased_subject` dipakai BFF untuk
  * menolak subjek terhapus di ingest segmen. Dipanggil di DALAM transaksi ErasureService yang sama dengan transisi
  * `dsar_request` → `processing` (atomik: ETL tidak pernah melihat `processing` tanpa baris `subject_erasure`).
- * Bukti consent device (`device_consent`, tanpa PII) dipertahankan — setelah tautan dihapus tidak dapat dikaitkan.
+ * Bukti consent device lama (`device_consent`, tanpa PII) dipertahankan; SEC-G50-07: untuk SETIAP device tertaut
+ * ditambahkan baris penarikan (`granted=false`, versi `erasure`, teks tidak diketahui) sehingga event berikutnya dari
+ * perangkat itu ditolak `tracking_consent_required` sampai pengguna memberi consent baru lewat banner.
  */
 export async function eraseBehaviorMember(
   q: Queryable,
@@ -54,6 +63,15 @@ export async function eraseBehaviorMember(
 ): Promise<number> {
   if (!(await behaviorSchemaReady(q))) return 0;
   const keys = await subjectKeysOf(q, memberId, pepper);
+  const devices = await q.query<{ device_key: string }>(`SELECT device_key FROM behavior.device_link WHERE member_id = $1`, [memberId]);
+  const deviceKeys = [...new Set(devices.rows.map((r) => String(r.device_key).trim()))];
+  if (deviceKeys.length > 0) {
+    await q.query(
+      `INSERT INTO behavior.device_consent (device_key, granted, version, text_sha256)
+       SELECT k, false, $2, $3 FROM unnest($1::text[]) AS k`,
+      [deviceKeys, ERASURE_CONSENT_VERSION, UNKNOWN_TEXT_SHA256_LOCAL],
+    );
+  }
   if (keys.length > 0) {
     await q.query(
       `INSERT INTO behavior.subject_erasure (subject_key, request_id, reason)

@@ -28,7 +28,7 @@ describe('BehaviorJobsService', () => {
   it('partisi + retensi (7 hari staging, 180 hari tautan, 30 hari segmen, 100 hari daftar erasure)', async () => {
     const ctx = setup();
     const r = await ctx.svc.runOnce();
-    expect(r).toMatchObject({ skipped: false, partitionsCreated: 2, partitionsDropped: 1, purged: 21 });
+    expect(r).toMatchObject({ skipped: false, partitionsCreated: 2, partitionsDropped: 1, purged: 24 });
     expect(ctx.db.find('drop_old_event_partitions')[0]!.params).toEqual([7]);
     expect(ctx.db.find('DELETE FROM behavior.device_link')[0]!.params).toEqual([180]);
     expect(ctx.db.find('DELETE FROM behavior.segment_member')[0]!.params).toEqual([30]);
@@ -77,13 +77,33 @@ describe('behavior-privacy (erasure/DSAR/penarikan consent)', () => {
   const REQUEST = randomUUID();
   const PEPPER = 'p'.repeat(32);
 
-  function db(ready: boolean, keys: string[] = []) {
+  function db(ready: boolean, keys: string[] = [], devices: string[] = []) {
     return new FakeDb((t) => {
       if (t.includes('to_regclass')) return { rows: [{ ok: ready }], rowCount: 1 };
       if (t.includes('FROM behavior.subject_member WHERE member_id')) return { rows: keys.map((k) => ({ k })), rowCount: keys.length };
+      if (t.includes('SELECT device_key FROM behavior.device_link WHERE member_id')) {
+        return { rows: devices.map((device_key) => ({ device_key })), rowCount: devices.length };
+      }
       return undefined;
     });
   }
+
+  it('SEC-G50-07: erasure mencatat penarikan consent (granted=false) untuk SETIAP device tertaut, sebelum tautan dihapus', async () => {
+    const d1 = '1'.repeat(64);
+    const d2 = '2'.repeat(64);
+    const d = db(true, [d1, d2], [d1, d2, d1]);
+    await eraseBehaviorMember(d, MEMBER, PEPPER, REQUEST);
+    const ins = d.find('INSERT INTO behavior.device_consent')[0]!;
+    expect(ins.text).toContain('false');
+    expect(ins.params).toEqual([[d1, d2], 'erasure', 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855']);
+    const texts = d.queries.map((q) => q.text);
+    expect(texts.findIndex((t) => t.includes('INSERT INTO behavior.device_consent'))).toBeLessThan(
+      texts.findIndex((t) => t.includes('DELETE FROM behavior.device_link WHERE member_id')),
+    );
+    const none = db(true, [], []);
+    await eraseBehaviorMember(none, MEMBER, PEPPER, REQUEST);
+    expect(none.find('INSERT INTO behavior.device_consent')).toHaveLength(0);
+  });
 
   it('skema G50 belum ada → tidak ada query hapus (erasure akun tidak gagal)', async () => {
     const d = db(false);

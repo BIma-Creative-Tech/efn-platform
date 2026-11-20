@@ -92,7 +92,7 @@ CREATE TABLE IF NOT EXISTS behavior.event_raw (
   event_id       uuid        NOT NULL,
   type           text        NOT NULL CHECK (type IN ('product_view', 'wishlist_add', 'wishlist_remove', 'cart_add', 'cart_remove',
                                                       'checkout_start', 'search', 'notify_me_request', 'price_alert_set',
-                                                      'cart_abandon')),
+                                                      'cart_abandon', 'purchase')),
   client_ts      timestamptz NOT NULL,
   channel_code   text        CHECK (channel_code IS NULL OR channel_code ~ '^[A-Z0-9-]{1,8}$'),
   outlet_code    text        CHECK (outlet_code IS NULL OR outlet_code ~ '^[A-Za-z0-9_-]{1,16}$'),
@@ -137,6 +137,12 @@ BEGIN
       CHECK (company_code ~ '^[A-Z][A-Z0-9]{1,9}$');
   END IF;
 END $$;
+-- QA G50 #7: event server `purchase` (order online lunas) — CHECK `type` ditulis ulang idempoten (nama otomatis
+-- `event_raw_type_check` dari CREATE TABLE; constraint di induk partisi berlaku ke semua partisi).
+ALTER TABLE behavior.event_raw DROP CONSTRAINT IF EXISTS event_raw_type_check;
+ALTER TABLE behavior.event_raw ADD CONSTRAINT event_raw_type_check
+  CHECK (type IN ('product_view', 'wishlist_add', 'wishlist_remove', 'cart_add', 'cart_remove', 'checkout_start', 'search',
+                  'notify_me_request', 'price_alert_set', 'cart_abandon', 'purchase'));
 -- Cursor ETL job `behavior_events` (index di induk → terbentuk di setiap partisi, termasuk partisi baru)
 CREATE INDEX IF NOT EXISTS ix_event_raw_ingested ON behavior.event_raw (ingested_at);
 
@@ -155,6 +161,7 @@ CREATE TABLE IF NOT EXISTS behavior.segment_chunk (
   body_sha256   char(64)    NOT NULL CHECK (body_sha256 ~ '^[0-9a-f]{64}$'),
   member_count  integer     NOT NULL CHECK (member_count BETWEEN 0 AND 5000),
   received_at   timestamptz NOT NULL DEFAULT now(),
+  company_code  text        NOT NULL CHECK (company_code ~ '^[A-Z][A-Z0-9]{1,9}$'),
   PRIMARY KEY (run_id, segment_code, chunk_no)
 );
 CREATE INDEX IF NOT EXISTS ix_segment_chunk_received ON behavior.segment_chunk (received_at);
@@ -164,10 +171,35 @@ CREATE TABLE IF NOT EXISTS behavior.segment_member (
   segment_code  text        NOT NULL,
   subject_key   char(64)    NOT NULL CHECK (subject_key ~ '^[0-9a-f]{64}$'),
   received_at   timestamptz NOT NULL DEFAULT now(),
+  company_code  text        NOT NULL CHECK (company_code ~ '^[A-Z][A-Z0-9]{1,9}$'),
   PRIMARY KEY (run_id, segment_code, subject_key)
 );
 CREATE INDEX IF NOT EXISTS ix_segment_member_subject ON behavior.segment_member (subject_key);
 CREATE INDEX IF NOT EXISTS ix_segment_member_received ON behavior.segment_member (received_at);
+
+-- SEC-G50-08: segmen terikat PT (body ingest `company_code`, satu PT per run_id); dispatcher memfilter PT kampanye.
+-- DB versi awal: snapshot segmen lama tanpa PT dibuang (turunan harian, dibangun ulang worker), lalu NOT NULL + CHECK.
+ALTER TABLE behavior.segment_chunk ADD COLUMN IF NOT EXISTS company_code text;
+ALTER TABLE behavior.segment_member ADD COLUMN IF NOT EXISTS company_code text;
+DELETE FROM behavior.segment_member WHERE company_code IS NULL;
+DELETE FROM behavior.segment_chunk WHERE company_code IS NULL;
+ALTER TABLE behavior.segment_chunk ALTER COLUMN company_code SET NOT NULL;
+ALTER TABLE behavior.segment_member ALTER COLUMN company_code SET NOT NULL;
+DO $$
+DECLARE
+  t text;
+BEGIN
+  FOREACH t IN ARRAY ARRAY['segment_chunk', 'segment_member'] LOOP
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint
+                    WHERE conrelid = ('behavior.' || t)::regclass AND contype = 'c'
+                      AND pg_get_constraintdef(oid) LIKE '%company_code%') THEN
+      EXECUTE format('ALTER TABLE behavior.%I ADD CONSTRAINT %I CHECK (company_code ~ ''^[A-Z][A-Z0-9]{1,9}$'')',
+                     t, t || '_company_code_check');
+    END IF;
+  END LOOP;
+END $$;
+CREATE INDEX IF NOT EXISTS ix_segment_member_run_company ON behavior.segment_member (run_id, segment_code, company_code);
+CREATE INDEX IF NOT EXISTS ix_segment_chunk_run ON behavior.segment_chunk (run_id, company_code);
 
 CREATE TABLE IF NOT EXISTS behavior.erased_subject (
   subject_key  char(64)    PRIMARY KEY CHECK (subject_key ~ '^[0-9a-f]{64}$'),
@@ -188,6 +220,14 @@ CREATE TABLE IF NOT EXISTS behavior.subject_erasure (
 );
 CREATE INDEX IF NOT EXISTS ix_subject_erasure_created ON behavior.subject_erasure (created_at, id);
 CREATE INDEX IF NOT EXISTS ix_subject_erasure_request ON behavior.subject_erasure (request_id);
+
+-- QA G50 #7: penanda bagian order online yang event `purchase`-nya sudah diterbitkan (idempotensi job BFF;
+-- tanpa data member, hanya id bagian). Retensi 30 hari (jendela job 48 jam).
+CREATE TABLE IF NOT EXISTS behavior.purchase_emitted (
+  part_id     uuid        PRIMARY KEY,
+  emitted_at  timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS ix_purchase_emitted_at ON behavior.purchase_emitted (emitted_at);
 
 -- Partisi harian (UTC) hari ini-1 .. hari ini+p_days_ahead. Kegagalan satu partisi (mis. baris sudah jatuh ke DEFAULT
 -- untuk rentang itu) → WARNING, partisi lain tetap dibuat; baris DEFAULT tetap terbaca & dipurge job retensi.
@@ -379,7 +419,8 @@ REVOKE ALL ON platform.member_wishlist, platform.restock_alert, platform.price_a
 
 GRANT USAGE ON SCHEMA behavior TO efn_bff, efn_etl;
 GRANT SELECT, INSERT, DELETE ON behavior.device_consent, behavior.event_raw, behavior.event_dedup, behavior.segment_chunk,
-                                behavior.segment_member, behavior.erased_subject, behavior.subject_erasure TO efn_bff;
+                                behavior.segment_member, behavior.erased_subject, behavior.subject_erasure,
+                                behavior.purchase_emitted TO efn_bff;
 GRANT SELECT, INSERT, UPDATE, DELETE ON behavior.device_link, behavior.subject_member TO efn_bff;
 GRANT USAGE ON SEQUENCE behavior.device_consent_id_seq, behavior.subject_erasure_id_seq TO efn_bff;
 GRANT EXECUTE ON FUNCTION behavior.ensure_event_partitions(integer), behavior.drop_old_event_partitions(integer) TO efn_bff;

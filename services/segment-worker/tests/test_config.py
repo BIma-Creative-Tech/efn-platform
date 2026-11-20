@@ -36,7 +36,7 @@ def env(files: dict[str, str]) -> dict[str, str]:
         "ODOO_RPC_CA_FILE": files["ca"],
         "SEGMENT_CLIENT_CERT_FILE": files["crt"],
         "SEGMENT_CLIENT_KEY_FILE": files["key"],
-        "ODOO_API_KEY_CAMPAIGN_SMD_FILE": files["apikey"],
+        "ODOO_API_KEY_SEGMENT_SMD_FILE": files["apikey"],
     }
 
 
@@ -111,7 +111,12 @@ def test_odoo_settings_api_key_per_company(env: dict[str, str], files: dict[str,
     placeholder = tmp_path / "ph"
     placeholder.write_text("disabled", encoding="utf-8")
     with pytest.raises(RuntimeError):
-        OdooSettings.from_env("SMD", {**env, "ODOO_API_KEY_CAMPAIGN_SMD_FILE": str(placeholder)})
-    # PT lain tanpa secret -> default /run/secrets/odoo_api_key_campaign_gl tidak ada -> gagal (bukan key PT lain).
+        OdooSettings.from_env("SMD", {**env, "ODOO_API_KEY_SEGMENT_SMD_FILE": str(placeholder)})
+    # PT lain tanpa secret -> default /run/secrets/odoo_api_key_segment_gl tidak ada -> gagal (bukan key PT lain).
     with pytest.raises(RuntimeError):
         OdooSettings.from_env("GL", env)
+    # Key kampanye milik BFF (user efn_campaign_<kode>) TIDAK dipakai worker.
+    only_campaign = {k: v for k, v in env.items() if k != "ODOO_API_KEY_SEGMENT_SMD_FILE"}
+    only_campaign["ODOO_API_KEY_CAMPAIGN_SMD_FILE"] = files["apikey"]
+    with pytest.raises(RuntimeError):
+        OdooSettings.from_env("SMD", only_campaign)

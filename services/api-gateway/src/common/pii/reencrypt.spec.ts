@@ -5,6 +5,8 @@ import { PII_AAD, PiiCipher } from './crypto';
 import { PII_COLUMNS, findPiiColumns } from './pii-columns';
 import { PiiKeyRingCheck } from './pii-key-check';
 import { countUnreadable, reencryptColumn } from './reencrypt';
+import { voucherCodeAad } from '../../campaign/campaign-sync.service';
+import { memberEmailAad } from '../../notification/email/email.constants';
 
 const K1 = randomBytes(32);
 const K2 = randomBytes(32);
@@ -94,6 +96,20 @@ describe('re-encrypt PII (U2)', () => {
       pk: 'id',
       aad: 'efn:member_voucher.code_enc:v1',
     });
+    // SEC-G50-11: AAD per baris = voucherCodeAad (campaign-sync menulis v2, inbox membaca v2 lalu v1)
+    expect(findPiiColumns('member_voucher.code_enc')[0].rowAad!('BBBBBBBB-BBBB-4BBB-8BBB-BBBBBBBBBBBB')).toBe(
+      'efn:member_voucher.code_enc:v2:bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+    );
+    expect(voucherCodeAad('BBBBBBBB-BBBB-4BBB-8BBB-BBBBBBBBBBBB')).toBe(
+      findPiiColumns('member_voucher.code_enc')[0].rowAad!('bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'),
+    );
+    // SEC-G50-11: AAD per baris email = memberEmailAad (email-sender membaca v2 lalu v1)
+    expect(findPiiColumns('member_email.email_enc')[0].rowAad!('CCCCCCCC-CCCC-4CCC-8CCC-CCCCCCCCCCCC')).toBe(
+      'efn:member_email.email_enc:v2:cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+    );
+    expect(memberEmailAad('CCCCCCCC-CCCC-4CCC-8CCC-CCCCCCCCCCCC')).toBe(
+      findPiiColumns('member_email.email_enc')[0].rowAad!('cccccccc-cccc-4ccc-8ccc-cccccccccccc'),
+    );
     expect(PII_AAD.PUSH_TOKEN).toBe('efn:push_token.token_enc:v1');
     expect(PII_AAD.ONLINE_COUNTER_CODE).toBe('efn:online_order_part.counter_code_enc:v1');
     expect(findPiiColumns('online_order_part.counter_code_enc')[0].rowAad!('AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA')).toBe(
@@ -164,5 +180,21 @@ describe('SEC-102: kolom ber-AAD per baris (pickup_code_enc)', () => {
     expect(next.decrypt(rows.get(idA)!, col.rowAad!(idA))).toBe('ABCDEFGH');
     expect(next.decrypt(rows.get(idB)!, col.rowAad!(idB))).toBe('HGFEDCBA');
     expect(() => next.decrypt(rows.get(idA)!, col.rowAad!(idB))).toThrow(); // tidak bisa ditukar antar-baris
+  });
+
+  it('SEC-G50-11: member_email.email_enc v1 (AAD kolom) ditulis ulang ke v2 terikat member_id', async () => {
+    const col = PII_COLUMNS.find((c) => c.table === 'member_email')!;
+    const old = new PiiCipher(new Map([[1, K1]]), 1);
+    const m1 = '33333333-3333-4333-8333-333333333333';
+    const m2 = '44444444-4444-4444-8444-444444444444';
+    const rows = new Map<string, Buffer>([
+      [m1, old.encrypt('a@contoh.id', col.aad)],
+      [m2, old.encrypt('b@contoh.id', memberEmailAad(m2))],
+    ]);
+    const next = new PiiCipher(new Map([[1, K1], [2, K2]]), 2);
+    expect(await reencryptColumn(fakeTable(rows), next, col, 10, false)).toMatchObject({ reencrypted: 2, failed: 0 });
+    expect(next.decrypt(rows.get(m1)!, memberEmailAad(m1))).toBe('a@contoh.id');
+    expect(next.decrypt(rows.get(m2)!, memberEmailAad(m2))).toBe('b@contoh.id');
+    expect(() => next.decrypt(rows.get(m1)!, memberEmailAad(m2))).toThrow();
   });
 });

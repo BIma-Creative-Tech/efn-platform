@@ -39,8 +39,9 @@ http:
       certificates:
         - certFile: /run/secrets/tls_traefik_crt
           keyFile: /run/secrets/tls_traefik_key
-    # G50 (docs/04 §28.9, ADR-044): server admin HTTPS wa-unofficial :8443 (network wa-admin, overlay
-    # docker-compose.wa-unofficial.yml). Tidak dipakai bila overlay tidak aktif.
+    # G50 (docs/04 §28.9, ADR-044): server admin HTTPS wa-unofficial :8443, dijangkau lewat relay TCP wa-admin-relay
+    # (network wa-ingress, SEC-G50-06; overlay docker-compose.wa-unofficial.yml). serverName = sertifikat wa-unofficial
+    # (relay TLS passthrough). Tidak dipakai bila overlay tidak aktif.
     efn-wa-unofficial:
       serverName: wa-unofficial
       rootCAs: [/run/secrets/efn_ca_crt]

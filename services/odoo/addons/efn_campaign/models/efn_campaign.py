@@ -10,7 +10,7 @@ Mode voucher (dikunci setelah approval pertama, ``approval_rev`` > 0):
 - ``anonymous_code`` (default): N ``loyalty.card`` tanpa partner; daftar kode ikut payload; BFF menugaskan ke member.
 - ``public_code``: satu kode bersama = kode aturan ``with_code`` program CE ``promo_code``; kuota = ``max_usage``.
 - ``member_bound``: kartu per ``partner_id`` dari ``partner_ids`` yang diisi Marketing (satu-satunya mode yang
-  memasukkan identitas member ke Odoo, L-164); payload memuat ``partner_id`` (integer) + kode, tanpa nama/HP/email.
+  memasukkan identitas member ke Odoo, L-164); payload TIDAK memuat partner maupun kode (BFF hanya notifikasi).
 
 Markdown (G45) memakai jalur yang sama lewat ``_efn_propose_markdown`` (``ref_model``/``ref_id`` generik, tanpa
 depends ke ``efn_expiry_monitor``).
@@ -18,7 +18,9 @@ depends ke ``efn_expiry_monitor``).
 
 import logging
 import re
-from datetime import timedelta
+from datetime import datetime, time, timedelta
+
+import pytz
 
 from odoo import _, api, fields, models
 from odoo.exceptions import AccessError, UserError, ValidationError
@@ -54,10 +56,13 @@ MAX_CLAIM = 20
 MAX_ACK = 20
 MAX_METRICS = 20
 MAX_MEMBER_COUNT = 10_000_000
-MAX_SUMMARY = 500
+MAX_SUMMARY = 256
+MAX_MARKDOWN_PRODUCTS = 200  # parser BFF: product_ids 1..200
+MAX_MARKDOWN_OUTLETS = 50  # parser BFF: outlet_codes <= 50
 DEFAULT_DAYS = 14
+PAYLOAD_TZ = "Asia/Jakarta"  # tanggal kampanye = hari WIB; payload = ISO UTC (keputusan lead G50)
 REF_MODEL_RE = re.compile(r"^[a-z][a-z0-9_]*(\.[a-z0-9_]+)+$")
-RFC3339_UTC_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?Z$")
+RFC3339_UTC_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?(?:Z|\+00:00)$")
 _UPSERT_LOCK_NAMESPACE = 705001
 
 # Field isi kampanye (diubah Marketing selama draft/proposed; mengubahnya = menjadi penyunting -> tidak boleh approve).
@@ -107,8 +112,16 @@ SYSTEM_FIELDS = (
 )
 
 
-def _iso_date(value):
-    return fields.Date.to_string(value) if value else None
+def _wib_iso(day, end_of_day):
+    """Tanggal kampanye (hari WIB) -> ISO-8601 UTC ``...Z`` (konvensi lead G50).
+
+    Awal: ``day`` 00:00 WIB. Akhir (eksklusif): ``day + 1`` 00:00 WIB. WIB = UTC+7 tanpa DST."""
+    if not day:
+        return None
+    day = fields.Date.to_date(day) + (timedelta(days=1) if end_of_day else timedelta())
+    local = datetime.combine(day, time(0, 0, 0))
+    utc = pytz.timezone(PAYLOAD_TZ).localize(local).astimezone(pytz.utc)
+    return utc.strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 class EfnCampaign(models.Model):
@@ -186,7 +199,10 @@ class EfnCampaign(models.Model):
         check_company=True,
         help="Hanya mode terikat member. Diisi Marketing; tidak ada partner yang dibuat otomatis.",
     )
-    card_ids = fields.One2many("loyalty.card", "efn_campaign_id", string="Voucher dibuat", readonly=True)
+    # SEC-G50-03: kode kartu bersifat bearer -> relasi hanya untuk Settings; form memakai card_count (dihitung sudo).
+    card_ids = fields.One2many(
+        "loyalty.card", "efn_campaign_id", string="Voucher dibuat", readonly=True, groups="base.group_system"
+    )
     card_count = fields.Integer(compute="_compute_card_count", string="Jumlah voucher")
     budget_idr = fields.Integer(string="Anggaran (Rp)", tracking=True)
     cap_enabled = fields.Boolean(
@@ -257,10 +273,12 @@ class EfnCampaign(models.Model):
     )
 
     # ================================================================ compute / constraint
-    @api.depends("card_ids")
     def _compute_card_count(self):
+        # Tanpa @api.depends pada card_ids (field ber-groups); non-stored -> dihitung setiap dibaca, sudo.
+        Card = self.env["loyalty.card"].sudo().with_context(active_test=False)
         for camp in self:
-            camp.card_count = len(camp.sudo().with_context(active_test=False).card_ids)
+            cid = camp._origin.id
+            camp.card_count = Card.search_count([("efn_campaign_id", "=", cid)]) if cid else 0
 
     @api.depends("segment_metrics")
     def _compute_segment_metrics_display(self):
@@ -271,6 +289,12 @@ class EfnCampaign(models.Model):
     def _efn_channels(self):
         self.ensure_one()
         return [code for fname, code in CHANNELS if self[fname]]
+
+    def _efn_check_channels(self):
+        """Parser BFF menolak ``channels`` kosong -> tolak di propose/approve (lapis selain constraint simpan)."""
+        self.ensure_one()
+        if not self._efn_channels():
+            raise UserError("efn_campaign:no_channel - pilih minimal satu kanal kampanye.")
 
     @api.constrains(
         *[fname for fname, _code in CHANNELS],
@@ -292,7 +316,7 @@ class EfnCampaign(models.Model):
                 raise ValidationError(_("Daftar member hanya untuk mode voucher terikat member."))
             if len(camp.partner_ids) > MAX_CODES:
                 raise ValidationError(_("Maksimal %s member per kampanye.", MAX_CODES))
-            # Eksplisit (selain check_company) karena penulisan form dilakukan sudo setelah cek hak tulis.
+            # Eksplisit (lapis selain check_company): juga berlaku untuk jalur sistem/sudo (bot, markdown G45).
             company = camp.company_id
             if camp.partner_ids.filtered(lambda p, c=company: p.company_id and p.company_id != c):
                 raise ValidationError(_("Member harus milik company kampanye (atau bersama)."))
@@ -302,21 +326,49 @@ class EfnCampaign(models.Model):
                 raise ValidationError(_("Outlet markdown harus milik company kampanye."))
 
     # ================================================================ CRUD + guard
+    # SEC-G50-01: pemanggil non-sudo (form/RPC Marketing) hanya boleh menulis CONTENT_FIELDS. Key lain (field sistem,
+    # outbox_ids, card_ids, message_ids, activity_ids, ...) ditolak `efn_campaign:field_not_writable`. Isi ditulis
+    # SEBAGAI USER (ACL + record rule berlaku); hanya jejak sistem (state awal, pembuat, penyunting) lewat jalur sistem.
+    @api.model
+    def _efn_reject_foreign_keys(self, keys):
+        foreign = set(keys) - set(CONTENT_FIELDS)
+        if foreign:
+            _logger.warning(
+                "EFN campaign: uid %s mencoba menulis field non-konten %s; ditolak", self.env.uid, sorted(foreign)
+            )
+            raise ca.campaign_error("field_not_writable")
+
+    @api.model
+    def _efn_clean_default_context(self):
+        """Buang ``default_<field>`` context untuk field non-konten (cegah state/outbox/kartu lewat default)."""
+        ctx = {
+            key: value
+            for key, value in self.env.context.items()
+            if not (key.startswith("default_") and key[8:] not in CONTENT_FIELDS)
+        }
+        return self.with_env(self.env(context=ctx))
+
     @api.model_create_multi
     def create(self, vals_list):
-        if not self.env.su and not self.env.user.has_group(ca.GROUP_USER):
+        if self.env.su:
+            for vals in vals_list:
+                vals.setdefault("maker_id", self.env.uid)
+            return super().create(vals_list)
+        if not self.env.user.has_group(ca.GROUP_USER):
             raise AccessError(_("Hanya Marketing yang dapat membuat kampanye."))
         for vals in vals_list:
-            if not self.env.su and set(vals) & set(SYSTEM_FIELDS):
-                raise AccessError(_("Status, jejak approval, dan ringkasan segmen kampanye diisi sistem."))
-            vals.setdefault("maker_id", self.env.uid)
-            if not self.env.su:
-                vals.update({"state": "draft", "editor_ids": [Command.set([self.env.uid])]})
-        return super().create(vals_list)
+            self._efn_reject_foreign_keys(vals)
+        clean = self._efn_clean_default_context()
+        records = super(EfnCampaign, clean).create(vals_list)
+        # Jejak sistem ditulis setelah record dibuat sebagai user (ACL create + record rule company sudah berlaku).
+        records._efn_sys_write(
+            {"state": "draft", "maker_id": self.env.uid, "editor_ids": [Command.set([self.env.uid])]}
+        )
+        return records
 
     def write(self, vals):
-        if not self.env.su and set(vals) & set(SYSTEM_FIELDS):
-            raise AccessError(_("Status dan jejak approval kampanye hanya diubah lewat tombol."))
+        if not self.env.su:
+            self._efn_reject_foreign_keys(vals)
         content = set(vals) & set(CONTENT_FIELDS)
         if content:
             if any(camp.state not in ("draft", "proposed") for camp in self):
@@ -327,14 +379,13 @@ class EfnCampaign(models.Model):
                 raise UserError(_("Mode voucher dikunci setelah kampanye pernah disetujui; buat kampanye baru."))
             if "company_id" in vals and any(camp.company_id.id != vals["company_id"] for camp in self):
                 raise UserError(_("Company kampanye tidak dapat dipindah."))
-            if not self.env.su:
-                if not self.env.user.has_group(ca.GROUP_USER):
-                    raise AccessError(_("Hanya Marketing yang dapat mengubah kampanye."))
-                # editor_ids = field sistem -> ditulis sudo SETELAH hak tulis (ACL + record rule company) dicek.
-                self.check_access("write")
-                vals = {**vals, "editor_ids": [Command.link(self.env.uid)]}
-                return super(EfnCampaign, self.sudo()).write(vals)
-        return super().write(vals)
+        if self.env.su or not content:
+            return super().write(vals)
+        if not self.env.user.has_group(ca.GROUP_USER):
+            raise AccessError(_("Hanya Marketing yang dapat mengubah kampanye."))
+        res = super().write(vals)  # sebagai user: ACL + record rule + check_company berlaku
+        self._efn_sys_write({"editor_ids": [Command.link(self.env.uid)]})
+        return res
 
     @api.ondelete(at_uninstall=False)
     def _unlink_except_used(self):
@@ -366,6 +417,7 @@ class EfnCampaign(models.Model):
         for camp in self:
             if camp.state != "draft":
                 raise UserError(_("Hanya kampanye draft yang dapat diajukan."))
+            camp._efn_check_channels()
             camp._efn_sys_write({"state": "proposed"})
         return True
 
@@ -456,14 +508,26 @@ class EfnCampaign(models.Model):
         today = fields.Date.context_today(self)
         if not camp.company_id.efn_brand_code:
             raise UserError(_("Company belum punya Kode Company EFN."))
+        camp._efn_check_channels()
         if not (camp.message_title and camp.message_body):
             raise UserError(_("Judul dan isi pesan kampanye wajib diisi."))
         if camp.date_to < today:
             raise UserError(_("Periode kampanye sudah lewat."))
-        if camp.kind == "markdown" and not (camp.markdown_product_ids and camp.markdown_warehouse_ids):
-            raise UserError(_("Kampanye markdown butuh produk dan outlet."))
-        if camp.kind == "segment" and camp.voucher_mode != "public_code" and not camp.segment_run_id:
-            raise UserError(_("Kampanye segmen butuh usulan segmen dari segment-worker (kecuali kode publik)."))
+        if camp.kind == "markdown":
+            products, outlets = camp.markdown_product_ids, camp.markdown_warehouse_ids
+            if not 1 <= len(products) <= MAX_MARKDOWN_PRODUCTS or not 1 <= len(outlets) <= MAX_MARKDOWN_OUTLETS:
+                raise UserError(
+                    _(
+                        "Kampanye markdown butuh 1..%(p)s produk dan 1..%(o)s outlet.",
+                        p=MAX_MARKDOWN_PRODUCTS,
+                        o=MAX_MARKDOWN_OUTLETS,
+                    )
+                )
+            if any(not ca.OUTLET_CODE_RE.match(code or "") for code in outlets.mapped("code")):
+                raise UserError(_("Kode outlet markdown tidak valid untuk BFF."))
+        # Parser BFF menolak kampanye segmen tanpa run segmen (`segment_required`), termasuk kode publik.
+        if camp.kind == "segment" and not (camp.segment_run_id and camp.segment_code):
+            raise UserError("efn_campaign:segment_required - kampanye segmen butuh usulan segmen dari segment-worker.")
         if camp.voucher_mode == "member_bound" and not camp.program_id:
             raise UserError(_("Mode terikat member butuh program voucher."))
         if not camp.program_id:
@@ -503,12 +567,35 @@ class EfnCampaign(models.Model):
         rules = self.sudo().program_id.rule_ids.filtered(lambda r: r.active and r.mode == "with_code" and r.code)
         if len(rules) != 1:
             raise UserError(_("Program kode publik harus punya tepat satu aturan aktif berkode."))
+        if not ca.VOUCHER_CODE_RE.match(rules.code):
+            raise UserError(_("Kode publik harus 4-40 karakter huruf/angka/_/-."))
         return rules
+
+    def _efn_voucher_value_idr(self):
+        """Nilai voucher (bilangan bulat, mata uang program) untuk cap anggaran BFF (``voucher_value_idr``).
+
+        Reward diskon ``per_order`` -> nilai diskon; persen dengan ``discount_max_amount`` -> batas itu; selain itu
+        (persen tanpa batas, reward produk) -> ``None`` (nilai tidak dapat dinyatakan dalam rupiah). Tanpa program ->
+        ``None``. Parser BFF hanya menerima integer > 0 atau null."""
+        self.ensure_one()
+        program = self.sudo().program_id
+        if not program:
+            return None
+        values = []
+        for reward in program.reward_ids.filtered(lambda r: r.reward_type == "discount"):
+            if reward.discount_mode == "per_order" and reward.discount > 0:
+                values.append(reward.discount)
+            elif "discount_max_amount" in reward._fields and reward.discount_max_amount > 0:
+                values.append(reward.discount_max_amount)
+        value = int(round(max(values))) if values else 0
+        return value if value > 0 else None
 
     def _efn_generate_vouchers(self):
         """Buat voucher sesuai mode lewat wizard CE ``loyalty.generate.wizard`` (tanpa email CE ke member).
 
-        Kembalikan dict ``voucher`` untuk payload outbox, atau ``None`` bila tanpa program."""
+        Kembalikan key payload voucher (bentuk parser BFF): ``{"voucher_codes": [...]}`` (anonim),
+        ``{"public_code": "..."}`` (publik), ``{}`` (terikat member: kartu dibuat, kode/partner TIDAK ikut payload),
+        atau ``None`` bila tanpa program."""
         self.ensure_one()
         camp = self.sudo()
         program = camp.program_id
@@ -517,7 +604,7 @@ class EfnCampaign(models.Model):
         if camp.voucher_mode == "public_code":
             rule = camp._efn_public_rule()
             program.write({"limit_usage": True, "max_usage": camp.code_qty})
-            return {"mode": "public_code", "code": rule.code, "quota": camp.code_qty}
+            return {"public_code": rule.code}
         ctx = {"loyalty_no_mail": True, "action_no_send_mail": True, "allowed_company_ids": [camp.company_id.id]}
         Card = self.env["loyalty.card"].sudo().with_context(active_test=False)
         last_id = Card.search([], order="id desc", limit=1).id or 0
@@ -543,16 +630,16 @@ class EfnCampaign(models.Model):
         if len(cards) != expected:
             raise UserError(_("Jumlah voucher yang dibuat tidak sesuai; approval dibatalkan."))
         cards.with_context(loyalty_no_mail=True).write({"efn_campaign_id": camp.id})
-        expiration = _iso_date(camp.date_to)
         if camp.voucher_mode == "anonymous_code":
             if cards.filtered("partner_id"):
                 raise UserError(_("Voucher anonim tidak boleh terikat partner."))
-            return {"mode": "anonymous_code", "codes": cards.mapped("code"), "expiration_date": expiration}
-        return {
-            "mode": "member_bound",
-            "cards": [{"partner_id": card.partner_id.id, "code": card.code} for card in cards],
-            "expiration_date": expiration,
-        }
+            codes = cards.mapped("code")
+            if any(not ca.VOUCHER_CODE_RE.match(code or "") for code in codes):
+                raise UserError(_("Format kode voucher CE tidak diterima BFF; approval dibatalkan."))
+            return {"voucher_codes": codes}
+        # member_bound: CE menegakkan kecocokan partner di POS/online; BFF hanya memberi notifikasi (L-164) dan
+        # parser BFF menolak kode pada mode ini -> tidak ada partner_id/kode di payload.
+        return {}
 
     # ================================================================ payload & status
     def _efn_idempotency_key(self, rev=None):
@@ -560,20 +647,27 @@ class EfnCampaign(models.Model):
         return f"campaign:{self.company_code}:{self.id}:{rev if rev is not None else self.approval_rev}"
 
     def _efn_outbox_payload(self, voucher):
-        """Payload ``promo.campaign.requested`` (docs/04 §28.7) + ``voucher_mode``/``voucher``. Tanpa data member
-        selain ``partner_id`` integer pada mode ``member_bound`` (pengecualian L-164)."""
+        """Payload ``promo.campaign.requested`` v1 = bentuk yang dibaca parser BFF
+        (``api-gateway/src/campaign/odoo-campaign.ts`` ``parseCampaignPayload``; keputusan lead G50, SEC-G50-02).
+
+        Fixture bersama: ``tests/fixtures/campaign_payload_v1.json`` (juga dibaca Jest BFF). Tanggal = ISO-8601 UTC
+        (``valid_from`` awal hari WIB, ``valid_to`` akhir hari WIB). ``voucher`` = hasil ``_efn_generate_vouchers``:
+        ``voucher_codes`` hanya untuk ``anonymous_code``, ``public_code`` hanya untuk ``public_code``; key kode tidak
+        ada sama sekali pada mode lain (parser menolak ``codes_without_mode``). Tanpa data member."""
         self.ensure_one()
         camp = self.sudo()
         markdown = None
         capped = camp.cap_enabled
         if camp.kind == "markdown":
             markdown = {
+                "channel_code": None,
                 "product_ids": sorted(camp.markdown_product_ids.ids),
                 "outlet_codes": sorted(camp.markdown_warehouse_ids.mapped("code")),
-                "valid_to": _iso_date(camp.date_to),
+                "valid_to": _wib_iso(camp.date_to, end_of_day=True),
             }
-        return {
+        payload = {
             "schema_version": ca.SCHEMA_VERSION,
+            "idempotency_key": camp._efn_idempotency_key(),
             "campaign_id": camp.id,
             "company_code": camp.company_code,
             "kind": camp.kind,
@@ -582,16 +676,17 @@ class EfnCampaign(models.Model):
             "segment_code": camp.segment_code or None,
             "markdown": markdown,
             "channels": camp._efn_channels(),
-            "title": camp.message_title,
-            "body": camp.message_body,
-            "voucher_mode": camp.voucher_mode,
-            "voucher_program_ref": camp.program_id.id or None,
-            "voucher": voucher,
+            "message": {"title": camp.message_title, "body": camp.message_body},
+            "voucher_mode": camp.voucher_mode if voucher is not None else None,
+            "voucher_program_ref": f"loyalty.program:{camp.program_id.id}" if voucher is not None else None,
+            "voucher_value_idr": camp._efn_voucher_value_idr() if voucher is not None else None,
             "budget_idr": (camp.budget_idr or None) if capped else None,
             "cap_per_member_week": (camp.cap_per_member_week or None) if capped else None,
-            "valid_from": _iso_date(camp.date_from),
-            "valid_to": _iso_date(camp.date_to),
+            "valid_from": _wib_iso(camp.date_from, end_of_day=False),
+            "valid_to": _wib_iso(camp.date_to, end_of_day=True),
         }
+        payload.update(voucher or {})
+        return payload
 
     def _efn_mark_sent(self, outbox_row):
         self.ensure_one()

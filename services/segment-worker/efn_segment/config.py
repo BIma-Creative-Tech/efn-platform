@@ -1,8 +1,8 @@
 """Konfigurasi segment-worker dari env non-rahasia + Docker secret (`<NAME>_FILE`). Pola = efn_forecast/config.py.
 
-Secret tidak pernah masuk repr/log/pesan exception. API key Odoo per PT: `ODOO_API_KEY_CAMPAIGN_<KODE>_FILE` (default
-`/run/secrets/odoo_api_key_campaign_<kode>`); isi placeholder (`disabled`, dsb.) ditolak. Sertifikat klien mTLS (CN
-`segment-worker`) dipakai untuk BFF dan odoo-rpc-gateway.
+Secret tidak pernah masuk repr/log/pesan exception. API key Odoo per PT: `ODOO_API_KEY_SEGMENT_<KODE>_FILE` (default
+`/run/secrets/odoo_api_key_segment_<kode>`, user teknis `efn_segment_<kode>`); isi placeholder (`disabled`, dsb.)
+ditolak. Sertifikat klien mTLS (CN `segment-worker`) dipakai untuk BFF dan odoo-rpc-gateway.
 """
 
 from __future__ import annotations
@@ -224,13 +224,15 @@ class OdooSettings:
         e: Mapping[str, str] = os.environ if env is None else env
         code = company_code(company)
         endpoint = _endpoint(e, "ODOO_RPC", "https://odoo-rpc-gateway:8443")
-        env_name = f"ODOO_API_KEY_CAMPAIGN_{code}"
+        # Keputusan devsecops G50: user teknis worker = `efn_segment_<kode>` (bukan `efn_campaign_<kode>` milik BFF),
+        # secret `odoo_api_key_segment_<kode>` -> kredensial BFF dan worker terpisah.
+        env_name = f"ODOO_API_KEY_SEGMENT_{code}"
         secret_env = {**e}
-        secret_env.setdefault(f"{env_name}_FILE", f"/run/secrets/odoo_api_key_campaign_{code.lower()}")
+        secret_env.setdefault(f"{env_name}_FILE", f"/run/secrets/odoo_api_key_segment_{code.lower()}")
         api_key = read_secret(env_name, secret_env).strip()
         if not api_key or api_key.lower() in _PLACEHOLDERS or api_key.lower().endswith(":disabled"):
             raise RuntimeError(
-                f"{env_name}_FILE kosong/placeholder: buat user teknis efn_campaign_{code.lower()} + API key di Odoo "
+                f"{env_name}_FILE kosong/placeholder: buat user teknis efn_segment_{code.lower()} + API key di Odoo "
                 "sebelum SEGMENT_ENABLED=true"
             )
         return cls(endpoint=endpoint, company=code, api_key=api_key, database=_str(e, "ODOO_DB", ""))

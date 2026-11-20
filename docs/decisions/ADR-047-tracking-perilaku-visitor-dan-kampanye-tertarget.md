@@ -163,7 +163,39 @@ sequenceDiagram
 - **Q-SM26** (DPO) Inferensi "alasan tidak beli" & segmen = profiling: perlu pemberitahuan khusus dan hak keberatan?
   (usulan: halaman "Kenapa saya mendapat promo ini" + opsi keluar dari personalisasi = cabut `tracking`).
 
+## 6a. Revisi G50 (20 Nov 2026) — penyesuaian setelah implementasi
+Status tetap **Proposed**. Gelombang yang membangun ADR ini bernomor **G50** (bukan G46; G46 = forecast ESB). Keputusan
+inti (opsi A + jalur data a) tidak berubah; rincian berikut menggantikan teks di atas bila bertentangan. Kontrak rinci:
+`docs/04` §28.6–§28.10, L-169..L-185.
+
+| Bagian | Teks semula | Setelah G50 | Alasan / dampak |
+|---|---|---|---|
+| §3.3 erasure | "Pepper hanya di BFF dan ETL-erasure … DELETE ringan by `subject_key`" | BFF menulis semua `subject_key` subjek ke `behavior.subject_erasure(request_id NOT NULL)` dalam transaksi yang sama dengan DSAR → `processing`; ETL hanya mencocokkan kunci, `ALTER DELETE` fisik, recheck 24 jam, menahan `privacy.erasure.completed`. **ETL tidak memegang pepper.** | Permukaan kunci lebih kecil; mutasi fisik sesuai pola §8.4. Biaya: tabel antrean kecil di PG, tanpa biaya infra baru. |
+| §3.2 pengayaan | `outlet_code`, `channel` | + `company_code` per event dari pemetaan kanal → PT (salinan katalog); kanal tak dikenal ditolak | Mart & row policy per PT. Event kanal SMD baru diterima setelah katalog SMD tersinkron. |
+| §3.4 diagram langkah 6 | "publish notify.push / notify.email / notify.wa_unofficial" | Push langsung lewat Expo dari dispatcher BFF; `notify.email` / `notify.wa_unofficial` tetap. Kode voucher hanya di inbox in-app (`GET /v1/me/inbox`), tidak lewat email/WA/push | Consumer `notify.push` = jalur WhatsApp Cloud API; kode bearer tidak keluar dari aplikasi. |
+| §3.4 voucher | "kode voucher `sale_loyalty`" | Modul CE `loyalty` (wizard `loyalty.generate.wizard`); `efn_campaign` tidak bergantung pada `pos_loyalty`/`sale_loyalty` | Modul terpasang tanpa POS/Sales; penegakan kupon tetap CE. |
+| §3.4 4-eyes | "4-eyes bila anggaran > ambang" | 4-eyes **selalu** (penyetuju ≠ pembuat/penyunting) sampai ambang ditetapkan (Q-SM24/Q-SM32) | Lebih ketat; biaya = satu orang tambahan per kampanye. |
+| §3.4 `member_bound` | BFF mengirim notifikasi ke pemilik kartu | BFF hanya notifikasi + inbox tanpa kode; daftar kartu/partner tidak dikirim ke BFF sampai pemetaan partner↔member ditetapkan (Q-SM30) | Pemetaan partner↔member belum ada di platform. |
+| §3.4 markdown | Masuk jalur yang sama | Kampanye `markdown` dibuat `proposed`, tetap butuh approval Marketing (Q-SM31) | Konservatif sampai klien memutuskan. |
+| Kredensial | segment-worker & BFF memakai `efn_campaign_<kode>` | segment-worker = user Odoo terpisah `efn_segment_<kode>` (secret `odoo_api_key_segment_<kode>`); path dibatasi per CN di gateway | Kebocoran key di mesin `efn-data` tidak memberi akses ke kode voucher. |
+| Gate production | DPO menyetujui | `BEHAVIOR_TRACKING_DPO_APPROVAL_REF` / `PROMO_CAMPAIGN_APPROVAL_REF` di manifest **dan** `EFN_ALLOW_FEATURE_ON` Superadmin | Pola G22; mencegah pemegang akses CI menyalakan fitur. |
+
+**Temuan yang memblokir uji end-to-end** (bukan perubahan keputusan): payload klaim Odoo ↔ BFF dan ringkasan
+segment-worker ↔ Odoo belum cocok (`docs/04` §28.7b, L-181). Keputusan lead: Odoo menyesuaikan ke parser BFF (payload
+klaim), segment-worker menyesuaikan ke validator Odoo (`metrics` datar `{kunci: angka}`). Estimasi ±1,5–2
+hari-engineer termasuk test parity.
+
+**Event server `purchase` (L-185, keputusan lead):** BFF menerbitkan `purchase` per baris saat pesanan online lunas,
+hanya bila consent `tracking` akun aktif; pembelian POS belum tercakup. Sampai dibangun, segmen "sudah beli" hanya
+berbasis `checkout_start`. Penautan transaksi ke profil perilaku perlu dicantumkan di DPIA (Q-SM16/Q-SM26).
+
+Pertanyaan baru: Q-SM30 (sumber `partner_ids` `member_bound`), Q-SM31 (markdown lewat approval), Q-SM32 (ambang 4-eyes),
+Q-SM33 (teks banner consent), Q-SM37 (`outlet_code` → `warehouse_id` untuk Insight), Q-SM38 (consent `marketing` per purpose vs per
+kanal, SEC-G50-14), Q-SM39 (re-grant `tracking` menautkan ulang data lama, SEC-G50-15). Bentuk payload klaim yang
+berlaku = parser BFF + fixture `efn_campaign/tests/fixtures/campaign_payload_v1.json` (keputusan lead SEC-G50-02).
+
 ## 7. Kapan ditinjau ulang
 - Volume event > ±5 juta/hari (evaluasi opsi 2.2 b dengan ADR pengecualian).
+- Setelah perbaikan §28.7b dan uji end-to-end pertama (verifikasi alur segmen → approval → inbox).
 - DPO menolak consent sebagai dasar atau meminta retensi lebih pendek.
 - Sebelum aktivasi production; paling lambat **31 Mar 2027**.

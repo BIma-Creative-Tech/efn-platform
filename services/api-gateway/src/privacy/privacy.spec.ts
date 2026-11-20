@@ -253,6 +253,8 @@ describe('DsarService (§8.9)', () => {
     const data = await ctx.dsar.exportData(ctx.user);
     expect(data.profile).toMatchObject({ member_id: MEMBER_ID, member_ref: PHONE, member_ref_masked: '62812****890' });
     expect((data.points as { balance: number }).balance).toBe(10);
+    // G50-B (SEC-G50-05): bagian kanal selalu ada (kosong bila migrasi 21 belum jalan)
+    expect(data).toMatchObject({ email: null, email_deliveries: [], wa_unofficial: { recipients: [], deliveries: [] } });
     const ins = ctx.db.find('INSERT INTO platform.dsar_request')[0];
     expect(ins.text).toContain("'export', 'completed'");
     // query data selalu dibatasi member_hash / member_id pemanggil

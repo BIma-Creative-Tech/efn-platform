@@ -30,7 +30,27 @@ sebelum G50 harus di-recreate agar definitions dimuat ulang:
 cd infra/compose
 docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --force-recreate rabbitmq
 docker compose -f docker-compose.yml -f docker-compose.dev.yml exec rabbitmq rabbitmqctl list_queues name arguments | grep -E 'behavior|campaign|notify\.'
+docker compose -f docker-compose.yml -f docker-compose.dev.yml exec rabbitmq rabbitmqctl list_policies
+docker compose -f docker-compose.yml -f docker-compose.dev.yml exec rabbitmq rabbitmqctl list_queues name policy effective_policy_definition | grep -E 'wa_unofficial|behavior'
 ```
+
+### 1.1 Retensi antrean berisi data pribadi (SEC-G50-04)
+RabbitMQ **menghapus properti `expiration`** saat pesan di-dead-letter, sehingga tanpa batas di sisi broker nomor HP
+(`to_e164`) di `notify.wa_unofficial.dlq` akan tersimpan selamanya. Policy broker (definitions, dipasang ulang setiap
+start rabbitmq):
+
+| Policy | Queue | `message-ttl` | `max-length` / `overflow` |
+|---|---|---|---|
+| `efn-wa-unofficial-dlq-retention` | `notify.wa_unofficial.dlq` | 24 jam | 1000 / `drop-head` (dibuang, tanpa DLX) |
+| `efn-wa-unofficial-retention` | `notify.wa_unofficial` | 24 jam (backstop `expiration` per pesan dari BFF) | 5000 / `drop-head` (ke DLQ lalu TTL di atas) |
+| `efn-behavior-dlq-retention` | `behavior.event.dlq` (subject_key pseudonim) | 7 hari (= retensi staging `behavior.event_raw`) | 100000 / `drop-head` |
+
+Konsekuensi operasional:
+- Replay `notify.wa_unofficial.dlq` hanya mungkin dalam 24 jam, dan umumnya **tidak dilakukan** (promo kedaluwarsa).
+  Replay `behavior.event.dlq` dalam 7 hari.
+- Erasure DSAR tidak perlu menyisir DLQ: pesan hilang paling lambat 24 jam / 7 hari (sebut di inventaris PDP).
+- Jangan menambah policy operator yang polanya cocok dengan queue di atas (RabbitMQ hanya menerapkan SATU policy per
+  queue, yang prioritasnya tertinggi; policy lain bisa menghapus TTL tanpa terlihat).
 
 ## 2. Persiapan dev (sekali)
 
@@ -88,6 +108,9 @@ Semua flag di `infra/compose/.env` lalu `docker compose ... up -d api-gateway` (
    dev, tanpa relai ke internet. UI: `https://localhost:8025` (percayai `secrets/efn_ca_crt.txt`).
 2. `.env`: `EMAIL_ENABLED=true` (host/port/mode/from/URL unsubscribe sudah diisi default dev). Recreate api-gateway.
 3. Selama alur isi/verifikasi email member belum dibangun, notifier mengembalikan `skipped_no_email` (bukan error).
+4. Production (SEC-G50-10): `EMAIL_ENABLED=true` ditolak `deploy-validate` kecuali config rilis memuat
+   `EMAIL_DPA_APPROVAL_REF` (nomor dokumen DPA penyedia + persetujuan DPO) **dan** Superadmin mencantumkan
+   `EMAIL_ENABLED` di `EFN_ALLOW_FEATURE_ON` (`/etc/efn/deploy.conf`). Dev/staging tidak terkena gerbang ini.
 
 ### 3.5 ETL perilaku -> ClickHouse
 `ETL_ENABLE_BEHAVIOR=true` **belum boleh** dinyalakan: skema PG `behavior.*` dari BFF dan asumsi ETL belum cocok (§8).
@@ -130,8 +153,8 @@ Jaringan: `segment-ch` (ClickHouse), `segment-rpc` (odoo-rpc-gateway), `segment-
    (dengan `F="-f docker-compose.yml -f docker-compose.dev.yml -f docker-compose.wa-unofficial.yml"`).
 3. Idle dulu (flag `false`) untuk memeriksa jalur:
    ```bash
-   docker compose $F --profile core --profile observability --profile wa-unofficial up -d wa-egress-proxy wa-unofficial
-   docker compose $F ps wa-unofficial wa-egress-proxy      # healthy
+   docker compose $F --profile core --profile observability --profile wa-unofficial up -d wa-egress-proxy wa-unofficial wa-admin-relay
+   docker compose $F ps wa-unofficial wa-egress-proxy wa-admin-relay     # healthy
    ```
 4. `.env`: `WA_UNOFFICIAL_ENABLED=true` lalu recreate `wa-unofficial` **dan** `api-gateway` (BFF memeriksa flag yang sama).
 
@@ -139,6 +162,13 @@ Egress: `wa-egress-proxy` (HAProxy, `infra/wa-egress/haproxy.cfg`) meneruskan TL
 diizinkan; `wa-unofficial` menjangkau `web.whatsapp.com` lewat `extra_hosts` ke IP proxy. **Daftar host BELUM
 DIVERIFIKASI**: bila pairing/kirim gagal, lihat log proxy (`sni=... ts=...`): SNI ditolak = host belum ada di allowlist.
 Tambah host hanya lewat perubahan devsecops (ACL + backend + `extra_hosts`) dengan catatan di ADR-044.
+
+Jalur masuk admin & metrik (SEC-G50-06): Traefik dan Prometheus -> `wa-admin-relay` (HAProxy TCP, TLS passthrough,
+`infra/wa-egress/admin-relay.cfg`, network `wa-ingress`, listen hanya `172.30.21.10:8443`) -> `wa-unofficial:8443`
+(network `wa-admin`). wa-unofficial tidak berbagi network dengan Traefik/Prometheus dan relay tidak listen di sisi
+`wa-admin`, jadi wa-unofficial yang dikompromi tidak bisa membuka koneksi ke Traefik, Prometheus, maupun relay. TLS
+tetap diverifikasi end-to-end terhadap sertifikat `wa-unofficial`. Bila rute admin/scrape gagal: cek
+`docker compose $F logs wa-admin-relay` (`ts=` terminasi) dan pastikan relay healthy.
 
 ### 5.2 Pairing (operator)
 Endpoint admin hanya lewat Traefik `wg-https` host `wa-admin.<domain>` + IP subnet staf (`internal-ops`) + sertifikat
@@ -159,7 +189,22 @@ curl -fsS "${C[@]}" -X POST https://wa-admin.efn.local:9443/v1/admin/session/log
 rm -rf "$d"
 ```
 
-Kode/QR pairing tidak pernah di-log; jangan tempel di chat. Rate limit: 10 gagal/menit -> 429.
+Kode/QR pairing tidak pernah di-log; jangan tempel di chat.
+
+#### Operator terkunci (429) - SEC-G50-12
+Limiter gagal-autentikasi di `wa-unofficial` (`src/admin-server.ts`) bersifat **global per proses**, bukan per IP/operator:
+10 request dengan token salah dalam satu menit dari siapa pun yang lolos mTLS + `internal-ops` membuat SEMUA request admin
+(termasuk operator dengan token benar) dijawab `429` sampai jendela berakhir. Risiko diterima (Info) karena di depannya
+ada mTLS + IP staf; perubahan limiter = kode service (bukan devsecops).
+Pemulihan:
+1. Tunggu >= 60 detik tanpa request lalu coba lagi (jendela per menit).
+2. Bila 429 terus berulang, ada klien lain yang terus gagal: cek log Traefik untuk router `wa-admin` (IP sumber WireGuard)
+   dan log `wa-unofficial` (pesan gagal auth, tanpa token). Hentikan/putus peer itu (WireGuard), atau cabut sertifikat
+   klien `wa-operator` yang bocor (terbitkan ulang: `bash scripts/gen-pki.sh wa-operator`).
+3. Darurat: `docker compose $F restart wa-unofficial` (penghitung di memori ikut ter-reset; sesi WA terenkripsi di volume
+   tetap ada, tidak perlu pairing ulang).
+4. Curiga token admin bocor -> ganti `secrets/wa_unofficial_admin_token.txt` (>= 32 karakter acak) lalu recreate
+   `wa-unofficial`.
 
 ### 5.3 Mematikan darurat
 `WA_UNOFFICIAL_ENABLED=false` di `.env` lalu recreate `wa-unofficial` + `api-gateway` (BFF berhenti publish; pesan di
@@ -172,7 +217,8 @@ tidak terdampak.
 1. `GET /v1/admin/session` -> `detail` (`logged_out`, `connecting`, ...).
 2. Log `wa-unofficial` dan `wa-egress-proxy` (SNI ditolak? DNS gagal? `ts=` terminasi).
 3. `logged_out` = sesi dicabut dari ponsel -> pairing ulang (§5.2, non-production saja).
-4. Jangan putar ulang `notify.wa_unofficial.dlq` (promo kedaluwarsa); hapus isinya setelah dicatat.
+4. Jangan putar ulang `notify.wa_unofficial.dlq` (promo kedaluwarsa); policy broker membuang isinya setelah 24 jam
+   (§1.1). Catat jumlahnya bila perlu, jangan ekspor isi (berisi nomor HP).
 
 ### EfnWaUnofficialBanned
 Nomor diblokir WhatsApp (R-B16). Segera `WA_UNOFFICIAL_ENABLED=false` (§5.3), catat waktu + volume kirim 24 jam
@@ -194,12 +240,13 @@ docker compose $F logs clickhouse-init | grep efn_segment_reader   # "user (... 
 | `BEHAVIOR_TRACKING_ENABLED` | DPO: dasar hukum, teks banner final, DPIA, retensi (Q-SM16/17/26); entri inventaris PDP | `BEHAVIOR_TRACKING_DPO_APPROVAL_REF` + `CONSENT_TRACKING_*` final + Superadmin `EFN_ALLOW_FEATURE_ON` |
 | `PROMO_CAMPAIGN_ENABLED` (+ `SEGMENT_ENABLED`) | DPO (profiling), Marketing (approver 4-eyes), Finance (anggaran voucher) | `PROMO_CAMPAIGN_APPROVAL_REF` + `EFN_ALLOW_FEATURE_ON` |
 | `WA_UNOFFICIAL_ENABLED` | Penerimaan risiko tertulis pemilik proyek + Legal (Q-SM14), DPO (Q-SM18), nomor terpisah (Q-SM15), PoC host egress | `WA_UNOFFICIAL_RISK_ACCEPTANCE_REF` + `EFN_ALLOW_FEATURE_ON` + secret host diisi manual |
-| `EMAIL_ENABLED` | Penyedia SMTP + DPA + SPF/DKIM/DMARC (Q-SM19) | `EMAIL_SMTP_*`, secret `email_smtp_password` di host |
+| `EMAIL_ENABLED` | Penyedia SMTP + DPA + SPF/DKIM/DMARC (Q-SM19); transfer lintas negara bila penyedia di luar negeri (PDP Pasal 56) | `EMAIL_DPA_APPROVAL_REF` + `EFN_ALLOW_FEATURE_ON` (SEC-G50-10) + `EMAIL_SMTP_*`, secret `email_smtp_password` di host |
 | `WISHLIST/RESTOCK/PRICE_ALERT_ENABLED` | Entri PDP §2.8.12 disetujui DPO | config rilis |
 | `ETL_ENABLE_BEHAVIOR` | mengikuti tracking + rekonsiliasi skema §8 | config rilis |
 
 `scripts/lib/deploy-validate.sh` (`efn_validate_g50_config`) menolak production tanpa ref; ref = nomor dokumen
-(`^[A-Za-z0-9._/-]{3,64}$`), bukan isi dokumen. Staging/prod juga butuh GitHub Environment `CLICKHOUSE_PASSWORD_SEGMENT`,
+(`^[A-Za-z0-9._/-]{3,64}$`), bukan isi dokumen; `check-encryption.sh` memastikan ref tidak pernah berisi nilai di
+`.env.example`/compose. Staging/prod juga butuh GitHub Environment `CLICKHOUSE_PASSWORD_SEGMENT`,
 `BEHAVIOR_SUBJECT_PEPPER`, `BEHAVIOR_DEVICE_PEPPER`, `EMAIL_UNSUBSCRIBE_KEY` (`openssl rand -base64 36`) sebelum deploy
 pertama setelah G50, dan intermediate PKI diterbitkan ulang (nama leaf baru, `internal-pki.md#service-baru`).
 

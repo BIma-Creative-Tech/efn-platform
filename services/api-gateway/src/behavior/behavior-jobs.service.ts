@@ -70,8 +70,10 @@ export class BehaviorJobsService implements OnModuleInit, OnModuleDestroy {
         await purge(`DELETE FROM behavior.segment_member WHERE received_at < now() - make_interval(days => $1::int)`, this.config.segmentRetentionDays);
         await purge(`DELETE FROM behavior.segment_chunk WHERE received_at < now() - make_interval(days => $1::int)`, this.config.segmentRetentionDays);
         await purge(`DELETE FROM behavior.erased_subject WHERE erased_at < now() - make_interval(days => $1::int)`, this.config.behaviorErasedSubjectRetentionDays);
-        // Antrean erasure ETL: ≥ 100 hari (> TTL ClickHouse 90 hari; konfigurasi minimum 91)
+        // Antrean erasure ETL: ≥ 100 hari (> TTL ClickHouse 90 hari; konfigurasi minimum 100)
         await purge(`DELETE FROM behavior.subject_erasure WHERE created_at < now() - make_interval(days => $1::int)`, this.config.behaviorErasedSubjectRetentionDays);
+        // Penanda idempotensi event purchase (jendela job 48 jam)
+        await purge(`DELETE FROM behavior.purchase_emitted WHERE emitted_at < now() - make_interval(days => $1::int)`, 30);
         const cartAbandon = this.config.behaviorTrackingEnabled ? await this.deriveCartAbandon(q) : 0;
         const res: BehaviorJobResult = {
           skipped: false,

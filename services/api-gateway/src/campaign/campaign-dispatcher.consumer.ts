@@ -123,10 +123,11 @@ export class CampaignDispatcherConsumer implements OnApplicationBootstrap {
         `SELECT m.id::text AS member_id FROM behavior.segment_member s
            JOIN behavior.subject_member sm ON sm.subject_key = s.subject_key
            JOIN platform.member m ON m.id = sm.member_id AND m.deleted_at IS NULL
-          WHERE s.run_id = $1::uuid AND s.segment_code = $2 AND m.id > $3::uuid
+          WHERE s.run_id = $1::uuid AND s.segment_code = $2 AND s.company_code = $5 AND m.id > $3::uuid
             AND ${CONSENT('marketing')} AND ${CONSENT('tracking')}
           ORDER BY m.id LIMIT $4`,
-        [p.segment_run_id, p.segment_code, after, PAGE],
+        // SEC-G50-08: hanya anggota segmen ber-PT sama dengan kampanye (PT pemilik API key Odoo yang mengklaimnya)
+        [p.segment_run_id, p.segment_code, after, PAGE, p.company_code],
       );
       return r.rows.map((x) => x.member_id);
     }

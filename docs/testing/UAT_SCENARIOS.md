@@ -1207,3 +1207,157 @@ Status: **Draft** (efn-qa-engineer, 18 Nov 2026). Untuk **Finance** dan **Ops/PI
 - **When** operator menutup jendela (secret `migration_bundle_key` & `clickhouse_password_mig` → `disabled`, overlay `docker-compose.migration.yml` dilepas) dan menghapus bundel/hasil
 - **Then** `ls /run/secrets` di container Odoo **tidak** memuat `migration_bundle_key`; user ClickHouse `efn_mig` hilang; direktori pertukaran tanpa `*.efnmig`/`*.part`/`*.json`; tanggal hapus dicatat di berita acara dan inventaris PDP (≤ 90 hari)
 - **And** Odoo, POS, dan checkout tetap berjalan normal selama dan sesudah jendela (migrasi bukan jalur transaksi)
+
+---
+
+## N. Gelombang 50 — Supermarket: visitor → voucher → beli, notify-me & price alert (docs/04 §28.6–§28.10, ADR-044/047/048 *Proposed*, L-152..L-164)
+
+Status: **Draft** (efn-qa-engineer, 20 Nov 2026; belum dijalankan, tidak ada runtime lokal saat penulisan). Untuk penguji bisnis dan teknis; dijalankan di **dev** (`efn-dev`) atau staging lokal. Semua flag G50 **OFF di production** (CLAUDE.md, ADR-047); skenario ini tidak boleh dijalankan di prod. Data = **demo** PT Supermarket Demo (`SMD`, placeholder Q-SM1).
+
+**Blocker yang diketahui (dari QA G50; skenario terkait gagal/ditunda sampai diperbaiki, lihat laporan QA)**
+- **B1** usulan segmen worker → Odoo ditolak 422 `invalid_input` (format `metrics`): N1 langkah 4 dan N6c tidak lulus sampai worker/Odoo disamakan.
+- **B2** belum ada layar Inbox/voucher di superapp-web (`GET /v1/me/inbox` tanpa klien): N1 langkah 7 diuji lewat API (`curl` ber-Bearer) bukan UI.
+- **B3** event `purchase` belum diterbitkan siapa pun: N1 langkah 9–10 (pembeli keluar dari segmen, funnel `purchasers`) hanya berlaku bagi pembeli yang sempat `checkout_start`.
+- **B4** ETL perilaku butuh migrasi `20-platform-g50a.sql` terbaru (kolom `company_code`, `ingested_at`) dan grant kolom; runbook §3.5 yang menyebut "terblokir" sudah usang.
+
+**Flag & prasyarat dev (`infra/compose/.env`, recreate `api-gateway`; selain yang tertulis = `false`)**
+| Flag / env | Nilai | Untuk skenario |
+|---|---|---|
+| `BEHAVIOR_TRACKING_ENABLED` + `CONSENT_TRACKING_VERSION=tracking@2026-11-20` + `CONSENT_TRACKING_TEXT_SHA256=<sha256 body TRACKING_TEXT>` | `true` | N1–N4, N9 |
+| `WISHLIST_ENABLED`, `RESTOCK_ALERT_ENABLED`, `PRICE_ALERT_ENABLED` | `true` | N1 (wishlist), P1–P8 |
+| `PROMO_CAMPAIGN_ENABLED`, `CAMPAIGN_COMPANIES=SMD`; Odoo `efn_campaign.enabled=true` (+ opsional `efn_campaign.enabled.SMD`) | `true` | N1, N3–N8 |
+| `EMAIL_ENABLED` (Mailpit dev) | `true` | N1 (email), P1/P3/P5 |
+| `WA_UNOFFICIAL_ENABLED` (nomor uji, overlay `docker-compose.wa-unofficial.yml`) | `true` hanya untuk P5/N1b | opsional |
+| `ETL_ENABLE_BEHAVIOR` (ETL 15 menit) | `true` | N1 langkah 3, N9 |
+| `SEGMENT_ENABLED` (overlay `docker-compose.segment.yml`) + `SEGMENT_MIN_SIZE=1`, `SEGMENT_K_MIN=2` (demo kecil) | `true` | N1 langkah 4 |
+| `CAMPAIGN_FREQUENCY_CAP_ENABLED`, `CAMPAIGN_BUDGET_CAP_ENABLED` | `true` hanya untuk N8b/N8c | opsional |
+
+**Data uji N**
+- Platform: kanal online `SMD` terpetakan ke company `SMD` (`platform.online_catalog_sync`), outlet `SMD01`; produk **Susu UHT** (id P1, harga Rp12.000) dan **Yoghurt** (id P2, harga Rp9.000) ada di `platform.online_catalog_item` kanal `SMD`; stok cache `ocat:stk:SMD:SMD01:<id>`.
+- Member: **Sari** (login OTP, nomor uji, consent `marketing` aktif, consent akun `tracking` **aktif**), **Tika** (consent `marketing` aktif, `tracking` **tidak**), **Wira** (`tracking` aktif, `marketing` **dicabut**). Visitor anonim **Budi** (perangkat tanpa login).
+- Odoo: company `SMD`; user teknis `efn_campaign_smd` (BFF) dan `efn_segment_smd` (worker), masing-masing grup *campaign bot* saja dan **satu** company; staf **Maya** (Marketing, grup pengguna kampanye) dan **Dedi** (Marketing penyetuju, orang berbeda dari Maya); program voucher tipe **Kupon** "Diskon Susu" (aktif, milik `SMD`, berakhir setelah kampanye) dan program **Kode Promo** "HEMAT10".
+- Seluruh pemeriksaan "tidak boleh memuat" berlaku untuk log BFF/worker/Odoo/Loki: **tanpa nomor HP, email, `subject_key`/`device_key` penuh, kode voucher, API key, isi payload**.
+
+### N1. Visitor → voucher → beli (jalur utama)
+1. **Given** semua flag di atas aktif; Sari login di superapp-web kanal `SMD` dan di Pengaturan Privasi menyalakan "Pelacakan aktivitas" (consent akun `tracking`)
+   **When** Sari membuka halaman Susu UHT di `SMD01` tiga kali dengan total ≥ 30 detik, tidak menambah ke keranjang
+   **Then** `GET /v1/config` memuat `features.tracking=true`, `tracking_consent.version=tracking@2026-11-20`; `POST /v1/events` (Bearer) menjawab **202** `accepted ≥ 1`; baris muncul di `behavior.event_raw` dengan `subject_kind=member`, `company_code=SMD`, `stock_status`/`price_idr` terisi dari server (bukan dari klien)
+2. **And** Budi (tanpa login) menyetujui banner → `POST /v1/events/consent` **202** `recorded`; event Budi tercatat `subject_kind=device` dan **tidak** pernah menjadi target kampanye
+3. **When** ETL 15 menit berjalan (`behavior_events`)
+   **Then** `efn_dwh.fact_visitor_event` memuat event Sari; tidak ada kolom nomor HP/email/IP; agregat harian `agg_visitor_*` tanpa `subject_key`; log ETL tanpa nilai data
+4. **When** `segment-worker run --once` berjalan
+   **Then** BFF `POST /internal/v1/segments/{run_id}/members` menjawab 200 per chunk (≤ 5000) dan Odoo menampilkan kampanye `viewed_not_bought (xxxxxxxx)` berstatus **Diusulkan** (origin worker) dengan jumlah anggota agregat dan tanpa data member (**B1**)
+5. **When** Maya mengisi judul (≤ 48) dan isi pesan (≤ 160), memilih program "Diskon Susu", mode **Kode anonim**, jumlah kode 50, kanal Inbox + Push + Email, periode 7 hari, lalu Dedi menyetujui
+   **Then** status **Disetujui** (`approval_rev=1`); 50 kartu voucher dibuat tanpa partner; satu baris outbox `queued`; mode voucher terkunci
+6. **When** BFF sinkron (≤ 60 detik)
+   **Then** baris outbox diklaim lalu di-ack → kampanye Odoo **Terkirim**; `platform.campaign.status` `queued → dispatching → done`; Sari mendapat 1 baris inbox + 1 kode voucher; push terkirim ke token Sari; email masuk **Mailpit** tanpa kode voucher (kode hanya di inbox); `campaign_delivery` Sari `delivered`
+7. **When** Sari memanggil `GET /v1/me/inbox` (Bearer) (**B2**)
+   **Then** 1 item berlaku dengan `voucher.code`; member lain tidak dapat melihat kode itu; `Cache-Control: no-store`
+8. **When** Sari memakai kode itu di POS/checkout `SMD` (satu kali)
+   **Then** diskon berlaku; kode tidak bisa dipakai kedua kali (kupon sekali pakai); transaksi POS/online tidak bergantung pada tracking/ETL/worker (semua boleh mati)
+9. **And** Sari membeli → pada run segmen berikutnya Sari **tidak** lagi di `viewed_not_bought` untuk produk itu (**B3**: hanya terjamin bila ada `checkout_start`/event `purchase`)
+10. **And** dashboard funnel (`agg_visitor_funnel_daily`) memuat viewers ≥ 1, purchasers ≥ 1 (**B3**)
+
+### N1b. Kanal WhatsApp tidak resmi (opsional, nomor uji)
+- **Given** `WA_UNOFFICIAL_ENABLED=true` di dev, Sari ber-consent `marketing`, kampanye N1 menyertakan kanal `wa_unofficial`
+- **When** dispatcher berjalan
+- **Then** satu pesan `promo_generic` masuk antrean `notify.wa_unofficial` (kedaluwarsa ≤ 24 jam, ≤ `valid_to`); teks memuat "Balas STOP"; **tanpa kode voucher**; Sari membalas **STOP** → hasil `opt_out` diterima BFF dan Sari tidak lagi menerima WA kampanye/alert; di production flag ini OFF (R-B16)
+
+### N2. Negatif — consent tracking tidak ada atau ditarik
+- **Given** Tika (consent akun `tracking` tidak aktif) mengirim `POST /v1/events` dengan Bearer
+- **When** BFF memproses
+- **Then** **403** `tracking_consent_required`; klien superapp berhenti mengirim dan mengosongkan antrean; **tidak ada** baris di `behavior.event_raw`/`event_dedup`
+- **And** Budi menolak banner → tidak ada ID perangkat dibuat, tidak ada panggilan server; Budi menarik persetujuan setelah sempat setuju → `device_consent` baris baru `granted=false`, `device_link` dihapus, event berikutnya **403**
+- **And** Sari menarik consent akun `tracking` → `device_link` + `subject_member` dihapus; Sari tidak lagi muncul sebagai target segmen pada fan-out berikutnya (query target mensyaratkan consent `tracking` terbaru `granted`)
+
+### N3. Negatif — consent `marketing` dicabut di tengah jalan
+- **Given** kampanye N1 disetujui dan outbox sudah diklaim; sebelum fan-out halaman target, **Wira** mencabut consent `marketing` (Sari tetap aktif)
+- **When** dispatcher memproses
+- **Then** Wira **tidak** menerima inbox/voucher/push/email/WA (consent dibaca ulang di setiap halaman target dan oleh notifier email/WA saat enqueue); tidak ada baris `campaign_delivery` untuk Wira; Sari tetap terkirim; kode voucher yang tidak ditugaskan tetap di pool
+
+### N4. Negatif — flag mati (kill switch)
+- **Given** (a) `BEHAVIOR_TRACKING_ENABLED=false`; (b) `PROMO_CAMPAIGN_ENABLED=false`; (c) Odoo `efn_campaign.enabled=false`; (d) `WISHLIST_ENABLED=false`
+- **Then** (a) `GET /v1/config` `features.tracking=false`, banner tidak tampil, `POST /v1/events` **202** `{accepted:0, disabled:true}` dan klien berhenti permanen; (b) `GET /v1/me/inbox` **404**, `features.campaign_inbox=false`, listener segmen `:9466` tidak dibuka, outbox tidak diklaim; (c) Odoo menolak approval ("dimatikan untuk PT ini") dan RPC bot menjawab **422** `efn_campaign:disabled` (BFF tidak mengulang, log `odoo_business disabled`); baris outbox yang sempat diklaim tetap `claimed` (cron pengembalian klaim dilewati selama sakelar mati) dan diproses setelah sakelar dinyalakan lagi; (d) endpoint wishlist **404** dan UI menyembunyikan tombol
+- **And** pada seluruh kasus POS, checkout, OTP, dan pembayaran tetap normal
+
+### N5. Negatif — PT lain / company mismatch
+- **Given** user teknis `efn_campaign_smd` (company SMD)
+- **When** (a) `efn_campaign_proposal_upsert` dikirim dengan `company_code=PB`; (b) user teknis ditambahi grup lain atau dua company; (c) payload klaim berisi `company_code` PT lain sampai ke BFF; (d) pemanggil bukan user bot (mis. Maya) memanggil `efn_campaign_claim`
+- **Then** (a) **403** `efn_campaign:company_mismatch`, tidak ada kampanye dibuat; (b) **403** `efn_campaign:access_denied` (fail closed); (c) BFF menandai baris `company_mismatch`, tidak menyimpan, **tidak** di-ack (Odoo: maks 5 percobaan → `failed` + aktivitas ke Marketing); (d) **403** `access_denied`
+- **And** sertifikat klien bukan CN `segment-worker` ke `:9466` ditolak handshake TLS; CN lain yang valid ditolak **403** `forbidden`; path selain `POST /internal/v1/segments/{run_id}/members` → 404
+
+### N6. Idempotensi dan ketahanan
+- **N6a.** Worker mengulang chunk yang sama (timeout) → BFF **200** `duplicate_chunk:true`, `accepted:0`, jumlah `segment_member` tidak bertambah; chunk dengan nomor sama tetapi isi berbeda → **409** `chunk_conflict` (worker tidak mengulang; perilaku run sesudahnya diamati dan dicatat); `run_id` di path ≠ body → **400**
+- **N6b.** Subjek yang sudah di-erase dikirim lagi dalam chunk → tidak disimpan (`accepted` lebih kecil dari jumlah kunci)
+- **N6c.** `proposal_upsert` dikirim dua kali untuk `(run_id, segment_code)` yang sama → tepat **satu** kampanye (`created:true` lalu `created:false, updated:false`); kampanye yang sudah Disetujui/Terkirim menjawab `locked:true` dan tidak berubah (**B1**)
+- **N6d.** BFF menyimpan kampanye lalu gagal saat ack → klaim kembali `queued` setelah 10 menit → klaim ulang menemukan `campaign_key` yang sama: **tidak** ada duplikasi kode voucher/pesan antrean, hanya ack; ack kedua → `already_done`
+- **N6e.** Pesan `promo.campaign.requested` terkirim dua kali → `duplicate`; tidak ada member menerima inbox/push dua kali (`campaign_delivery` kunci kampanye × member); sistem bersifat *at-most-once* per kanal
+- **N6f.** Klien kirim `Idempotency-Key`/event dengan `event_id` yang sama dalam batch berbeda → `duplicates` bertambah, tidak ada baris ganda di staging
+
+### N7. Negatif — kampanye kedaluwarsa
+- **Given** Maya menyetujui kampanye dengan periode berakhir hari ini; BFF mati sampai lewat tengah malam
+- **When** BFF hidup kembali dan mengklaim
+- **Then** Odoo menandai baris outbox `failed` alasan `expired` (tidak diserahkan ke BFF) + aktivitas ke Dedi/Maya; kampanye tidak terkirim; menyetujui kampanye yang `date_to` sudah lewat ditolak ("Periode kampanye sudah lewat")
+- **And** bila kampanye lolos klaim tetapi `valid_to` lewat sebelum fan-out → `platform.campaign.status=expired`, tidak ada inbox/push; baris inbox lama disembunyikan setelah `valid_to` dan dihapus oleh retensi
+
+### N8. Negatif — voucher habis dan batas
+- **N8a. Voucher habis.** Kode anonim 2, target 3 member → 2 member dapat kode; member ke-3 `campaign_delivery` `skipped` alasan `voucher_exhausted`; fan-out berhenti (`stop_reason`), kampanye `done`, aktivitas/laporan menunjukkan sisa target tidak terjangkau; tidak ada kode yang dibagikan dua kali
+- **N8b. Cap frekuensi** (`CAMPAIGN_FREQUENCY_CAP_ENABLED=true`, `CAMPAIGN_MAX_PER_MEMBER_PER_WEEK=2`): member yang sudah menerima 2 kampanye dalam 7 hari → `skipped` `frequency_cap`; dengan flag mati cap tidak berlaku
+- **N8c. Cap anggaran** (`CAMPAIGN_BUDGET_CAP_ENABLED=true`, anggaran Rp15.000, nilai voucher Rp10.000): hanya 1 voucher ditugaskan lalu berhenti `budget_cap`. Catatan: Odoo saat ini tidak mengirim `voucher_value_idr`, sehingga cap anggaran tidak dapat ditegakkan (temuan QA) — skenario ini baru valid setelah nilai voucher dikirim
+- **N8d. Kode publik** (`HEMAT10`, kuota 50): semua target menerima kode yang sama; program lain yang memakai kode sama ditolak saat approval; pada Odoo, kampanye kode publik **tanpa** usulan segmen belum punya target (temuan QA, keputusan produk)
+- **N8e. Mode terikat member:** kartu dibuat per `partner_id`; BFF hanya mengirim notifikasi dan **tidak** menyimpan kode atau `partner_id`
+
+### N9. Erasure/DSAR — event masih di antrean dan di ClickHouse
+- **Given** Sari punya event di antrean `behavior.event`, di `behavior.event_raw`, dan sudah di ClickHouse `fact_visitor_event`; Sari meminta hapus akun
+- **When** erasure berjalan
+- **Then** satu baris `behavior.subject_erasure` per `subject_key` (HMAC member + setiap `device_key` tertaut) dengan `request_id` DSAR dalam **satu transaksi** dengan transisi DSAR → `processing`; `event_raw`, `event_dedup`, `segment_member`, `device_link`, `subject_member` dihapus; `erased_subject` dicatat (retensi ≥ 100 hari)
+- **And** batch Sari yang **masih di antrean** saat erasure tidak menulis ulang event ke staging (writer menolak batch dengan `received_at ≤ erased_at`); event baru dari perangkat yang sama **sesudah** erasure dengan consent baru tetap diterima
+- **And** job ETL `behavior_erasure` menjalankan `ALTER DELETE` per `subject_key`, memverifikasi `count()=0`, baru watermark maju; `privacy.erasure.completed` untuk store `clickhouse` **ditahan** sampai kunci hilang dari ClickHouse (bila mutation belum selesai → siklus berikutnya, bukan gagal diam-diam)
+- **And** DSAR export memuat tautan perangkat (tanpa `device_key`) dan event staging ≤ 7 hari milik Sari; inbox/voucher/wishlist/alert ikut diekspor dan dihapus; kode voucher member tidak muncul di log
+
+### N10. Privasi dan keamanan umum
+- Ringkasan segmen dari worker yang memuat rangkaian ≥ 6 digit atau pola email → **422** `efn_campaign:pii_suspected` (tidak pernah disimpan); worker menolak payload yang memuat string heksadesimal 64 karakter sebelum mengirim
+- `POST /v1/events` tanpa/dengan `query` pencarian berisi nomor HP/email → tersimpan `[redacted]`; `query` hanya untuk `type=search`; `cart_abandon` dari klien ditolak `invalid`
+- Rate limit `POST /v1/events` (per device dan per IP) → **429** + `Retry-After`; klien memakai jeda dan tidak membanjiri; Redis mati → **503** (fail closed)
+- Kode voucher terenkripsi AES-256-GCM di `platform.member_voucher.code_enc`; tidak ada kode di `campaign.payload`, log, atau pesan email/WA
+
+### P1. Notify-me (stok kembali) — jalur utama
+- **Given** Sari login, `RESTOCK_ALERT_ENABLED=true`; Susu UHT **habis** (`out`) di `SMD01`; `EMAIL_ENABLED=true` dan Sari punya email terverifikasi + consent `marketing`
+- **When** Sari menekan "Ingatkan saya" memilih kanal **Notifikasi aplikasi** + **Email**
+- **Then** `POST /v1/me/restock-alerts` **201** `{id}`; alert muncul di `GET /v1/me/restock-alerts` (kedaluwarsa 30 hari); `platform.alert_stock_state` = `out`; event `notify_me_request` tercatat hanya bila consent `tracking` aktif
+- **When** stok Susu UHT di `SMD01` pulih ke `in_stock`/`low` (watcher mendeteksi transisi `out → tersedia`)
+- **Then** satu pesan `notify.restock` → push "Stok tersedia lagi" ke token Sari dan satu email `restock_available` di Mailpit; alert hilang dari daftar (`sent_at` terisi: dikirim **sekali**); pesan yang sama diproses ulang → `duplicate`, tanpa kiriman kedua
+- **And** pilihan kanal email/WA hanya tampil bila `GET /v1/config` memuat `features.notify_channels.email|wa_unofficial=true`
+
+### P2. Notify-me — negatif
+- Produk sudah tersedia di outlet itu → **409** `already_in_stock` ("Produk ini sudah tersedia…"), tidak ada baris dibuat
+- Produk/outlet tidak dikenal → **404**; jangan ditampilkan sebagai "fitur mati" di UI
+- Alert aktif ke-51 → **409** `alert_limit_reached`; alert yang sama dibuat dua kali → satu baris (kanal diperbarui), bukan dua
+- Kanal `email` dengan `EMAIL_ENABLED=false`, atau `wa_unofficial` dengan flag mati → **400** `channel_unavailable`; Sari tanpa email terverifikasi atau tanpa consent `marketing` → email **tidak** diantrekan (`skipped_no_email` / `skipped_no_consent`) tetapi push tetap dikirim
+- Sari dihapus/erasure sebelum stok pulih → tidak ada pengiriman (dispatcher hanya memilih member `deleted_at IS NULL`; data alert ikut dihapus oleh erasure)
+- Alert kedaluwarsa (30 hari) tidak dikirim dan dibersihkan; `DELETE /v1/me/restock-alerts/{id}` milik member lain → **404**
+- `RESTOCK_ALERT_ENABLED=false` → semua endpoint **404**, UI menyembunyikan tombol, checkout tak terpengaruh
+
+### P3. Price alert — jalur utama
+- **Given** Yoghurt Rp9.000 di kanal `SMD`; `PRICE_ALERT_ENABLED=true`
+- **When** Sari mengisi harga target **Rp7.500** ("Rp 7.500", pemisah ribuan dibuang) → `POST /v1/me/price-alerts`
+- **Then** **201** `{id}`; `GET` memuat alert dengan `target_price_idr=7500` (kedaluwarsa 90 hari); `alert_price_state` mencatat harga saat ini sebagai dasar
+- **When** harga Yoghurt turun menjadi Rp7.000 (≤ target)
+- **Then** satu pesan `notify.price_alert` → push "Harga turun … Rp7.000" (+ email `price_drop` bila dipilih); alert `triggered_at` terisi, tidak dikirim lagi; harga turun lagi tidak memicu ulang
+- **When** Sari menghapus alert lain dari layar wishlist
+- **Then** `DELETE` berhasil (superapp-web mencari id lewat `GET` lalu `DELETE /v1/me/price-alerts/{id}`); alert tidak muncul lagi
+
+### P4. Price alert dan wishlist — negatif dan batas
+- Target ≥ harga saat ini, 0, negatif, desimal, atau teks → ditolak di klien (pesan Indonesia) dan oleh BFF **400** `invalid_target_price` / `invalid_request`; target > Rp1 miliar ditolak
+- Alert aktif ke-51 → **409** `alert_limit_reached`; item wishlist ke-201 → **409** `wishlist_full`; menambah wishlist dua kali → idempoten (**204**, satu baris)
+- Produk tidak ada di katalog kanal itu → **404**; `channel_code` tidak valid → **400**
+- Harga turun saat Sari tidak punya consent `marketing`: push (pelaksanaan permintaan member) tetap terkirim, email/WA **tidak** (consent diperiksa notifier)
+- Dua event harga yang sama (redelivery) → `duplicate`, satu pengiriman; harga naik kembali lalu turun lagi → alert baru harus dibuat ulang (alert lama sudah `triggered`)
+- `PRICE_ALERT_ENABLED=false` → **404** dan UI menyembunyikan fitur
+
+### P5. Kanal WA tidak resmi untuk notify-me/price alert (non-production)
+- **Given** `WA_UNOFFICIAL_ENABLED=true` (dev), Sari punya nomor terverifikasi + consent `marketing`, memilih kanal WhatsApp
+- **When** alert terpicu
+- **Then** pesan `restock_available`/`price_drop` (kategori `notify_restock`/`price_alert`) masuk `notify.wa_unofficial` dengan `to_hash` HMAC, kedaluwarsa ≤ 24 jam; teks memuat "Balas STOP"; nomor di log ter-mask; alert yang sudah kedaluwarsa di antrean → DLQ/`failed expired`, bukan terkirim terlambat
+- **And** Sari membalas STOP → opt-out dicatat, pesan WA berikutnya `skipped_no_consent`; nomor tidak dapat dibedakan terdaftar/tidak lewat respons API
+- **And** flag mati / WA ban / koneksi putus → alert tetap terkirim lewat push; tidak ada galat bagi member

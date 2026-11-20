@@ -35,8 +35,21 @@ segmen yang gagal di BFF tidak dikirim ke Odoo. Retry = chunk identik (anggota d
 | `search_no_result` | 14 hari: >= 1 pencarian tanpa hasil |
 
 Subjek `device` (belum tertaut akun) tidak dikirim kecuali `SEGMENT_INCLUDE_DEVICE=true`. Segmen < `SEGMENT_MIN_SIZE`
-(10) dilewati. Ringkasan Odoo: `member_count`, `as_of`, `lookback_days`, `product_count`, `top_products` (hanya produk
-dengan >= `SEGMENT_K_MIN` subjek), `reason_counts` (price_sensitive).
+(10) dilewati. Ringkasan Odoo (bentuk = validator `efn_campaign`, QA G50 #1):
+
+```json
+{ "schema_version": 1, "company_code": "SMD", "run_id": "<uuid4>", "segment_code": "price_sensitive",
+  "member_count": 25,
+  "metrics": { "lookback_days": 14, "product_count": 3, "as_of_yyyymmdd": 20261119, "k_min": 10,
+               "top_product_count": 2, "top_product_subjects": 35, "reason_habit": 15, "reason_market": 12 },
+  "summary": "2 produk teratas (>= 10 subjek): id 10 (20), id 12 (15)",
+  "generated_at": "2026-11-20T02:15:30Z" }
+```
+
+`metrics` hanya angka (<= 20 kunci `^[a-z][a-z0-9_]{0,39}$`, |nilai| < 1e12); `reason_*` hanya untuk
+`price_sensitive`. `summary` <= 256 karakter, hanya produk dengan >= `SEGMENT_K_MIN` subjek; id/jumlah >= 6 digit tidak
+ditulis (pola PII Odoo) dan dihitung `+n lainnya`. `generated_at` = waktu run (UTC). Paritas dengan source Odoo diuji
+`tests/test_odoo_contract_parity.py`.
 
 ## Konfigurasi
 
@@ -52,7 +65,7 @@ dengan >= `SEGMENT_K_MIN` subjek), `reason_counts` (price_sensitive).
 | `SEGMENT_BFF_URL`, `SEGMENT_BFF_CA_FILE`, `SEGMENT_BFF_TIMEOUT_SECONDS`, `SEGMENT_BFF_MAX_RETRIES` | `https://api-gateway:3000`, CA internal, 25, 6 |
 | `ODOO_RPC_URL`, `ODOO_RPC_CA_FILE`, `ODOO_DB`, `ODOO_RPC_TIMEOUT_SECONDS`, `ODOO_RPC_MAX_RETRIES` | `https://odoo-rpc-gateway:8443`, CA internal, —, 25, 6 |
 | `SEGMENT_CLIENT_CERT_FILE`, `SEGMENT_CLIENT_KEY_FILE` | `/run/secrets/tls_segment_worker_crt`, `/run/secrets/tls_segment_worker_key` (CN `segment-worker`) |
-| `ODOO_API_KEY_CAMPAIGN_<KODE>_FILE` | `/run/secrets/odoo_api_key_campaign_<kode>` (user teknis `efn_campaign_<kode>`) |
+| `ODOO_API_KEY_SEGMENT_<KODE>_FILE` | `/run/secrets/odoo_api_key_segment_<kode>` (user teknis `efn_segment_<kode>`, satu company; terpisah dari user BFF `efn_campaign_<kode>` — keputusan devsecops G50) |
 
 Plaintext (`http://`, `CH_SECURE=false`) hanya `EFN_ALLOW_PLAINTEXT=true` + `APP_ENV` dev/test.
 
@@ -72,8 +85,8 @@ dengan `--require-hashes`. Test: `pip install -r requirements-dev.txt && pytest`
 
 ## Belum / batasan
 
-- Field ringkasan Odoo, kode segmen, dan respons BFF/Odoo = asumsi G50 (kontrak §28.7 belum merinci) — lihat
-  `docs/agent-reports/efn-data-ai-engineer.md` bagian G50.
+- Bentuk ringkasan Odoo mengikuti validator `efn_campaign` (diuji paritas); kode segmen dan respons BFF masih asumsi
+  G50 (kontrak §28.7 belum merinci) — lihat `docs/agent-reports/efn-data-ai-engineer.md` bagian G50.
 - `purchase` (event server) belum ada di kontrak §28.6; tanpa itu "sudah beli" hanya dari `checkout_start`.
 - Pembanding Price Hunter kosong sampai laporan Price Hunter dipetakan ke SKU (`competitor_prices.product_sku`).
 - Belum ada metrik Prometheus; pantau log `EFN_SEGMENT_RUN` (status `failed`/`partial`).

@@ -55,7 +55,7 @@ EFN_RELEASE_CONFIG_VARS=(ACME_EMAIL PAYMENT_PROVIDER PG_SUPERUSER WHATSAPP_ENABL
   PROMO_CAMPAIGN_ENABLED PROMO_CAMPAIGN_APPROVAL_REF CAMPAIGN_FREQUENCY_CAP_ENABLED CAMPAIGN_BUDGET_CAP_ENABLED
   CAMPAIGN_MAX_PER_MEMBER_PER_WEEK CAMPAIGN_COMPANIES CAMPAIGN_SYNC_SECONDS
   EMAIL_ENABLED EMAIL_SMTP_HOST EMAIL_SMTP_PORT EMAIL_SMTP_TLS_MODE EMAIL_SMTP_USER EMAIL_FROM EMAIL_UNSUBSCRIBE_URL
-  EMAIL_RATE_PER_MIN WA_UNOFFICIAL_ENABLED WA_UNOFFICIAL_RISK_ACCEPTANCE_REF ETL_ENABLE_BEHAVIOR)
+  EMAIL_RATE_PER_MIN EMAIL_DPA_APPROVAL_REF WA_UNOFFICIAL_ENABLED WA_UNOFFICIAL_RISK_ACCEPTANCE_REF ETL_ENABLE_BEHAVIOR)
 # G22 (docs/04 §14.D.1, L-72 D-22-18): env yang DIHAPUS kontrak. Bukan konfigurasi rilis (kunci manifest tak dikenal =
 # ditolak efn-deploy); jalur manual `sudo -E bash deploy.sh` -> production DITOLAK, staging peringatan (BFF: gagal start
 # di production, warning di luar production).
@@ -69,9 +69,10 @@ EFN_REMOVED_CONFIG_VARS=(LOYALTY_POINT_EXPIRY_DAYS)
 # Q-ESB1/7/9 dan Q-INS1/Q-INS4 -> INSIGHT_ENABLED=true di production juga hanya dengan izin Superadmin.
 # G50 (docs/04 §28.10): tracking perilaku, kampanye tertarget dan WA tidak resmi = OFF di production; selain izin
 # Superadmin ini, efn_validate_g50_config mewajibkan ref persetujuan di manifest (DPO / pemilik risiko + Legal).
+# SEC-G50-10: EMAIL_ENABLED juga (penyedia SMTP pihak ketiga, mungkin luar negeri: DPA + transfer PDP Pasal 56, Q-SM19).
 EFN_GATED_FEATURES=(LOYALTY_EXPIRY_ENABLED LOYALTY_INACTIVE_ANONYMIZE LOYALTY_EXPIRY_NOTICE_REQUIRE_CONSENT
   FNB_QR_POINTS_ENABLED ONLINE_LOYALTY_REDEEM_ENABLED INSIGHT_ENABLED
-  BEHAVIOR_TRACKING_ENABLED PROMO_CAMPAIGN_ENABLED WA_UNOFFICIAL_ENABLED)
+  BEHAVIOR_TRACKING_ENABLED PROMO_CAMPAIGN_ENABLED WA_UNOFFICIAL_ENABLED EMAIL_ENABLED)
 # Subset EFN_GATED_FEATURES yang nilai berisikonya `false` (default true = filter perlindungan aktif). SEC-171 (r15):
 # melepas filter consent `marketing` untuk notice hangus = keputusan Legal yang sama jenisnya dengan L-73, jadi memakai
 # izin yang sama (EFN_ALLOW_FEATURE_ON), bukan izin darurat EFN_ALLOW_CONTROL_OFF.
@@ -663,6 +664,7 @@ efn_validate_g22_config() { # app_env
 #   BEHAVIOR_TRACKING_ENABLED=true -> wajib BEHAVIOR_TRACKING_DPO_APPROVAL_REF (DPO: Q-SM16/17/26)
 #   PROMO_CAMPAIGN_ENABLED=true    -> wajib PROMO_CAMPAIGN_APPROVAL_REF (DPO profiling + Marketing + Finance)
 #   WA_UNOFFICIAL_ENABLED=true     -> wajib WA_UNOFFICIAL_RISK_ACCEPTANCE_REF (pemilik proyek + Legal, Q-SM14)
+#   EMAIL_ENABLED=true             -> wajib EMAIL_DPA_APPROVAL_REF (DPA penyedia + SPF/DKIM/DMARC + DPO, Q-SM19; SEC-G50-10)
 #   ETL_ENABLE_BEHAVIOR / SEGMENT_ENABLED=true ditolak selama fitur sumbernya mati (laporan data-AI G50 no. 6)
 # Secret G50 hanya di service yang tercantum (§28.10 baris terakhir) = scripts/check-encryption.sh (render compose).
 efn_validate_g50_config() { # app_env
@@ -675,7 +677,8 @@ efn_validate_g50_config() { # app_env
     efn_no_cntrl "$v" "${!v:-}" || return 1
     [[ -z "${!v:-}" || "${!v}" == true || "${!v}" == false ]] || _efn_err "$v harus true|false" || return 1
   done
-  for v in BEHAVIOR_TRACKING_DPO_APPROVAL_REF PROMO_CAMPAIGN_APPROVAL_REF WA_UNOFFICIAL_RISK_ACCEPTANCE_REF; do
+  for v in BEHAVIOR_TRACKING_DPO_APPROVAL_REF PROMO_CAMPAIGN_APPROVAL_REF WA_UNOFFICIAL_RISK_ACCEPTANCE_REF \
+           EMAIL_DPA_APPROVAL_REF; do
     efn_no_cntrl "$v" "${!v:-}" || return 1
     [[ -z "${!v:-}" || "${!v}" =~ $ref_re ]] \
       || _efn_err "$v harus nomor dokumen persetujuan ^[A-Za-z0-9._/-]{3,64}\$ (bukan isi dokumen)" || return 1
@@ -725,6 +728,9 @@ efn_validate_g50_config() { # app_env
     fi
     if [[ "${WA_UNOFFICIAL_ENABLED:-false}" == true && -z "${WA_UNOFFICIAL_RISK_ACCEPTANCE_REF:-}" ]]; then
       _efn_err "production menolak WA_UNOFFICIAL_ENABLED=true tanpa WA_UNOFFICIAL_RISK_ACCEPTANCE_REF (penerimaan risiko tertulis pemilik proyek + Legal, Q-SM14, ADR-044)"; return 1
+    fi
+    if [[ "${EMAIL_ENABLED:-false}" == true && -z "${EMAIL_DPA_APPROVAL_REF:-}" ]]; then
+      _efn_err "production menolak EMAIL_ENABLED=true tanpa EMAIL_DPA_APPROVAL_REF (DPA penyedia SMTP + SPF/DKIM/DMARC + DPO, Q-SM19, ADR-048; SEC-G50-10)"; return 1
     fi
     if [[ "${ETL_ENABLE_BEHAVIOR:-false}" == true && "${BEHAVIOR_TRACKING_ENABLED:-false}" != true ]]; then
       _efn_err "production menolak ETL_ENABLE_BEHAVIOR=true selama BEHAVIOR_TRACKING_ENABLED mati (docs/04 §28.10)"; return 1

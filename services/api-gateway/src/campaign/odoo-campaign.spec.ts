@@ -58,6 +58,16 @@ describe('parse klaim kampanye Odoo (allowlist, §28.7)', () => {
     expect(mb.codes).toEqual([]);
   });
 
+  it('SATU format (SEC-G50-02): bentuk lama Odoo (title/body datar, voucher{}, tanggal YYYY-MM-DD, ref integer) DITOLAK', () => {
+    const legacy = campaignPayload({ message: undefined, title: 'X', body: 'Y' });
+    delete legacy.message;
+    expect(() => parseCampaignPayload(legacy, 'SMD')).toThrow();
+    expect(() => parseCampaignPayload(campaignPayload({ valid_from: '2026-11-20', valid_to: '2026-11-27' }), 'SMD')).toThrow('valid_from');
+    expect(() => parseCampaignPayload(campaignPayload({ voucher_program_ref: 12 }), 'SMD')).toThrow('voucher_program_ref');
+    const nested = campaignPayload({ voucher_codes: undefined, voucher: { mode: 'anonymous_code', codes: ['SMD-AAAA-0001'] } });
+    expect(() => parseCampaignPayload(nested, 'SMD')).toThrow('voucher_codes');
+  });
+
   it('respons bukan {items: []} → invalid_response', () => {
     expect(() => parseClaim({ rows: [] }, 'SMD')).toThrow(OdooCampaignError);
   });

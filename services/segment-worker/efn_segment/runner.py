@@ -129,7 +129,7 @@ def run_company(
             members = members_payloads(run_id, seg.code, seg.members, params.chunk_size)
             if total_members(members) != seg.member_count:  # defensif: chunking tidak boleh kehilangan anggota
                 raise ContractError("member_count_mismatch")
-            proposal = proposal_payload(company, run_id, seg, sp, as_of, params.k_min, params.top_n)
+            proposal = proposal_payload(company, run_id, seg, sp, as_of, params.k_min, params.top_n, now)
             prepared.append(_Prepared(seg, members, proposal))
     except Exception as exc:
         code = _code(exc)

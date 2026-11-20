@@ -48,6 +48,14 @@ export class BehaviorWriterConsumer implements OnApplicationBootstrap {
     if (ageMs > this.config.behaviorEventRetentionDays * 86_400_000) return { status: 'stale' };
     const outcome = await this.db.tx(async (q): Promise<WriterOutcome> => {
       if (!(await claimMessage(q, BEHAVIOR_WRITER_CONSUMER, behaviorIdempotencyKey(msg.batch_id)))) return { status: 'duplicate' };
+      // QA G50 (L-154): subjek yang di-erase SETELAH batch ini diterima BFF (pesan masih di antrean saat erasure) tidak
+      // boleh menulis ulang event ke staging -> ETL tidak akan membawanya ke ClickHouse setelah jendela recheck.
+      // Event dari perangkat yang sama sesudah erasure (received_at > erased_at, consent baru) tetap diterima.
+      const erased = await q.query(`SELECT 1 FROM behavior.erased_subject WHERE subject_key = $1 AND erased_at >= $2::timestamptz`, [
+        msg.subject_key,
+        msg.received_at,
+      ]);
+      if ((erased.rowCount ?? 0) > 0) return { status: 'stale' };
       const fresh = await q.query<{ event_id: string }>(
         `INSERT INTO behavior.event_dedup (subject_key, event_id, received_at)
          SELECT $1, e, $3::timestamptz FROM unnest($2::uuid[]) AS e

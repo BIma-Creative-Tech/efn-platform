@@ -258,6 +258,10 @@ export function isLimitCode(code: string): boolean {
  * kode dikenal -> `limit_reached` (asumsi: 409 selain `already_in_stock` = batas jumlah; BELUM diverifikasi ke BFF).
  */
 export function mapEngageCode(status: number, code: string): string {
+  // Kode nyata BFF (src/wishlist/dto/wishlist.dto.ts WishlistErrors) -> kode klien (QA G50)
+  if (code === 'wishlist_full') return 'wishlist_limit';
+  if (code === 'invalid_target_price') return 'price_not_lower';
+  if (code === 'alert_limit_reached') return 'limit_reached';
   if (ENGAGE_ERROR_CODES.includes(code)) return code;
   if (status === 404) return 'feature_unavailable';
   if (status === 403) return 'forbidden';

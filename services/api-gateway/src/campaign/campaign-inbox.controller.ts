@@ -5,7 +5,7 @@ import { Errors } from '../common/errors/api-error';
 import { PiiCipher } from '../common/pii/crypto';
 import { AuthUser } from '../common/security/access-token.service';
 import { CurrentUser, JwtAuthGuard } from '../common/security/jwt-auth.guard';
-import { VOUCHER_CODE_AAD } from './campaign-sync.service';
+import { decryptVoucherCode } from './campaign-sync.service';
 
 export interface InboxItem {
   id: string;
@@ -39,11 +39,12 @@ export class CampaignInboxService {
       body: string;
       valid_to: Date | string;
       created_at: Date | string;
+      v_id: string | null;
       code_enc: Buffer | null;
       mode: 'anonymous_code' | 'public_code' | null;
       v_member: string | null;
     }>(
-      `SELECT i.id::text AS id, i.title, i.body, i.valid_to, i.created_at, v.code_enc, v.mode, v.member_id::text AS v_member
+      `SELECT i.id::text AS id, i.title, i.body, i.valid_to, i.created_at, v.id::text AS v_id, v.code_enc, v.mode, v.member_id::text AS v_member
          FROM platform.member_inbox i
          LEFT JOIN platform.member_voucher v ON v.id = i.voucher_id
         WHERE i.member_id = $1 AND i.valid_to > now()
@@ -55,9 +56,10 @@ export class CampaignInboxService {
         let voucher: InboxItem['voucher'] = null;
         // anonymous_code hanya ditampilkan ke member yang ditugaskan (pertahanan berlapis selain join inbox)
         const owned = r.mode === 'public_code' || (r.mode === 'anonymous_code' && r.v_member === user.memberId);
-        if (r.code_enc && r.mode && owned) {
+        if (r.code_enc && r.mode && r.v_id && owned) {
           try {
-            voucher = { code: this.cipher.decrypt(r.code_enc, VOUCHER_CODE_AAD), mode: r.mode };
+            // SEC-G50-11: AAD per baris (v2, terikat id voucher) lalu v1 kolom sebagai cadangan
+            voucher = { code: decryptVoucherCode(this.cipher, r.v_id, r.code_enc), mode: r.mode };
           } catch {
             this.logger.warn(`Kode voucher inbox ${r.id} tidak dapat didekripsi`);
           }

@@ -57,7 +57,15 @@ export class BehaviorController {
 }
 
 export interface PublicConfig {
-  features: { tracking: boolean; wishlist: boolean; restock_alert: boolean; price_alert: boolean; campaign_inbox: boolean };
+  features: {
+    tracking: boolean;
+    wishlist: boolean;
+    restock_alert: boolean;
+    price_alert: boolean;
+    campaign_inbox: boolean;
+    /** QA G50: kanal notify-me yang boleh dipilih (superapp-web `parseFeatures` membaca `notify_channels`). */
+    notify_channels: { push: boolean; email: boolean; wa_unofficial: boolean };
+  };
   /** Versi teks banner consent `tracking` aktif (null = belum dikonfigurasi → banner tidak ditampilkan). */
   tracking_consent: { version: string } | null;
 }
@@ -87,6 +95,7 @@ export class PublicConfigController {
         restock_alert: this.config.restockAlertEnabled,
         price_alert: this.config.priceAlertEnabled,
         campaign_inbox: this.config.promoCampaignEnabled,
+        notify_channels: { push: true, email: this.config.emailEnabled, wa_unofficial: this.config.waUnofficialEnabled },
       },
       tracking_consent: tracking && text ? { version: text.version } : null,
     };

@@ -5,7 +5,7 @@ import { memberHash } from '../../common/pii/pii';
 import { testCipher, testConfig } from '../../common/testing/fakes';
 import { ChannelEnv } from './channel-env';
 import { ChannelTables } from './channel-testing';
-import { MEMBER_EMAIL_AAD, NOTIFY_EMAIL_QUEUE } from './email.constants';
+import { NOTIFY_EMAIL_QUEUE, encryptMemberEmail } from './email.constants';
 import { EmailConfig } from './email.config';
 import { EmailTemplateError } from './email-templates';
 import { EmailEnqueueInput, EmailNotifier } from './email.notifier';
@@ -20,7 +20,7 @@ function setup(enabled = true) {
   const memberId = randomUUID();
   const hash = memberHash(app.memberHashPepper, PHONE);
   t.members.set(memberId, { member_hash: hash, member_ref_enc: cipher.encrypt(PHONE, PII_AAD.MEMBER_REF), deleted: false });
-  t.emails.set(memberId, { email_enc: cipher.encrypt(ADDRESS, MEMBER_EMAIL_AAD), verified_at: new Date(), status: 'active', status_reason: null });
+  t.emails.set(memberId, { email_enc: encryptMemberEmail(cipher, ADDRESS, memberId), verified_at: new Date(), status: 'active', status_reason: null });
   const config = new EmailConfig(new ChannelEnv({ NODE_ENV: 'test', EMAIL_ENABLED: enabled ? 'true' : 'false' }));
   // OutboxService asli: enqueue = INSERT platform.outbox dalam transaksi pemanggil (relay tidak dijalankan)
   const outbox = new OutboxService(t.db, {} as never, app);

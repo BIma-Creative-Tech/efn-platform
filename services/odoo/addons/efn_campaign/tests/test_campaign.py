@@ -1,41 +1,53 @@
 """G50 (docs/04 §28.7, ADR-047 §3.4, L-155/L-156/L-164): kampanye, voucher per mode, outbox klaim/ack, SoD,
-isolasi multi-company, galat berkode 403/422.
+isolasi multi-company, galat berkode 403/422, perbaikan review SEC-G50-01/02/03 + QA G50.
 
 Semua data = data uji (tanpa data member nyata). Metode bot dipanggil langsung sebagai user teknis (jalur /json/2
 memakai get_public_method yang sama; gateway di luar cakupan test ini)."""
 
+import json
+import pathlib
+import re
 import uuid
-from datetime import timedelta
+from datetime import datetime, time, timedelta
 
 from odoo import fields
 from odoo.exceptions import AccessError, UserError, ValidationError
 from odoo.fields import Command
 from odoo.tests import TransactionCase, new_test_user, tagged
 
-PAYLOAD_KEYS = {
-    "schema_version",
-    "campaign_id",
-    "company_code",
-    "kind",
-    "approval_rev",
-    "segment_run_id",
-    "segment_code",
-    "markdown",
-    "channels",
-    "title",
-    "body",
-    "voucher_mode",
-    "voucher_program_ref",
-    "voucher",
-    "budget_idr",
-    "cap_per_member_week",
-    "valid_from",
-    "valid_to",
-}
+FIXTURE = pathlib.Path(__file__).resolve().parent / "fixtures" / "campaign_payload_v1.json"
+ISO_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
+TITLE = "Promo susu"
+BODY = "Diskon Rp10.000 untuk Anda"
 
 
 def _rid():
     return str(uuid.uuid4())
+
+
+def _shape(value):
+    """Bentuk (kunci + tipe) payload untuk dibandingkan dengan fixture bersama."""
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return "bool"
+    if isinstance(value, int):
+        return "int"
+    if isinstance(value, float):
+        return "float"
+    if isinstance(value, str):
+        return "str"
+    if isinstance(value, list):
+        return ["list", _shape(value[0]) if value else None]
+    if isinstance(value, dict):
+        return {key: _shape(item) for key, item in value.items()}
+    return type(value).__name__
+
+
+def _wib_iso(day, end):
+    """Konvensi lead G50: awal = day 00:00 WIB; akhir eksklusif = (day + 1) 00:00 WIB; dikirim UTC."""
+    local = datetime.combine(day + (timedelta(days=1) if end else timedelta()), time(0, 0, 0))
+    return (local - timedelta(hours=7)).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 @tagged("post_install", "-at_install", "efn")
@@ -63,10 +75,11 @@ class TestEfnCampaign(TransactionCase):
         )
         cls.plain = user("efn_cmp_plain_uji", "base.group_user", cls.company)
 
+        # Reward diskon nominal per order -> voucher_value_idr = 10000 (deterministik, sama dengan fixture).
         reward = {
             "reward_type": "discount",
-            "discount": 10,
-            "discount_mode": "percent",
+            "discount": 10000,
+            "discount_mode": "per_order",
             "discount_applicability": "order",
             "required_points": 1,
         }
@@ -97,6 +110,7 @@ class TestEfnCampaign(TransactionCase):
             {"name": "Outlet uji kampanye", "code": "SMG5", "company_id": cls.company.id}
         )
         cls.product = cls.env["product.product"].create({"name": "Yoghurt (uji)", "is_storable": True})
+        cls.fixture = json.loads(FIXTURE.read_text(encoding="utf-8"))
 
     def setUp(self):
         super().setUp()
@@ -110,7 +124,8 @@ class TestEfnCampaign(TransactionCase):
             "run_id": over.pop("run_id", None) or _rid(),
             "segment_code": "viewed_not_bought",
             "member_count": 120,
-            "metrics": {"avg_views": 3.5, "oos_share": 0.2},
+            # Kunci baku docs/04 §28.7b-2 (kunci numerik lain s.d. 20 tetap diterima).
+            "metrics": {"product_count": 12, "lookback_days": 14, "reason_market": 0.4, "reason_habit": 0.25},
             "summary": "Melihat produk susu minimal 3 kali tanpa membeli",
         }
         payload.update(over)
@@ -120,8 +135,8 @@ class TestEfnCampaign(TransactionCase):
         res = self.upsert(segment_code=vals.pop("segment_code", "viewed_not_bought"))
         camp = self.env["efn.campaign"].browse(res["campaign_id"])
         content = {
-            "message_title": "Promo susu",
-            "message_body": "Diskon 10% untuk Anda",
+            "message_title": TITLE,
+            "message_body": BODY,
             "voucher_mode": "anonymous_code",
             "program_id": self.coupon_program.id,
             "code_qty": 3,
@@ -176,15 +191,19 @@ class TestEfnCampaign(TransactionCase):
     # ------------------------------------------------------------ usulan segmen
     def test_proposal_upsert_idempotent(self):
         run_id = _rid()
-        first = self.upsert(run_id=run_id)
+        first = self.upsert(run_id=run_id, generated_at="2026-11-20T01:00:00Z")
         self.assertTrue(first["created"])
         camp = self.env["efn.campaign"].browse(first["campaign_id"])
         self.assertEqual((camp.state, camp.origin, camp.kind), ("proposed", "worker", "segment"))
         self.assertEqual(camp.company_id, self.company)
-        self.assertEqual(camp.segment_metrics, {"avg_views": 3.5, "oos_share": 0.2})
-        again = self.upsert(run_id=run_id)
+        self.assertEqual(
+            camp.segment_metrics,
+            {"lookback_days": 14, "product_count": 12, "reason_habit": 0.25, "reason_market": 0.4},
+        )
+        self.assertEqual(camp.segment_generated_at, datetime(2026, 11, 20, 1, 0, 0))
+        again = self.upsert(run_id=run_id, generated_at="2026-11-20T01:00:00+00:00")
         self.assertEqual((again["campaign_id"], again["created"], again["updated"]), (camp.id, False, False))
-        changed = self.upsert(run_id=run_id, member_count=150)
+        changed = self.upsert(run_id=run_id, member_count=150, generated_at="2026-11-20T01:00:00Z")
         self.assertEqual((changed["campaign_id"], changed["updated"]), (camp.id, True))
         self.assertEqual(camp.segment_member_count, 150)
         other_code = self.upsert(run_id=run_id, segment_code="wishlist_idle")
@@ -196,9 +215,13 @@ class TestEfnCampaign(TransactionCase):
         cases = [
             ({"run_id": "bukan-uuid"}, "invalid_input"),
             ({"segment_code": "Bad Code"}, "invalid_input"),
+            ({"segment_code": "a" * 41}, "invalid_input"),  # selaras SEGMENT_RE BFF (maks 40)
             ({"member_count": -1}, "invalid_input"),
             ({"member_count": True}, "invalid_input"),
             ({"metrics": {"x": "teks"}}, "invalid_input"),
+            ({"metrics": [1, 2]}, "invalid_input"),
+            ({"summary": "x" * 257}, "invalid_input"),
+            ({"generated_at": "2026-11-20T08:00:00+07:00"}, "invalid_input"),
             ({"phone": "0812"}, "invalid_input"),
             ({"schema_version": 2}, "unsupported_schema"),
             ({"summary": "contoh 081234567890"}, "pii_suspected"),
@@ -207,6 +230,7 @@ class TestEfnCampaign(TransactionCase):
         for over, code in cases:
             with self.subTest(over=over), self.assertRaisesRegex(UserError, f"efn_campaign:{code}"):
                 self.upsert(**over)
+        self.assertTrue(self.upsert(segment_code="a" * 40, summary="x" * 256)["created"])
         with self.assertRaisesRegex(AccessError, "company_mismatch"):
             self.upsert(company_code="FARM")
         with self.assertRaisesRegex(AccessError, "company_mismatch"):
@@ -243,12 +267,12 @@ class TestEfnCampaign(TransactionCase):
         Campaign = self.env["efn.campaign"]
         with self.assertRaises(AccessError):
             Campaign.with_user(self.plain).create({"name": "X", "company_id": self.company.id})
-        with self.assertRaises(AccessError):
+        with self.assertRaisesRegex(UserError, "efn_campaign:field_not_writable"):
             Campaign.with_user(self.marketer).create({"name": "X", "state": "approved"})
         camp = self.proposed()
-        with self.assertRaises(AccessError):
+        with self.assertRaisesRegex(UserError, "efn_campaign:field_not_writable"):
             camp.with_user(self.marketer).write({"state": "approved"})
-        with self.assertRaises(AccessError):
+        with self.assertRaisesRegex(UserError, "efn_campaign:field_not_writable"):
             camp.with_user(self.marketer).write({"segment_member_count": 1})
         self.assertIn(self.marketer, camp.editor_ids)
         self.approve(camp)
@@ -256,6 +280,161 @@ class TestEfnCampaign(TransactionCase):
             camp.with_user(self.marketer).write({"message_title": "Ubah"})
         with self.assertRaises(AccessError):
             camp.sudo().outbox_ids.with_user(self.marketer).read(["payload"])
+
+    def test_sec_g50_01_marketing_cannot_inject_outbox_or_cards(self):
+        """SEC-G50-01: field konten + outbox_ids/card_ids/message_ids dalam satu write/create -> ditolak utuh."""
+        camp = self.proposed()
+        Outbox = self.env["efn.campaign.outbox"].sudo()
+        Card = self.env["loyalty.card"].sudo().with_context(active_test=False)
+        outbox_before = Outbox.search_count([])
+        cards_before = Card.search_count([("program_id", "=", self.coupon_program.id)])
+        attacks = [
+            {
+                "name": "x",
+                "outbox_ids": [
+                    Command.create(
+                        {
+                            "company_id": self.company.id,
+                            "kind": "segment",
+                            "ref_model": "efn.campaign",
+                            "ref_id": camp.id,
+                            "approval_rev": 99,
+                            "idempotency_key": f"campaign:SMD:{camp.id}:99",
+                            "payload": {"x": 1},
+                        }
+                    )
+                ],
+            },
+            {"name": "x", "card_ids": [Command.create({"program_id": self.coupon_program.id, "points": 1e6})]},
+            {"name": "x", "message_ids": [Command.create({"body": "palsu", "model": "efn.campaign"})]},
+            {"name": "x", "approval_rev": 5},
+        ]
+        for vals in attacks:
+            with self.subTest(keys=sorted(vals)), self.assertRaisesRegex(UserError, "field_not_writable"):
+                camp.with_user(self.marketer).write(vals)
+        with self.assertRaisesRegex(UserError, "field_not_writable"):
+            self.env["efn.campaign"].with_user(self.marketer).create(
+                {"name": "y", "card_ids": [Command.create({"program_id": self.coupon_program.id, "points": 1})]}
+            )
+        self.assertNotEqual(camp.name, "x")
+        self.assertEqual(camp.state, "proposed")
+        self.assertEqual(Outbox.search_count([]), outbox_before)
+        self.assertEqual(Card.search_count([("program_id", "=", self.coupon_program.id)]), cards_before)
+        # default_<field> context untuk field sistem dibuang.
+        made = (
+            self.env["efn.campaign"]
+            .with_user(self.marketer)
+            .with_context(default_state="approved", default_approval_rev=7, default_origin="worker")
+            .create({"name": "Manual ctx", "company_id": self.company.id})
+        )
+        self.assertEqual((made.state, made.approval_rev, made.origin), ("draft", 0, "manual"))
+        self.assertEqual(made.maker_id, self.marketer)
+
+    def test_sec_g50_03_marketing_cannot_read_card_codes(self):
+        camp = self.approve(self.proposed(code_qty=2))
+        Card = self.env["loyalty.card"].with_user(self.marketer)
+        with self.assertRaises(AccessError):
+            Card.search_read([("efn_campaign_id", "=", camp.id)], ["code"])
+        self.assertEqual(camp.with_user(self.marketer).card_count, 2)
+
+    def test_segment_required_and_channel_required(self):
+        """QA G50 #3: kampanye segmen tanpa usulan segmen ditolak berkode; tanpa kanal ditolak berkode."""
+        manual = (
+            self.env["efn.campaign"]
+            .with_user(self.marketer)
+            .create(
+                {
+                    "name": "Kode publik tanpa segmen",
+                    "company_id": self.company.id,
+                    "message_title": TITLE,
+                    "message_body": BODY,
+                    "voucher_mode": "public_code",
+                    "program_id": self.promo_program.id,
+                    "code_qty": 10,
+                }
+            )
+        )
+        manual.with_user(self.marketer).action_efn_propose()
+        with self.assertRaisesRegex(UserError, "efn_campaign:segment_required"):
+            self.approve(manual)
+        self.assertEqual(manual.state, "proposed")
+        draft = self.env["efn.campaign"].with_user(self.marketer).create({"name": "Tanpa kanal"})
+        self.env.flush_all()
+        self.env.cr.execute(
+            "UPDATE efn_campaign SET channel_inbox = false, channel_push = false, channel_email = false, "
+            "channel_wa_unofficial = false WHERE id = %s",
+            (draft.id,),
+        )
+        draft.invalidate_recordset()
+        with self.assertRaisesRegex(UserError, "efn_campaign:no_channel"):
+            draft.with_user(self.marketer).action_efn_propose()
+
+    # ------------------------------------------------------------ payload = fixture bersama BFF
+    def test_payload_matches_shared_fixture(self):
+        """SEC-G50-02: builder menghasilkan bentuk fixture `campaign_payload_v1.json` (yang juga dibaca Jest BFF)."""
+        today = fields.Date.context_today(self.env["efn.campaign"].with_context(tz="Asia/Jakarta"))
+        dates = {"date_from": today + timedelta(days=1), "date_to": today + timedelta(days=14)}
+        anonymous = self.proposed(cap_enabled=True, budget_idr=5_000_000, cap_per_member_week=1, **dates)
+        public = self.proposed(
+            segment_code="search_no_result",
+            voucher_mode="public_code",
+            program_id=self.promo_program.id,
+            code_qty=100,
+            **dates,
+        )
+        member = self.proposed(
+            segment_code="wishlist_idle",
+            voucher_mode="member_bound",
+            partner_ids=[Command.set([self.partner1.id, self.partner2.id])],
+            **dates,
+        )
+        markdown = self.env["efn.campaign"]._efn_propose_markdown(
+            self.company, "efn.lot.markdown", 11, [self.product.id], [self.warehouse.id], dates["date_to"]
+        )
+        markdown.with_user(self.marketer).write({"message_title": TITLE, "message_body": BODY, **dates})
+        cases = {"anonymous_code": anonymous, "public_code": public, "member_bound": member, "no_voucher": markdown}
+        examples = self.fixture["examples"]
+        self.assertEqual(set(examples), set(cases))
+        for name, camp in cases.items():
+            with self.subTest(mode=name):
+                self.approve(camp)
+                payload = self.row(camp).payload
+                expected = examples[name]
+                self.assertEqual(_shape(payload), _shape(expected))
+                for key in (
+                    "schema_version",
+                    "company_code",
+                    "kind",
+                    "approval_rev",
+                    "segment_code",
+                    "channels",
+                    "message",
+                    "voucher_mode",
+                    "voucher_value_idr",
+                    "budget_idr",
+                    "cap_per_member_week",
+                ):
+                    self.assertEqual(payload[key], expected[key], key)
+                self.assertEqual(payload["campaign_id"], camp.id)
+                self.assertEqual(payload["idempotency_key"], f"campaign:SMD:{camp.id}:1")
+                self.assertEqual(payload["valid_from"], _wib_iso(dates["date_from"], end=False))
+                self.assertEqual(payload["valid_to"], _wib_iso(dates["date_to"], end=True))
+                self.assertTrue(ISO_RE.match(payload["valid_from"]) and payload["valid_to"] > payload["valid_from"])
+                self.assertNotIn("partner", json.dumps(payload))
+        # Nilai per mode.
+        program_ref = f"loyalty.program:{self.coupon_program.id}"
+        self.assertEqual(self.row(anonymous).payload["voucher_program_ref"], program_ref)
+        codes = self.row(anonymous).payload["voucher_codes"]
+        self.assertEqual(sorted(codes), sorted(anonymous.card_ids.mapped("code")))
+        self.assertTrue(all(re.match(r"^[A-Za-z0-9_-]{4,40}$", c) for c in codes))
+        self.assertEqual(self.row(public).payload["public_code"], self.public_code)
+        self.assertEqual(self.row(member).payload["voucher_program_ref"], program_ref)
+        md = self.row(markdown).payload
+        self.assertIsNone(md["voucher_program_ref"])
+        self.assertEqual(md["markdown"]["product_ids"], [self.product.id])
+        self.assertEqual(md["markdown"]["outlet_codes"], ["SMG5"])
+        self.assertEqual(md["markdown"]["valid_to"], _wib_iso(dates["date_to"], end=True))
+        self.assertEqual((self.row(markdown).ref_model, self.row(markdown).ref_id), ("efn.lot.markdown", 11))
 
     # ------------------------------------------------------------ voucher per mode
     def test_voucher_anonymous_code(self):
@@ -270,21 +449,22 @@ class TestEfnCampaign(TransactionCase):
         )
         self.assertEqual(row.idempotency_key, f"campaign:SMD:{camp.id}:1")
         payload = row.payload
-        self.assertEqual(set(payload), PAYLOAD_KEYS)
         self.assertEqual(payload["voucher_mode"], "anonymous_code")
-        self.assertEqual(sorted(payload["voucher"]["codes"]), sorted(cards.mapped("code")))
+        self.assertEqual(sorted(payload["voucher_codes"]), sorted(cards.mapped("code")))
+        self.assertNotIn("public_code", payload)
         self.assertEqual(payload["segment_run_id"], camp.segment_run_id)
         self.assertEqual(payload["channels"], ["inbox", "push"])
         self.assertIsNone(payload["budget_idr"])
-        self.assertNotIn("partner", str(payload))
+        self.assertEqual(payload["voucher_value_idr"], 10000)
 
     def test_voucher_public_code(self):
         camp = self.approve(self.proposed(voucher_mode="public_code", program_id=self.promo_program.id, code_qty=100))
         self.assertFalse(camp.card_ids)
         self.assertTrue(self.promo_program.limit_usage)
         self.assertEqual(self.promo_program.max_usage, 100)
-        voucher = self.row(camp).payload["voucher"]
-        self.assertEqual(voucher, {"mode": "public_code", "code": self.public_code, "quota": 100})
+        payload = self.row(camp).payload
+        self.assertEqual(payload["public_code"], self.public_code)
+        self.assertNotIn("voucher_codes", payload)
         again = self.proposed(
             segment_code="search_no_result", voucher_mode="public_code", program_id=self.promo_program.id, code_qty=5
         )
@@ -297,16 +477,16 @@ class TestEfnCampaign(TransactionCase):
         camp = self.proposed(
             voucher_mode="member_bound", partner_ids=[Command.set([self.partner1.id, self.partner2.id])]
         )
-        with self.assertRaises(UserError):  # ValidationError subkelas UserError
+        with self.assertRaises(UserError):  # ValidationError/AccessError subkelas UserError
             camp.with_user(self.marketer).write({"partner_ids": [Command.link(self.partner_other.id)]})
         self.approve(camp)
         cards = camp.card_ids
         self.assertEqual(set(cards.mapped("partner_id").ids), {self.partner1.id, self.partner2.id})
-        voucher = self.row(camp).payload["voucher"]
-        self.assertEqual(voucher["mode"], "member_bound")
-        self.assertEqual({c["partner_id"] for c in voucher["cards"]}, {self.partner1.id, self.partner2.id})
-        self.assertTrue(all(set(c) == {"partner_id", "code"} for c in voucher["cards"]))
-        self.assertNotIn("Member uji", str(self.row(camp).payload))
+        payload = self.row(camp).payload
+        self.assertEqual(payload["voucher_mode"], "member_bound")
+        # Parser BFF menolak kode pada mode ini; partner tidak pernah ikut payload.
+        self.assertFalse({"voucher_codes", "public_code", "cards"} & set(payload))
+        self.assertNotIn("Member uji", json.dumps(payload))
         # Batal -> kartu nonaktif, outbox gagal (cancelled); reset ke draft -> mode tetap terkunci.
         with self.assertRaises(AccessError):
             camp.with_user(self.marketer).action_efn_cancel()
@@ -328,6 +508,7 @@ class TestEfnCampaign(TransactionCase):
         self.approve(camp, self.approver2)
         self.assertEqual(camp.approval_rev, 2)
         self.assertEqual(self.row(camp).idempotency_key, f"campaign:SMD:{camp.id}:2")
+        self.assertEqual(self.row(camp).payload["idempotency_key"], f"campaign:SMD:{camp.id}:2")
         self.assertEqual(len(camp.sudo().outbox_ids), 2)
 
     # ------------------------------------------------------------ klaim / ack
@@ -443,8 +624,7 @@ class TestEfnCampaign(TransactionCase):
         row = self.row(camp)
         self.assertEqual((row.kind, row.ref_model, row.ref_id), ("markdown", "efn.lot.markdown", 7))
         payload = row.payload
-        self.assertIsNone(payload["voucher"])
-        self.assertEqual(
-            payload["markdown"],
-            {"product_ids": [self.product.id], "outlet_codes": ["SMG5"], "valid_to": fields.Date.to_string(date_to)},
-        )
+        self.assertIsNone(payload["voucher_mode"])
+        self.assertNotIn("voucher_codes", payload)
+        self.assertEqual(payload["markdown"]["outlet_codes"], ["SMG5"])
+        self.assertEqual(payload["markdown"]["valid_to"], _wib_iso(date_to, end=True))

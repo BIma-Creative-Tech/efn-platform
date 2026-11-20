@@ -6,7 +6,7 @@ import { RateLimiter } from '../../common/rate-limit/rate-limiter';
 import { FakeClock, FakeKvStore, testCipher, testConfig } from '../../common/testing/fakes';
 import { ChannelEnv } from './channel-env';
 import { ChannelTables } from './channel-testing';
-import { MEMBER_EMAIL_AAD, maskEmail } from './email.constants';
+import { MEMBER_EMAIL_AAD, decryptMemberEmail, encryptMemberEmail, maskEmail, memberEmailAad } from './email.constants';
 import { EmailConfig } from './email.config';
 import { EmailSenderConsumer, parseNotifyEmailMessage } from './email-sender.consumer';
 import { OutgoingEmail, SmtpTransport } from './smtp-transport';
@@ -40,7 +40,7 @@ function setup(env: Record<string, string> = {}) {
   const memberId = randomUUID();
   const hash = memberHash(app.memberHashPepper, PHONE);
   t.members.set(memberId, { member_hash: hash, member_ref_enc: cipher.encrypt(PHONE, PII_AAD.MEMBER_REF), deleted: false });
-  t.emails.set(memberId, { email_enc: cipher.encrypt(ADDRESS, MEMBER_EMAIL_AAD), verified_at: new Date(), status: 'active', status_reason: null });
+  t.emails.set(memberId, { email_enc: encryptMemberEmail(cipher, ADDRESS, memberId), verified_at: new Date(), status: 'active', status_reason: null });
   t.grantMarketing(memberId);
   const unsubKey = randomBytes(32).toString('hex');
   const config = new EmailConfig(
@@ -86,8 +86,35 @@ function setup(env: Record<string, string> = {}) {
     params: { product_name: 'Beras <b>5kg</b>', outlet_name: 'SMD Outlet 2' },
     ...over,
   });
-  return { app, t, memberId, hash, transport, consumer, msg, key, unsubKey: Buffer.from(unsubKey, 'utf8'), clock, sleeps };
+  return { app, cipher, t, memberId, hash, transport, consumer, msg, key, unsubKey: Buffer.from(unsubKey, 'utf8'), clock, sleeps };
 }
+
+describe('AAD email terikat baris (SEC-G50-11)', () => {
+  it('v2 = efn:member_email.email_enc:v2:<member_id lowercase>; ciphertext member lain tidak bisa didekripsi', () => {
+    const ctx = setup();
+    const other = randomUUID();
+    expect(memberEmailAad('AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA')).toBe('efn:member_email.email_enc:v2:aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa');
+    const enc = encryptMemberEmail(ctx.cipher, ADDRESS, ctx.memberId);
+    expect(decryptMemberEmail(ctx.cipher, enc, ctx.memberId)).toEqual({ email: ADDRESS, legacy: false });
+    expect(() => decryptMemberEmail(ctx.cipher, enc, other)).toThrow();
+  });
+
+  it('data v1 lama tetap terbaca (legacy) selama migrasi; consumer tetap mengirim', async () => {
+    const ctx = setup();
+    const legacy = ctx.cipher.encrypt(ADDRESS, MEMBER_EMAIL_AAD);
+    expect(decryptMemberEmail(ctx.cipher, legacy, ctx.memberId)).toEqual({ email: ADDRESS, legacy: true });
+    ctx.t.emails.get(ctx.memberId)!.email_enc = legacy;
+    expect(await ctx.consumer.handle(ctx.msg(), BFF)).toBe('sent');
+    expect(ctx.transport.sent[0].to).toBe(ADDRESS);
+  });
+
+  it('email_enc ditukar dari member lain → gagal (tidak terkirim ke alamat salah)', async () => {
+    const ctx = setup();
+    ctx.t.emails.get(ctx.memberId)!.email_enc = encryptMemberEmail(ctx.cipher, 'penyerang@contoh.id', randomUUID());
+    await expect(ctx.consumer.handle(ctx.msg(), BFF)).rejects.toThrow();
+    expect(ctx.transport.sent).toHaveLength(0);
+  });
+});
 
 describe('EmailSenderConsumer (notify.email)', () => {
   it('kirim sekali: alamat didekripsi saat kirim, HTML di-escape, List-Unsubscribe bertoken valid; duplikat dilewati', async () => {

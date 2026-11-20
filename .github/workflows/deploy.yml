@@ -408,6 +408,8 @@ jobs:
           CFG_EMAIL_FROM: ${{ vars.EMAIL_FROM }}
           CFG_EMAIL_UNSUBSCRIBE_URL: ${{ vars.EMAIL_UNSUBSCRIBE_URL }}
           CFG_EMAIL_RATE_PER_MIN: ${{ vars.EMAIL_RATE_PER_MIN }}
+          # SEC-G50-10: production EMAIL_ENABLED=true wajib ref DPA + EFN_ALLOW_FEATURE_ON (deploy-validate)
+          CFG_EMAIL_DPA_APPROVAL_REF: ${{ vars.EMAIL_DPA_APPROVAL_REF }}
           CFG_WA_UNOFFICIAL_ENABLED: ${{ vars.WA_UNOFFICIAL_ENABLED || 'false' }}
           CFG_WA_UNOFFICIAL_RISK_ACCEPTANCE_REF: ${{ vars.WA_UNOFFICIAL_RISK_ACCEPTANCE_REF }}
           CFG_ETL_ENABLE_BEHAVIOR: ${{ vars.ETL_ENABLE_BEHAVIOR || 'false' }}

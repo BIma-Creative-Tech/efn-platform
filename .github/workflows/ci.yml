@@ -797,11 +797,14 @@ jobs:
             haproxy:3.2.25-alpine@sha256:5d97434a423c2533cfeb42874d45cf6d69a840b60334582dfbfd5008e94c80be \
             haproxy -c -f /usr/local/etc/haproxy/haproxy.cfg
       # G50 (ADR-044 §3.6): proxy egress WA tidak resmi (TLS passthrough allowlist SNI) - sintaks HAProxy valid
-      - name: haproxy -c (infra/wa-egress/haproxy.cfg)
+      # SEC-G50-06: relay admin satu arah (admin-relay.cfg) juga diperiksa
+      - name: haproxy -c (infra/wa-egress/haproxy.cfg, admin-relay.cfg)
         run: |
-          docker run --rm -v "$PWD/infra/wa-egress/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro" \
-            haproxy:3.2.25-alpine@sha256:5d97434a423c2533cfeb42874d45cf6d69a840b60334582dfbfd5008e94c80be \
-            haproxy -c -f /usr/local/etc/haproxy/haproxy.cfg
+          for cfg in haproxy.cfg admin-relay.cfg; do
+            docker run --rm -v "$PWD/infra/wa-egress/${cfg}:/usr/local/etc/haproxy/haproxy.cfg:ro" \
+              haproxy:3.2.25-alpine@sha256:5d97434a423c2533cfeb42874d45cf6d69a840b60334582dfbfd5008e94c80be \
+              haproxy -c -f /usr/local/etc/haproxy/haproxy.cfg
+          done
       # SEC-36/SEC-42/SEC-50: wrapper deploy host diuji dengan cosign palsu di container sekali pakai (87 kasus: replay/
       # downgrade, IMAGE_* lewat env, registry asing, trust anchor PKI, tanda tangan, allowlist env, topologi dipin di
       # deploy.conf, config manifest, karakter kontrol/multi-baris, kontrol keamanan production, lib deploy-validate,

@@ -89,6 +89,8 @@ export interface Features {
   wishlist: boolean;
   restock: boolean;
   priceAlert: boolean;
+  /** Kotak masuk & voucher kampanye (`features.campaign_inbox`, G50). */
+  campaignInbox: boolean;
   /** Kanal notifikasi yang boleh dipilih member untuk notify-me. */
   channels: { push: boolean; email: boolean; wa_unofficial: boolean };
 }
@@ -98,6 +100,7 @@ export const NO_FEATURES: Features = {
   wishlist: false,
   restock: false,
   priceAlert: false,
+  campaignInbox: false,
   channels: { push: false, email: false, wa_unofficial: false },
 };
 
@@ -120,6 +123,7 @@ export function parseFeatures(data: unknown): Features {
     wishlist: flag(f, 'wishlist') === true,
     restock: flag(f, 'restock_alert', 'restock_alerts', 'restock') === true,
     priceAlert: flag(f, 'price_alert', 'price_alerts') === true,
+    campaignInbox: flag(f, 'campaign_inbox') === true,
     channels: {
       push: (flag(f, 'push') ?? flag(notifyChannels, 'push')) !== false,
       email: (flag(f, 'email') ?? flag(notifyChannels, 'email')) === true,
@@ -138,6 +142,7 @@ export function coerceFeatures(data: unknown): Features {
     wishlist: o.wishlist === true,
     restock: o.restock === true,
     priceAlert: o.priceAlert === true,
+    campaignInbox: o.campaignInbox === true,
     channels: { push: ch.push === true, email: ch.email === true, wa_unofficial: ch.wa_unofficial === true },
   };
 }

@@ -1581,8 +1581,8 @@ sampai DPO (Q-SM16/17/26). Ditulis tanpa shell: pytest/ruff belum dijalankan ole
    ALTER USER efn_segment_reader SETTINGS PROFILE 'segment_readonly';` (pola forecast G44). Tanpa ini access SQL tetap
    jalan (role/view saja) tetapi worker tidak bisa login. Pertimbangkan `HOST IP` subnet efn-data (SEC-215).
 2. Secret baru: `clickhouse_password_segment` (clickhouse-init + segment-worker), `tls_segment_worker_crt/key`
-   (CN `segment-worker`, CA internal), `odoo_api_key_campaign_<kode>` per PT (mis. `_smd`; placeholder `disabled`
-   ditolak worker). Tidak ada secret baru untuk ETL (tidak memegang `behavior_subject_pepper`; §28.10 menyebut "job
+   (CN `segment-worker`, CA internal), `odoo_api_key_segment_<kode>` per PT (mis. `_smd`, user teknis
+   `efn_segment_<kode>`, keputusan devsecops; placeholder `disabled` ditolak worker). Tidak ada secret baru untuk ETL (tidak memegang `behavior_subject_pepper`; §28.10 menyebut "job
    erasure ETL untuk subject" — desain ini membuatnya tidak perlu, lihat Keputusan).
 3. Service `segment-worker` di compose `efn-data` (container & kredensial terpisah dari forecast-worker): read_only,
    tmpfs /tmp, user 65534, network ke ClickHouse + jalur WireGuard ke `api-gateway:3000` dan `odoo-rpc-gateway:8443`.
@@ -1620,7 +1620,11 @@ lock ada (sengaja, fail closed).
 - **Segmen**: Python murni atas agregat per subjek×produk dari ClickHouse; hanya subjek `member` (device = opsi);
   segmen < 10 anggota tidak dikirim; anggota dikirim lengkap ke BFF sebelum ringkasan Odoo; segmen gagal di BFF tidak
   diringkas ke Odoo; run baru = `run_id` baru. Ringkasan divalidasi menolak string hex-64 di mana pun (L-155).
-- `top_products` di ringkasan hanya produk dengan ≥ `SEGMENT_K_MIN` subjek.
+- Produk teratas di `summary` hanya produk dengan ≥ `SEGMENT_K_MIN` subjek.
+- **Perbaikan QA G50 #1**: `metrics` diratakan menjadi angka saja (`as_of` → `as_of_yyyymmdd`, `reason_counts` →
+  `reason_market`/`reason_habit`, `top_products` → teks `summary`), `generated_at` di top-level. Sebelumnya setiap
+  `proposal_upsert` akan ditolak 422. User Odoo worker diganti ke `efn_segment_<kode>` / secret
+  `odoo_api_key_segment_<kode>` (env `ODOO_API_KEY_SEGMENT_<KODE>_FILE`).
 
 ### Asumsi skema/kontrak yang belum ditetapkan (perlu rekonsiliasi lead dengan BFF/Odoo)
 1. **PG `behavior.event_raw`** kolom: `event_id uuid, subject_key char(64), subject_kind ('device'|'member'),
@@ -1634,9 +1638,11 @@ lock ada (sengaja, fail closed).
    itu "sudah beli" hanya dari `checkout_start` (product_id keranjang bisa kosong) → viewed-not-bought kelebihan anggota.
    Tipe di luar daftar membatalkan halaman ETL (fail closed).
 4. **Kode segmen**: `viewed_not_bought|wishlist_idle|oos_viewed|price_sensitive|search_no_result`.
-5. **Ringkasan Odoo**: `{schema_version:1, company_code, run_id, segment_code, member_count, metrics:{as_of,
-   lookback_days, product_count, top_products:[{product_id, subjects}], reason_counts?:{market, habit}}}`;
-   idempoten per `(run_id, segment_code)`; galat `efn_campaign:<kode>` (422/403); respons objek/`true`.
+5. **Ringkasan Odoo** (diperbaiki QA G50 #1, sesuai validator `efn_campaign`): `{schema_version:1, company_code,
+   run_id, segment_code, member_count, metrics:{lookback_days, product_count, as_of_yyyymmdd, k_min,
+   top_product_count, top_product_subjects, reason_market?, reason_habit?} (angka saja), summary (<= 256, tanpa angka
+   >= 6 digit), generated_at (RFC3339 UTC)}`; idempoten per `(company, run_id, segment_code)`; galat
+   `efn_campaign:<kode>`; konstanta dicek terhadap source Odoo di `tests/test_odoo_contract_parity.py`.
 6. **BFF members**: body persis §28.7; sukses 2xx; chunk ulang boleh 2xx atau `409 duplicate_chunk`; header tambahan
    `Idempotency-Key: segment:<run_id>:<segment_code>:<chunk_no>`. Usul kontrak: field `chunk_total` (sekarang BFF bisa
    mencocokkan Σ anggota dengan `member_count` dari Odoo).

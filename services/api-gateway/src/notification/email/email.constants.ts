@@ -1,4 +1,4 @@
-import { piiAad } from '../../common/pii/crypto';
+import { PiiCipher, PiiDecryptError, piiAad } from '../../common/pii/crypto';
 
 /** Queue kontrak docs/04 §28.7 (didefinisikan broker; BFF tidak men-declare). DLQ `notify.email.dlq`. */
 export const NOTIFY_EMAIL_QUEUE = 'notify.email';
@@ -8,10 +8,31 @@ export const NOTIFY_EMAIL_CONSUMER = 'bff.notify-email';
 export const NOTIFY_EMAIL_PUBLISHERS: readonly string[] = ['efn-bff'];
 
 /**
- * Kolom `platform.member_email.email_enc` (AES-256-GCM key ring PII, docs/04 §7.2). WAJIB didaftarkan di
- * `common/pii/pii-columns.ts` (rotasi kunci) — usulan G50-B ke efn-lead (file milik bersama).
+ * Kolom `platform.member_email.email_enc` (AES-256-GCM key ring PII, docs/04 §7.2; terdaftar di
+ * `common/pii/pii-columns.ts`). SEC-G50-11 (pola SEC-102): AAD v2 TERIKAT BARIS
+ * `efn:member_email.email_enc:v2:<member_id lowercase>` → ciphertext yang ditukar antar-member (hak UPDATE DB) gagal
+ * didekripsi. `MEMBER_EMAIL_AAD` (v1, AAD kolom) hanya untuk membaca data lama selama migrasi / registry re-encrypt.
+ * Penulis WAJIB memakai `encryptMemberEmail` (v2).
  */
 export const MEMBER_EMAIL_AAD = piiAad('member_email', 'email_enc');
+
+export function memberEmailAad(memberId: string): string {
+  return `efn:member_email.email_enc:v2:${memberId.toLowerCase()}`;
+}
+
+export function encryptMemberEmail(cipher: PiiCipher, email: string, memberId: string): Buffer {
+  return cipher.encrypt(email, memberEmailAad(memberId));
+}
+
+/** v2 (terikat `member_id`) dulu; gagal → AAD v1 lama (`legacy: true`). Keduanya gagal → `PiiDecryptError`. */
+export function decryptMemberEmail(cipher: PiiCipher, enc: Buffer | Uint8Array, memberId: string): { email: string; legacy: boolean } {
+  try {
+    return { email: cipher.decrypt(enc, memberEmailAad(memberId)), legacy: false };
+  } catch (err) {
+    if (!(err instanceof PiiDecryptError)) throw err;
+  }
+  return { email: cipher.decrypt(enc, MEMBER_EMAIL_AAD), legacy: true };
+}
 
 const EMAIL_RE = /^[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]{1,64}@[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)+$/;
 

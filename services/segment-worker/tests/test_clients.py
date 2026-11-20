@@ -52,7 +52,9 @@ def _proposal() -> dict[str, Any]:
         "run_id": RUN,
         "segment_code": "wishlist_idle",
         "member_count": 12,
-        "metrics": {"as_of": "2026-11-19", "lookback_days": 60, "product_count": 3, "top_products": []},
+        "metrics": {"lookback_days": 60, "product_count": 3, "as_of_yyyymmdd": 20261119},
+        "summary": "",
+        "generated_at": "2026-11-20T02:15:00Z",
     }
 
 
@@ -157,8 +159,11 @@ def test_odoo_errors_safe_codes(response: tuple[int, bytes], kind: str, code: st
 def test_odoo_rejects_member_data_before_sending() -> None:
     transport = FakeTransport([])
     bad = _proposal()
-    bad["metrics"]["top_products"] = [{"product_id": 1, "subjects": 1}]
-    bad["metrics"]["as_of"] = key(9)
+    bad["summary"] = f"anggota {key(9)}"
+    with pytest.raises(ContractError):
+        OdooCampaignClient(transport, API_KEY, policy=_policy()).proposal_upsert(bad)
+    bad = _proposal()
+    bad["metrics"]["top_products"] = [{"product_id": 1, "subjects": 1}]  # bukan angka -> 422 di Odoo
     with pytest.raises(ContractError):
         OdooCampaignClient(transport, API_KEY, policy=_policy()).proposal_upsert(bad)
     assert transport.requests == []

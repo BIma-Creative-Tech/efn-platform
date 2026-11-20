@@ -101,9 +101,11 @@ scrape_configs:
         action: keep
 
   # G50 (docs/04 §28.9, ADR-044): wa-unofficial /metrics di server admin HTTPS :8443 (CA internal, SAN wa-unofficial),
-  # autentikasi bearer token metrik (wa_unofficial_metrics_token, != token admin). Service + secret + network wa-admin
-  # HANYA ada di overlay docker-compose.wa-unofficial.yml: tanpa overlay nama DNS tidak ada -> 0 target (tidak ada
-  # EfnServiceDown palsu). Hanya IP di subnet wa-admin (172.30.16.0/24) yang dipertahankan.
+  # autentikasi bearer token metrik (wa_unofficial_metrics_token, != token admin). SEC-G50-06: scrape lewat relay TCP
+  # wa-admin-relay (TLS passthrough, network wa-ingress) -> Prometheus tidak berbagi network dengan wa-unofficial;
+  # server_name tetap wa-unofficial (verifikasi end-to-end). Service + secret + network HANYA ada di overlay
+  # docker-compose.wa-unofficial.yml: tanpa overlay nama DNS tidak ada -> 0 target (tidak ada EfnServiceDown palsu).
+  # Hanya IP relay di subnet wa-ingress (172.30.21.0/24) yang dipertahankan.
   - job_name: wa-unofficial
     metrics_path: /metrics
     scheme: https
@@ -114,12 +116,12 @@ scrape_configs:
       ca_file: /run/secrets/efn_ca_crt
       server_name: wa-unofficial
     dns_sd_configs:
-      - names: ["wa-unofficial.efn_wa-admin"]
+      - names: ["wa-admin-relay.efn_wa-ingress"]
         type: A
         port: 8443
     relabel_configs:
       - source_labels: [__address__]
-        regex: '172\.30\.16\.\d+:8443'
+        regex: '172\.30\.21\.\d+:8443'
         action: keep
 
   # Metrik per-queue (ocr.requested, *.dlq): endpoint per-object plugin rabbitmq_prometheus (TLS 15691, mTLS)

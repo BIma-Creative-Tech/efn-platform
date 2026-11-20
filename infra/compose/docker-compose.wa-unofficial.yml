@@ -9,16 +9,20 @@
 #
 # Pemakaian (dev/staging lokal; secret WA nyata hanya dibuat `APP_ENV=dev bash scripts/gen-secrets.sh`):
 #   docker compose -f docker-compose.yml -f docker-compose.dev.yml -f docker-compose.wa-unofficial.yml \
-#     --profile core --profile observability --profile wa-unofficial up -d wa-unofficial wa-egress-proxy
+#     --profile core --profile observability --profile wa-unofficial up -d wa-unofficial wa-egress-proxy wa-admin-relay
 #
 # Jaringan (least privilege, dicek scripts/check-encryption.sh):
 #   rmq         (internal) : HANYA rabbitmq <-> wa-unofficial (amqps 5671, user efn-wa-unofficial, CA internal)
 #   wa-egress   (internal) : HANYA wa-unofficial <-> wa-egress-proxy (TLS passthrough allowlist SNI, IP statis)
 #   wa-internet (keluar)   : HANYA wa-egress-proxy (enable_icc=false) -> host WhatsApp (daftar BELUM DIVERIFIKASI)
-#   wa-admin    (internal) : traefik + prometheus -> wa-unofficial :8443 (admin & metrik; tanpa akses balik ke apa pun)
+#   wa-admin    (internal) : HANYA wa-admin-relay <-> wa-unofficial :8443
+#   wa-ingress  (internal) : traefik + prometheus -> wa-admin-relay 172.30.21.10:8443 (TLS passthrough)
+#   SEC-G50-06: network bridge Docker dua arah -> wa-unofficial TIDAK berbagi network dengan Traefik/Prometheus. Relay
+#   (infra/wa-egress/admin-relay.cfg) hanya listen di IP wa-ingress, jadi dari wa-unofficial tidak ada listener yang
+#   terjangkau lewat jalur admin. TLS tetap end-to-end ke wa-unofficial (sertifikat diverifikasi Traefik/Prometheus).
 #   wa-unofficial TIDAK di network data/internal/cache/egress: tanpa PostgreSQL, Redis, Odoo, ClickHouse, internet langsung.
-#   Catatan: brief meminta "rmq + wa-egress saja"; wa-admin ditambahkan karena endpoint admin lewat Traefik + scrape
-#   metrik butuh jalur masuk. Jalur keluar dari wa-admin tidak ada (internal: true, anggotanya hanya klien).
+#   Catatan: brief meminta "rmq + wa-egress saja"; wa-admin ditambahkan karena endpoint admin + scrape metrik butuh
+#   jalur masuk (lewat relay).
 #
 # Admin: Traefik entrypoint wg-https, host wa-admin.<TRAEFIK_DOMAIN>, middleware internal-ops (subnet staf WireGuard),
 #   TLS option efn-mtls (sertifikat klien CA internal, leaf `wa-operator`) + bearer wa_unofficial_admin_token di service.
@@ -118,10 +122,46 @@ services:
       start_period: 20s
     labels:
       service: wa-unofficial
+
+  # SEC-G50-06: relay TCP satu-satunya jalur masuk ke :8443 wa-unofficial (infra/wa-egress/admin-relay.cfg). Label
+  # Traefik ada di SINI (alamat backend = IP relay di wa-ingress), bukan di wa-unofficial.
+  wa-admin-relay:
+    image: haproxy:3.2.25-alpine@sha256:5d97434a423c2533cfeb42874d45cf6d69a840b60334582dfbfd5008e94c80be
+    profiles: ["wa-unofficial"]
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"
+        labels: "service"
+    security_opt:
+      - no-new-privileges:true
+    user: haproxy
+    volumes:
+      - ../wa-egress/admin-relay.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
+    networks:
+      wa-ingress:
+        ipv4_address: 172.30.21.10
+      wa-admin: {}
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    deploy:
+      resources:
+        limits: { memory: 64M }
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8408/healthz"]   # loopback namespace sendiri
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    labels:
+      service: wa-admin-relay
       traefik.enable: "true"
-      traefik.docker.network: efn_wa-admin
+      traefik.docker.network: efn_wa-ingress
       # ADR-044 / docs/04 §28.9: HANYA wg-https + subnet staf (internal-ops) + mTLS operator (efn-mtls) + token admin.
       # Sertifikat host: acme-dns (ACME_DOMAINS diperluas di bawah) / dev: edge self-signed *.efn.local.
+      # serversTransport efn-wa-unofficial: serverName wa-unofficial -> TLS (passthrough relay) diverifikasi end-to-end.
       traefik.http.routers.wa-admin.rule: >-
         Host(`wa-admin.${TRAEFIK_DOMAIN:-efn.local}`) && (Path(`/health`) || PathPrefix(`/v1/admin/`))
       traefik.http.routers.wa-admin.entrypoints: wg-https
@@ -185,10 +225,10 @@ services:
       - wa_unofficial_hash_key
 
   traefik:
-    networks: [edge, internal, socket-proxy, insight-ingress, wa-admin]
+    networks: [edge, internal, socket-proxy, insight-ingress, wa-ingress]
 
   prometheus:
-    networks: [internal, data, wa-admin]
+    networks: [internal, data, wa-ingress]
     secrets:
       - wa_unofficial_metrics_token
 
@@ -214,10 +254,14 @@ networks:
       com.docker.network.bridge.enable_icc: "false"
     ipam:
       config: [{ subnet: 172.30.15.0/24 }]
-  wa-admin:       # traefik + prometheus -> wa-unofficial :8443
+  wa-admin:       # hanya wa-admin-relay <-> wa-unofficial :8443 (SEC-G50-06)
     internal: true
     ipam:
       config: [{ subnet: 172.30.16.0/24 }]
+  wa-ingress:     # traefik + prometheus -> wa-admin-relay (relay listen hanya di 172.30.21.10)
+    internal: true
+    ipam:
+      config: [{ subnet: 172.30.21.0/24 }]
 
 secrets:
   rabbitmq_password_wa_unofficial: { file: ../../secrets/rabbitmq_password_wa_unofficial.txt }

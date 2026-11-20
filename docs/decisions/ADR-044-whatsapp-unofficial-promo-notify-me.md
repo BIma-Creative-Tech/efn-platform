@@ -111,6 +111,21 @@ sequenceDiagram
   end
 ```
 
+### 3.2 Revisi G50 (20 Nov 2026) — penyesuaian setelah implementasi
+Status tetap **Proposed**; batasan wajib no. 1–11 tetap berlaku. Kontrak rinci: `docs/04` §28.7, §28.9, §28.10,
+L-175, L-178..L-180.
+
+| Butir | Semula | Setelah G50 | Alasan / dampak |
+|---|---|---|---|
+| 11 supply chain | Versi belum diverifikasi (7.x RC, sekunder) | **`@whiskeysockets/baileys` 6.7.24 exact** (keputusan lead). Minimal 6.7.22 karena **GHSA-qvv5-jq5g-4cgg / CVE-2026-48063** (kritis, CVSS v4 9,3: spoofing `messages.upsert`, korupsi app state sync; patch 6.7.22 / 7.0.0-rc12) — diverifikasi architect di github.com/advisories 20 Nov 2026 | Garis 6.x dipilih karena 7.x masih RC; pindah 7.x = PR dibaca manusia + uji pairing. |
+| 6 egress | "allowlist proxy egress" | HAProxy **TLS passthrough dengan allowlist SNI** (tanpa hop plaintext, tanpa proxy CONNECT); allowlist `web.whatsapp.com` saja, media diblok — **daftar host tetap belum terverifikasi** (Q-SM36) | Patuh "enkripsi di setiap transaksi" tanpa pengecualian check-encryption. Risiko: bila host lain dibutuhkan, service gagal konek (fail closed). |
+| 2 network | rmq + wa-egress | rmq + wa-egress + **wa-admin** (internal, untuk Traefik admin & scrape Prometheus) | Admin endpoint & metrik tidak bisa dijangkau tanpa itu; tetap tanpa db/redis/odoo. |
+| 4 flag | `deploy-validate` menolak tanpa ref | Ref **dan** izin Superadmin `EFN_ALLOW_FEATURE_ON`; service exit 78 di production tanpa ref; secret WA `host:disabled` di production | Dua lapis; pemegang akses CI saja tidak cukup. |
+| §3.1 payload | `to (didekripsi per pesan)` | `to_e164` = digit E.164 **tanpa `+`**; `to_hash` HMAC atas string itu; hasil punya `reason` opsional dan `message_id` `warslt:<key>:<status>` | Konsistensi kedua paket (kontrak disalin di dua tempat, diubah bersamaan). |
+| 8 consent | STOP mencabut `marketing` | Tetap; consent per **purpose** — STOP mencabut `marketing` untuk semua kanal promo (email ikut berhenti) | Consent per kanal butuh revisi `docs/04` §8.4 (belum diminta). |
+| DLQ | — | `notify.wa_unofficial.dlq` wajib policy broker `message-ttl` (≤ 24–48 jam) + `max-length`: `expiration` dicabut saat dead-letter sehingga `to_e164` bisa tertahan tanpa batas (SEC-G50-04, pemblokir production WA) | Minimisasi & retensi PDP untuk nomor HP. |
+| Uji | — | Service **tidak pernah dijalankan terhadap WhatsApp nyata**; perilaku pairing, reconnect, kode putus, STOP dari alamat `@lid` belum terverifikasi | Wajib PoC dengan nomor uji sebelum Q-SM14 ditandatangani. |
+
 ## 4. Konsekuensi
 
 ### 4.1 Positif

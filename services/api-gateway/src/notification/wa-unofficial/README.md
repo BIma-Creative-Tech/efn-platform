@@ -55,4 +55,5 @@ R-B16 (ban: kanal dilewati, transaksi tidak terdampak), R-S21 (Baileys tidak di 
   dideklarasikan broker sebelum flag dinyalakan (bila tidak, `consume` gagal dan koneksi BFF reconnect berulang).
 - Consent per purpose: STOP di WA mencabut `marketing` untuk semua kanal promo (email & push juga).
 - Production tanpa ref: BFF tidak gagal start, kanal mati + log error; penolakan deploy = `deploy-validate`.
-- Tabel baru belum ikut DSAR export (`src/privacy`, file milik bersama).
+- DSAR export (SEC-G50-05): `wa_unofficial_outbound` + `wa_unofficial_recipient` diekspor lewat
+  `notification/email/channel-privacy.ts` (dipanggil `src/privacy/dsar.service.ts`); erasure lewat FK CASCADE.

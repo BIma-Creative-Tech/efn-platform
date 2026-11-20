@@ -2,6 +2,7 @@ import type { Metadata } from 'next';
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
 import { FeatureGate } from '@/components/engage/FeatureGate';
+import { InboxLink } from '@/components/engage/InboxLink';
 import { bffFetch, type MeResponse } from '@/lib/bff';
 import { formatNumber } from '@/lib/format';
 import { currentExpiryNotice, parsePointsExpiry } from '@/lib/points';
@@ -69,6 +70,7 @@ export default async function AkunPage() {
           Data akun belum dapat dimuat. Silakan muat ulang halaman beberapa saat lagi.
         </p>
       )}
+      <InboxLink />
       <FeatureGate feature={['wishlist', 'restock', 'priceAlert']}>
         <section className="card stack" aria-labelledby="wishlist-judul">
           <h2 id="wishlist-judul" style={{ margin: 0 }}>

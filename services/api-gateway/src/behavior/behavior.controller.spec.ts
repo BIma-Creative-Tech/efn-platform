@@ -37,8 +37,21 @@ describe('optionalMember (Bearer opsional §28.6)', () => {
 describe('GET /v1/config features (§28.6, §28.10)', () => {
   it('default semua false; tracking hanya true bila flag + teks consent tracking dikonfigurasi', () => {
     expect(new PublicConfigController(testConfig()).get()).toEqual({
-      features: { tracking: false, wishlist: false, restock_alert: false, price_alert: false, campaign_inbox: false },
+      features: {
+        tracking: false,
+        wishlist: false,
+        restock_alert: false,
+        price_alert: false,
+        campaign_inbox: false,
+        notify_channels: { push: true, email: false, wa_unofficial: false },
+      },
       tracking_consent: null,
+    });
+    // QA G50: kanal email/WA notify-me mengikuti flag kanal (klien superapp-web membaca `notify_channels`)
+    expect(new PublicConfigController(testConfig({ EMAIL_ENABLED: 'true', WA_UNOFFICIAL_ENABLED: 'true' })).get().features.notify_channels).toEqual({
+      push: true,
+      email: true,
+      wa_unofficial: true,
     });
     expect(new PublicConfigController(testConfig({ BEHAVIOR_TRACKING_ENABLED: 'true' })).get().features.tracking).toBe(false);
     const on = new PublicConfigController(

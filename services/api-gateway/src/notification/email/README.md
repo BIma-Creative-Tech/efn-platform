@@ -54,8 +54,11 @@ R-B17 (consent + berhenti berlangganan sekali klik + kuota), R-B02.
 ## Belum / keterbatasan
 - **Alur mengisi & memverifikasi alamat email member belum dibangun** (tabel `member_email` hanya dibaca). Sampai ada
   (`PUT /v1/me/email` + verifikasi tautan/OTP — butuh kontrak §8), semua enqueue menghasilkan `skipped_no_email`.
-- `member_email.email_enc` belum terdaftar di `common/pii/pii-columns.ts` (rotasi kunci) dan belum ikut DSAR export
-  (`src/privacy`) — file milik bersama, diusulkan ke efn-lead.
+- (Selesai G50 review) `member_email.email_enc` terdaftar di `pii-columns.ts` dengan AAD v2 terikat baris
+  `efn:member_email.email_enc:v2:<member_id>` (SEC-G50-11; penulis wajib `encryptMemberEmail`, pembaca
+  `decryptMemberEmail` menerima v1 lama; `pii-reencrypt` menulis ulang v1 → v2). DSAR export (`channel-privacy.ts`,
+  SEC-G50-05) memuat alamat email terdekripsi + status verifikasi, `email_outbound`, `wa_unofficial_outbound`, dan
+  `wa_unofficial_recipient` (to_hash + nomor subjek sendiri). Erasure lewat FK CASCADE.
 - Belum ada template `transactional` (sumber ditolak sebagai kesalahan pemanggil).
 - One-click unsubscribe RFC 8058 (`List-Unsubscribe-Post`) tidak didukung: butuh token di URL + parser form
   (bertentangan dengan R2 "tanpa token di URL"); keputusan diserahkan ke efn-lead/DPO.

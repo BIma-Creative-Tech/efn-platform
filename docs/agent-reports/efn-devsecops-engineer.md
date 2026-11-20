@@ -1,5 +1,19 @@
 # Laporan Agent: efn-devsecops-engineer
 
+## G50 perbaikan security review (20 Nov 2026, `docs/reviews/SECURITY_REVIEW_2026-11-20.md`)
+
+Tanpa shell; belum dijalankan.
+- **SEC-G50-04:** policy broker di definitions (`infra/rabbitmq/rabbitmq-entrypoint.sh`): `notify.wa_unofficial.dlq`
+  TTL 24 jam + maks 1000 drop-head; `notify.wa_unofficial` TTL 24 jam + maks 5000 drop-head; `behavior.event.dlq` TTL
+  7 hari + maks 100000. Policy (bukan argumen quorum) agar bisa diterapkan ke queue yang sudah ada.
+- **SEC-G50-06:** service baru `wa-admin-relay` (HAProxy TCP passthrough, `infra/wa-egress/admin-relay.cfg`, bind hanya
+  `172.30.21.10:8443`). Network `wa-admin` = relay + wa-unofficial; `wa-ingress` (baru, 172.30.21.0/24) = traefik +
+  prometheus + relay. Label Traefik pindah ke relay; job Prometheus dns_sd `wa-admin-relay.efn_wa-ingress`. TLS tetap
+  end-to-end (serverName/server_name `wa-unofficial`). check-encryption + CI `haproxy -c` diperbarui.
+- **SEC-G50-10:** `EMAIL_ENABLED` masuk `EFN_GATED_FEATURES`; production wajib `EMAIL_DPA_APPROVAL_REF` (release var,
+  deploy.sh, deploy.yml, .env.example). check-encryption menolak ref persetujuan berisi nilai di `.env.example`/compose.
+- **SEC-G50-12:** runbook §5.2 "Operator terkunci (429)".
+
 ## G50 (20 Nov 2026, worktree `efn-platform-g50`, branch `feat/wave-50-supermarket-campaign`, belum di-commit) — wiring kampanye supermarket
 
 Ditulis tanpa shell: `docker compose config`, shellcheck, hadolint, yamllint, promtool, `haproxy -c`, check-encryption

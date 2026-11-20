@@ -28,7 +28,10 @@ SCHEMA_VERSION = 1
 MAX_PAYLOAD_BYTES = 64 * 1024
 UUID4_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$")
 COMPANY_CODE_RE = re.compile(r"^[A-Z]{2,8}$")
-SEGMENT_CODE_RE = re.compile(r"^[a-z][a-z0-9_]{1,47}$")
+# Sama dengan parser BFF (`odoo-campaign.ts` SEGMENT_RE / VOUCHER_CODE_RE / OUTLET_RE).
+SEGMENT_CODE_RE = re.compile(r"^[a-z][a-z0-9_]{1,39}$")
+VOUCHER_CODE_RE = re.compile(r"^[A-Za-z0-9_-]{4,40}$")
+OUTLET_CODE_RE = re.compile(r"^[A-Za-z0-9_-]{1,32}$")
 METRIC_KEY_RE = re.compile(r"^[a-z][a-z0-9_]{0,39}$")
 # Ringkasan teks dari worker tidak boleh memuat pengenal member (L-155): rangkaian >= 6 digit (HP/ID) atau email.
 PII_RE = re.compile(r"\d{6,}|[^@\s]+@[^@\s]+\.[^@\s]+")
@@ -41,6 +44,8 @@ ERROR_CODES = frozenset(
         "too_many_items",
         "pii_suspected",
         "disabled",
+        # SEC-G50-01: Marketing menulis key di luar field konten (state, outbox_ids, card_ids, message_ids, ...).
+        "field_not_writable",
     }
 )
 

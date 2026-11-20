@@ -96,7 +96,8 @@ networks:
   # Subnet 172.30.7.0/24 dan 172.30.8.0/24 dipakai overlay docker-compose.esb.yml (G41); 172.30.11.0/24 dan
   # 172.30.12.0/24 dipakai overlay docker-compose.forecast.yml (G44). G50: 172.30.13-16.0/24 overlay
   # docker-compose.wa-unofficial.yml (rmq, wa-egress, wa-internet, wa-admin), 172.30.17-19.0/24 overlay
-  # docker-compose.segment.yml (segment-ch, segment-rpc, segment-bff), 172.30.20.0/24 network `mail` dev (Mailpit).
+  # docker-compose.segment.yml (segment-ch, segment-rpc, segment-bff), 172.30.20.0/24 network `mail` dev (Mailpit),
+  # 172.30.21.0/24 wa-ingress (overlay wa-unofficial: traefik/prometheus -> relay admin, SEC-G50-06).
   insight-ingress:
     internal: true
     ipam:

@@ -1158,6 +1158,19 @@ Cron akrual harian Odoo `efn_loyalty_accounting` memanggil `GET /v1/pos/loyalty/
 - SMTP nyata (STARTTLS wajib, Mailpit dengan CA dev, klasifikasi 5xx RCPT pada penyedia terpilih).
 - Pembacaan `pg` untuk `to_timestamp($n / 1000.0)` dan `to_timestamp($n)` dengan parameter angka (diharapkan aman).
 
+### G50-B review keamanan (SECURITY_REVIEW_2026-11-20: SEC-G50-05, SEC-G50-11) — belum dijalankan lokal
+- **SEC-G50-05:** `src/notification/email/channel-privacy.ts` (`exportChannelMember`) dipanggil `privacy/dsar.service.ts`
+  → field export baru `email` (alamat terdekripsi untuk subjek, `verified`/`verified_at`, status), `email_deliveries`,
+  `wa_unofficial.{recipients (to_hash + nomor subjek sendiri), deliveries}`; ikut `truncated`. Cipher dari
+  `PiiCipher.fromConfig(config)` (konstruktor DsarService tidak diubah). Bagian wishlist/behavior/campaign BFF-A tidak
+  diubah. Spec: `channel-privacy.spec.ts` (baru), asersi tambahan di `privacy.spec.ts` (export).
+- **SEC-G50-11:** AAD v2 terikat baris `efn:member_email.email_enc:v2:<member_id lowercase>`; `email.constants.ts`
+  (`memberEmailAad`, `encryptMemberEmail`, `decryptMemberEmail` v2 → fallback v1), `email-sender.consumer.ts` memakai
+  `decryptMemberEmail`; `pii-columns.ts` entri `member_email` + `rowAad`. Spec: `email-sender.consumer.spec.ts`
+  (v2, v1 legacy, ciphertext ditukar gagal), `email.notifier.spec.ts` (data v2), `reencrypt.spec.ts` (rowAad +
+  re-encrypt v1 → v2). Belum ada penulis `member_email` di kode (alur isi email belum dibangun) — penulis kelak WAJIB
+  `encryptMemberEmail`.
+
 ## G50-A — tracking perilaku, wishlist/notify-me/price alert, kampanye tertarget (docs/04 §28.6–§28.10, ADR-047 Proposed; 20 Nov 2026)
 
 > **Build/test/lint BELUM dijalankan lokal** (tanpa shell di sesi ini). tsc, eslint, Jest, dan eksekusi SQL

@@ -164,6 +164,28 @@
   overflow-wrap: anywhere;
 }
 
+/* Kotak masuk: kode voucher besar untuk ditunjukkan ke kasir. */
+.voucher {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.75rem 1rem;
+  background: var(--color-surface-alt);
+  border: 2px dashed var(--color-primary);
+  border-radius: var(--radius);
+}
+.voucherCode {
+  flex: 1 1 12rem;
+  font-family: ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace;
+  font-size: clamp(1.5rem, 6vw, 2.25rem);
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  color: var(--color-text);
+  overflow-wrap: anywhere;
+  user-select: all;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .heart,
   .toast {

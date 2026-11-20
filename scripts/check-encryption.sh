@@ -574,7 +574,8 @@ check_compose() {
   for spec in "segment-ch:clickhouse,segment-worker" "segment-rpc:odoo-rpc-gateway,segment-worker" \
               "segment-bff:api-gateway,segment-worker" "rmq:rabbitmq,wa-unofficial" \
               "wa-egress:wa-unofficial,wa-egress-proxy" "wa-internet:wa-egress-proxy" \
-              "wa-admin:traefik,prometheus,wa-unofficial" "mail:api-gateway,mailpit"; do
+              "wa-admin:wa-admin-relay,wa-unofficial" "wa-ingress:traefik,prometheus,wa-admin-relay" \
+              "mail:api-gateway,mailpit"; do
     jq -e --arg n "${spec%%:*}" --arg ok "${spec#*:}" '[.services | to_entries[] | select((.value.networks // {}) | has($n)) | .key]
            - ($ok | split(",")) | length == 0' <<< "$json" > /dev/null \
       || err "[$label] network ${spec%%:*} dipakai service selain ${spec#*:} (docs/04 §28.7/§28.9)"
@@ -583,7 +584,7 @@ check_compose() {
          or ((($n.driver_opts // {})["com.docker.network.bridge.enable_icc"] // "" | tostring) == "false")' \
       <<< "$json" > /dev/null \
     || err "[$label] network wa-internet wajib driver_opts com.docker.network.bridge.enable_icc=\"false\" (pola SEC-183)"
-  for spec in rmq wa-egress wa-admin segment-ch segment-rpc segment-bff mail; do
+  for spec in rmq wa-egress wa-admin wa-ingress segment-ch segment-rpc segment-bff mail; do
     jq -e --arg n "$spec" '(.networks[$n] // null) as $x | $x == null or ($x.internal == true)' <<< "$json" > /dev/null \
       || err "[$label] network ${spec} wajib internal: true (tanpa jalur keluar)"
   done
@@ -609,11 +610,25 @@ check_compose() {
              and ((($w.environment // {}).AMQP_URL // "") | startswith("amqps://"))
              and (($w.environment // {}) | has("WA_UNOFFICIAL_PROXY_URL") | not)
              and ((($w.environment // {}).WA_UNOFFICIAL_ENABLED // "") | tostring | test("^(true|false)$"))
+             and ((($w.labels // {}) | keys | map(select(startswith("traefik."))) | length) == 0))' \
+      <<< "$json" > /dev/null \
+    || err "[$label] wa-unofficial: wajib hanya network rmq/wa-egress/wa-admin, read_only, cap_drop ALL tanpa cap_add, tanpa port, profil wa-unofficial, user non-root, AMQP amqps://, tanpa WA_UNOFFICIAL_PROXY_URL, flag boolean, tanpa label Traefik (rute admin lewat wa-admin-relay, SEC-G50-06)"
+  # SEC-G50-06: relay admin = satu-satunya jalur Traefik/Prometheus -> wa-unofficial; listen hanya IP wa-ingress
+  jq -e '(.services["wa-admin-relay"] // null) as $w | $w == null
+         or (((($w.networks // {}) | keys | sort) == ["wa-admin", "wa-ingress"])
+             and ((($w.networks // {})["wa-ingress"].ipv4_address // "") == "172.30.21.10")
+             and ($w.read_only == true)
+             and ((($w.cap_drop // []) | index("ALL")) != null)
+             and ((($w.cap_add // []) | length) == 0)
+             and ((($w.ports // []) | length) == 0)
+             and ((($w.labels // {})["traefik.docker.network"] // "") == "efn_wa-ingress")
              and ((($w.labels // {})["traefik.http.routers.wa-admin.entrypoints"] // "") == "wg-https")
              and ((($w.labels // {})["traefik.http.routers.wa-admin.tls.options"] // "") == "efn-mtls@file")
              and ((($w.labels // {})["traefik.http.routers.wa-admin.middlewares"] // "") | split(",") | index("internal-ops@file") != null))' \
       <<< "$json" > /dev/null \
-    || err "[$label] wa-unofficial: wajib hanya network rmq/wa-egress/wa-admin, read_only, cap_drop ALL tanpa cap_add, tanpa port, profil wa-unofficial, user non-root, AMQP amqps://, tanpa WA_UNOFFICIAL_PROXY_URL, flag boolean, router admin wg-https + internal-ops + efn-mtls (docs/04 §28.9)"
+    || err "[$label] wa-admin-relay: wajib network wa-admin + wa-ingress (IP 172.30.21.10), read_only, cap_drop ALL, tanpa port, router admin wg-https + internal-ops + efn-mtls di network efn_wa-ingress (SEC-G50-06)"
+  grep -qE '^[[:space:]]*bind[[:space:]]+172\.30\.21\.10:8443([[:space:]]|$)' "${ROOT_DIR}/infra/wa-egress/admin-relay.cfg" \
+    || err "infra/wa-egress/admin-relay.cfg: relay wajib bind hanya 172.30.21.10:8443 (tidak listen di sisi wa-admin, SEC-G50-06)"
   jq -e '(.services["wa-egress-proxy"] // null) as $w | $w == null
          or (((($w.networks // {}) | keys) - ["wa-egress", "wa-internet"] | length == 0)
              and ($w.read_only == true)
@@ -758,8 +773,8 @@ check_compose() {
       || err "[$label] segment-worker: SEGMENT_ENABLED harus diteruskan dengan default false di render prod (docs/04 §28.10)"
   fi
   if [[ "$label" == prod-wa-unofficial ]]; then
-    jq -e '.services["wa-unofficial"] != null and .services["wa-egress-proxy"] != null' <<< "$json" > /dev/null \
-      || err "[$label] wa-unofficial/wa-egress-proxy tidak ter-render (overlay docker-compose.wa-unofficial.yml / --profile wa-unofficial)"
+    jq -e '.services["wa-unofficial"] != null and .services["wa-egress-proxy"] != null and .services["wa-admin-relay"] != null' <<< "$json" > /dev/null \
+      || err "[$label] wa-unofficial/wa-egress-proxy/wa-admin-relay tidak ter-render (overlay docker-compose.wa-unofficial.yml / --profile wa-unofficial)"
     for svc in wa-unofficial api-gateway; do
       jq -e --arg s "$svc" '(.services[$s].environment.WA_UNOFFICIAL_ENABLED // "") == "false"' <<< "$json" > /dev/null \
         || err "[$label] ${svc}: WA_UNOFFICIAL_ENABLED harus diteruskan dengan default false di render prod (ADR-044, docs/04 §28.10)"
@@ -839,6 +854,21 @@ check_files() {
   if grep -qE 'verify[[:space:]]+none|^[[:space:]]*(stats|option[[:space:]]+forwardfor)' "$hap"; then
     err "infra/odoo-rpc-gateway/haproxy.cfg: verify none / stats / forwardfor dilarang"
   fi
+  # G50 (SEC-G50-10, docs/04 §28.10): ref persetujuan production tidak boleh berisi nilai di file repo (.env.example /
+  # compose) - ref hanya dari config rilis bertanda tangan; nilai contoh akan memenuhi gerbang deploy-validate diam-diam.
+  local ref_var ref_line
+  for ref_var in BEHAVIOR_TRACKING_DPO_APPROVAL_REF PROMO_CAMPAIGN_APPROVAL_REF WA_UNOFFICIAL_RISK_ACCEPTANCE_REF \
+                 EMAIL_DPA_APPROVAL_REF; do
+    ref_line="$(grep -E "^${ref_var}=" "$COMPOSE_DIR/.env.example" || true)"
+    [[ -n "$ref_line" ]] || err "infra/compose/.env.example: ${ref_var} wajib ada (kosong) sebagai dokumentasi gerbang G50"
+    [[ -z "$ref_line" || "$ref_line" =~ ^${ref_var}=[[:space:]]*(#.*)?$ ]] \
+      || err "infra/compose/.env.example: ${ref_var} wajib kosong (ref persetujuan hanya dari config rilis, SEC-G50-10)"
+    ref_line="$(grep -hE "^[[:space:]]*-?[[:space:]]*${ref_var}[:=]" "$COMPOSE_DIR"/docker-compose*.yml || true)"
+    if [[ -n "$ref_line" ]] \
+       && grep -vqE "${ref_var}[:=][[:space:]]*\\\$\\{${ref_var}:-\\}[[:space:]]*(#.*)?$" <<< "$ref_line"; then
+      err "infra/compose/docker-compose*.yml: ${ref_var} di-hardcode; wajib \${${ref_var}:-} (SEC-G50-10)"
+    fi
+  done
   check_esb_users
   echo "check-encryption: file konfigurasi infra diperiksa"
 }

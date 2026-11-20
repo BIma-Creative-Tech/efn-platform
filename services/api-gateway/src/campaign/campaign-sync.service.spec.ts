@@ -1,6 +1,6 @@
 import { OutboxService } from '../common/outbox/outbox.service';
 import { FakeDb, testCipher, testConfig } from '../common/testing/fakes';
-import { CampaignSyncService, VOUCHER_CODE_AAD, voucherCodeHash } from './campaign-sync.service';
+import { CampaignSyncService, VOUCHER_CODE_AAD, voucherCodeAad, voucherCodeHash } from './campaign-sync.service';
 import { MockOdooCampaign, OdooCampaignApi, OdooCampaignError } from './odoo-campaign';
 import { campaignPayload } from './testing/campaign-fixtures';
 
@@ -26,10 +26,13 @@ describe('CampaignSyncService (klaim outbox Odoo → PG + outbox → ack)', () =
     ctx.odoo.queued.set('SMD', [{ id: 41, approval_rev: 2, payload: campaignPayload() }]);
     expect(await ctx.svc.syncCompany('SMD')).toEqual({ claimed: 1, stored: 1, acked: 1, rejected: 0 });
     const ins = ctx.db.find('INSERT INTO platform.member_voucher')[0]!;
-    const [key, mode, , , encs, hashes] = ins.params as [string, string, string, string[], Buffer[], string[]];
+    const [key, mode, , ids, encs, hashes] = ins.params as [string, string, string, string[], Buffer[], string[]];
     expect(key).toBe('campaign:SMD:7:2');
     expect(mode).toBe('anonymous_code');
-    expect(ctx.cipher.decrypt(encs[0]!, VOUCHER_CODE_AAD)).toBe('SMD-AAAA-0001');
+    // SEC-G50-11: ditulis dengan AAD v2 terikat id baris; AAD v1 kolom atau id lain tidak bisa membukanya
+    expect(ctx.cipher.decrypt(encs[0]!, voucherCodeAad(ids[0]!))).toBe('SMD-AAAA-0001');
+    expect(() => ctx.cipher.decrypt(encs[0]!, VOUCHER_CODE_AAD)).toThrow();
+    expect(() => ctx.cipher.decrypt(encs[0]!, voucherCodeAad(ids[1]!))).toThrow();
     expect(hashes[1]).toBe(voucherCodeHash(ctx.config.redisKeyPepper, 'SMD-AAAA-0002'));
     expect(JSON.stringify(ins.params)).not.toContain('SMD-AAAA-0001');
     expect(ctx.enqueued).toHaveLength(1);

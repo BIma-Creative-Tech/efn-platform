@@ -7,8 +7,24 @@ import { PiiCipher, piiAad } from '../common/pii/crypto';
 import { CampaignRequestedMessage, PROMO_CAMPAIGN_REQUESTED_QUEUE, campaignKey } from './campaign-message';
 import { CLAIM_LIMIT, ClaimResult, ClaimedCampaign, ODOO_CAMPAIGN, OdooCampaignApi, OdooCampaignError } from './odoo-campaign';
 
-/** AAD kolom kode voucher (AES-256-GCM key ring PII). Perlu didaftarkan di registry re-encrypt (lihat README). */
+/** AAD kolom v1 kode voucher (hanya dibaca sebagai cadangan; registry `pii-columns.ts`). */
 export const VOUCHER_CODE_AAD = piiAad('member_voucher', 'code_enc');
+/**
+ * SEC-G50-11 (pola SEC-102): AAD per baris — ciphertext terikat `member_voucher.id`, sehingga `code_enc` tidak bisa
+ * ditukar antar-baris lewat UPDATE DB. Sama dengan `rowAad` entri `member_voucher` di `pii-columns.ts`.
+ */
+export function voucherCodeAad(id: string): string {
+  return `efn:member_voucher.code_enc:v2:${id.toLowerCase()}`;
+}
+
+/** Dekripsi kode voucher: v2 (per baris) lalu v1 (kolom) sebagai cadangan. Melempar bila keduanya gagal. */
+export function decryptVoucherCode(cipher: PiiCipher, id: string, blob: Buffer): string {
+  try {
+    return cipher.decrypt(blob, voucherCodeAad(id));
+  } catch {
+    return cipher.decrypt(blob, VOUCHER_CODE_AAD);
+  }
+}
 /** Retensi (PLACEHOLDER DPO/Finance): inbox 30 hari setelah berakhir, kode voucher 90 hari setelah berakhir. */
 const INBOX_RETENTION_DAYS = 30;
 const VOUCHER_RETENTION_DAYS = 90;
@@ -125,8 +141,9 @@ export class CampaignSyncService implements OnModuleInit, OnModuleDestroy {
         const encs: Buffer[] = [];
         const hashes: string[] = [];
         for (const code of item.codes) {
-          ids.push(randomUUID());
-          encs.push(this.cipher.encrypt(code, VOUCHER_CODE_AAD));
+          const id = randomUUID();
+          ids.push(id);
+          encs.push(this.cipher.encrypt(code, voucherCodeAad(id)));
           hashes.push(voucherCodeHash(pepper, code));
         }
         for (let i = 0; i < ids.length; i += 1000) {

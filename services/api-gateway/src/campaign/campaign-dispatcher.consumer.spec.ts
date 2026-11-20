@@ -19,6 +19,8 @@ interface Opts {
   freqCount?: number;
   missing?: boolean;
   members?: string[];
+  /** Redelivery: baris campaign_delivery (kampanye x member) sudah ada. */
+  alreadyDelivered?: boolean;
 }
 
 function setup(opts: Opts = {}) {
@@ -37,7 +39,9 @@ function setup(opts: Opts = {}) {
     }
     if (t.includes('count(*) AS n FROM platform.campaign_delivery')) return { rows: [{ n: opts.freqCount ?? 0 }], rowCount: 1 };
     if (t.includes('count(*) AS n FROM platform.member_voucher')) return { rows: [{ n: 0 }], rowCount: 1 };
-    if (t.includes('INSERT INTO platform.campaign_delivery') && t.includes("'delivered'")) return { rows: [{ member_id: p[1] }], rowCount: 1 };
+    if (t.includes('INSERT INTO platform.campaign_delivery') && t.includes("'delivered'")) {
+      return opts.alreadyDelivered ? { rows: [], rowCount: 0 } : { rows: [{ member_id: p[1] }], rowCount: 1 };
+    }
     if (t.includes('INSERT INTO platform.campaign_delivery')) return { rows: [], rowCount: 1 };
     if (t.includes('UPDATE platform.member_voucher SET member_id')) {
       if (pool <= 0) return { rows: [], rowCount: 0 };
@@ -76,6 +80,10 @@ describe('CampaignDispatcherConsumer (promo.campaign.requested → fan-out)', ()
     const target = ctx.db.find('FROM behavior.segment_member')[0]!.text;
     expect(target).toContain("c.purpose = 'marketing'");
     expect(target).toContain("c.purpose = 'tracking'");
+    // SEC-G50-08: anggota segmen difilter PT kampanye
+    const tq = ctx.db.find('FROM behavior.segment_member')[0]!;
+    expect(tq.text).toContain('s.company_code = $5');
+    expect(tq.params[4]).toBe('SMD');
   });
 
   it('pool kode habis → berhenti, member berikut dilewati voucher_exhausted', async () => {
@@ -138,6 +146,27 @@ describe('CampaignDispatcherConsumer (promo.campaign.requested → fan-out)', ()
     expect(exp.db.find('FROM behavior.segment_member')).toHaveLength(0);
     expect(await setup({ status: 'done' }).c.handle(msg, bff)).toEqual({ status: 'duplicate' });
     expect(await setup({ env: { PROMO_CAMPAIGN_ENABLED: 'false' } }).c.handle(msg, bff)).toEqual({ status: 'disabled' });
+  });
+
+  it('redelivery (campaign_delivery sudah ada) → tidak menugaskan kode, tidak mengisi inbox, tidak mengirim ulang kanal', async () => {
+    const ctx = setup({ alreadyDelivered: true, members: MEMBERS });
+    const out = await ctx.c.handle(msg, bff);
+    expect(out).toMatchObject({ status: 'done', stats: { delivered: 0, skipped: 0, email_queued: 0, push_sent: 0 } });
+    expect(ctx.db.find('UPDATE platform.member_voucher SET member_id')).toHaveLength(0);
+    expect(ctx.db.find('INSERT INTO platform.member_inbox')).toHaveLength(0);
+    expect(ctx.email.enqueue).not.toHaveBeenCalled();
+  });
+
+  it('target = member dengan consent marketing (+ tracking) DAN akun aktif; dievaluasi ulang pada setiap halaman (consent dicabut di tengah jalan)', async () => {
+    const ctx = setup({ members: MEMBERS });
+    await ctx.c.handle(msg, bff);
+    const targetQueries = ctx.db.find('FROM behavior.segment_member');
+    // satu halaman berisi (3 member < PAGE) + satu halaman kosong: consent dibaca di SQL tiap halaman, bukan di-cache
+    expect(targetQueries.length).toBeGreaterThanOrEqual(2);
+    for (const t of targetQueries) {
+      expect(t.text).toContain('m.deleted_at IS NULL');
+      expect(t.text).toContain('IS TRUE');
+    }
   });
 
   it('publisher asing, key rusak, kampanye tidak ada → DLQ', async () => {

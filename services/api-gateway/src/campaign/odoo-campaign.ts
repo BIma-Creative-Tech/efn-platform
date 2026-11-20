@@ -94,9 +94,14 @@ function req<T>(v: T | null | undefined | false, reason: string): T {
   return v;
 }
 
-/** Validasi satu payload kampanye (allowlist). `company` = PT pemilik API key; payload PT lain ditolak. */
-export function parseCampaignPayload(raw: unknown, company: string): { payload: CampaignPayload; codes: string[] } {
-  const o = req(obj(raw), 'payload');
+/**
+ * Validasi satu payload kampanye (allowlist). `company` = PT pemilik API key; payload PT lain ditolak.
+ * SATU format (keputusan lead, SEC-G50-02): bentuk di bawah = kontrak; Odoo `efn_campaign` mengirim persis bentuk ini dan
+ * fixture bersama `services/odoo/addons/efn_campaign/tests/fixtures/campaign_payload_v1.json` diuji kedua sisi. Tidak ada
+ * normalisasi bentuk lama (title/body datar, `voucher{}`, tanggal `YYYY-MM-DD`, program ref integer → ditolak).
+ */
+export function parseCampaignPayload(rawInput: unknown, company: string): { payload: CampaignPayload; codes: string[] } {
+  const o = req(obj(rawInput), 'payload');
   const campaignId = req(posInt(o.campaign_id), 'campaign_id');
   const companyCode = req(typeof o.company_code === 'string' && CODE_RE.test(o.company_code) ? o.company_code : null, 'company_code');
   if (companyCode !== company) throw new Invalid('company_mismatch');

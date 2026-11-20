@@ -7,8 +7,8 @@ import { isMemberHash } from '../../common/pii/pii';
 import { RateLimiter } from '../../common/rate-limit/rate-limiter';
 import { AppConfig } from '../../config/app-config';
 import {
-  MEMBER_EMAIL_AAD,
   NOTIFY_EMAIL_CONSUMER,
+  decryptMemberEmail,
   NOTIFY_EMAIL_PUBLISHERS,
   NOTIFY_EMAIL_QUEUE,
   SOURCE_REF_RE,
@@ -131,7 +131,8 @@ export class EmailSenderConsumer implements OnApplicationBootstrap, OnModuleDest
         await this.markOutbound(q, msg.idempotency_key, 'skipped');
         return 'skipped';
       }
-      const address = this.cipher.decrypt(row.email_enc, MEMBER_EMAIL_AAD);
+      // SEC-G50-11: AAD v2 terikat member_id (v1 lama masih dibaca selama migrasi)
+      const address = decryptMemberEmail(this.cipher, row.email_enc, row.id).email;
       if (!isPlausibleEmail(address)) throw new PermanentMessageError('alamat email tersimpan tidak valid');
       masked = maskEmail(address);
 

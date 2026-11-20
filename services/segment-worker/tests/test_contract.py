@@ -2,7 +2,7 @@
 
 import copy
 import uuid
-from datetime import date
+from datetime import UTC, date, datetime
 from typing import Any
 
 import pytest
@@ -11,11 +11,14 @@ from conftest import key
 from efn_segment.contract import (
     MAX_SUBJECTS_PER_CHUNK,
     MEMBERS_KEYS,
+    PII_RE,
+    PROPOSAL_KEYS,
     ContractError,
     chunk_subjects,
     idempotency_key,
     members_payloads,
     proposal_payload,
+    top_summary,
     total_members,
     validate_members,
     validate_proposal,
@@ -107,8 +110,11 @@ def _segment(code: str = "price_sensitive") -> Segment:
     )
 
 
-def test_proposal_payload_aggregate_only() -> None:
-    payload = proposal_payload("SMD", RUN, _segment(), SegmentParams(), AS_OF, 10, 10)
+GEN = datetime(2026, 11, 20, 2, 15, 30, 123456, tzinfo=UTC)
+
+
+def test_proposal_payload_flat_numeric_metrics() -> None:
+    payload = proposal_payload("SMD", RUN, _segment(), SegmentParams(), AS_OF, 10, 10, GEN)
     assert payload == {
         "schema_version": 1,
         "company_code": "SMD",
@@ -116,38 +122,71 @@ def test_proposal_payload_aggregate_only() -> None:
         "segment_code": "price_sensitive",
         "member_count": 25,
         "metrics": {
-            "as_of": "2026-11-19",
             "lookback_days": 14,
             "product_count": 3,
-            "top_products": [{"product_id": 10, "subjects": 20}, {"product_id": 12, "subjects": 15}],
-            "reason_counts": {"market": 12, "habit": 15},
+            "as_of_yyyymmdd": 20261119,
+            "k_min": 10,
+            "top_product_count": 2,
+            "top_product_subjects": 35,
+            "reason_habit": 15,
+            "reason_market": 12,
         },
+        "summary": "2 produk teratas (>= 10 subjek): id 10 (20), id 12 (15)",
+        "generated_at": "2026-11-20T02:15:30Z",
     }
+    assert set(payload) == PROPOSAL_KEYS
+    assert all(isinstance(v, int) and not isinstance(v, bool) for v in payload["metrics"].values())
     text = repr(payload)
     assert all(key(i) not in text for i in range(25))
-    wl = proposal_payload("SMD", RUN, _segment("wishlist_idle"), SegmentParams(), AS_OF, 10, 10)
-    assert wl["metrics"]["lookback_days"] == 60 and "reason_counts" not in wl["metrics"]
+    wl = proposal_payload("SMD", RUN, _segment("wishlist_idle"), SegmentParams(), AS_OF, 10, 10, GEN)
+    assert wl["metrics"]["lookback_days"] == 60
+    assert not any(k.startswith("reason_") for k in wl["metrics"])
+
+
+def test_generated_at_defaults_to_now_utc() -> None:
+    payload = proposal_payload("SMD", RUN, _segment(), SegmentParams(), AS_OF, 10, 10)
+    assert payload["generated_at"].endswith("Z") and len(payload["generated_at"]) == 20
+
+
+def test_top_summary_empty_long_ids_and_length() -> None:
+    assert top_summary([], 10) == ""
+    # Id >= 6 digit tidak ditulis (pola PII Odoo \d{6,}).
+    text = top_summary([{"product_id": 1234567, "subjects": 50}, {"product_id": 42, "subjects": 11}], 10)
+    assert text == "2 produk teratas (>= 10 subjek): id 42 (11) (+1 lainnya)"
+    assert top_summary([{"product_id": 1234567, "subjects": 50}], 10) == "1 produk teratas (>= 10 subjek) (+1 lainnya)"
+    many = [{"product_id": 10_000 + i, "subjects": 99_999} for i in range(50)]
+    text = top_summary(many, 10)
+    assert len(text) <= 256 and "lainnya" in text
+    assert not PII_RE.search(text)
 
 
 def _proposal() -> dict[str, Any]:
-    return proposal_payload("SMD", RUN, _segment(), SegmentParams(), AS_OF, 10, 10)
+    return proposal_payload("SMD", RUN, _segment(), SegmentParams(), AS_OF, 10, 10, GEN)
 
 
 @pytest.mark.parametrize(
     "mutate",
     [
         lambda p: p.update(subject_keys=[key(1)]),  # kunci di luar allowlist
-        lambda p: p["metrics"].update(note=key(1)),  # metrik di luar allowlist
-        lambda p: p["metrics"].update(top_products=[{"product_id": 1, "subjects": 1, "who": key(1)}]),
-        lambda p: p["metrics"]["reason_counts"].update(market=-1),
-        lambda p: p["metrics"]["reason_counts"].update(vip=1),
+        lambda p: p["metrics"].update(note=key(1)),  # metrik bukan angka
+        lambda p: p["metrics"].update(top_products=[{"product_id": 1, "subjects": 1}]),  # list
+        lambda p: p["metrics"].update(reasons={"market": 1}),  # dict
+        lambda p: p["metrics"].update(as_of="2026-11-19"),  # string
+        lambda p: p["metrics"].update(flag=True),  # bool bukan angka
+        lambda p: p["metrics"].update(huge=10**12),
+        lambda p: p["metrics"].update(Bad_Key=1),
+        lambda p: p["metrics"].update({f"m{i}": i for i in range(20)}),  # > 20 kunci
+        lambda p: p["metrics"].pop("product_count"),
         lambda p: p.update(member_count=0),
         lambda p: p.update(company_code="smd"),
         lambda p: p.update(segment_code="all"),
         lambda p: p.update(schema_version=2),
-        lambda p: p["metrics"].update(as_of="kemarin"),
-        lambda p: p["metrics"].pop("top_products"),
-        lambda p: p["metrics"].update(top_products=[{"product_id": 0, "subjects": 1}]),
+        lambda p: p.update(summary="x" * 257),
+        lambda p: p.update(summary="hubungi 081234567890"),
+        lambda p: p.update(summary="kirim ke budi@mail.com"),
+        lambda p: p.update(generated_at="2026-11-20 02:15:30"),
+        lambda p: p.update(generated_at="2026-11-20T09:15:30+07:00"),
+        lambda p: p.pop("generated_at"),
     ],
 )
 def test_validate_proposal_rejects(mutate: Any) -> None:
@@ -159,6 +198,6 @@ def test_validate_proposal_rejects(mutate: Any) -> None:
 
 def test_validate_proposal_rejects_hash_anywhere() -> None:
     payload = copy.deepcopy(_proposal())
-    payload["metrics"]["as_of"] = key(1)
+    payload["summary"] = key(1)
     with pytest.raises(ContractError):
         validate_proposal(payload)

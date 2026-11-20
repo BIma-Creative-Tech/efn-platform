@@ -10,6 +10,7 @@ const K1 = '1'.repeat(64);
 const K2 = '2'.repeat(64);
 const chunk = (extra: Record<string, unknown> = {}): Record<string, unknown> => ({
   schema_version: 1,
+  company_code: 'SMD',
   run_id: RUN,
   segment_code: 'oos_viewed',
   chunk_no: 0,
@@ -17,8 +18,9 @@ const chunk = (extra: Record<string, unknown> = {}): Record<string, unknown> => 
   ...extra,
 });
 
-function setup(opts: { inserted?: boolean; prevSha?: string } = {}) {
+function setup(opts: { inserted?: boolean; prevSha?: string; runOtherCompany?: string } = {}) {
   const db = new FakeDb((t) => {
+    if (t.includes('company_code <> $2')) return opts.runOtherCompany ? { rows: [{ company_code: opts.runOtherCompany }], rowCount: 1 } : { rows: [], rowCount: 0 };
     if (t.includes('INSERT INTO behavior.segment_chunk')) return opts.inserted === false ? { rows: [], rowCount: 0 } : { rows: [{}], rowCount: 1 };
     if (t.includes('SELECT body_sha256')) return { rows: [{ body_sha256: opts.prevSha ?? '' }], rowCount: 1 };
     if (t.includes('INSERT INTO behavior.segment_member')) return { rows: [], rowCount: 2 };
@@ -34,7 +36,21 @@ describe('SegmentIngestService (POST /internal/v1/segments/{run_id}/members, §2
     expect(out).toEqual({ status: 200, body: { ok: true, run_id: RUN, segment_code: 'oos_viewed', chunk_no: 0, accepted: 2, duplicate_chunk: false } });
     const ins = ctx.db.find('INSERT INTO behavior.segment_member')[0]!;
     expect(ins.params[2]).toEqual([K1, K2]);
+    expect(ins.params[3]).toBe('SMD');
     expect(ins.text).toContain('behavior.erased_subject');
+    expect(ctx.db.find('INSERT INTO behavior.segment_chunk')[0]!.params[5]).toBe('SMD');
+  });
+
+  it('SEC-G50-08: company_code wajib & ∈ COMPANY_CODES; run_id yang sudah milik PT lain → 409 run_company_mismatch', async () => {
+    const ctx = setup();
+    const noCompany = chunk();
+    delete noCompany.company_code;
+    expect((await ctx.svc.ingest(RUN, noCompany)).status).toBe(400);
+    expect((await ctx.svc.ingest(RUN, chunk({ company_code: 'ZZZ' }))).status).toBe(400);
+    expect(ctx.db.queries).toHaveLength(0);
+    const other = setup({ runOtherCompany: 'PB' });
+    expect(await other.svc.ingest(RUN, chunk())).toMatchObject({ status: 409, body: { error: { code: 'run_company_mismatch' } } });
+    expect(other.db.find('INSERT INTO behavior.segment_member')).toHaveLength(0);
   });
 
   it('kirim ulang isi sama → duplicate_chunk; isi berbeda dengan kunci sama → 409 chunk_conflict', async () => {
