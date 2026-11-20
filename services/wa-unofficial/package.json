@@ -14,7 +14,7 @@
   },
   "dependencies": {
     "@whiskeysockets/baileys": "6.7.24",
-    "amqplib": "^0.10.5",
+    "amqplib": "^2.2.1",
     "https-proxy-agent": "^7.0.6"
   },
   "devDependencies": {
