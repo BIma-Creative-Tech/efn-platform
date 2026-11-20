@@ -1028,3 +1028,56 @@ Tidak ada mismatch nama/payload di sisi kontrak. Kontrak hanya **kurang detail**
 3. Kontrol izin alkohol di kasir tidak ada (assortment tidak ditegakkan di POS, keputusan pemilik; Q-SM13) — UAT N13 mencatat sebagai temuan terbuka.
 4. Temuan #2–#5 di atas (cron expire bergantung flag, alert dibuat ulang per hari, TZ perangkat, selisih retur vs kuota) = perilaku diterima/dilaporkan, bukan bug pasti.
 5. Perubahan `pos_order.py` dan tiga test baru belum dijalankan; verifikasi di container (`-u efn_expiry_monitor --test-tags /efn_expiry_monitor`).
+
+---
+
+## G47 QA — Insight supermarket (worktree `efn-platform-g47`, branch `feat/wave-47-insight-supermarket`)
+
+Metode: **hanya membaca kode** (tanpa runtime; tidak ada shell di sesi ini). Tidak mengulang verifikasi lead (Odoo test, ETL pytest, tsc/vitest/build, vektor eit2/sig2, harness row policy 8/8, DDL load CH 24.8, compose config).
+
+### G47.1 Hasil pencocokan (tidak ada mismatch kolom/kunci/persona)
+| Area | Hasil |
+|---|---|
+| Kolom ETL writer vs DDL `17-g47-insight-sm.sql` | Sama (nama + urutan) untuk 12 tabel; sudah dijaga `tests/test_sm_ddl.py`. Tipe transformer sesuai (UInt/Decimal/Nullable/Array). |
+| Kolom `efn_insight.v_sm_*` (access SQL) vs `efn_dwh.v_sm_*` | CH memvalidasi saat CREATE VIEW (lead: load lulus). |
+| Kolom yang diquery insight-web (`lib/queries-sm.ts`) vs daftar kolom `insight-sm-access.sql` | Semua ada; alias agregat tidak bentrok dengan kolom view; `outlet_type='dc'` = literal view. Sekarang dijaga test baru. |
+| 39 kunci KPI: Odoo `kpi_registry.py` = JSON = ETL `sm_kpi.py` = literal view CH = `sm-defaults.ts` (default, enum, rentang, pasangan) | Identik. Odoo `parse` lebih ketat dari ETL (bool hanya 0/1, tanpa koma desimal) = aman (ETL superset). |
+| Persona: grup Odoo (`PERSONA_GROUPS`) = `PERSONAS`/`ORG_PERSONAS` token = `claims.ts` = `insight-sm-policy.sh` | Identik (5 persona; PT-level = category, dc, exec, marketing). 29 view di policy = 29 view di access SQL. |
+| Query tiap halaman persona vs daftar persona per view di row policy | Tidak ada query yang ditolak policy untuk personanya (diuji statis). `sm_cogs_sums` (store membaca margin_daily yang tidak diizinkan) tidak dipakai loader mana pun = kode mati. |
+| Kolom Odoo yang dibaca ETL (usulan, bias, PO DC, expiry, markdown, kampanye, KPI, warehouse, outlet online, picking/move/location) vs model Odoo 19 + grant `odoo-readonly-grants.sql` + `22-platform-g47.sql` | Semua kolom ada di model dan di-grant per kolom; nilai selection (state/stage/kind) sama dengan konstanta ETL; `platform.v_campaign_stats` sesuai kunci `stats` yang ditulis BFF (`campaign-dispatcher.consumer.ts:28-31`). |
+| Nama job ETL vs `v_sm_freshness` vs `MARTS` insight-web | 12 mart + 11 job cocok. |
+
+### G47.2 Mismatch / temuan
+| # | Temuan | Sisi A | Sisi B | Status |
+|---|---|---|---|---|
+| M-1 | **Flag `INSIGHT_SM_ENABLED` tidak diteruskan di compose.** Dibaca Odoo (`efn_insight/controllers/main.py:36,66`) dan insight-web (`lib/config.ts:75`), kontrak §28.13.12 (`04_SERVICE_CONTRACTS.md:4920`), tetapi tidak ada di environment service `odoo` maupun `insight-web`, jadi fitur tidak mungkin dinyalakan lewat `.env`. | `infra/compose/docker-compose.yml` (odoo ± baris 980, insight-web ± baris 1820) | — | **DIPERBAIKI**: pass-through `${INSIGHT_SM_ENABLED:-false}` di kedua service + `.env.example`. |
+| M-2 | `scripts/deploy.sh:398` dan `scripts/lib/deploy-validate.sh:25,78` hanya mengenal `INSIGHT_ENABLED`; `INSIGHT_SM_ENABLED` tidak diteruskan ke render production dan tidak divalidasi boolean / tidak masuk `EFN_ALLOW_FEATURE_ON`. Produksi aman (default false) tetapi tidak ada gerbang Superadmin untuk menyalakan. `check-encryption.sh:796` juga hanya memeriksa `INSIGHT_ENABLED`. | scripts/* | kontrak §28.13.12 (syarat prod) | **Dilaporkan** (perubahan desain deploy; tugas devsecops). |
+| M-3 | `thr.stock_age.days` (1..365) dipetakan ke bucket tetap 30/60/90 (`app/(sm)/dc/page.tsx:51`): N=45 tampil sebagai "> 60", N=120 sebagai "> 90". Label kartu tidak sama dengan nilai konfigurasi. | `dc/page.tsx:51` | `kpi_registry.py` rentang 1..365 | **Dilaporkan** (batasi rentang di kontrak atau pakai bucket dinamis di agregat). |
+| M-4 | View/kunci tanpa konsumen UI: `v_sm_replenishment_line` (ST-3 "sudah di usulan", CM-3 alasan), `v_sm_replenishment_bias_weekly` (EX-6 konteks bias), `v_sm_segment_daily` + `v_sm_search_terms` (MK-3), `v_sm_markdown`; kunci `thr.bias.*` hanya dipakai `biasStatus` yang tidak dipanggil dari halaman, `thr.price.below_pct` hanya label netral. Kontrak §28.13.9 menyebut kartu itu. | `queries-sm.ts` (tidak ada query) | `04_SERVICE_CONTRACTS.md:4800-4812` | **Dilaporkan** (celah fitur; konfirmasi apakah ditunda ke fase 2 dan catat di kontrak/README). |
+| M-5 | Catatan usang: `04_SERVICE_CONTRACTS.md:4887-4888` masih menulis #114/#117 "belum di main"; `queries-sm.ts:16` menulis "SQL BELUM dijalankan terhadap ClickHouse"; `sm-defaults.ts:8` menunjuk `lib/sm-config.ts` (tidak ada); `kpi_registry.py:4` menunjuk `lib/thresholds.ts` (nama sebenarnya `sm-thresholds.ts`/`sm-defaults.ts`). | — | — | **Dilaporkan** (dokumentasi). |
+| M-6 | **Katalog 39 query insight-web belum terbukti jalan di ClickHouse 24.8.** Daftar verifikasi lead mencakup DDL, access SQL, dan harness policy, bukan eksekusi `SM_QUERIES` terhadap view dengan data (header `queries-sm.ts:16` meminta ini). Risiko spesifik: subquery `CATF` (`categ_id IN (SELECT … v_sm_product_list)` di bawah row policy kelas C), `arrayExists` lambda di dalam parameter Array, `HAVING` pada alias, `any()` pada kolom Nullable. | `queries-sm.ts` | CH 24.8 | **Terbuka** — jalankan semua query dengan setting scope sah di stg. |
+
+### G47.3 Perbaikan yang dilakukan
+1. `infra/compose/docker-compose.yml`: tambah `INSIGHT_SM_ENABLED: ${INSIGHT_SM_ENABLED:-false}` pada service `odoo` dan `insight-web` (default false, string persis `true` yang aktif; tidak mengubah network/secret/cap).
+2. `infra/compose/.env.example`: tambah `INSIGHT_SM_ENABLED=false` + komentar syarat production.
+
+### G47.4 Test yang ditambah
+`services/etl/tests/test_g47_cross_service.py` (statis, pytest, baca file repo; **belum dijalankan** — tidak ada runtime):
+- persona sama di Odoo / token / claims.ts / policy; PT-level persona sama Odoo dan web;
+- 29 view policy = 29 view access SQL;
+- setiap query yang dimuat loader halaman persona hanya membaca view yang diizinkan row policy untuk persona itu (dan view dasar terbuka untuk kelima persona);
+- semua query katalog hanya merujuk view yang dideklarasikan;
+- kolom literal pada SELECT sederhana katalog ada di daftar kolom `efn_insight.v_sm_*`;
+- enum/rentang KPI `sm-defaults.ts` = JSON kontrak (39 kunci);
+- flag `INSIGHT_SM_ENABLED` diteruskan di compose untuk Odoo dan insight-web.
+Jika regex test gagal di CI karena format file berubah, perbaiki regex, bukan melonggarkan asersi.
+
+### G47.5 UAT
+`docs/qa/G47_UAT.md`: prasyarat lintas persona + checklist Given/When/Then per persona (kepala toko, direksi, category manager, DC, marketing, pengelola KPI) termasuk kasus negatif (persona salah route, outlet lain via URL, tanda tangan scope rusak, data usang, ClickHouse mati, tracking OFF, nilai KPI tidak sah, pasangan ambang terbalik, isolasi PT).
+
+### G47.6 Sisa risiko
+1. **M-6** (query katalog belum dieksekusi di CH) = P1 sebelum dipakai pilot.
+2. M-2 (gerbang deploy/validasi `INSIGHT_SM_ENABLED`) sebelum production.
+3. M-3/M-4 = perbedaan fitur vs kontrak; perlu keputusan lead (tunda atau bangun).
+4. Fill rate diperkirakan bila `picking_shared=1` (alokasi FIFO, fit-gap §6.2); belum ada data nyata untuk mengukur frekuensi.
+5. Test baru dan seluruh UAT belum dijalankan.

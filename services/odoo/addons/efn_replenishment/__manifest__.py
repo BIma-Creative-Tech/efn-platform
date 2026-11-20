@@ -9,7 +9,8 @@
     # proyeksi pertama, QA-3 offset hari order supplier, aktivitas run tanpa baris diterima.
     # 19.0.1.2.0 (G45): constraint jadwal kirim tumpang-tindih per outlet; sisa umur minimum mewarisi kategori induk
     # (helper efn_expiry_monitor, bila terpasang).
-    "version": "19.0.1.2.0",
+    # 19.0.1.2.1 (G47, fit-gap G47 §8): satu privilege per grup (widget hak akses Odoo 19); hak efektif tetap.
+    "version": "19.0.1.2.1",
     "category": "EFN/Inventory",
     "author": "Era Food and Nourishment",
     # LGPL-3. Tanpa dependency modul pihak ketiga (ADR-031). OCA stock_request / stock_warehouse_calendar /

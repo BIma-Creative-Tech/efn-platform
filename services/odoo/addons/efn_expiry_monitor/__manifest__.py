@@ -6,7 +6,8 @@
     "otomatis, blokir lot kedaluwarsa (override supervisor teraudit), harga markdown hanya untuk lot GS1/pilihan "
     "eksplisit, berlaku offline. Semua di belakang parameter efn_expiry_monitor.enabled (default false).",
     # 19.0.1.1.0 (G45 security r1): SEC-216..222, SEC-224 — lihat README "Perbaikan security G45".
-    "version": "19.0.1.1.0",
+    # 19.0.1.1.1 (G47, fit-gap G47 §8): Markdown Manager & Supervisor override di privilege terpisah; hak efektif tetap.
+    "version": "19.0.1.1.1",
     "category": "EFN/Inventory",
     "author": "Era Food and Nourishment",
     # LGPL-3. Tanpa dependency modul pihak ketiga (ADR-031). Referensi desain (ide saja, tidak disalin):

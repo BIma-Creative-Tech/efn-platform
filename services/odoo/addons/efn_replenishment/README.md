@@ -65,6 +65,13 @@ qty       = round_pack(min(need, cap_shelf, cap_rack))
 - Kepala toko **tidak** bisa mengonfirmasi/menyetujui PO yang barisnya berasal dari orderpoint terkelola
   (`button_confirm` dan jalur double validation `button_approve`, SEC-213).
 - Usulan hanya berubah status lewat tombol (write field lain ditolak); baris hanya `qty_approved`/`change_reason`.
+- **G47 (19.0.1.2.1, fit-gap `docs/fit-gap/G47_INSIGHT_SM.md` §8):** tiga grup kini masing-masing di privilege sendiri
+  (*EFN Replenishment: kepala toko / buyer DC / administrator*, kategori Supply Chain). Widget hak akses Odoo 19 =
+  satu pilihan per privilege + `Command.set`: dalam satu privilege, kombinasi wajar (admin + buyer) tidak bisa
+  dipegang dan grup kedua terhapus saat form user disimpan. Tanpa `implied_ids` baru (admin tidak otomatis buyer),
+  keanggotaan grup tidak berubah, tanpa migrasi. Test `tests/test_privilege.py`.
+- Persona Insight `efn_insight_sm.group_insight_store` (hak data) ≠ `group_replenishment_store` (hak tindakan); keduanya
+  membaca cakupan outlet dari `res.users.efn_outlet_warehouse_ids`, yang sejak G47 teraudit (`efn_audit` CONTROL_SPECS).
 
 ## Risiko yang dimitigasi
 R-T21 (forecast tidak akurat → approval manusia + log bias), R-T11 (beban Odoo: dihitung di cron, bukan request),

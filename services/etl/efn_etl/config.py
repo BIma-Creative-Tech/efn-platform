@@ -14,6 +14,7 @@ from typing import Self
 from urllib.parse import urlsplit
 
 from efn_etl.sink import load_key
+from efn_etl.sm import parse_sm_companies
 from efn_etl.tls import (
     TlsConfigError,
     ca_file,
@@ -197,6 +198,16 @@ class Settings:
     behavior_k_min: int = 10
     behavior_erasure_recheck_hours: int = 24
     behavior_erasure_batch_size: int = 500
+    # G47 (docs/04 §28.13.8/§28.13.12): mart EFN Insight supermarket (efn_etl/sm.py, sm_cycle.py). Semua default mati.
+    # ETL_ENABLE_SM butuh ETL_ENABLE_ODOO + grant G47; sm_stock_agg butuh juga ETL_ENABLE_STOCK. EXPIRY (#114) dan
+    # CAMPAIGN (#117) butuh ETL_ENABLE_SM; CAMPAIGN ditolak di production selama PROMO_CAMPAIGN_ENABLED != true (L-180).
+    sm_enabled: bool = False
+    sm_companies: tuple[str, ...] = ("SMD",)
+    sm_expiry_enabled: bool = False
+    sm_campaign_enabled: bool = False
+    sm_fill_recalc_days: int = 14
+    sm_campaign_attr_days: int = 30
+    sm_stock_backfill_days: int = 90
 
     @property
     def amqp_user(self) -> str:
@@ -302,6 +313,22 @@ class Settings:
         forecast_legacy = _bool(e, "ETL_ENABLE_FORECAST_LEGACY", False)
         if forecast_legacy and not forecast_enabled:
             raise RuntimeError("ETL_ENABLE_FORECAST_LEGACY membutuhkan ETL_ENABLE_FORECAST=true")
+        sm_enabled = _bool(e, "ETL_ENABLE_SM", False)
+        if sm_enabled and not odoo_enabled:
+            raise RuntimeError("ETL_ENABLE_SM membutuhkan ETL_ENABLE_ODOO=true")
+        try:
+            sm_companies = parse_sm_companies(_str(e, "ETL_SM_COMPANIES", "SMD"))
+        except ValueError as exc:
+            raise RuntimeError(str(exc)) from exc
+        sm_expiry = _bool(e, "ETL_ENABLE_SM_EXPIRY", False)
+        if sm_expiry and not sm_enabled:
+            raise RuntimeError("ETL_ENABLE_SM_EXPIRY membutuhkan ETL_ENABLE_SM=true")
+        sm_campaign = _bool(e, "ETL_ENABLE_SM_CAMPAIGN", False)
+        if sm_campaign and not sm_enabled:
+            raise RuntimeError("ETL_ENABLE_SM_CAMPAIGN membutuhkan ETL_ENABLE_SM=true")
+        if sm_campaign and is_production(e) and _str(e, "PROMO_CAMPAIGN_ENABLED", "false") != "true":
+            # Pola L-180: hasil kampanye hanya dimuat bila kampanye promo memang aktif di production.
+            raise RuntimeError("ETL_ENABLE_SM_CAMPAIGN ditolak di production selama PROMO_CAMPAIGN_ENABLED != true")
         return cls(
             platform_pg=platform,
             odoo_pg=odoo,
@@ -376,4 +403,11 @@ class Settings:
             behavior_k_min=_int_range(e, "ETL_BEHAVIOR_K_MIN", 10, 2, 1000),
             behavior_erasure_recheck_hours=_int_range(e, "ETL_BEHAVIOR_ERASURE_RECHECK_HOURS", 24, 1, 168),
             behavior_erasure_batch_size=_int_range(e, "ETL_BEHAVIOR_ERASURE_BATCH_SIZE", 500, 1, 1000),
+            sm_enabled=sm_enabled,
+            sm_companies=sm_companies,
+            sm_expiry_enabled=sm_expiry,
+            sm_campaign_enabled=sm_campaign,
+            sm_fill_recalc_days=_int_range(e, "ETL_SM_FILL_RECALC_DAYS", 14, 1, 60),
+            sm_campaign_attr_days=_int_range(e, "ETL_SM_CAMPAIGN_ATTR_DAYS", 30, 1, 365),
+            sm_stock_backfill_days=_int_range(e, "ETL_SM_STOCK_BACKFILL_DAYS", 90, 1, 400),
         )

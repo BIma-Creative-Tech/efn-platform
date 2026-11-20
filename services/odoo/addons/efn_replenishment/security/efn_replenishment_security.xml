@@ -2,9 +2,31 @@
 <!-- efn_replenishment (docs/04 §28.4): 3 grup + SoD (kepala toko tidak mengonfirmasi PO supplier, dicek di
      purchase.order.button_confirm) + record rule outlet kepala toko (res.users.efn_outlet_warehouse_ids). -->
 <odoo>
+    <!-- G47 (fit-gap docs/fit-gap/G47_INSIGHT_SM.md §8): SATU privilege per grup. Widget hak akses Odoo 19 = satu pilihan
+         per privilege + Command.set: tiga grup independen dalam satu privilege tidak bisa dipegang bersamaan (mis.
+         admin + buyer) dan grup kedua terhapus diam-diam saat form user disimpan. Hak efektif tidak berubah: tanpa
+         implied baru (admin TIDAK otomatis buyer), keanggotaan grup user yang ada tetap (hanya privilege_id grup).
+         xmlid privilege lama dipertahankan untuk kepala toko. -->
     <record id="res_groups_privilege_efn_replenishment" model="res.groups.privilege">
-        <field name="name">EFN Replenishment</field>
+        <field name="name">EFN Replenishment: kepala toko</field>
         <field name="category_id" ref="base.module_category_supply_chain"/>
+        <field name="sequence">60</field>
+        <field name="placeholder">–</field>
+        <field name="description">Menyetujui usulan order outlet di "Outlet dikelola" (tab Outlet di form user).</field>
+    </record>
+    <record id="res_groups_privilege_efn_replenishment_buyer" model="res.groups.privilege">
+        <field name="name">EFN Replenishment: buyer DC</field>
+        <field name="category_id" ref="base.module_category_supply_chain"/>
+        <field name="sequence">61</field>
+        <field name="placeholder">–</field>
+        <field name="description">Usulan semua outlet PT + tombol Order orderpoint DC terkelola.</field>
+    </record>
+    <record id="res_groups_privilege_efn_replenishment_admin" model="res.groups.privilege">
+        <field name="name">EFN Replenishment: administrator</field>
+        <field name="category_id" ref="base.module_category_supply_chain"/>
+        <field name="sequence">62</field>
+        <field name="placeholder">–</field>
+        <field name="description">Jadwal kirim DC -> outlet dan jadwal supplier; baca semua usulan dan log bias.</field>
     </record>
     <record id="group_replenishment_store" model="res.groups">
         <field name="name">Replenishment: kepala toko</field>
@@ -15,13 +37,13 @@
     <record id="group_replenishment_buyer" model="res.groups">
         <field name="name">Replenishment: buyer DC</field>
         <field name="comment">Melihat usulan semua outlet PT, menekan "Order" pada orderpoint DC terkelola dan mengonfirmasi RFQ (hak purchase CE terpisah).</field>
-        <field name="privilege_id" ref="res_groups_privilege_efn_replenishment"/>
+        <field name="privilege_id" ref="res_groups_privilege_efn_replenishment_buyer"/>
         <field name="implied_ids" eval="[(4, ref('stock.group_stock_user'))]"/>
     </record>
     <record id="group_replenishment_admin" model="res.groups">
         <field name="name">Replenishment: administrator</field>
         <field name="comment">Mengelola jadwal kirim DC -> outlet dan jadwal supplier; membaca semua usulan dan log bias. Tidak otomatis kepala toko/buyer.</field>
-        <field name="privilege_id" ref="res_groups_privilege_efn_replenishment"/>
+        <field name="privilege_id" ref="res_groups_privilege_efn_replenishment_admin"/>
         <field name="implied_ids" eval="[(4, ref('stock.group_stock_user'))]"/>
     </record>
 

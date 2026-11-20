@@ -1,6 +1,27 @@
-# efn_insight — Dashboard Insight (SSO akun Odoo, G42)
+# efn_insight — Dashboard Insight (SSO akun Odoo, G42 + G47)
 
-**Versi:** 19.0.1.0.0 · **Lisensi:** LGPL-3 · **Depends:** `efn_core` (CE saja, tanpa modul pihak ketiga — ADR-031)
+**Versi:** 19.0.2.0.0 · **Lisensi:** LGPL-3 · **Depends:** `efn_core` (CE saja, tanpa modul pihak ketiga — ADR-031)
+
+## G47 (19.0.2.0.0): token `eit2` + cakupan supermarket
+Kontrak `docs/04_SERVICE_CONTRACTS.md` §28.13.3–§28.13.4 (v20.3, L-186..L-189), fit-gap
+`docs/fit-gap/G47_INSIGHT_SM.md` §7.1, ADR-041 §3.4 (Proposed).
+- **`EFN_INSIGHT_TOKEN_VERSION`** (`1|2`, default `2`; nilai lain → `2`). `2` = token **`eit2`**: 13 kunci (tambahan
+  `wids`, `cats`; `v=2`; `codes ⊆ ESB_CODES ∪ SM_CODES`; `roles` = satu dari `user`/`all_brands` + 0..5 persona).
+  Aturan konsistensi diperiksa pembuat (`lib/insight_token.validate_claims_v2`): `wids` ada ⇔ ada persona ⇔ ada kode
+  SM; `0 ∈ wids` ⇔ persona exec/category/dc/marketing; `cats` hanya untuk `category`; `payload_b64 ≤ 3000`.
+  `1` = rollback: `eit1` persis §26.3, bagian SM diabaikan. **Deploy insight-web sebelum Odoo** (L-186).
+- **`INSIGHT_SM_ENABLED`** (string persis `true`, default mati) dicek di controller, bukan di hook, agar modul
+  penimpa tidak bisa melewatinya.
+- Hook privat `res.users._efn_insight_sm_scope()` mengembalikan cakupan kosong; `efn_insight_sm` (modul jembatan,
+  auto_install) menimpanya. Tidak ada metode publik baru (SEC-58); model pertama modul ini hanya `_inherit`, tanpa ACL.
+- Halaman info baru: `no_outlet` (persona Kepala toko tanpa outlet sah, 200 tanpa token) dan `scope_too_large`
+  (`wids > 200`, `cats > 50`, atau `payload_b64 > 3000`; log `insight_scope_too_large uid=… wids_n=… cats_n=…`).
+- Audit `ir.logging`: `insight_open uid=… v=2 codes=… cids=… roles=… wids_n=… cats_n=… jti=…` — tanpa daftar
+  wids/cats (minimisasi; dapat direkonstruksi dari Odoo). Jalur v1 menulis `v=1` tanpa jumlah.
+- Privilege "EFN Dashboard Insight" diberi `sequence=10` agar tampil sebelum privilege persona (20..70).
+- Vektor uji `eit2` A/B/C + sig2 (§28.13.4/§28.13.6) dihitung di `tests/test_insight_token_v2.py` dan **dicetak ke
+  log** (`EFN_G47_VECTOR …`) untuk dibandingkan efn-lead dengan builder Node; setelah sepakat, nilainya dijadikan
+  konstanta assert byte-exact.
 
 ## Tujuan
 Staf EFN membuka dashboard `insight-web` (Next.js, mart ESB) memakai akun Odoo. Menu **"Dashboard Insight"** memanggil
@@ -33,6 +54,8 @@ diekspos ke internet.
 | Nama | Wajib | Keterangan |
 |---|---|---|
 | `INSIGHT_ENABLED` | – | Kill switch, default mati. Hanya string `true` (persis, sama dengan insight-web) = aktif; `1/yes/on/True` = mati. Mati → halaman "belum diaktifkan" (menu tetap ada). |
+| `INSIGHT_SM_ENABLED` | – | G47: bagian supermarket token `eit2`. Hanya `true` persis. Mati → persona diabaikan (user SM-saja mendapat "Tidak ada PT"). |
+| `EFN_INSIGHT_TOKEN_VERSION` | – | G47: `1` = rollback `eit1`; lainnya/kosong = `eit2`. |
 | `EFN_INSIGHT_URL` | ya | Origin insight-web, mis. `https://insight.<domain>` (tanpa path/query/kredensial). Salah → 503 "konfigurasi". |
 | `EFN_INSIGHT_SSO_KEY_FILE` | – | Default `/run/secrets/insight_sso_key`. Isi: hex ≥ 64 karakter. Dibaca tiap request. |
 | `APP_ENV`, `EFN_ALLOW_PLAINTEXT` | – | Dipakai `plaintext_allowed()` (efn_core). |
@@ -59,8 +82,9 @@ membersihkan `ir.logging` otomatis → retensi = **Q-INS3** (usulan 400 hari, ke
 manual/cron admin. Penolakan 403 hanya `_logger.info("insight_denied uid=…")`.
 
 ## Tanpa model baru
-Modul tidak membuat model, jadi tidak ada `ir.model.access.csv` maupun `ir.rule` (konvensi CLAUDE.md berlaku bila
-kelak log audit dijadikan model: `company_id` + record rule).
+Modul tidak membuat model baru (G47 hanya `_inherit = "res.users"` untuk hook privat), jadi tidak ada
+`ir.model.access.csv` maupun `ir.rule` (konvensi CLAUDE.md berlaku bila kelak log audit dijadikan model:
+`company_id` + record rule).
 
 ## Cara uji manual
 1. Set env Odoo `INSIGHT_ENABLED=true`, `EFN_INSIGHT_URL=https://insight.<domain>`, secret `insight_sso_key`.
@@ -69,8 +93,10 @@ kelak log audit dijadikan model: `company_id` + record rule).
 4. User tanpa grup → 403; user hanya GL/EFN → halaman "Tidak ada PT"; `INSIGHT_ENABLED=false` → "belum diaktifkan".
 5. Pengaturan → Teknis → Logging: satu baris `efn_insight` per pembukaan, tanpa token/nama.
 
-Test otomatis: `tests/test_insight_token.py` (vektor §26.3, aturan `name`, validasi URL/kunci) dan
-`tests/test_insight_sso.py` (HttpCase), tag `efn`.
+Test otomatis: `tests/test_insight_token.py` (vektor §26.3, aturan `name`, validasi URL/kunci),
+`tests/test_insight_token_v2.py` (G47: vektor A/B/C + N1..N5, konsistensi, batas ukuran, sig2) dan
+`tests/test_insight_sso.py` (HttpCase; default `eit2`, rollback `eit1`), tag `efn`. Test persona/cakupan SM ada di
+`efn_insight_sm`.
 
 ## Referensi desain (bukan dependency, tidak disalin — ADR-031)
 OCA `server-auth` (`auth_api_key_group`: grup menentukan cakupan) dan `cross_connect_client` (AGPL-3, Akretion: menu

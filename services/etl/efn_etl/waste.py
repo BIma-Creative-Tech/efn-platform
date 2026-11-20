@@ -38,13 +38,28 @@ def _opt_ts(value: Any) -> datetime | None:
 
 
 # ---------------------------------------------------------------- stock_scrap -> fact_scrap
-SQL_SCRAPS = """
+# G47 (fit-gap G47 C-6): gudang = COALESCE(efn_warehouse_id, gudang lokasi asal); nilai = COALESCE(efn_waste_value,
+# Σ |stock_move.value| move scrap done (stock_account 19.0), qty x standard_price PT, 0). Kolom efn_* hanya ada bila
+# efn_ck_production terpasang: job G32 selalu memakainya (grant G32 bersyarat), job G47 `sm_scraps` (efn_etl/sm.py)
+# mendeteksi kolom saat runtime. Ekspresi SAMA di kedua job -> baris identik (kunci ORDER BY memuat warehouse_id), tidak
+# ada duplikat bila keduanya aktif. Cara baca standard_price jsonb per company = pola stock.py (belum diverifikasi).
+_SCRAP_MOVE_VALUE = "(SELECT SUM(ABS(mv.value)) FROM stock_move mv WHERE mv.scrap_id = s.id AND mv.state = 'done')"
+_SCRAP_STD_VALUE = "s.scrap_qty * u.factor / pu.factor * (pp.standard_price ->> s.company_id::text)::numeric"
+
+
+def scrap_sql(has_efn_warehouse: bool = True, has_efn_value: bool = True, extra_filter: str = "TRUE") -> str:
+    warehouse = "COALESCE(sl.warehouse_id, 0)"
+    if has_efn_warehouse:
+        warehouse = "COALESCE(s.efn_warehouse_id, sl.warehouse_id, 0)"
+    fallback = f"NULLIF({_SCRAP_MOVE_VALUE}, 0), {_SCRAP_STD_VALUE}, 0"
+    value = f"COALESCE(s.efn_waste_value, {fallback})" if has_efn_value else f"COALESCE({fallback})"
+    return f"""
 SELECT s.id AS scrap_id, s.company_id, COALESCE(c.efn_brand_code, '') AS brand,
-       COALESCE(s.efn_warehouse_id, 0) AS warehouse_id, s.product_id, COALESCE(pt.categ_id, 0) AS categ_id,
+       {warehouse} AS warehouse_id, s.product_id, COALESCE(pt.categ_id, 0) AS categ_id,
        (SELECT MIN(rel.stock_scrap_reason_tag_id) FROM stock_scrap_stock_scrap_reason_tag_rel rel
          WHERE rel.stock_scrap_id = s.id) AS reason_id,
        COALESCE(s.production_id, 0) AS production_id, s.scrap_qty * u.factor / pu.factor AS qty,
-       COALESCE(s.efn_waste_value, 0) AS waste_value, s.state, s.date_done, s.write_date,
+       {value} AS waste_value, s.state, s.date_done, s.write_date,
        s.write_date AS _cursor_ts, s.id::text AS _cursor_key
 FROM stock_scrap s
 JOIN res_company c ON c.id = s.company_id
@@ -52,11 +67,16 @@ JOIN product_product pp ON pp.id = s.product_id
 JOIN product_template pt ON pt.id = pp.product_tmpl_id
 JOIN uom_uom u ON u.id = s.product_uom_id
 JOIN uom_uom pu ON pu.id = pt.uom_id
-WHERE s.write_date >= %(cursor_ts)s
+LEFT JOIN stock_location sl ON sl.id = s.location_id
+WHERE {extra_filter}
+  AND s.write_date >= %(cursor_ts)s
   AND (s.write_date, s.id::text) > (%(cursor_ts)s, %(cursor_key)s)
 ORDER BY s.write_date, s.id::text
 LIMIT %(limit)s
-"""
+"""  # noqa: S608 - potongan SQL konstanta / filter kode PT tervalidasi pemanggil
+
+
+SQL_SCRAPS = scrap_sql()
 SCRAP_COLUMNS = (
     "scrap_id",
     "company_id",

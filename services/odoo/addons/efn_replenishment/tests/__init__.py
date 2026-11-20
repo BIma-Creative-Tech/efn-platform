@@ -1,1 +1,1 @@
-from . import test_replenishment
+from . import test_privilege, test_replenishment

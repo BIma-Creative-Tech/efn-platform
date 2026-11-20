@@ -10,7 +10,8 @@ import { getConfig, getKey } from './runtime';
 import { readCookie, SESSION_COOKIE, type Session } from './session';
 
 function stateFor(cookieValue: string | undefined): AuthState {
-  return authenticate(cookieValue, getConfig().enabled, getKey('session'), Math.floor(Date.now() / 1000));
+  const cfg = getConfig();
+  return authenticate(cookieValue, cfg.enabled, getKey('session'), Math.floor(Date.now() / 1000), cfg.acceptEit1);
 }
 
 /** Untuk halaman: redirect ke halaman informasi bila tidak sah. */

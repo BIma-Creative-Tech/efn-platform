@@ -939,3 +939,112 @@ Worktree g44, branch `feat/wave-45-supermarket-expiry`. Modul `services/odoo/add
 - `_get_putaway_strategy(product)` mengembalikan zona: alur dibaca dari source [V], belum diuji.
 - `convert_file` dari migrasi untuk file demo.
 - Pemuatan demo saat mode update; migrasi ditulis aman untuk kedua kemungkinan.
+
+## G47 — 2026-11-21 (fit-gap EFN Insight supermarket per persona, `efn_insight_sm`)
+
+Dokumen utama: `docs/fit-gap/G47_INSIGHT_SM.md`. Worktree g47, branch `feat/wave-47-insight-supermarket`.
+Dokumen saja: tidak ada kode, tidak ada modul `efn_setup_*` baru, dan tidak ada instance yang dijalankan. Legenda
+[V]/[R]/[B] sama dengan G42.
+
+### Temuan kunci
+1. **Privilege Odoo 19 = satu pilihan [V].** Widget `res_user_group_ids` merender setiap `res.groups.privilege`
+   sebagai field selection.
+   - Grup yang tidak saling `implied` di privilege yang sama tidak bisa dipegang bersamaan.
+   - Menyimpan perubahan hak user memakai `set(...)`, sehingga grup kedua **dihapus diam-diam**.
+   - Untuk G47: **satu privilege per persona** (6 privilege di kategori `efn_insight.module_category_efn_insight`).
+     Tanpa itu, vektor kontrak A (exec + store) tidak bisa dipertahankan.
+2. **Grup & field kategori** dibuat di modul jembatan `efn_insight_sm` (setuju dengan L-187). Field kategori adalah
+   gap nyata: `product.category` tanpa field user/active/company [V], dan `responsible_id` per produk tidak cocok.
+3. **Audit `efn_insight_categ_ids`.** `res.users` adalah model kontrol `efn_audit` dengan field bawaan tetap, dan
+   `efn.audit.rule` unik per model.
+   - Rekomendasi: tambahkan `efn_outlet_warehouse_ids` + `efn_insight_categ_ids` ke `CONTROL_SPECS["res.users"]`.
+   - Ini sekaligus menutup celah G44: `efn_outlet_warehouse_ids` belum teraudit [R].
+4. **Model `efn.insight.sm.kpi` dikonfirmasi.** Alternatif `ir.config_parameter`, `res.company`, maupun record bertipe
+   per PT ditolak (alasan di dokumen §4.1).
+5. **Deep link [V].** Pola `/odoo/action-<xmlid>/<id>` per model sudah ditetapkan. `purchase.order` lewat
+   `purchase.purchase_rfq`, karena `purchase_form_action` ber-domain `state='purchase'`. Sesi habis → login → kembali
+   ke tautan.
+6. **ETL**:
+   - `qty_received` PO tersimpan [V].
+   - `sale.order.line.coupon_id` tersimpan, tetapi `is_reward_line` **non-stored** [V].
+   - 19.0 tidak menggabungkan move tanpa `reference_ids` ke picking yang ada, dan orderpoint tidak mengisinya [V
+     source], sehingga `picking_shared` ≈ 0.
+   - Rumus `qty_received` kontrak bisa dobel pada penerimaan outlet 2 langkah.
+   - `efn_waste_value` hanya ada bila `efn_ck_production` terpasang. Fallback `stock.move.value` (19.0) +
+     `stock_location.warehouse_id`.
+
+### Rekomendasi untuk efn-odoo-engineer
+- **Tambah**:
+  - `efn_insight_sm` 19.0.1.0.0 (struktur §7.2 dokumen);
+  - `efn_insight` 19.0.2.0.0 (builder `eit2`, hook privat `_efn_insight_sm_scope`, kill switch SM di controller).
+- **Ubah kecil**:
+  - `efn_role`: 5 xmlid sensitif;
+  - `efn_audit`: 2 field cakupan `res.users` + test;
+  - test runtime `efn_replenishment` yang mengunci jenis picking di `proposal.picking_id` (ship, bukan pick).
+- **Perbaiki (di luar G47, rendah biaya)**: privilege berisi grup independen di `efn_replenishment` (store/buyer/admin),
+  `efn_expiry_monitor` (markdown manager/override), dan `efn_audit` (auditor_personal/manager). Pisahkan privilege,
+  atau rantai `implied_ids` bila memang hierarkis.
+- **Jangan**:
+  - persona meng-implies grup tindakan;
+  - mengisi parameter `efn_role.sensitive_group_xmlids` dari data;
+  - membuat `efn.audit.rule` `res.users` di `efn_insight_sm` (mengunci slot unik).
+
+### Untuk efn-lead / architect (perubahan kontrak C-1..C-9, dokumen §9)
+- `is_default` view KPI;
+- privilege per persona;
+- `qty_received` hanya move yang melintasi batas outlet + `qty_shipped` via lokasi transit;
+- reward online `reward_id IS NOT NULL` + SO `state='sale'`;
+- `cats` tanpa "aktif";
+- fallback scrap;
+- `from_orderpoint` via `orderpoint_id` ⋈ `efn_replenishment_managed`;
+- pola URL + `rel="noopener noreferrer"`;
+- pemindahan butir ke [V] di §28.13.15.
+
+### Untuk efn-odoo-functional (berikutnya)
+`efn_setup_supermarket` 19.0.3.0.0 (demo persona + 2 user demo + kategori contoh) setelah `efn_insight_sm` ada.
+Template peran `efn_setup_role` setelah Q-SM29.
+
+### Pertanyaan klien
+- Q-G47-1: pemegang `kpi_admin` + SoD.
+- Q-G47-2: penerimaan outlet 1 atau 2 langkah.
+- Q-SM29 dan Q-SM40 tetap.
+
+### Belum terverifikasi
+Dokumen §12. Yang terpenting:
+- runtime rantai move (jenis picking, push Input → Stock);
+- konversi UoM;
+- `stock.move.value` scrap SMD;
+- pembacaan SQL `standard_price` jsonb;
+- pindah company otomatis pada deep link;
+- lisensi referensi OCA.
+
+### Lanjutan G47 — 21 Nov 2026: `efn_setup_supermarket` 19.0.3.0.0
+
+Keputusan pemilik proyek: Q-G47-2 = outlet menerima barang dua langkah. Detail di README modul, bagian "G47".
+
+**Yang diubah:**
+- `demo/stock_warehouse_demo.xml`: 5 outlet `reception_steps = two_steps`. DC tetap `two_steps`/`pick_ship`.
+- `demo/stock_location_demo.xml`: catatan bahwa putaway tetap di Stock (komentar saja).
+- Demo baru `demo/res_users_insight_demo.xml`:
+  - persona store untuk 5 kepala toko, dc untuk buyer, category + kategori (Fresh, Dairy & Chilled, Frozen) untuk
+    markdown manager;
+  - user baru Direksi (exec) dan Marketing (marketing);
+  - kpi_admin tidak diberikan.
+- `depends` + `efn_insight_sm`.
+- Migrasi `migrations/19.0.3.0.0/post-migrate.py` (khusus DB demo).
+
+**Test baru:**
+- konfigurasi dua langkah dan leg resupply;
+- rantai runtime pick → ship → receipt (Input) → storage (push, putaway ke Zona Dry), dengan predikat C-3 dan picking
+  ship pertama;
+- persona per user, kategori, cakupan store;
+- satu privilege per persona (C-2).
+
+**Dampak ke modul lain** (dibaca dari kode, tanpa perubahan):
+- `efn_assortment`: transit → Input dinilai, Input → Stock tidak.
+- `efn_replenishment`: `on_hand`/`in_transit` per gudang tidak menghitung dua kali.
+- `efn_expiry_monitor`: dicek sekali di picking receipt.
+- Seed g48: quant di zona Stock, aman.
+- C-3 menjadi wajib.
+
+**Belum dijalankan:** install (butuh `efn_insight_sm`), migrasi, dan semua test.

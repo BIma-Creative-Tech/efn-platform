@@ -62,7 +62,7 @@ nonaktif); saat aktif juga URL https, password terbaca, CA internal terbaca, `EF
 - CSP berbasis nonce dibuat per request di `proxy.ts` (`lib/csp.ts`): `script-src 'self' 'nonce-..' 'strict-dynamic'` tanpa `unsafe-inline`/`unsafe-eval`
   (production); `style-src 'self' 'nonce-..'`; **`style-src-attr 'unsafe-inline'`** (tooltip ECharts memasang gaya lewat atribut) = satu-satunya pelonggaran, dicatat.
   `frame-ancestors 'none'`, `base-uri 'none'`, `form-action 'self'`. Referrer `no-referrer`, `nosniff`, no-store untuk semua kecuali aset statis.
-- Cookie `__Host-eis` (C2) `HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=28800`, tanpa Domain. Kunci sesi terpisah dari kunci SSO.
+- Cookie `__Host-eis` (C2) `HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=7200 (2 jam, L-217)`, tanpa Domain. Kunci sesi terpisah dari kunci SSO.
 - Semua akses ClickHouse lewat `lib/clickhouse.ts` (`server-only`) dan katalog `lib/queries.ts`; tanpa SQL dari pengguna; parameter bertipe.
 - Log hanya kode hasil, `sub`, `jti`, durasi. Tidak pernah token/cookie/header Cookie.
 - Cek Origin `/sso` (C1): header `Origin` **wajib ada** dan = origin `EFN_INSIGHT_ODOO_URL`; tanpa Origin, `Origin: null`, atau origin lain -> 401 generik

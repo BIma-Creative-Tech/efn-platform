@@ -300,6 +300,26 @@ Kode: `efn_etl/behavior.py`. DDL: `infra/clickhouse/init/16-g50-behavior.sql`. G
 - Belum: skema `behavior.*` dibuat BFF paralel (kolom diasumsikan, grant kolom = verifikasi saat deploy); event `purchase`
   belum ada di kontrak §28.6; pemetaan `outlet_code` -> `warehouse_id` untuk row policy Insight (G47) belum.
 
+## G47: EFN Insight supermarket (docs/04 §28.13 v20.3, ADR-041 §3.3-§3.4 Proposed, fit-gap G47 C-1..C-7)
+
+- Modul: `efn_etl/sm.py` (SQL, transform, logika murni), `efn_etl/sm_cycle.py` (job khusus), `efn_etl/sm_kpi.py`
+  (registri 39 kunci KPI = `docs/contracts/insight_sm_kpi_defaults.json`). DDL `infra/clickhouse/init/17-g47-insight-sm.sql`;
+  view Insight `infra/clickhouse/access/insight-sm-access.sql`; row policy `infra/clickhouse/access/insight-sm-policy.sh`
+  (disourcing clickhouse-init.sh); hak ETL `access/etl-sm-access.sql`; PG `infra/postgres/init/22-platform-g47.sql`.
+- Job incremental (runner): `sm_dims_warehouse`, `sm_dims_online_outlet`, `sm_replenishment`, `sm_dc_purchase`,
+  `sm_dc_supplier`, (+`ETL_ENABLE_SM_EXPIRY`) `sm_expiry`, `sm_expiry_markdown`. Job khusus: `sm_dims_kpi` (salin penuh,
+  baris terhapus -> active 0), `sm_scraps` (deteksi kolom efn_*), `sm_replenishment_bias` (MergeTree + dedup log_id),
+  `sm_dc_fill_rate` (jendela 14 hari, hanya baris berubah), `sm_stock_agg` (butuh `ETL_ENABLE_STOCK`), `sm_expiry_agg`,
+  (+`ETL_ENABLE_SM_CAMPAIGN`) `sm_campaign`.
+- Env baru (semua default aman): `ETL_ENABLE_SM` (false; butuh `ETL_ENABLE_ODOO`), `ETL_SM_COMPANIES` (`SMD`, ⊆ SM_CODES),
+  `ETL_ENABLE_SM_EXPIRY` (false), `ETL_ENABLE_SM_CAMPAIGN` (false; production butuh `PROMO_CAMPAIGN_ENABLED=true`, L-180),
+  `ETL_SM_FILL_RECALC_DAYS` (14, 1..60), `ETL_SM_CAMPAIGN_ATTR_DAYS` (30, 1..365), `ETL_SM_STOCK_BACKFILL_DAYS` (90, 1..400).
+- Grant: blok "Gelombang 47" di `sql/odoo-readonly-grants.sql` (bersyarat per modul) + view `efn_etl.purchase_partner`.
+- Backfill kategori produk (`dim_product.categ_id/categ_parent_path`): reset watermark job `products` sekali setelah
+  deploy (admin ClickHouse): `INSERT INTO efn_dwh.etl_watermark (job, watermark, rows_loaded, updated_at) VALUES
+  ('products', '1970-01-01 00:00:00', 0, now64(6))`.
+- Uji perilaku row policy: `tests/clickhouse/g47_row_policy_harness.sh` (ClickHouse 24.8, dijalankan manual).
+
 ## Test
 
 ```

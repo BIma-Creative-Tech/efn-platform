@@ -375,15 +375,17 @@ SELECT to_regclass('public.stock_scrap_stock_scrap_reason_tag_rel') IS NOT NULL
                 WHERE table_schema = 'public' AND table_name = 'stock_scrap' AND column_name = 'efn_waste_value')
    AS efn_g32_waste \gset
 \if :efn_g32_waste
+-- location_id: fallback gudang scrap (G47 fit-gap C-6, efn_etl/waste.py scrap_sql).
 GRANT SELECT (id, company_id, product_id, product_uom_id, production_id, scrap_qty, state, date_done, write_date,
-              efn_warehouse_id, efn_waste_value)
+              efn_warehouse_id, efn_waste_value, location_id)
     ON public.stock_scrap TO efn_etl;
 GRANT SELECT (stock_scrap_id, stock_scrap_reason_tag_id) ON public.stock_scrap_stock_scrap_reason_tag_rel TO efn_etl;
 GRANT SELECT (id, name, write_date) ON public.stock_scrap_reason_tag TO efn_etl;
 GRANT SELECT (id, company_id, product_id, product_uom_id, bom_id, picking_type_id, product_qty, qty_producing, state,
               date_finished, write_date, efn_yield_pct, efn_byproduct_qty, efn_variance_value, efn_yield_alert)
     ON public.mrp_production TO efn_etl;
-GRANT SELECT (id, raw_material_production_id, product_id, product_uom, product_uom_qty, quantity, state)
+-- scrap_id, value: fallback nilai scrap = Σ |stock_move.value| (stock_account 19.0; G47 fit-gap C-6).
+GRANT SELECT (id, raw_material_production_id, product_id, product_uom, product_uom_qty, quantity, state, scrap_id, value)
     ON public.stock_move TO efn_etl;
 GRANT SELECT (id, factor) ON public.uom_uom TO efn_etl;
 GRANT SELECT (uom_id) ON public.product_template TO efn_etl;
@@ -438,4 +440,158 @@ CREATE INDEX CONCURRENTLY IF NOT EXISTS efn_etl_efn_legacy_sales_daily_write_dat
     ON public.efn_legacy_sales_daily (write_date, id);
 \else
 \echo 'efn_legacy_history belum terpasang: grant G46 histori penjualan ESB dilewati'
+\endif
+
+-- ============================================================================================================
+-- Gelombang 47 (efn-data-ai-engineer): mart EFN Insight supermarket (services/etl/efn_etl/sm.py + sm_cycle.py,
+--     docs/04 §28.13.8 v20.3, fit-gap docs/fit-gap/G47_INSIGHT_SM.md C-3..C-7). Hanya SELECT level kolom. TIDAK di-grant:
+--     approved_by (usulan), changed_by (baris), user_id (log bias), activated_by/note (markdown), maker_id/approved_by_id/
+--     cancelled_by_id/partner_ids/editor_ids/message_* (kampanye), res_partner (nama/kontak pelanggan). Supplier DC dibaca
+--     lewat view efn_etl.purchase_partner (nama HANYA untuk partner perusahaan; pola G21: view milik efn_odoo).
+--     Bersyarat (psql \if): dilewati sampai modul terkait terpasang -> jalankan ulang skrip setelah -i/-u.
+--     ETL membaca hanya bila ETL_ENABLE_SM (+ _EXPIRY / _CAMPAIGN) = true.
+--
+-- (a) Inti (main: efn_replenishment G44, efn_assortment efn_is_dc, efn_online_order, purchase_stock, scrap CE).
+SELECT to_regclass('public.efn_replenishment_proposal_line') IS NOT NULL
+   AND to_regclass('public.efn_replenishment_bias_log') IS NOT NULL
+   AND to_regclass('public.efn_online_outlet') IS NOT NULL
+   AND to_regclass('public.stock_move_move_rel') IS NOT NULL
+   AND EXISTS (SELECT 1 FROM information_schema.columns
+                WHERE table_schema = 'public' AND table_name = 'stock_warehouse' AND column_name = 'efn_is_dc')
+   AND EXISTS (SELECT 1 FROM information_schema.columns
+                WHERE table_schema = 'public' AND table_name = 'purchase_order_line' AND column_name = 'orderpoint_id')
+   AS efn_g47_sm \gset
+\if :efn_g47_sm
+GRANT SELECT (id, code, name, company_id, active, write_date, efn_is_dc) ON public.stock_warehouse TO efn_etl;
+GRANT SELECT (id, channel_id, company_id, code, warehouse_id, active, write_date) ON public.efn_online_outlet TO efn_etl;
+GRANT SELECT (id, code, company_id, active, write_date) ON public.efn_online_channel TO efn_etl;
+GRANT SELECT (id, company_id, warehouse_id, supply_warehouse_id, schedule_id, delivery_date, cutoff_at, run_id, state,
+              approved_at, picking_id, write_date)
+    ON public.efn_replenishment_proposal TO efn_etl;
+GRANT SELECT (id, proposal_id, product_id, forecast_qty, on_hand, in_transit, qty_need, qty_shelf_cap, qty_rack_cap,
+              qty_proposed, qty_approved, reason_codes, excluded, change_reason, write_date)
+    ON public.efn_replenishment_proposal_line TO efn_etl;
+GRANT SELECT (id, company_id, kind, proposal_id, purchase_line_id, run_id, warehouse_id, product_id, qty_system,
+              qty_before, qty_after, change_reason, create_date)
+    ON public.efn_replenishment_bias_log TO efn_etl;
+-- Fill rate DC (C-3): picking usulan + backorder, move done, rantai move (stock_move_move_rel), lokasi asal/tujuan.
+GRANT SELECT (id, backorder_id, picking_type_id, state, date_done, scheduled_date) ON public.stock_picking TO efn_etl;
+GRANT SELECT (id, picking_id, product_id, product_uom, quantity, state, date, location_id, location_dest_id, scrap_id)
+    ON public.stock_move TO efn_etl;
+GRANT SELECT (move_orig_id, move_dest_id) ON public.stock_move_move_rel TO efn_etl;
+GRANT SELECT (id, usage, warehouse_id) ON public.stock_location TO efn_etl;
+GRANT SELECT (id, factor) ON public.uom_uom TO efn_etl;
+GRANT SELECT (uom_id) ON public.product_template TO efn_etl;
+GRANT SELECT (id, warehouse_id) ON public.stock_picking_type TO efn_etl;
+-- PO DC (C-7: from_orderpoint = orderpoint_id ⋈ orderpoint terkelola efn_replenishment). PO 19.0 tanpa state done.
+GRANT SELECT (id, company_id, partner_id, picking_type_id, state, date_order, date_approve, write_date)
+    ON public.purchase_order TO efn_etl;
+GRANT SELECT (id, order_id, product_id, product_qty, qty_received, price_subtotal, date_planned, orderpoint_id, write_date)
+    ON public.purchase_order_line TO efn_etl;
+GRANT SELECT (id, warehouse_id, efn_replenishment_managed) ON public.stock_warehouse_orderpoint TO efn_etl;
+-- Kategori (dim_product.categ_parent_path, filter turunan kategori Insight).
+GRANT SELECT (id, parent_path) ON public.product_category TO efn_etl;
+-- Scrap SMD tanpa efn_ck_production (job sm_scraps, C-6): kolom CE saja; kolom efn_* di-grant blok G32 bila ada.
+GRANT SELECT (id, company_id, product_id, product_uom_id, production_id, scrap_qty, state, date_done, write_date,
+              location_id)
+    ON public.stock_scrap TO efn_etl;
+GRANT SELECT (stock_scrap_id, stock_scrap_reason_tag_id) ON public.stock_scrap_stock_scrap_reason_tag_rel TO efn_etl;
+GRANT SELECT (id, name, write_date) ON public.stock_scrap_reason_tag TO efn_etl;
+-- Supplier DC: view baris-per-partner tanpa kontak; nama hanya untuk perusahaan (minimisasi PDP, §28.13.8). Lebih sempit
+-- dari grant kolom res_partner di kontrak §28.13.8 (yang akan membuka nama partner perorangan/pelanggan ke efn_etl).
+CREATE SCHEMA IF NOT EXISTS efn_etl;
+REVOKE ALL ON SCHEMA efn_etl FROM PUBLIC;
+GRANT USAGE ON SCHEMA efn_etl TO efn_etl;
+CREATE OR REPLACE VIEW efn_etl.purchase_partner AS
+SELECT p.id, COALESCE(p.commercial_partner_id, p.id) AS commercial_partner_id,
+       COALESCE(p.is_company, FALSE) AS is_company,
+       CASE WHEN COALESCE(p.is_company, FALSE) THEN COALESCE(p.name, '') ELSE '' END AS name,
+       p.write_date
+FROM public.res_partner p;
+REVOKE ALL ON efn_etl.purchase_partner FROM PUBLIC;
+GRANT SELECT ON efn_etl.purchase_partner TO efn_etl;
+-- Index cursor (R-O03): write_date usulan/PO tidak ber-index bawaan; log bias dibaca per create_date.
+CREATE INDEX CONCURRENTLY IF NOT EXISTS efn_etl_efn_repl_proposal_line_write_date_id_idx
+    ON public.efn_replenishment_proposal_line (write_date, id);
+CREATE INDEX CONCURRENTLY IF NOT EXISTS efn_etl_efn_repl_proposal_write_date_id_idx
+    ON public.efn_replenishment_proposal (write_date, id);
+CREATE INDEX CONCURRENTLY IF NOT EXISTS efn_etl_efn_repl_bias_log_create_date_id_idx
+    ON public.efn_replenishment_bias_log (create_date, id);
+CREATE INDEX CONCURRENTLY IF NOT EXISTS efn_etl_purchase_order_line_write_date_id_idx
+    ON public.purchase_order_line (write_date, id);
+CREATE INDEX CONCURRENTLY IF NOT EXISTS efn_etl_purchase_order_write_date_id_idx
+    ON public.purchase_order (write_date, id);
+\else
+\echo 'efn_replenishment/efn_assortment/efn_online_order/purchase_stock belum lengkap: grant G47 inti dilewati'
+\endif
+
+-- (a2) Nilai scrap dari valuasi CE (stock_account 19.0 stock_move.value tersimpan; C-6). Bersyarat kolom.
+DO $grant_g47_move_value$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = 'stock_move' AND column_name = 'value'
+    ) THEN
+        EXECUTE 'GRANT SELECT (value) ON public.stock_move TO efn_etl';
+    ELSE
+        RAISE NOTICE 'stock_move.value belum ada (stock_account belum terpasang): grant G47 nilai scrap dilewati';
+    END IF;
+END
+$grant_g47_move_value$;
+
+-- (b) Konfigurasi KPI per PT (efn_insight_sm, L-200).
+SELECT to_regclass('public.efn_insight_sm_kpi') IS NOT NULL AS efn_g47_kpi \gset
+\if :efn_g47_kpi
+GRANT SELECT (id, company_id, key, value, active, write_date) ON public.efn_insight_sm_kpi TO efn_etl;
+\else
+\echo 'efn_insight_sm belum terpasang: grant G47 konfigurasi KPI dilewati'
+\endif
+
+-- (c) #114 efn_expiry_monitor: alert near-expiry & markdown per lot (tanpa activated_by, note, transfer_picking_id).
+SELECT to_regclass('public.efn_expiry_alert') IS NOT NULL AND to_regclass('public.efn_lot_markdown') IS NOT NULL
+   AS efn_g47_expiry \gset
+\if :efn_g47_expiry
+GRANT SELECT (id, company_id, warehouse_id, lot_id, product_id, categ_id, qty, days_left, stage, state, date,
+              last_run_date, write_date)
+    ON public.efn_expiry_alert TO efn_etl;
+GRANT SELECT (id, company_id, warehouse_id, lot_id, product_id, alert_id, price, discount_pct, date_from, date_to,
+              qty_cap, qty_sold, state, notify_members, write_date)
+    ON public.efn_lot_markdown TO efn_etl;
+\else
+\echo 'efn_expiry_monitor belum terpasang: grant G47 near-expiry dilewati'
+\endif
+
+-- (d) #117 efn_campaign: hasil kampanye + redemption POS (pos_order_line.coupon_id, [V] fit-gap §6.4).
+SELECT to_regclass('public.efn_campaign') IS NOT NULL
+   AND EXISTS (SELECT 1 FROM information_schema.columns
+                WHERE table_schema = 'public' AND table_name = 'loyalty_card' AND column_name = 'efn_campaign_id')
+   AND EXISTS (SELECT 1 FROM information_schema.columns
+                WHERE table_schema = 'public' AND table_name = 'pos_order_line' AND column_name = 'coupon_id')
+   AS efn_g47_campaign \gset
+\if :efn_g47_campaign
+GRANT SELECT (id, company_id, name, kind, origin, state, approval_rev, channel_inbox, channel_push, channel_email,
+              channel_wa_unofficial, date_from, date_to, voucher_mode, budget_idr, segment_run_id, segment_code,
+              segment_member_count, segment_generated_at, approved_at, sent_at, write_date)
+    ON public.efn_campaign TO efn_etl;
+GRANT SELECT (id, program_id, efn_campaign_id) ON public.loyalty_card TO efn_etl;
+GRANT SELECT (coupon_id) ON public.pos_order_line TO efn_etl;
+CREATE INDEX CONCURRENTLY IF NOT EXISTS efn_etl_loyalty_card_efn_campaign_id_idx
+    ON public.loyalty_card (efn_campaign_id) WHERE efn_campaign_id IS NOT NULL;
+\else
+\echo 'efn_campaign belum terpasang: grant G47 kampanye dilewati'
+\endif
+
+-- (e) #117 redemption online (C-4): sale_loyalty menyimpan coupon_id & reward_id di sale_order_line; is_reward_line
+--     TIDAK tersimpan -> ETL memakai reward_id IS NOT NULL, hanya SO state 'sale'. ETL mendeteksi grant ini lewat
+--     information_schema.column_privileges (tanpa grant = redemption online tidak dihitung, bukan error).
+SELECT EXISTS (SELECT 1 FROM information_schema.columns
+                WHERE table_schema = 'public' AND table_name = 'sale_order_line' AND column_name = 'coupon_id')
+   AND EXISTS (SELECT 1 FROM information_schema.columns
+                WHERE table_schema = 'public' AND table_name = 'sale_order_line' AND column_name = 'reward_id')
+   AS efn_g47_campaign_online \gset
+\if :efn_g47_campaign_online
+GRANT SELECT (id, order_id, coupon_id, reward_id, price_subtotal) ON public.sale_order_line TO efn_etl;
+GRANT SELECT (id, company_id, state) ON public.sale_order TO efn_etl;
+\else
+\echo 'sale_loyalty belum terpasang: grant G47 redemption online dilewati'
 \endif

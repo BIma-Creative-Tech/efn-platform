@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- G47 (docs/04 §28.13.8c, L-200): perubahan definisi KPI teraudit (nilai lama/baru, user, waktu). Model baru ->
+     tidak bentrok dengan constraint unik efn.audit.rule per model. Perubahan res.users.efn_insight_categ_ids diaudit
+     lewat CONTROL_SPECS res.users di efn_audit (bukan aturan res.users di modul ini). -->
+<odoo>
+    <record id="audit_rule_efn_insight_sm_kpi" model="efn.audit.rule">
+        <field name="name">EFN - Definisi KPI Insight supermarket</field>
+        <field name="model_id" ref="model_efn_insight_sm_kpi"/>
+        <field name="log_create" eval="True"/>
+        <field name="log_write" eval="True"/>
+        <field name="log_unlink" eval="True"/>
+        <field name="capture_unlink_values" eval="True"/>
+    </record>
+</odoo>

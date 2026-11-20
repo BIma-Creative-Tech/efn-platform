@@ -432,6 +432,9 @@ def enabled_jobs(
     forecast: bool = False,
     forecast_legacy: bool = False,
     behavior: bool = False,
+    sm: bool = False,
+    sm_expiry: bool = False,
+    sm_companies: tuple[str, ...] = ("SMD",),
 ) -> list[Job]:
     """Job incremental. Odoo: penjualan POS + (Gelombang 13) pembayaran POS, outlet, produk (efn_etl/pos.py) +
     (Gelombang 21, `partner_region`) wilayah pembeli di penjualan dan master `dim_region` (efn_etl/region.py) +
@@ -440,7 +443,7 @@ def enabled_jobs(
     (Gelombang 44, `forecast`) gudang, kalender, run & proyeksi forecast (efn_etl/forecast.py) +
     (Gelombang 46, `forecast_legacy`, hanya bersama `forecast`) histori penjualan ESB pra-cutover.
     Platform: (Gelombang 50, `behavior`) event perilaku visitor `behavior.event_raw` (efn_etl/behavior.py); tidak butuh
-    Odoo."""
+    Odoo. (Gelombang 47, `sm`) mart Insight supermarket (efn_etl/sm.py), hanya bersama Odoo."""
     jobs = [competitor_prices_job(age_out), loyalty_events_job(age_out)]
     if behavior:
         from efn_etl.behavior import behavior_job
@@ -469,4 +472,9 @@ def enabled_jobs(
                 from efn_etl.forecast import legacy_sales_jobs
 
                 jobs.extend(legacy_sales_jobs())
+        if sm:
+            # G47 (docs/04 §28.13.8): job incremental supermarket; `sm_expiry` = #114 (hanya bersama `sm`).
+            from efn_etl.sm import sm_jobs
+
+            jobs.extend(sm_jobs(sm_companies, expiry=sm_expiry))
     return jobs

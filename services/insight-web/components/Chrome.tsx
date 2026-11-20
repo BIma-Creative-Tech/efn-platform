@@ -7,32 +7,52 @@ import Link from 'next/link';
 import { usePathname, useSearchParams } from 'next/navigation';
 import { useEffect, useRef, useState } from 'react';
 import { NAV_ITEMS } from '@/lib/page-filters';
+import type { NavGroup } from '@/lib/sm-personas';
 import { Icon } from './ui';
 
 const PAGE_ONLY_PARAMS = ['sort', 'rank'];
+/** Param filter ESB yang tidak berlaku di halaman supermarket (dan sebaliknya) tidak dibawa antar kelompok. */
+const ESB_ONLY_PARAMS = ['pt', 'branch', 'product', 'cat'];
+const SM_ONLY_PARAMS = ['wh', 'cat'];
 
-export function NavLinks(): React.ReactNode {
+const DEFAULT_GROUPS: readonly NavGroup[] = [{ items: NAV_ITEMS }];
+
+export function NavLinks({ groups = DEFAULT_GROUPS }: { groups?: readonly NavGroup[] }): React.ReactNode {
   const pathname = usePathname();
   const sp = useSearchParams();
   const carry = new URLSearchParams(sp.toString());
   for (const k of PAGE_ONLY_PARAMS) carry.delete(k);
-  const qs = carry.toString();
+  const smCarry = new URLSearchParams(carry.toString());
+  for (const k of ESB_ONLY_PARAMS) smCarry.delete(k);
+  const esbCarry = new URLSearchParams(carry.toString());
+  for (const k of SM_ONLY_PARAMS) esbCarry.delete(k);
+  const smPaths = ['/store', '/dc', '/category', '/marketing', '/exec'];
   return (
     <nav id="nav" aria-label="Navigasi utama" className="nav">
-      <ul>
-        {NAV_ITEMS.map((it) => {
-          const active = pathname === it.href;
-          return (
-            <li key={it.href}>
-              <Link href={`${it.href}${qs ? `?${qs}` : ''}`} aria-current={active ? 'page' : undefined} className="nav-link">
-                <Icon name={it.icon} />
-                <span>{it.label}</span>
-                {it.soon ? <span className="soon">segera</span> : null}
-              </Link>
-            </li>
-          );
-        })}
-      </ul>
+      {groups.map((g, gi) => (
+        <div key={g.title ?? `g${gi}`}>
+          {g.title ? (
+            <p className="nav-group-title" id={`nav-g${gi}`}>
+              {g.title}
+            </p>
+          ) : null}
+          <ul aria-labelledby={g.title ? `nav-g${gi}` : undefined}>
+            {g.items.map((it) => {
+              const active = pathname === it.href;
+              const qs = (smPaths.includes(it.href) ? smCarry : esbCarry).toString();
+              return (
+                <li key={it.href}>
+                  <Link href={`${it.href}${qs ? `?${qs}` : ''}`} aria-current={active ? 'page' : undefined} className="nav-link">
+                    <Icon name={it.icon} />
+                    <span>{it.label}</span>
+                    {it.soon ? <span className="soon">segera</span> : null}
+                  </Link>
+                </li>
+              );
+            })}
+          </ul>
+        </div>
+      ))}
     </nav>
   );
 }

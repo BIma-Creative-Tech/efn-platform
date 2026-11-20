@@ -126,6 +126,7 @@ SELECT pp.id AS product_id, pp.product_tmpl_id AS template_id, COALESCE(pp.defau
        COALESCE(pt.tracking, 'none') AS tracking, COALESCE(pt.use_expiration_date, FALSE) AS use_expiration_date,
        COALESCE(pt.sale_ok, FALSE) AS sale_ok, COALESCE(pt.available_in_pos, FALSE) AS available_in_pos,
        (COALESCE(pp.active, FALSE) AND COALESCE(pt.active, FALSE)) AS active,
+       COALESCE(pt.categ_id, 0) AS categ_id, COALESCE(pc.parent_path, '') AS categ_parent_path,
        {version} AS version_ts,
        {version} AS _cursor_ts, pp.id::text AS _cursor_key
 FROM product_product pp
@@ -153,6 +154,10 @@ PRODUCT_COLUMNS = (
     "available_in_pos",
     "active",
     "version_ts",
+    # G47 (docs/04 §28.13.8): id & jalur kategori (filter turunan kategori Insight). Baris lama = default (0/'') sampai
+    # watermark job `products` di-reset (README).
+    "categ_id",
+    "categ_parent_path",
 )
 
 
@@ -173,6 +178,8 @@ def transform_product(row: dict[str, Any]) -> list[Any]:
         1 if row["available_in_pos"] else 0,
         1 if row["active"] else 0,
         to_utc(row["version_ts"]),
+        int(row.get("categ_id") or 0),
+        str(row.get("categ_parent_path") or "")[:256],
     ]
 
 

@@ -162,6 +162,20 @@ class ClickHouseBehaviorStore:
         self._client.command(sql, parameters=parameters, settings={"max_execution_time": 600})
 
 
+class ClickHouseSmStore:
+    """G47: baca kecil berparameter + INSERT ... SELECT server-side (agg_sm_stock_daily, agg_sm_expiry_daily). Hak
+    efn_etl = access/etl-sm-access.sql (SELECT/INSERT tabel mart G47, tanpa ALTER/DDL)."""
+
+    def __init__(self, client: Client) -> None:
+        self._client = client
+
+    def rows(self, sql: str, parameters: dict[str, Any] | None = None) -> list[tuple[Any, ...]]:
+        return list(self._client.query(sql, parameters=parameters or {}).result_rows)
+
+    def execute(self, sql: str, parameters: dict[str, Any]) -> None:
+        self._client.command(sql, parameters=parameters, settings={"max_execution_time": 600})
+
+
 class ClickHouseWatermarkStore:
     def __init__(self, client: Client, database: str) -> None:
         self._client = client

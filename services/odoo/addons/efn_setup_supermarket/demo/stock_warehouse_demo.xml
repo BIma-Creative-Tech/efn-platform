@@ -9,7 +9,18 @@
      dua picking DC -> transit -> outlet sehingga stok in-transit terlihat) [V source 19.0]. Rute itu TIDAK masuk
      route_ids outlet; ia terbaca lewat warehouse.resupply_route_ids / _get_all_routes [V]. TIDAK memakai
      efn_ck_production (syarat gudang CK + depends mrp).
-     Outlet one_step + ship_only (default CE).
+     Penerimaan outlet DUA LANGKAH sejak awal (keputusan pemilik proyek 21 Nov 2026, Q-G47-2; 19.0.3.0.0):
+     reception_steps = two_steps (transit -> WH/Input -> WH/Stock), delivery_steps tetap ship_only (outlet tidak
+     mengirim). Fakta source stock 19.0 [V 21 Nov 2026]:
+       - in_type_id.default_location_dest_id = wh_input_stock_loc_id untuk two_steps (_get_input_output_locations);
+       - rute penerimaan outlet = rule PUSH Input -> Stock (store_type_id) (get_rules_dict 'two_steps');
+       - leg resupply transit -> outlet = rule pull (transit, lot_stock_id, in_type_id) tanpa location_dest_from_rule,
+         sehingga move receipt mendarat di Input (tujuan akhir = Stock) lalu push Input -> Stock dibuat saat receipt
+         selesai [runtime: test test_demo_resupply_chain_two_steps].
+     Rantai lengkap: DC Stock -> DC Output (pick) -> transit (ship) -> outlet Input (receipt) -> outlet Stock (storage,
+     putaway ke zona demo/stock_location_demo.xml). POS (lokasi sumber child_of Stock) baru bisa menjual setelah
+     langkah storage. Mengubah reception_steps lewat write() mengaktifkan lokasi Input + memperbarui picking type &
+     rule penerimaan tanpa menyentuh rute resupply [V]; dipakai migrasi 19.0.3.0.0 untuk DB demo lama.
 
      Picking type POS outlet (pos_type_id, dibuat point_of_sale per gudang [V]): use_existing_lots=True,
      use_create_lots=False -> kasir memilih lot yang ada, tidak boleh membuat lot baru (lot dibuat saat penerimaan
@@ -68,6 +79,7 @@
         <field name="code">SMD01</field>
         <field name="company_id" ref="company_smd"/>
         <field name="partner_id" ref="partner_smd01"/>
+        <field name="reception_steps">two_steps</field>
         <field name="resupply_wh_ids" eval="[(6, 0, [ref('warehouse_smd_dc')])]"/>
     </record>
     <record id="warehouse_smd02" model="stock.warehouse">
@@ -75,6 +87,7 @@
         <field name="code">SMD02</field>
         <field name="company_id" ref="company_smd"/>
         <field name="partner_id" ref="partner_smd02"/>
+        <field name="reception_steps">two_steps</field>
         <field name="resupply_wh_ids" eval="[(6, 0, [ref('warehouse_smd_dc')])]"/>
     </record>
     <record id="warehouse_smd03" model="stock.warehouse">
@@ -82,6 +95,7 @@
         <field name="code">SMD03</field>
         <field name="company_id" ref="company_smd"/>
         <field name="partner_id" ref="partner_smd03"/>
+        <field name="reception_steps">two_steps</field>
         <field name="resupply_wh_ids" eval="[(6, 0, [ref('warehouse_smd_dc')])]"/>
     </record>
     <record id="warehouse_smd04" model="stock.warehouse">
@@ -89,6 +103,7 @@
         <field name="code">SMD04</field>
         <field name="company_id" ref="company_smd"/>
         <field name="partner_id" ref="partner_smd04"/>
+        <field name="reception_steps">two_steps</field>
         <field name="resupply_wh_ids" eval="[(6, 0, [ref('warehouse_smd_dc')])]"/>
     </record>
     <record id="warehouse_smd05" model="stock.warehouse">
@@ -96,6 +111,7 @@
         <field name="code">SMD05</field>
         <field name="company_id" ref="company_smd"/>
         <field name="partner_id" ref="partner_smd05"/>
+        <field name="reception_steps">two_steps</field>
         <field name="resupply_wh_ids" eval="[(6, 0, [ref('warehouse_smd_dc')])]"/>
     </record>
 

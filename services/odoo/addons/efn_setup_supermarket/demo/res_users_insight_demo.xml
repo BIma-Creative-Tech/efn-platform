@@ -1,0 +1,70 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- DEMO 19.0.3.0.0 — persona EFN Insight supermarket (G47; docs/04 §28.13.2, ADR-041 §3.4 Proposed; fit-gap
+     docs/fit-gap/G47_INSIGHT_SM.md §2.2). Grup persona & field kategori dibuat modul efn_insight_sm
+     (efn-odoo-engineer, paralel). xmlid yang dipakai di sini = xmlid fit-gap; bila engineer mengganti nama, file ini
+     dan test ikut diganti (lihat README "Koordinasi").
+
+       Persona Insight      | User demo                         | Catatan
+       store                | Kepala Toko SMD01..SMD05           | cakupan wids = efn_outlet_warehouse_ids (sudah diisi)
+       dc                   | Buyer DC SMD                      | DC/logistik
+       category             | Markdown Manager SMD              | + efn_insight_categ_ids = Fresh, Dairy & Chilled, Frozen
+       exec                 | Direksi SMD (BARU)                | semua toko PT SMD, margin & GMROI
+       marketing            | Marketing SMD (BARU)              | data kampanye & perilaku (tanpa hak tindakan kampanye)
+
+     Persona = hak DATA saja: tidak ada persona yang memberi grup tindakan (replenishment/expiry/campaign), dan grup
+     tindakan yang sudah dipegang user tidak diubah. kpi_admin TIDAK diberikan ke siapa pun (Q-G47-1, SoD belum
+     diputuskan). Pemetaan nyata jabatan -> persona = Q-SM29.
+     User baru: login placeholder, TANPA password, tanpa email/HP (pola res_users_demo.xml; auth_totp wajib saat
+     diaktifkan admin). Grup ditambah dengan (4, id) agar idempoten dan tidak menghapus grup lain.
+     noupdate="1": untuk DB demo lama, migrations/19.0.3.0.0 menerapkan ulang file ini (mode init). -->
+<odoo noupdate="1">
+    <!-- ===== Kepala toko -> persona store ===== -->
+    <record id="user_smd01_store_head" model="res.users">
+        <field name="group_ids" eval="[Command.link(ref('efn_insight_sm.group_insight_store'))]"/>
+    </record>
+    <record id="user_smd02_store_head" model="res.users">
+        <field name="group_ids" eval="[Command.link(ref('efn_insight_sm.group_insight_store'))]"/>
+    </record>
+    <record id="user_smd03_store_head" model="res.users">
+        <field name="group_ids" eval="[Command.link(ref('efn_insight_sm.group_insight_store'))]"/>
+    </record>
+    <record id="user_smd04_store_head" model="res.users">
+        <field name="group_ids" eval="[Command.link(ref('efn_insight_sm.group_insight_store'))]"/>
+    </record>
+    <record id="user_smd05_store_head" model="res.users">
+        <field name="group_ids" eval="[Command.link(ref('efn_insight_sm.group_insight_store'))]"/>
+    </record>
+
+    <!-- ===== Buyer DC -> persona dc ===== -->
+    <record id="user_smd_buyer_dc" model="res.users">
+        <field name="group_ids" eval="[Command.link(ref('efn_insight_sm.group_insight_dc'))]"/>
+    </record>
+
+    <!-- ===== Category manager (markdown manager demo) -> persona category + kategori dikelola ===== -->
+    <record id="user_smd_markdown_manager" model="res.users">
+        <field name="group_ids" eval="[Command.link(ref('efn_insight_sm.group_insight_category'))]"/>
+        <field name="efn_insight_categ_ids" eval="[Command.set([
+            ref('product_category_smd_fresh'),
+            ref('product_category_smd_dairy_chilled'),
+            ref('product_category_smd_frozen'),
+        ])]"/>
+    </record>
+
+    <!-- ===== User baru ===== -->
+    <record id="user_smd_director" model="res.users">
+        <field name="name">Direksi SMD (DEMO)</field>
+        <field name="login">efn_demo_smd_direksi</field>
+        <field name="company_id" ref="company_smd"/>
+        <field name="company_ids" eval="[Command.set([ref('company_smd')])]"/>
+        <field name="tz">Asia/Jakarta</field>
+        <field name="group_ids" eval="[Command.set([ref('base.group_user'), ref('efn_insight_sm.group_insight_exec')])]"/>
+    </record>
+    <record id="user_smd_marketing" model="res.users">
+        <field name="name">Marketing SMD (DEMO)</field>
+        <field name="login">efn_demo_smd_marketing</field>
+        <field name="company_id" ref="company_smd"/>
+        <field name="company_ids" eval="[Command.set([ref('company_smd')])]"/>
+        <field name="tz">Asia/Jakarta</field>
+        <field name="group_ids" eval="[Command.set([ref('base.group_user'), ref('efn_insight_sm.group_insight_marketing')])]"/>
+    </record>
+</odoo>

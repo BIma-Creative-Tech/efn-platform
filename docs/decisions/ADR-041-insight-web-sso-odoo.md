@@ -167,6 +167,25 @@ Rekomendasi **R1**:
 5. Grup persona exec/category/dc/marketing = **grup sensitif** (tidak ikut sinkron jabatan, SEC-193); store boleh ikut
    sinkron bila jabatan "Kepala toko" dipetakan dengan warehouse.
 
+### 3.4 Revisi 20 Nov 2026 — kontrak byte-exact G47 (Proposed)
+
+> **Ringkasan manajemen.** Rincian teknis §3.3 kini ditetapkan di `docs/04` §28.13. Tiga penyesuaian: (1) grup peran
+> supermarket dipasang di modul tambahan yang hanya aktif bila modul supermarket terpasang; (2) tanda tangan cakupan juga
+> mengunci peran dan kategori, sehingga margin/GMROI tertutup bagi kepala toko di level database, bukan hanya di layar;
+> (3) data tingkat PT (harga pasar, kampanye) memakai "outlet 0" yang tidak terlihat oleh kepala toko. Biaya tambahan
+> terhadap §3.3: ±1 hari-engineer; menunda (2) akan memaksa format token baru kelak (±1 minggu + migrasi sesi).
+
+| # | Opsi tanda tangan cakupan | Kelebihan | Kekurangan | Biaya |
+|---|---|---|---|---|
+| S1 | `SHA256(key|cids|codes|wids)` (ringkasan §3.3) | Sederhana | Margin hanya dibatasi aplikasi (satu lapis, pola R2 yang ditolak); pembatasan kategori kelak = format baru | — |
+| **S2** | **`SHA256(key|cids|codes|wids|personas|cats)` + allowlist persona per view di row policy** | Dua lapis untuk data biaya; pembatasan kategori kelak cukup ubah row policy | Dua setting tambahan per query | **+±1 hari** |
+
+Rekomendasi **S2**. Penyesuaian lain: grup persona di modul **`efn_insight_sm`** (`depends` `efn_insight` +
+`efn_assortment`, `auto_install`) agar instalasi F&B tidak membawa modul supermarket; field
+`res.users.efn_insight_categ_ids` untuk "kategori dikelola" (CE 19 tidak punya padanan); baris tingkat PT
+`warehouse_id = 0` hanya untuk persona exec/category/dc/marketing. Keputusan L-186..L-199, pertanyaan Q-SM40..Q-SM45 di
+`docs/04` §28.13. Risiko baru: R-S22 (usulan; bug cakupan outlet), R-T22 (usulan; metrik turunan menyesatkan).
+
 ## 4. Konsekuensi
 
 ### 4.1 Positif
@@ -221,6 +240,7 @@ jadwal rotasi kunci SSO/sesi.
 
 ## 7. Kapan ditinjau ulang
 - Revisi §3.3 (outlet & persona supermarket) dibangun di G47 — tinjau format `eit2`/`eis2` dan Q-SM29.
+- §3.4: klien meminta pembatasan data per kategori (Q-INS-S6) atau PT supermarket kedua (`SM_CODES`).
 - Klien memilih identity provider terpusat (opsi 2) atau butuh MFA untuk dashboard.
 - Kebutuhan multi-replika/HA insight-web (→ Redis).
 - G43 (company IMD/CUP dibuat, halaman dari mart Odoo) dan G44 (forecast).

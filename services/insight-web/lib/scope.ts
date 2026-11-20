@@ -5,8 +5,56 @@
  *   SQL_efn_sig  = hex huruf kecil SHA256(key + "|" + cids + "|" + codes); key = byte ASCII string hex (bukan hex-decode)
  * Dihitung dari cookie sesi terverifikasi; tidak pernah dari input browser.
  */
-import { ESB_CODES } from './claims';
+import { ESB_CODES, PERSONAS, SM_CODES, personasOf, smCodesOf } from './claims';
 import { sha256Hex } from './hmac';
+import type { Session } from './session';
+
+/**
+ * Setting cakupan view SM (docs/04 §28.13.6). Semua nilai dihitung dari sesi eis2 terverifikasi:
+ *   SQL_efn_cids     = cids sesi (boleh memuat id company ESB; aman karena wids hanya warehouse SM)
+ *   SQL_efn_codes    = codes ∩ SM_CODES            (tidak kosong)
+ *   SQL_efn_wids     = wids sesi                   (tidak kosong; 0 = baris tingkat PT)
+ *   SQL_efn_personas = roles ∩ PERSONAS, urut naik (tidak kosong)
+ *   SQL_efn_cats     = cats sesi                   (boleh string kosong)
+ *   SQL_efn_sig2     = lower(hex(SHA256(KEY|cids|codes|wids|personas|cats)))  KEY = byte ASCII string hex insight_scope_key
+ */
+export interface ScopeSettingsSm {
+  SQL_efn_cids: string;
+  SQL_efn_codes: string;
+  SQL_efn_wids: string;
+  SQL_efn_personas: string;
+  SQL_efn_cats: string;
+  SQL_efn_sig2: string;
+}
+
+const isUint = (n: number): boolean => Number.isSafeInteger(n) && n >= 0 && n <= 4_294_967_295;
+
+export function scopeSettingsSm(
+  s: Pick<Session, 'cids' | 'codes' | 'roles' | 'wids' | 'cats'>,
+  key: string,
+): ScopeSettingsSm {
+  const codes = Array.from(new Set(smCodesOf(s.codes))).sort();
+  const personas = Array.from(new Set(personasOf(s.roles))).sort();
+  if (codes.length === 0 || codes.some((c) => !(SM_CODES as readonly string[]).includes(c))) throw new Error('scope: tanpa kode SM');
+  if (personas.length === 0 || personas.some((p) => !(PERSONAS as readonly string[]).includes(p))) throw new Error('scope: tanpa persona');
+  if (s.wids.length === 0) throw new Error('scope: wids kosong');
+  if (s.cids.length === 0 || !s.cids.every((n) => isUint(n) && n > 0)) throw new Error('scope: company id tidak valid');
+  if (!s.wids.every(isUint) || !s.cats.every((n) => isUint(n) && n > 0)) throw new Error('scope: id tidak valid');
+  const asc = (a: readonly number[]): string => Array.from(new Set(a)).sort((x, y) => x - y).join(',');
+  const cids = asc(s.cids);
+  const wids = asc(s.wids);
+  const cats = asc(s.cats);
+  const codesStr = codes.join(',');
+  const personasStr = personas.join(',');
+  return {
+    SQL_efn_cids: cids,
+    SQL_efn_codes: codesStr,
+    SQL_efn_wids: wids,
+    SQL_efn_personas: personasStr,
+    SQL_efn_cats: cats,
+    SQL_efn_sig2: sha256Hex(`${key}|${cids}|${codesStr}|${wids}|${personasStr}|${cats}`),
+  };
+}
 
 export interface ScopeSettings {
   SQL_efn_cids: string;

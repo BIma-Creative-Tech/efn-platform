@@ -154,6 +154,17 @@ RPC publik baru (terdaftar `efn_core/tests/test_rpc_surface.py` `RPC_ALLOWLIST`)
   `EFN_ROLE_KEEP_LAST_SUPERADMIN`. Superadmin yang sengaja menetapkan peran ke Superadmin lain tetap berlaku
   "nothing more, nothing less" selama masih ada Superadmin lain.
 
+## G47 (19.0.1.2.2; docs/04 §28.13.2, fit-gap `docs/fit-gap/G47_INSIGHT_SM.md` §2.5)
+- `SENSITIVE_GROUP_XMLIDS` + `efn_insight_sm.group_insight_exec`, `_category`, `_dc`, `_marketing`, `_kpi_admin`
+  (persona Insight supermarket lintas toko + pengelola definisi KPI). Peran yang memuatnya tidak pernah disinkron
+  dari jabatan; penetapan manual oleh Access Rights. `group_insight_store` sengaja **tidak** sensitif.
+- Keputusan pemilik proyek 21 Nov 2026 (Q-G47-1): `group_insight_kpi_admin` boleh diberikan ke siapa pun; **tidak ada**
+  aturan SoD bawaan untuk grup itu (usulan C-2 fit-gap tidak dibangun).
+- Data modul tidak mengisi parameter `efn_role.sensitive_group_xmlids` (satu string; akan menimpa tambahan admin).
+- Catatan widget Odoo 19: `group_role_cashier` dan `group_refund_approver` berada di satu privilege, sehingga form user
+  hanya bisa memilih salah satu. Kombinasi itu memang dilarang SOD-01, jadi dibiarkan (fit-gap G47 §8).
+- Test: `tests/test_g47.py`.
+
 ## Cara uji manual
 1. Pasang `efn_role` (+ `point_of_sale`, `sales_team` untuk SOD-01/02). *Settings → Users & Companies → Aturan SoD*:
    SOD-01/02 (block), SOD-06 (report_only) ada.

@@ -20,6 +20,7 @@ from efn_etl.adapters import (
     ClickHouseErasureStore,
     ClickHouseRunStore,
     ClickHouseSink,
+    ClickHouseSmStore,
     ClickHouseWatermarkStore,
     PgSource,
     build_clickhouse_client,
@@ -46,6 +47,7 @@ from efn_etl.loyalty_recon import LoyaltyReconSettings, run_loyalty_recon
 from efn_etl.loyalty_recon import recon_due as loyalty_recon_due
 from efn_etl.runner import run_once
 from efn_etl.sink import SinkCheckResult, SinkCheckSettings, run_sink_check
+from efn_etl.sm_cycle import SmCycleConfig, run_sm_cycle
 from efn_etl.stock import STOCK_JOB, run_stock_snapshot, snapshot_due
 from efn_etl.tls import client_ssl_context
 
@@ -332,7 +334,25 @@ def main() -> None:
         forecast=settings.forecast_enabled,
         forecast_legacy=settings.forecast_legacy_enabled,
         behavior=settings.behavior_enabled,
+        sm=settings.sm_enabled,
+        sm_expiry=settings.sm_expiry_enabled,
+        sm_companies=settings.sm_companies,
     )
+    sm_store = ClickHouseSmStore(client) if settings.sm_enabled else None
+    sm_cfg = SmCycleConfig(
+        codes=settings.sm_companies,
+        stock=settings.stock_enabled,
+        expiry=settings.sm_expiry_enabled,
+        campaign=settings.sm_campaign_enabled,
+        fill_recalc_days=settings.sm_fill_recalc_days,
+        campaign_attr_days=settings.sm_campaign_attr_days,
+        stock_backfill_days=settings.sm_stock_backfill_days,
+        overlap=timedelta(seconds=settings.overlap_seconds),
+        batch_size=settings.batch_size,
+        max_pages=settings.max_pages_per_run,
+    )
+    if settings.sm_enabled and not settings.stock_enabled:
+        log.warning("ETL_ENABLE_SM tanpa ETL_ENABLE_STOCK: sm_stock_agg tidak berjalan")
     forecast_store = ClickHouseForecastStore(client) if settings.forecast_enabled else None
     behavior_store: ClickHouseBehaviorStore | None = None
     erasure_hooks: list[SubjectHook] = []
@@ -413,6 +433,9 @@ def main() -> None:
                 settings.max_pages_per_run,
                 heartbeat,
             )
+        if sm_store is not None:
+            # G47: setelah snapshot stok (sm_stock_agg membaca snapshot terbaru).
+            run_sm_cycle(sm_cfg, sources["odoo"], sources["platform"], sm_store, sink, store, heartbeat)
         if behavior_store is not None:
             run_behavior_agg_cycle(
                 behavior_store,

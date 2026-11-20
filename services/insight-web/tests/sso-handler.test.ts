@@ -39,13 +39,13 @@ describe('POST /sso', () => {
     expect(res.headers.get('cache-control')).toBe('no-store');
     const cookie = res.headers.get('set-cookie') ?? '';
     expect(cookie.startsWith(`${SESSION_COOKIE}=eis1.`)).toBe(true);
-    for (const attr of ['Max-Age=28800', 'Path=/', 'HttpOnly', 'Secure', 'SameSite=Lax']) expect(cookie).toContain(attr);
+    for (const attr of ['Max-Age=7200', 'Path=/', 'HttpOnly', 'Secure', 'SameSite=Lax']) expect(cookie).toContain(attr);
     expect(cookie).not.toContain('Domain');
     expect(cookie).not.toContain(VECTOR_TOKEN);
     const value = cookie.split(';')[0].slice(`${SESSION_COOKIE}=`.length);
     const s = verifySessionValue(value, SESSION_KEY, IAT + 10);
     expect(s).toMatchObject({ sub: 7, name: 'Budi Uji', codes: ['BCF', 'PB'], cids: [3, 5], roles: ['user'] });
-    expect(s?.exp).toBe(IAT + 10 + 28800);
+    expect(s?.exp).toBe(IAT + 10 + 7200);
     // cookie TIDAK valid di bawah kunci SSO (kunci terpisah)
     expect(verifySessionValue(value, KEY, IAT + 10)).toBeNull();
   });
@@ -162,7 +162,7 @@ describe('cookie sesi palsu', () => {
     const [h, p, s] = value.split('.');
     const altered = Buffer.from(Buffer.from(p, 'base64url').toString('utf8').replace('"sub":7', '"sub":9'), 'utf8').toString('base64url');
     expect(verifySessionValue(`${h}.${altered}.${s}`, SESSION_KEY, IAT + 10)).toBeNull();
-    expect(verifySessionValue(value, SESSION_KEY, IAT + 10 + 28800)).toBeNull();
+    expect(verifySessionValue(value, SESSION_KEY, IAT + 10 + 7200)).toBeNull();
     expect(verifySessionValue('eis1.aaaaaaaaaaaaaaaa.' + 'a'.repeat(43), SESSION_KEY, IAT)).toBeNull();
     expect(verifySessionValue(undefined, SESSION_KEY, IAT)).toBeNull();
   });

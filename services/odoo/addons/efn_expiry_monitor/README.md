@@ -135,6 +135,12 @@ penyalahgunaan diskon (batas per peran + audit), replay persetujuan (terikat ord
   lain (bila ada) di luar `load_data` akan menerima payload `deferred` (POS lalu tanpa data lot offline → FEFO jatuh
   ke data online per produk).
 
+## Privilege terpisah (G47, 19.0.1.1.1; fit-gap `docs/fit-gap/G47_INSIGHT_SM.md` §8)
+*Markdown Manager* dan *Supervisor override kedaluwarsa POS* kini di privilege masing-masing (kategori Supply Chain).
+Widget hak akses Odoo 19 = satu pilihan per privilege + `Command.set`: supervisor yang juga Markdown Manager semula
+kehilangan salah satu grup saat form user disimpan. Hanya `privilege_id` grup yang berubah (tanpa implied baru, tanpa
+migrasi; keanggotaan grup tetap). Test `tests/test_privilege.py`.
+
 ## Batasan / belum
 - **Belum dijalankan di Odoo 19 nyata oleh penulis** (tanpa runtime di mesin penulis); lead menjalankan test container.
 - **Tour POS (G48)** `tests/test_expiry_tour.py` + `static/tests/tours/efn_expiry_tour.js` (tag `efn_tour`, job CI

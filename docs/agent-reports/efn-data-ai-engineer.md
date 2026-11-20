@@ -5,6 +5,98 @@ ADR terkait (semua `Proposed`): ADR-003, ADR-006, ADR-007, ADR-008, ADR-010, ADR
 
 **Tidak ada yang dijalankan.** Mesin penulis tidak punya Python; semua kode, test, dan SQL belum pernah dieksekusi. Validasi pertama terjadi di CI / oleh QA.
 
+## Gelombang 47 — EFN Insight supermarket per persona, sisi data (21 Nov 2026)
+
+Kontrak: `docs/04` §28.13 v20.3 (L-186..L-203) + fit-gap `docs/fit-gap/G47_INSIGHT_SM.md` C-1..C-7 (menang untuk detail
+Odoo). ADR-041 §3.3–§3.4 (Proposed), ADR-003. **Tanpa shell: pytest/ruff, DDL ClickHouse 24.8, psql grant, dan harness
+row policy belum pernah dijalankan.**
+
+### File
+| File | Isi |
+|---|---|
+| `infra/clickhouse/init/17-g47-insight-sm.sql` | 14 tabel mart (engine/kunci/partisi/TTL = §28.13.8), ALTER `dim_product` (+`categ_id`, `categ_parent_path`), 6 view pembantu + 29 view semantik `efn_dwh.v_sm_*` |
+| `infra/clickhouse/access/insight-sm-access.sql` | 29 view `efn_insight.v_sm_*` DEFINER kolom eksplisit + grant `efn_insight_definer` = penutupan rekursif |
+| `infra/clickhouse/access/insight-sm-policy.sh` | fragmen row policy `efn_insight_scope` kelas W/C/F + allowlist persona per view (disourcing `clickhouse-init.sh`) |
+| `infra/clickhouse/access/etl-sm-access.sql` | SELECT/INSERT `etl_writer` untuk tabel G47 (tanpa ALTER/DROP) |
+| `infra/postgres/init/22-platform-g47.sql` | view `platform.v_campaign_stats` (agregat, tanpa member/payload/kode) + GRANT ke `efn_etl` |
+| `docs/contracts/insight_sm_kpi_defaults.json` | file normatif 39 kunci KPI + 10 pasangan ambang |
+| `services/etl/efn_etl/sm.py`, `sm_cycle.py`, `sm_kpi.py` | job, transform, logika murni (fill rate, kampanye, KPI, hari agregat), orkestrasi |
+| `services/etl/efn_etl/{config,jobs,adapters,__main__,pos,waste}.py` | flag, wiring, `ClickHouseSmStore`, kolom kategori produk, fallback scrap (C-6) |
+| `services/etl/sql/odoo-readonly-grants.sql` | blok "Gelombang 47" (bersyarat per modul) + `location_id`/`scrap_id`/`value` di blok G32 + view `efn_etl.purchase_partner` |
+| `services/etl/tests/test_sm.py`, `test_sm_ddl.py`, `test_insight_sm_access.py`, `test_sm_kpi_parity.py` | test murni, DDL vs kontrak, akses + 8 negatif (cermin Python), parity KPI |
+| `services/etl/tests/clickhouse/g47_row_policy_harness.sh` | uji perilaku row policy di ClickHouse 24.8 (manual) |
+| `services/etl/README.md` | bagian G47 |
+
+### Butuh tindakan lead / devsecops (file di luar milik saya)
+1. **`infra/clickhouse/clickhouse-init.sh`**: tambahkan satu baris `. /init/access/insight-sm-policy.sh` tepat setelah
+   loop policy `v_esb_*` dan SEBELUM `unset INSIGHT_KEY INSIGHT_SIG`. Tanpa baris ini init **gagal** (pemeriksaan
+   fail-closed "setiap view efn_insight punya efn_insight_scope" mencabut grant). Fragmen memakai `$INSIGHT_KEY` dan `$CH`.
+2. **`scripts/deploy.sh`**: masukkan `22-platform-g47.sql` ke daftar migrasi PG volume lama.
+3. **Compose `etl`**: env baru `ETL_ENABLE_SM`, `ETL_SM_COMPANIES`, `ETL_ENABLE_SM_EXPIRY`, `ETL_ENABLE_SM_CAMPAIGN`,
+   `ETL_SM_FILL_RECALC_DAYS`, `ETL_SM_CAMPAIGN_ATTR_DAYS`, `ETL_SM_STOCK_BACKFILL_DAYS` (+ `PROMO_CAMPAIGN_ENABLED` bila
+   kampanye dinyalakan di production; tanpa itu ETL menolak start, pola L-180). Tidak ada secret baru.
+4. Setelah deploy: reset watermark job `products` sekali (README) agar `dim_product.categ_id` terisi.
+5. Jalankan harness row policy dan catat vektor sig2 §28.13.6 (`test_scope_vectors_are_computable`).
+
+### Penerapan fit-gap C-1..C-7
+- **C-1** `v_sm_kpi_config.is_default` = baris tidak ada/nonaktif ATAU nilai sama dengan default (enum: teks; numerik:
+  angka).
+- **C-3** `qty_shipped` = move `done` bertujuan lokasi `transit` di picking usulan + backorder (≤ 3); bila picking usulan
+  ternyata picking pick, diikuti satu langkah `move_dest` ke move ship. `qty_received` = move lanjutan (≤ 2 langkah dari
+  ship) yang **melintasi** batas outlet (tujuan = warehouse outlet, asal ≠ outlet) → receipt 2/3 langkah dihitung sekali.
+  Qty dikonversi ke UoM produk. `picking_shared` tetap ada sebagai penjaga (alokasi FIFO).
+- **C-4** redemption online = `sale_order_line.coupon_id` dengan baris reward `reward_id IS NOT NULL`, hanya SO
+  `state='sale'`; grant `sale_order(id, company_id, state)`, `sale_order_line(id, order_id, coupon_id, reward_id,
+  price_subtotal)` bersyarat. ETL mendeteksi grant lewat `information_schema.column_privileges` (tanpa grant = hanya POS).
+  **Aturan satu sumber:** kupon dihitung di dokumen tempat ia diterapkan (POS `pos_order_line.coupon_id` atau SO
+  `sale_order_line.coupon_id`); pesanan online yang dilunasi di kasir (E-45) menjadi order POS berisi produk pelunasan
+  tanpa kupon, jadi tidak ada pesanan yang masuk dua kanal. Pesanan dihitung per (kanal, order_id); voucher dipakai =
+  kartu berbeda lintas kanal; omzet = Σ subtotal (tanpa PPN) semua baris pesanan bervoucher.
+- **C-5** `cats` diproduksi Odoo/insight-web; sisi data tidak memfilter `product.category.active` (kolom tidak ada).
+  `cats` hanya ikut tanda tangan, belum predikat (L-189).
+- **C-6** scrap: gudang `COALESCE(efn_warehouse_id, stock_location.warehouse_id, 0)`, nilai `COALESCE(efn_waste_value,
+  NULLIF(Σ|stock_move.value| move scrap done, 0), qty × standard_price PT, 0)`. Job G32 `waste_scraps` dan job baru
+  `sm_scraps` (PT SM, deteksi kolom `efn_*` tiap siklus) memakai **ekspresi yang sama** sehingga baris identik bila
+  keduanya aktif. `v_sm_freshness` mart `waste` memakai job `sm_scraps` (kontrak menyebut `waste_scraps`).
+- **C-7** `from_orderpoint = orderpoint_id IS NOT NULL AND stock_warehouse_orderpoint.efn_replenishment_managed`; grant
+  `purchase_order_line.orderpoint_id`, `stock_warehouse_orderpoint(id, warehouse_id, efn_replenishment_managed)`.
+  `is_late` memakai `po_state='purchase'` (PO 19.0 tanpa `done`).
+
+### Asumsi & penyimpangan dari kontrak (beralasan)
+- `fact_replenishment.header_ts` (tambahan): Odoo menghapus baris usulan saat hitung ulang; view memakai baris dengan
+  `header_ts` terbaru per usulan. Usulan draft/proposed lewat cut-off ditampilkan `expired` (usulan yang dihapus Odoo
+  tidak pernah mendapat versi baru).
+- Supplier: **tanpa grant `res_partner`**. View `efn_etl.purchase_partner` (milik efn_odoo) memberi `id,
+  commercial_partner_id, is_company, write_date` dan nama **hanya** untuk partner perusahaan. Lebih sempit dari grant
+  kolom kontrak (yang membuka nama pelanggan perorangan ke efn_etl).
+- `dim_sm_kpi_config`: salin penuh tiap siklus (bukan cursor) agar baris yang **dihapus** di Odoo terdeteksi → `active=0`.
+  Nilai tidak sah menurut registri → `active=0` (view memakai default). Kunci tak dikenal tidak disalin.
+- `fact_replenishment_bias`: MergeTree + dedup `log_id` di ETL (cek ClickHouse per halaman) + `LIMIT 1 BY log_id` di view.
+- `fact_dc_purchase_line`/`fact_lot_markdown`: kolom partisi bisa berubah (RFQ/markdown draf) → view `LIMIT 1 BY` id
+  versi terbaru (RMT hanya dedup per partisi).
+- `agg_sm_stock_daily` & `agg_sm_expiry_daily`: hitung ulang hari menyertakan kunci lama dengan nilai 0, agar produk/alert
+  yang hilang tidak meninggalkan angka basi. Backfill stok pertama `ETL_SM_STOCK_BACKFILL_DAYS` (90), maks 14 hari/siklus.
+- `fact_dc_fill_rate`: hanya baris berubah yang ditulis tiap siklus. `on_time` tersimpan = toleransi 0 (Σ qty terkirim ≤
+  `delivery_date` WIB ≥ disetujui); toleransi `fill.grace_days` di view berbasis tanggal kirim terakhir.
+- `v_sm_price_index` menulis ulang aturan pencocokan `v_price_index` (SKU lalu nama) tanpa agregasi POS 30 hari;
+  `our_price` = `list_price` template (basis PPN SMD belum terverifikasi).
+- Funnel: `channel_code` dicocokkan persis dengan `efn_online_channel.code` (L-190), sedangkan ETL G50 meng-uppercase
+  `channel_code` event → kode kanal Odoo SMD wajib huruf besar (data setup, mirip Q-SM43).
+- JSON normatif saya buat dari tabel kontrak (format `keys[]` + `pairs[]`); builder Odoo/insight-web perlu memakai format
+  ini (kontrak menyebut builder Odoo yang membuat).
+
+### Belum terverifikasi
+- Semua SQL ClickHouse (tipe Decimal/Nullable di `multiIf`/`ifNull`/UNION, `ORDER BY` kolom tak terpilih + `LIMIT 1 BY`,
+  JOIN view `v_sm_kpi_settings`), CREATE VIEW DEFINER atas view INVOKER, dan perilaku row policy (harness belum dijalankan).
+- Kolom Odoo: `stock_move_move_rel(move_orig_id, move_dest_id)`, `stock_move.scrap_id`/`value`, `uom_uom.factor` di 19.0,
+  `standard_price ->> company_id` (jsonb), `purchase_order_line.qty_received` (fit-gap: [V] tersimpan), `efn_insight_sm_kpi`
+  (modul dibangun paralel; nama tabel diasumsikan dari model `efn.insight.sm.kpi`), `information_schema.column_privileges`
+  untuk deteksi grant online.
+- Kupon: `pos_order_line.coupon_id` pada baris reward ([V] fit-gap); asumsi baris reward POS selalu membawa `coupon_id`.
+- `proposal.picking_id` = picking ship (fit-gap §6.1 [B runtime]); usulan dengan beberapa picking DC hanya picking
+  pertama yang dihitung.
+- Insight-web `lib/sm-defaults.ts` dibandingkan bila ada (test parity); registri Odoo belum ada di branch ini.
+
 ## 1. File
 
 ### services/ai-ocr-worker (refactor; `worker.py` dihapus)

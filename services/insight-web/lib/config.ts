@@ -16,6 +16,10 @@ export type ReadFile = (path: string) => string | null;
 
 export interface InsightConfig {
   enabled: boolean;
+  /** INSIGHT_SM_ENABLED (docs/04 §28.13.12): aktif hanya string persis "true"; default false -> halaman supermarket "belum aktif". */
+  smEnabled: boolean;
+  /** INSIGHT_ACCEPT_EIT1 (§28.13.5): default true bila tidak diset; bila diset hanya "true" persis yang menerima eit1/eis1. */
+  acceptEit1: boolean;
   production: boolean;
   allowPlaintext: boolean;
   chUrl: string;
@@ -68,6 +72,8 @@ export function parseConfig(env: Env): InsightConfig {
 
   return {
     enabled: env.INSIGHT_ENABLED === 'true',
+    smEnabled: env.INSIGHT_SM_ENABLED === 'true',
+    acceptEit1: env.INSIGHT_ACCEPT_EIT1 === undefined || env.INSIGHT_ACCEPT_EIT1.trim() === '' ? true : env.INSIGHT_ACCEPT_EIT1 === 'true',
     production,
     allowPlaintext,
     chUrl: ch ? `${ch.origin}${ch.pathname.replace(/\/+$/, '')}` : '',
