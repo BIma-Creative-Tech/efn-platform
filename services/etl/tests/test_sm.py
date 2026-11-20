@@ -182,7 +182,12 @@ def test_fill_moves_sql_follows_transit_and_crossing_rule() -> None:
 def test_scrap_sql_detects_efn_columns() -> None:
     plain = scrap_sql(False, False)
     # c.efn_brand_code (efn_core, selalu ada) boleh; kolom opsional scrap s.efn_* tidak.
-    assert not re.search(r"\bs\.efn_\w+", plain) and "sl.warehouse_id" in plain and "mv.value" in plain and "standard_price" in plain
+    assert (
+        not re.search(r"\bs\.efn_\w+", plain)
+        and "sl.warehouse_id" in plain
+        and "mv.value" in plain
+        and "standard_price" in plain
+    )
     full = scrap_sql(True, True)
     assert "COALESCE(s.efn_warehouse_id, sl.warehouse_id, 0)" in full and "COALESCE(s.efn_waste_value," in full
 

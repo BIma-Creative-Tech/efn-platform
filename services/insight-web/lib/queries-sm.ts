@@ -13,8 +13,8 @@
  * Parameter: `wh` = outlet terpilih (tanpa 0); `whs` = semua warehouse sesi tanpa 0 (abaikan filter); `whz` = pilihan termasuk 0
  * (halaman Marketing: event tanpa outlet = 0). Diisi loader dari sesi terverifikasi + filter yang sudah divalidasi.
  *
- * STATUS: SQL BELUM dijalankan terhadap ClickHouse 24.8 (view v_sm_* dibangun paralel oleh agent data); lead wajib menjalankan
- * seluruh katalog setelah view ada. Asumsi kolom dicatat di docs/agent-reports/efn-frontend-engineer.md (bagian G47).
+ * STATUS: seluruh katalog dijalankan lead 21 Nov 2026 ke ClickHouse 24.8 (skema + row policy SM): 41/41 OK setelah perbaikan
+ * sm_cm_signal. Uji ulang: tests/sm-queries.live.test.ts (CH_LIVE_URL).
  */
 import 'server-only';
 import { K_ANON } from './sm-defaults';
@@ -249,7 +249,7 @@ LIMIT 100`),
 FROM ${V}price_coverage
 WHERE ${CO} AND warehouse_id = 0 AND ${CATF}`),
   // Hitungan perilaku di view bernilai NULL bila viewers_30d < K_ANON; filter literal K_ANON menjaga k-anonim di lapis aplikasi.
-  sm_cm_signal: q(`SELECT product_id, product_tmpl_id, categ_id, viewers_30d, views_30d, cart_adds_30d, purchases_30d, our_price, market_median_30d, diff_pct
+  sm_cm_signal: q(`SELECT product_id, categ_id, viewers_30d, views_30d, cart_adds_30d, purchases_30d, our_price, market_median_30d, diff_pct
 FROM ${V}price_signal
 WHERE ${CO} AND warehouse_id = 0 AND ${CATF} AND viewers_30d >= ${K_ANON} AND diff_pct > {price_warn:Float64}
 ORDER BY viewers_30d DESC

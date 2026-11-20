@@ -1288,3 +1288,53 @@ Q-SM38 consent per purpose vs kanal (DPO), Q-SM39 re-grant `tracking` (DPO). Tet
 - **Belum terverifikasi:** semua perilaku runtime (tidak ada test yang saya jalankan); kolom lengkap tabel SQL (hanya
   nama tabel + laporan agent); host egress WhatsApp; lisensi nodemailer 10.x; isi `rabbitmq-entrypoint.sh`; bahwa
   consumer `notify.push` adalah jalur WhatsApp Cloud API (diambil dari keputusan lead/laporan BFF).
+
+---
+
+# G47 — koreksi fit-gap C-1..C-9 diserap ke §28.13 v20.4 (2026-11-21)
+
+## Ringkasan (untuk manajemen)
+Kontrak dashboard supermarket disamakan dengan kode G47 yang sudah ditulis. Sembilan koreksi fit-gap Odoo diperiksa
+satu per satu terhadap kode; semuanya ada di kode, dengan beberapa perbedaan kecil yang kini tercatat. Dua keputusan
+pemilik proyek 21 Nov dicatat: pengelola definisi KPI boleh siapa saja (tanpa SoD sistem), dan outlet SMD menerima
+barang dua langkah sejak awal. Tidak ada biaya atau waktu tambahan, karena semuanya sudah dibangun.
+
+## File diubah (worktree `efn-platform-g47`, tanpa menyentuh kode)
+- `docs/04_SERVICE_CONTRACTS.md`: judul v20.4; §28.13 header + ringkasan v20.4 + status; §28.13.1 (file `18-g47` tidak
+  dibuat); §28.13.2 (privilege per grup, `kpi_admin` tanpa SoD, audit `CONTROL_SPECS`); §28.13.3 (`cats`); §28.13.8
+  (baris tabel fill rate/PO/`fact_scrap`/kampanye, definisi `qty_shipped`/`qty_received` + UoM, `from_orderpoint`,
+  redemption online, `fact_scrap`, grant v20.4, view `efn_etl.purchase_partner`); §28.13.8c (seed, kanonik, hak);
+  §28.13.9 (`is_default`); §28.13.10 (mart `waste` = `sm_scraps`); §28.13.11 (pola URL Odoo 19); §28.13.13 (L-204..L-215);
+  §28.13.14 (Q-SM40 bagian teknis, Q-G47-1/2 diputuskan); §28.13.15 (daftar verifikasi baru).
+- `docs/fit-gap/G47_INSIGHT_SM.md`: catatan pembaruan di atas; kolom Status tabel §9 ("diserap docs/04 v20.4 (L-xxx)");
+  tanda inline C-1/C-2/C-5; Q-G47-1 ditandai diputuskan; Q-G47-2 merujuk L-207.
+
+## Perbedaan kode vs fit-gap/kontrak (kode menang, sudah dicatat)
+1. C-8: tautan daftar log bias (`efn_replenishment_bias_log_action`) ada di fit-gap §5.2 dan kontrak v20.3, tetapi
+   **tidak ada** di `lib/odoo-links.ts`. Dicatat "tidak dibangun" (L-213).
+2. C-2: bagian SoD opsional tidak dibangun (sesuai Q-G47-1). Sequence privilege 20..70, bukan 10..60.
+3. C-4: grant `sale_order` lebih sempit dari fit-gap (`id, company_id, state`). Aturan satu-sumber di kode bergantung pada
+   asumsi E-45 (order pelunasan di kasir tanpa kupon), yang belum diuji runtime.
+4. C-6: kode memakai `NULLIF(Σ|value|, 0)` dan fallback akhir `0`, dengan tautan lewat `stock_move.scrap_id`. Mart
+   `waste` membaca kesegaran dari job `sm_scraps` (kontrak v20.3 menyebut `waste_scrap` G32).
+5. Di luar C-n: grant `res_partner` di kontrak v20.3 diganti view `efn_etl.purchase_partner` di kode (L-215, lebih
+   aman). Odoo juga menjalankan seed KPI saat company menjadi PT SM, dan mengkanonikkan nilai KPI (L-204).
+6. Tanggal: L-200..L-203 tercatat 20 Nov 2026, sedangkan brief lead menyebut keputusan KPI/PPN/HPP toko 21 Nov 2026.
+   Saya menganggapnya konfirmasi ulang: tanggal L lama tidak diubah, dan ditambahkan kalimat "dikonfirmasi ulang 21 Nov".
+
+## Keputusan yang butuh tanda tangan klien
+- Tidak ada yang baru. L-206 (tanpa SoD `kpi_admin`) dan L-207 (dua langkah) sudah diputuskan pemilik proyek. Yang
+  masih terbuka: Q-SM29 (persona per jabatan), Q-SM40 bagian bisnis (basis nilai susut), Q-SM41..43, Q-SM45.
+
+## Terverifikasi / belum terverifikasi
+- **Dibaca dari kode:** `efn_insight_sm` (security XML, `res_users.py`, README), `efn_role/models/role_policy.py` (grep),
+  `efn_audit/models/audit_policy.py` (grep), `efn_setup_supermarket` (grep `reception_steps`),
+  `services/etl/efn_etl/sm.py` (fill rate, PO, kampanye, scrap), `waste.py` `scrap_sql`, `sm_cycle.py` (grep),
+  `sql/odoo-readonly-grants.sql` blok G47, `17-g47-insight-sm.sql` (DDL + `v_sm_kpi_config` + grep grace/waste),
+  `insight-sm-access.sql` (grep), `insight-web/lib/odoo-links.ts`, `SmCard.tsx` (grep `rel`).
+- **Diverifikasi sumber primer (github.com/odoo/odoo 19.0, 21 Nov 2026):** `uom.uom.factor` tersimpan ("Absolute
+  Quantity") dan `_compute_quantity = qty × self.factor / to_unit.factor`, sehingga rumus konversi ETL benar arahnya;
+  `stock.move.scrap_id` (Many2one `stock.scrap`).
+- **Belum terverifikasi:** semua perilaku runtime (tidak ada test yang saya jalankan); `stock.move.value` pada scrap SMD;
+  cara baca `standard_price` jsonb; jenis picking di `proposal.picking_id`; aturan satu-sumber redemption online ↔ POS;
+  vektor `eit2`/sig2.

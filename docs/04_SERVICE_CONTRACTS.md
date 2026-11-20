@@ -1,5 +1,5 @@
 
-# KONTRAK ANTAR-SERVICE (v20.3 — 20 Nov 2026, G47 §28.13 Insight supermarket per persona: token `eit2`/`eis2` (`wids`, persona, `cats`), `SQL_efn_sig2`, row policy outlet + persona, mart `fact_replenishment`/`fact_dc_fill_rate`/`fact_dc_purchase_line`/`agg_sm_stock_daily`/`fact_lot_expiry`/`fact_campaign_result`, view `efn_insight.v_sm_*`, pemetaan `outlet_code` (Q-SM37), konfigurasi KPI per PT `efn.insight.sm.kpi` → `dim_sm_kpi_config`, Omzet termasuk PPN, L-186..L-203, Q-SM40..Q-SM45 — kontrak, belum dibangun; v20.2 dipakai PR #117 G50; v20.0 — 18 Nov 2026, Supermarket §28: forecast API worker→Odoo, usulan replenishment DC, assortment, event perilaku `POST /v1/events`, queue `behavior.event`/`promo.campaign.requested`/`notify.restock`/`notify.price_alert`/`notify.email`/`notify.wa_unofficial`, wishlist/notify-me/price alert, flag (ADR-044..048 Proposed, belum dibangun; §27 + L-127..L-143 dicadangkan G43); v18.0 — 18 Nov 2026, G42 §26 Insight web + SSO Odoo (token eit1 HMAC sekali pakai via POST form, cookie eis1, row policy `efn_insight_scope`, ADR-041 Proposed); v17.0 — 17 Nov 2026, G41 §25 ESB Core → datamart ClickHouse (esb-extract GET-only per brand, ADR-040 Proposed); v16.2 — 1 Nov 2026, G39 §24 asisten analisis "Analisis bertahap" (text2sql POST /v1/analyze: rencana ≤3 query → eksekusi per PT → ringkasan AI); v16.1 — 1 Nov 2026, G38 §23 Text-to-SQL "Tanya Data" (Odoo → text2sql → 9router/Ollama → ClickHouse per PT); v16.0 — 1 Nov 2026, G37 §22 gateway LLM 9router + fallback Ollama untuk OCR tahap 2 (K25-01, ADR-037); v15.1 — 31 Okt 2026, G33 §20.11 notifikasi reward MGM + layar referral Super-App; v15.0 — 30 Okt 2026, G32 §21 mart & dashboard waste/yield (K25-08); v14.1 — 30 Okt 2026, G31b §20.10 dasar MGM per baris (`excluded_categ_ids`); v14.0 — 30 Okt 2026, G31 §20 engine MGM: referral, akrual, settle, clawback; v13.0 — 29 Okt 2026, G30 §19 kebijakan MGM per PT (K25-10); v11.0 — 25 Okt 2026, G26 §17 pesanan online wajib lunas: VA, e-wallet, transfer + bukti, kiosk; v10.1 — 24 Okt 2026, G24 §16 entitas WTZ Wetzel's Pretzels; v10.0 — 21 Okt 2026, G23 §15 reservasi meja & pre-order berjadwal; v9.1 — 19 Okt 2026, G22 §14 sinkron r15 K1–K3 + L-82; v9.0 — 19 Okt 2026, G22 §14; v8.0 — G21 §13; v7.0 — G20 §12; v6.0 — G19 §11; v5.1 — 10 Okt 2026, privasi G18 L-21; v5.0 — 9 Okt 2026; §8 v3.x, §9 v4.x Fase 1, §10 v5.0 Fase 3 penjualan online; **§27 G43 v19.1** migrasi ESB → Odoo + arsip histori `efn_legacy_history`, ADR-042 Accepted)
+# KONTRAK ANTAR-SERVICE (v20.4 — 21 Nov 2026, G47 §28.13: koreksi fit-gap C-1..C-9 diserap dari kode (L-204..L-215), keputusan pemilik proyek 21 Nov: `kpi_admin` tanpa SoD kode, penerimaan outlet SMD dua langkah; v20.3 — 20 Nov 2026, G47 §28.13 Insight supermarket per persona: token `eit2`/`eis2` (`wids`, persona, `cats`), `SQL_efn_sig2`, row policy outlet + persona, mart `fact_replenishment`/`fact_dc_fill_rate`/`fact_dc_purchase_line`/`agg_sm_stock_daily`/`fact_lot_expiry`/`fact_campaign_result`, view `efn_insight.v_sm_*`, pemetaan `outlet_code` (Q-SM37), konfigurasi KPI per PT `efn.insight.sm.kpi` → `dim_sm_kpi_config`, Omzet termasuk PPN, L-186..L-203, Q-SM40..Q-SM45 — kontrak, belum dibangun; v20.2 dipakai PR #117 G50; v20.0 — 18 Nov 2026, Supermarket §28: forecast API worker→Odoo, usulan replenishment DC, assortment, event perilaku `POST /v1/events`, queue `behavior.event`/`promo.campaign.requested`/`notify.restock`/`notify.price_alert`/`notify.email`/`notify.wa_unofficial`, wishlist/notify-me/price alert, flag (ADR-044..048 Proposed, belum dibangun; §27 + L-127..L-143 dicadangkan G43); v18.0 — 18 Nov 2026, G42 §26 Insight web + SSO Odoo (token eit1 HMAC sekali pakai via POST form, cookie eis1, row policy `efn_insight_scope`, ADR-041 Proposed); v17.0 — 17 Nov 2026, G41 §25 ESB Core → datamart ClickHouse (esb-extract GET-only per brand, ADR-040 Proposed); v16.2 — 1 Nov 2026, G39 §24 asisten analisis "Analisis bertahap" (text2sql POST /v1/analyze: rencana ≤3 query → eksekusi per PT → ringkasan AI); v16.1 — 1 Nov 2026, G38 §23 Text-to-SQL "Tanya Data" (Odoo → text2sql → 9router/Ollama → ClickHouse per PT); v16.0 — 1 Nov 2026, G37 §22 gateway LLM 9router + fallback Ollama untuk OCR tahap 2 (K25-01, ADR-037); v15.1 — 31 Okt 2026, G33 §20.11 notifikasi reward MGM + layar referral Super-App; v15.0 — 30 Okt 2026, G32 §21 mart & dashboard waste/yield (K25-08); v14.1 — 30 Okt 2026, G31b §20.10 dasar MGM per baris (`excluded_categ_ids`); v14.0 — 30 Okt 2026, G31 §20 engine MGM: referral, akrual, settle, clawback; v13.0 — 29 Okt 2026, G30 §19 kebijakan MGM per PT (K25-10); v11.0 — 25 Okt 2026, G26 §17 pesanan online wajib lunas: VA, e-wallet, transfer + bukti, kiosk; v10.1 — 24 Okt 2026, G24 §16 entitas WTZ Wetzel's Pretzels; v10.0 — 21 Okt 2026, G23 §15 reservasi meja & pre-order berjadwal; v9.1 — 19 Okt 2026, G22 §14 sinkron r15 K1–K3 + L-82; v9.0 — 19 Okt 2026, G22 §14; v8.0 — G21 §13; v7.0 — G20 §12; v6.0 — G19 §11; v5.1 — 10 Okt 2026, privasi G18 L-21; v5.0 — 9 Okt 2026; §8 v3.x, §9 v4.x Fase 1, §10 v5.0 Fase 3 penjualan online; **§27 G43 v19.1** migrasi ESB → Odoo + arsip histori `efn_legacy_history`, ADR-042 Accepted)
 
 Status: **Draft untuk Fase 0 / PoC**. Mengikuti rekomendasi ADR yang masih `Proposed`. Semua service (Odoo, BFF, Next.js, worker) wajib memakai nama, path, dan payload di dokumen ini. Perubahan kontrak = ubah dokumen ini dulu.
 
@@ -4318,7 +4318,7 @@ Q-SM11 jadwal kirim & cut-off · Q-SM12 markdown di online · Q-SM13 izin alkoho
   Apakah diterima, atau pencabutan wajib memutus permanen (mis. salt per periode consent / hapus event saat cabut —
   ±1–2 hari-engineer + dampak segmen)?
 
-### 28.13 G47 — EFN Insight supermarket per persona: token `eit2`/`eis2`, mart, view `v_sm_*`, row policy outlet (v20.3, 20 Nov 2026; ADR-041 §3.3–§3.4, Proposed)
+### 28.13 G47 — EFN Insight supermarket per persona: token `eit2`/`eis2`, mart, view `v_sm_*`, row policy outlet (v20.3, 20 Nov 2026; v20.4, 21 Nov 2026; ADR-041 §3.3–§3.4, Proposed)
 
 > **Ringkasan manajemen.** Dashboard supermarket PT SMD dibangun di EFN Insight untuk lima peran: Direksi, Category
 > manager, Kepala toko, DC, dan Marketing. Kepala toko hanya melihat tokonya; peran lain melihat semua toko PT. Pembatasan
@@ -4332,12 +4332,24 @@ Q-SM11 jadwal kirim & cut-off · Q-SM12 markdown di online · Q-SM13 izin alkoho
 > **Keputusan pemilik proyek 20 Nov 2026 (L-200..L-203):** definisi GMROI, OOS rate, stok kritis, dan fill rate DC
 > memakai default kontrak ini dan **dapat diubah per PT di Odoo tanpa ubah kode** (§28.13.8c); **Omzet ditampilkan
 > termasuk PPN**, margin tetap tanpa PPN; **kepala toko boleh melihat nilai HPP susut dan near-expiry tokonya**.
+> Ketiganya dikonfirmasi ulang pemilik proyek pada 21 Nov 2026 tanpa perubahan isi.
 >
-> **Status: kontrak saja, belum ada kode.** Bagian ini menggantikan isi ringkas §28.11. Bila bertentangan dengan
+> **Perubahan v20.4 (21 Nov 2026) — untuk manajemen.** Kontrak disamakan dengan kode G47 yang sudah ditulis. Ada sembilan
+> koreksi kecil dari fit-gap Odoo (`docs/fit-gap/G47_INSIGHT_SM.md` C-1..C-9). Yang berdampak ke angka: (1) "qty diterima
+> outlet" tidak lagi terhitung dua kali di outlet dengan penerimaan dua langkah; (2) voucher yang dipakai di pesanan
+> online ikut dihitung; (3) nilai susut SMD tetap ada walau modul CK tidak terpasang. Dua keputusan baru pemilik proyek
+> (21 Nov 2026): **pengelola definisi KPI boleh siapa saja** (tidak ada pemisahan tugas yang dipaksa sistem; kendalinya
+> audit), dan **outlet SMD menerima barang dua langkah (Input → Stok) sejak awal**. Tidak ada tambahan biaya: semuanya
+> sudah dibangun di branch G47. Keputusan L-204..L-215.
+>
+> **Status (v20.4): dibangun di branch `feat/wave-47-insight-supermarket`, belum merge ke `main`, belum diuji di instance
+> Odoo berjalan.** Isi di bawah mengikuti kode; bila berbeda, kode yang menang dan perbedaannya dicatat di sini. v20.3
+> berstatus "kontrak saja". Bagian ini menggantikan isi ringkas §28.11. Bila bertentangan dengan
 > `docs/design/insight-supermarket.md` (spesifikasi UX efn-uiux-designer), **kontrak ini menang untuk nama view/kolom,
 > token, dan row policy**; spesifikasi UX menang untuk tata letak, teks, dan ambang tampilan.
 
-Penomoran: keputusan **L-186..L-203**, pertanyaan klien baru **Q-SM40..Q-SM45**; pertanyaan UX **Q-INS-S1..S15** milik
+Penomoran: keputusan **L-186..L-215** (v20.4 menambah L-204..L-215), pertanyaan klien baru **Q-SM40..Q-SM45** dan
+**Q-G47-1..2** (fit-gap, keduanya sudah diputuskan); pertanyaan UX **Q-INS-S1..S15** milik
 spesifikasi desain (§10 dokumen itu), dirujuk tanpa diduplikasi. v20.2 dipakai PR #117 (G50); nomor versi ini sengaja
 v20.3 agar tidak bentrok, urutan merge bebas.
 
@@ -4356,6 +4368,7 @@ Urutan merge yang direkomendasikan: **#114 → #117 → G47**. Bila G47 harus ma
 beserta row policy-nya ditahan di file terpisah `infra/clickhouse/init/18-g47-insight-sm-g50.sql` yang baru ditambahkan
 setelah #117 masuk (CREATE VIEW ClickHouse gagal bila tabel sumber belum ada; `clickhouse-init.sh` juga gagal bila daftar
 policy dan view tidak cocok). Job ETL yang membaca tabel Odoo #114/#117 dijaga flag (§28.13.8).
+*(v20.4: #114 dan #117 sudah di `main`, jadi semua view ada di `17-g47-insight-sm.sql`; file `18-g47-…` tidak dibuat.)*
 
 #### 28.13.2 Persona, grup Odoo, dan modul
 - Modul baru **`efn_insight_sm`** (19.0.1.0.0, LGPL-3, `depends: ["efn_insight", "efn_assortment"]`,
@@ -4373,7 +4386,16 @@ policy dan view tidak cocok). Job ETL yang membaca tabel Odoo #114/#117 dijaga f
 | `efn_insight_sm.group_insight_dc` | Insight SM: DC/logistik | `dc` | ya |
 | `efn_insight_sm.group_insight_marketing` | Insight SM: Marketing | `marketing` | ya |
 
-Semua grup `implied_ids` = `efn_insight.group_insight_user`. Persona = hak **data**; hak atas tindakan tetap grup modul
+**Privilege (v20.4, C-2 → L-205):** setiap grup di atas, ditambah `group_insight_kpi_admin`, punya
+**`res.groups.privilege` sendiri** (`res_groups_privilege_insight_sm_<exec|category|store|dc|marketing|kpi_admin>`,
+`category_id` = `efn_insight.module_category_efn_insight`, `sequence` 20..70, `placeholder` "–", `description` berisi hak
+data). Alasannya: widget hak akses Odoo 19 menampilkan satu privilege sebagai satu pilihan dan menyimpan `Command.set`.
+Bila persona berbagi privilege, user tidak bisa memegang dua persona (mis. vektor A `exec` + `store`), dan persona kedua
+terhapus diam-diam saat form user disimpan. Xmlid sensitif (`exec`, `category`, `dc`, `marketing`, `kpi_admin`, tanpa
+`store`) ditambahkan ke konstanta `efn_role.models.role_policy.SENSITIVE_GROUP_XMLIDS` (efn_role 19.0.1.2.2), bukan ke
+parameter `efn_role.sensitive_group_xmlids`.
+
+Semua grup persona `implied_ids` = `efn_insight.group_insight_user`. Persona = hak **data**; hak atas tindakan tetap grup modul
 masing-masing (`efn_replenishment.group_replenishment_store`, `group_replenishment_buyer`, `efn_expiry_monitor.*`,
 `efn_campaign.*`). Memberi persona tidak memberi hak menyetujui apa pun.
 
@@ -4382,8 +4404,13 @@ masing-masing (`efn_replenishment.group_replenishment_store`, `group_replenishme
   sisi sistem — CE 19 tidak menyimpan "kategori milik buyer" per user (lihat §28.13.13). Hanya diisi untuk persona
   `category`; diubah oleh admin user (grup `base.group_erp_manager`), teraudit `efn_audit`.
 - Model baru **`efn.insight.sm.kpi`** (konfigurasi definisi & ambang KPI per PT, L-200) dan grup
-  **`efn_insight_sm.group_insight_kpi_admin`** ("Insight SM: pengelola definisi KPI", sensitif, tidak implies persona
-  apa pun). Rinci di §28.13.8c.
+  **`efn_insight_sm.group_insight_kpi_admin`** ("Insight SM: pengelola definisi KPI", sensitif, `implied_ids` =
+  `base.group_user` saja, tidak implies persona apa pun). Rinci di §28.13.8c. **Keputusan pemilik proyek 21 Nov 2026
+  (Q-G47-1 → L-206):** grup ini **boleh diberikan ke user mana pun** lewat form user, termasuk kepala toko/DC yang
+  dinilai KPI tersebut. **Tidak ada aturan SoD di kode** (usulan SoD fit-gap C-2 tidak dibangun).
+- Field `efn_outlet_warehouse_ids` dan `efn_insight_categ_ids` teraudit lewat `efn_audit.CONTROL_SPECS["res.users"]`
+  (efn_audit 19.0.1.4.0), bukan `efn.audit.rule` `res.users` (unik per model). Ini juga menutup celah audit G44 pada
+  `efn_outlet_warehouse_ids`.
 
 #### 28.13.3 Aturan cakupan (Odoo `GET /efn/insight/open`, urutan tetap seperti §26.2)
 Konstanta (identik di Odoo `insight_token.py` dan insight-web `lib/claims.ts`):
@@ -4403,7 +4430,10 @@ Menambah PT supermarket = revisi kontrak ini (konstanta di dua sisi + test), buk
      persona `store` saja tidak pernah mendapat 0.
    - Persona dimasukkan ke `roles` hanya bila berkontribusi: `SMC = ∅` → tidak ada persona; `store` tanpa outlet yang
      ditugaskan → `store` tidak masuk.
-   - `cats` = `user.efn_insight_categ_ids` (id aktif, urut naik) bila `category` masuk `roles`, selain itu `[]`.
+   - `cats` = `user.efn_insight_categ_ids` (id yang **masih ada**, urut naik; v20.4, C-5 → L-210: `product.category`
+     CE 19 tidak punya field `active`, jadi "id aktif" di v20.3 tidak bermakna) bila `category` masuk `roles`, selain
+     itu `[]`. Kategori bersifat global (tanpa `company_id`), jadi kategori F&B bisa terpilih; aman karena `cats` v1 hanya
+     filter default (L-189).
    - `codes` SM = kode company SMC yang punya persona; `cids` SM = id-nya.
 3. **Gabung**: `codes` = kode ESB ∪ kode SM; `cids` = id ESB ∪ id SM; `roles` = (`["all_brands"]` bila grup semua brand,
    selain itu `["user"]`) ∪ persona; semua unik dan terurut naik (`roles` urut string ASCII:
@@ -4567,14 +4597,15 @@ atau PG platform; siklus `ETL_INTERVAL_SECONDS` (900); tulis hanya lewat ETL (AD
 | **`dim_sm_kpi_config`** (L-200) | `(company_id, key)` | RMT(`write_date`) | — | `sm_dims` | `efn_insight_sm_kpi` (§28.13.8c) | cursor `(write_date, id)`; baris yang dihapus/diarsipkan di Odoo → `active = 0` (view memakai default) |
 | `fact_replenishment` | `(company_id, warehouse_id, delivery_date, proposal_id, line_id)` | RMT(`version_ts`) | `toYYYYMM(delivery_date)` / 3 th | `sm_replenishment` (`ETL_ENABLE_SM`) | `efn_replenishment_proposal_line` ⋈ `efn_replenishment_proposal` | cursor `version_ts = GREATEST(l.write_date, p.write_date)` (state hanya di header; `state` baris tidak tersimpan) |
 | `fact_replenishment_bias` | `(company_id, warehouse_id, log_id)` | MergeTree (append-only, dedup via kunci di ETL: `log_id > watermark`) | `toYYYYMM(created_at)` / 3 th | `sm_replenishment` | `efn_replenishment_bias_log` | cursor `(create_date, id)` |
-| `fact_dc_fill_rate` | `(company_id, warehouse_id, delivery_date, line_id)` | RMT(`computed_at`) | `toYYYYMM(delivery_date)` / 3 th | `sm_dc_fill_rate` (`ETL_ENABLE_SM`) | proposal line `approved` + `stock_move` (done) di `proposal.picking_id` dan backorder-nya (`stock_picking.backorder_id`, kedalaman ≤ 3) | hitung ulang jendela `delivery_date ≥ hari ini − ETL_SM_FILL_RECALC_DAYS` (14) tiap siklus |
-| `fact_dc_purchase_line` | `(company_id, warehouse_id, order_id, line_id)` | RMT(`version_ts`) | `toYYYYMM(date_order)` / 3 th | `sm_dc_purchase` (`ETL_ENABLE_SM`) | `purchase_order_line` ⋈ `purchase_order` ⋈ `stock_picking_type` (warehouse ber-`efn_is_dc`) | cursor `GREATEST(pol.write_date, po.write_date)` |
+| `fact_dc_fill_rate` | `(company_id, warehouse_id, delivery_date, line_id)` | RMT(`computed_at`) | `toYYYYMM(delivery_date)` / 3 th | `sm_dc_fill_rate` (`ETL_ENABLE_SM`) | proposal line `approved` + `stock_move` (done) di `proposal.picking_id` dan backorder-nya (`stock_picking.backorder_id`, kedalaman ≤ 3); move lanjutan lewat `stock_move_move_rel` (≤ 2) dengan `stock_location` asal/tujuan (v20.4, C-3 → L-208) | hitung ulang jendela `delivery_date ≥ hari ini − ETL_SM_FILL_RECALC_DAYS` (14) tiap siklus; hanya baris baru/berubah yang ditulis |
+| `fact_dc_purchase_line` | `(company_id, warehouse_id, order_id, line_id)` | RMT(`version_ts`) | `toYYYYMM(date_order)` / 3 th | `sm_dc_purchase` (`ETL_ENABLE_SM`) | `purchase_order_line` ⋈ `purchase_order` ⋈ `stock_picking_type` (warehouse ber-`efn_is_dc`) ⟕ `stock_warehouse_orderpoint` (`pol.orderpoint_id`, C-7 → L-212) ⟕ view `efn_etl.purchase_partner` (L-215) | cursor `GREATEST(pol.write_date, po.write_date)` |
+| `fact_scrap` (G32, **job baru `sm_scraps`**, v20.4, C-6 → L-211) | kunci G32 (memuat `warehouse_id`) | (tetap G32) | (tetap G32) | `sm_scraps` (`ETL_ENABLE_SM`, tidak butuh `ETL_ENABLE_WASTE`) | `stock_scrap` ⋈ `stock_location` (`location_id`) ⋈ `stock_move` (`scrap_id`, `value`) ⋈ produk/UoM; kolom `efn_warehouse_id`/`efn_waste_value` dipakai hanya bila terlihat di `information_schema.columns` | cursor `(write_date, id)` |
 | `dim_sm_supplier` | `supplier_id` | RMT(`write_date`) | — | `sm_dc_purchase` | `res_partner` (commercial partner) yang dirujuk PO DC | cursor `write_date` |
 | `agg_sm_stock_daily` | `(company_id, day, warehouse_id, product_id)` | RMT(`computed_at`) | `toYYYYMM(day)` / 3 th | `sm_stock_agg` (`ETL_ENABLE_SM` + `ETL_ENABLE_STOCK`) | INSERT…SELECT server-side dari snapshot selesai terakhir per hari (`fact_stock_snapshot`, `fact_orderpoint_snapshot`, `stock_snapshot_run`) | `snapshot_ts` terakhir yang diproses; hari berjalan dihitung ulang setiap snapshot baru |
 | `fact_lot_expiry` **(#114)** | `(company_id, warehouse_id, alert_id)` | RMT(`write_date`) | `toYYYYMM(detected_date)` / 2 th | `sm_expiry` (`ETL_ENABLE_SM_EXPIRY`) | `efn_expiry_alert` | cursor `(write_date, id)` |
 | `fact_lot_markdown` **(#114)** | `(company_id, warehouse_id, markdown_id)` | RMT(`write_date`) | `toYYYYMM(date_from)` / 2 th | `sm_expiry` | `efn_lot_markdown` | cursor `(write_date, id)` |
 | `agg_sm_expiry_daily` **(#114)** | `(company_id, day, warehouse_id, categ_id, stage)` | RMT(`computed_at`) | `toYYYYMM(day)` / 3 th | `sm_expiry` | INSERT…SELECT dari `fact_lot_expiry` FINAL (alert `open|actioned`), hanya `day = hari ini WIB` | dihitung ulang tiap siklus (riwayat mulai sejak job aktif) |
-| `fact_campaign_result` **(#117)** | `(company_id, campaign_id)` | RMT(`computed_at`) | — / 2 th setelah `date_to` | `sm_campaign` (`ETL_ENABLE_SM_CAMPAIGN`) | `efn_campaign`; `loyalty_card` (`efn_campaign_id`); `pos_order_line.coupon_id`; PG platform view `platform.v_campaign_stats` (baru, §28.13.8b) | cursor `efn_campaign.write_date` + hitung ulang kampanye `date_to ≥ hari ini − ETL_SM_CAMPAIGN_ATTR_DAYS` (30) |
+| `fact_campaign_result` **(#117)** | `(company_id, campaign_id)` | RMT(`computed_at`) | — / 2 th setelah `date_to` | `sm_campaign` (`ETL_ENABLE_SM_CAMPAIGN`) | `efn_campaign`; `loyalty_card` (`efn_campaign_id`); `pos_order_line.coupon_id`; `sale_order_line.coupon_id`/`reward_id` ⋈ `sale_order` (online, v20.4, C-4 → L-209); PG platform view `platform.v_campaign_stats` (baru, §28.13.8b) | cursor `efn_campaign.write_date` + hitung ulang kampanye `date_to ≥ hari ini − ETL_SM_CAMPAIGN_ATTR_DAYS` (30) |
 | `fact_sm_segment_run` **(#117)** | `(company_id, generated_at, segment_code, run_id)` | RMT(`write_date`) | `toYYYYMM(generated_at)` / 2 th | `sm_campaign` | `efn_campaign` yang punya `segment_run_id` | cursor `write_date` |
 
 `fact_visitor_funnel` (nama di rencana) **tidak dibuat**: `agg_visitor_funnel_daily` dan `agg_visitor_product_daily`
@@ -4597,18 +4628,35 @@ atau PG platform; siklus `ETL_INTERVAL_SECONDS` (900); tulis hanya lewat ETL (AD
   run_id UInt64, purchase_line_id UInt64, qty_system, qty_before, qty_after, change_reason LowCardinality(String),
   created_at`.
 - `fact_dc_fill_rate`: `line_id UInt64, proposal_id UInt64, company_id UInt32, warehouse_id UInt32 (outlet tujuan),
-  dc_warehouse_id UInt32, product_id UInt32, delivery_date Date, qty_approved, qty_shipped (Σ `stock_move.quantity`
-  state `done`), **qty_received** (Σ `quantity` move `done` lanjutan berantai lewat `stock_move_move_rel` yang
-  `location_dest_id` ber-`warehouse_id` = outlet; kedalaman ≤ 2, mis. transit → stok outlet), last_done_at
+  dc_warehouse_id UInt32, product_id UInt32, delivery_date Date, qty_approved, qty_shipped, **qty_received**, last_done_at
   Nullable(DateTime64(0,'UTC')), last_received_at Nullable(DateTime64(0,'UTC')), on_time UInt8 (semua qty terkirim
   dengan tanggal WIB ≤ `delivery_date`), picking_shared UInt8 (picking dipakai > 1 usulan → alokasi FIFO per
   `delivery_date`, lihat batasan), computed_at`. Rumus fill rate (definisi dikonfigurasi §28.13.8c, L-201): basis
   `qty_shipped` (default) atau `qty_received`; qty = `Σ least(basis, qty_approved) / Σ qty_approved`; baris =
   `countIf(basis ≥ qty_approved) / count()`; hanya usulan `approved` dengan `qty_approved > 0`.
+
+  **Definisi qty (v20.4, C-3 → L-208; menggantikan definisi v20.3 yang menjumlah dua kali di outlet dua langkah):**
+  - `qty_shipped` = Σ `stock_move.quantity` move `done` di `proposal.picking_id` + backorder (≤ 3) yang
+    `location_dest_id.usage = 'transit'`. Bila picking usulan ternyata picking *pick* (tujuan bukan transit), ETL mengikuti
+    `stock_move_move_rel` satu langkah ke move *ship* yang `done` dan bertujuan transit. Tidak bergantung pada urutan id
+    move.
+  - `qty_received` = Σ `quantity` move `done` lanjutan dari move ship lewat `stock_move_move_rel` (kedalaman 1..2) yang
+    **melintasi batas outlet**: `location_dest_id.warehouse_id = outlet` **dan** `COALESCE(location_id.warehouse_id, 0) ≠
+    outlet`. Di outlet dua langkah (L-207) yang terhitung adalah move transit → Input; move push Input → Stock tidak
+    terhitung karena asalnya sudah di outlet. Move yang sama tidak dihitung dua kali walau tercapai lewat dua jalur.
+  - Satuan: semua qty move dikonversi ke UoM produk dengan `quantity × uom_move.factor / uom_produk.factor`. Rumus ini
+    sesuai semantik `uom.uom.factor` CE 19 ("Absolute Quantity", tersimpan; `_compute_quantity` = `qty × self.factor /
+    to_unit.factor`) [V source 19.0, 21 Nov 2026].
+  - Alokasi ke baris usulan FIFO per (picking akar, produk) menurut `(delivery_date, line_id)`; sisa masuk baris terakhir.
+    `on_time` = qty dikirim yang teralokasi dengan tanggal WIB ≤ `delivery_date` ≥ `qty_approved`; toleransi
+    `fill.grace_days` diterapkan di view.
 - `fact_dc_purchase_line`: `line_id UInt64, order_id UInt64, company_id UInt32, warehouse_id UInt32 (DC), supplier_id
   UInt32, product_id UInt32, po_state LowCardinality(String), date_order DateTime64(0,'UTC'), date_approve
   Nullable(DateTime64(0,'UTC')), date_planned Nullable(DateTime64(0,'UTC')), product_qty, qty_received, price_subtotal,
-  from_orderpoint UInt8 (RFQ draf dari orderpoint DC terkelola), version_ts`. Tanpa nama/nomor kontak supplier.
+  from_orderpoint UInt8, version_ts`. Tanpa nama/nomor kontak supplier. `from_orderpoint` (v20.4, C-7 → L-212) =
+  `purchase_order_line.orderpoint_id IS NOT NULL AND stock_warehouse_orderpoint.efn_replenishment_managed` (orderpoint
+  terkelola `efn_replenishment`). `product_qty` dan `qty_received` dalam UoM baris PO (`qty_received` CE 19 tersimpan,
+  dikurangi retur; penerimaan DC dua langkah menaikkan `qty_received` saat barang tiba di Input DC).
 - `dim_sm_supplier`: `supplier_id UInt32, name String` (**kosong bila `is_company = false`**: supplier perorangan
   ditampilkan "Supplier #<id>", minimisasi PDP), `write_date`.
 - `agg_sm_stock_daily`: `day Date, snapshot_ts, company_id UInt32, warehouse_id UInt32, product_id UInt32, categ_id
@@ -4633,12 +4681,33 @@ atau PG platform; siklus `ETL_INTERVAL_SECONDS` (900); tulis hanya lewat ETL (AD
   date_to Date, approved_at Nullable, sent_at Nullable, approval_rev UInt32, budget_idr Nullable(Int64), segment_code
   String, segment_member_count UInt32, delivered UInt64, skipped UInt64, push_sent UInt64, email_queued UInt64,
   wa_queued UInt64, stop_reason LowCardinality(String), vouchers_issued UInt64 (kartu `loyalty_card` kampanye),
-  vouchers_used UInt64 (kartu dengan ≥ 1 baris `pos_order_line.coupon_id`), orders_with_voucher UInt64,
-  discount_idr Decimal(18,2) (−Σ subtotal baris reward), revenue_with_voucher_idr Decimal(18,2) (Σ subtotal order yang
-  memakai voucher), computed_at`. Omzet inkremental **tidak** dihitung (tanpa kelompok kontrol, **Q-INS-S14**).
-  Redemption kanal online (`sale.order.line`) menyusul setelah field kupon CE dikonfirmasi (§28.13.15).
+  vouchers_used UInt64 (kartu berbeda dengan ≥ 1 baris ber-`coupon_id`, lintas kanal), orders_with_voucher UInt64 (per
+  `(kanal, order_id)`), discount_idr Decimal(18,2) (−Σ subtotal baris reward), revenue_with_voucher_idr Decimal(18,2) (Σ
+  subtotal order yang memakai voucher), computed_at`. Omzet inkremental **tidak** dihitung (tanpa kelompok kontrol,
+  **Q-INS-S14**).
+
+  **Redemption (v20.4, C-4 → L-209):**
+  - POS/kiosk: `pos_order_line.coupon_id`, order `state IN ('paid','done')`, baris reward = `is_reward_line` (Boolean
+    tersimpan di `pos_loyalty`).
+  - Online: `sale_order_line.coupon_id`, SO `state = 'sale'`, baris reward = **`reward_id IS NOT NULL`**. `is_reward_line`
+    di `sale_loyalty` adalah compute **non-stored**, jadi tidak bisa dibaca dari replica.
+  - Satu sumber per pesanan: kupon dihitung di dokumen tempat ia diterapkan. Asumsi kode: pesanan online yang dilunasi di
+    kasir (E-45) menjadi order POS berisi produk pelunasan **tanpa** kupon, sehingga tidak terhitung di dua kanal (belum
+    diuji runtime, §28.13.15).
+  - Kanal online hanya dihitung bila grant kolom `sale_order_line.coupon_id`/`reward_id` terlihat oleh `efn_etl`
+    (`information_schema.column_privileges`). Tanpa grant, redemption online tidak dihitung dan job tidak gagal.
 - `fact_sm_segment_run`: `company_id UInt32, run_id String, segment_code LowCardinality(String), member_count UInt32,
   generated_at, campaign_id UInt32, campaign_state LowCardinality(String), write_date`.
+- `fact_scrap` (kolom tetap G32; v20.4, C-6 → L-211): job `sm_scraps` memuat scrap PT SM tanpa bergantung pada
+  `efn_ck_production`. Ekspresi yang sama dipakai job G32 (`efn_etl/waste.py` `scrap_sql`), sehingga bila keduanya aktif
+  barisnya identik dan tidak ada duplikat.
+  - `warehouse_id = COALESCE(s.efn_warehouse_id, stock_location.warehouse_id (s.location_id), 0)`.
+  - `waste_value = COALESCE(s.efn_waste_value, NULLIF(Σ |stock_move.value| move scrap `done` (`stock_move.scrap_id`),
+    0), qty × standard_price PT, 0)`. `stock_move.value` = valuasi `stock_account` CE 19. Nilai valuasi 0 dianggap tidak
+    ada dan jatuh ke biaya standar.
+  - Kolom `efn_*` hanya dipakai bila terlihat di `information_schema.columns` (ada **dan** di-grant). Di DB demo SMD tanpa
+    modul CK, job tetap jalan.
+  - Basis nilai bisnis (valuasi CE vs biaya standar) tetap keputusan Finance (Q-SM40).
 
 **28.13.8a Pemetaan `outlet_code` → `warehouse_id` (Q-SM37) — keputusan lead sementara L-190, perlu konfirmasi
 Data + Ops.** Sumber = Odoo **`efn.online.outlet`** (`channel_id`, `code`, `warehouse_id`, unik `(channel_id, code)`)
@@ -4669,6 +4738,22 @@ platform.campaign;` + `GRANT SELECT ON platform.v_campaign_stats TO efn_etl` (ta
 kolom pelaku/partner tidak terbaca. G47 (L-200): `efn_insight_sm_kpi` (`id, company_id, key, value, active,
 write_date`).
 
+*Grant v20.4 (selaras `services/etl/sql/odoo-readonly-grants.sql` blok "Gelombang 47"; semua bersyarat `psql \if` per
+modul/kolom):*
+- C-3: `stock_move (id, picking_id, product_id, product_uom, quantity, state, date, location_id, location_dest_id,
+  scrap_id)`, `stock_move_move_rel (move_orig_id, move_dest_id)`, `stock_location (id, usage, warehouse_id)`,
+  `uom_uom (id, factor)`, `product_template (uom_id)`, `stock_picking_type (id, warehouse_id)`.
+- C-7: `purchase_order_line.orderpoint_id`, `stock_warehouse_orderpoint (id, warehouse_id, efn_replenishment_managed)`.
+- C-6: `stock_scrap (id, company_id, product_id, product_uom_id, production_id, scrap_qty, state, date_done, write_date,
+  location_id)`, `stock_scrap_stock_scrap_reason_tag_rel`, `stock_scrap_reason_tag (id, name, write_date)`, serta
+  `stock_move.value` hanya bila kolomnya ada (`stock_account` terpasang). Kolom `efn_*` scrap tetap di-grant blok G32.
+- C-4: `sale_order_line (id, order_id, coupon_id, reward_id, price_subtotal)`, `sale_order (id, company_id, state)`.
+  Grant ini lebih sempit dari usulan fit-gap (tanpa `date_order`, `amount_total`), karena kode tidak membutuhkannya.
+- **Supplier (L-215, mengganti grant `res_partner` di atas):** `efn_etl` **tidak** mendapat grant `res_partner`. Supplier
+  dibaca lewat view `efn_etl.purchase_partner (id, commercial_partner_id, is_company, name, write_date)` milik
+  `efn_odoo` (pola G21). `name` diisi hanya bila `is_company`, selain itu `''`. Alasannya: grant kolom `name` di
+  `res_partner` akan membuka nama pelanggan perorangan ke `efn_etl`.
+
 **28.13.8c Konfigurasi definisi & ambang KPI per PT (keputusan pemilik proyek 20 Nov 2026, L-200..L-201)**
 
 Tujuan: definisi GMROI, OOS rate, stok kritis, fill rate DC, waste %, ambang warna kartu, dan ambang kesegaran bisa
@@ -4682,9 +4767,20 @@ diubah **per PT tanpa ubah kode**.
     nilai di luar rentang ditolak `ValidationError` `efn_insight_sm:kpi_<kode>`.
   - Pasangan ambang wajib konsisten (`warn < bad`; untuk fill rate `good > warn`).
   - Baris yang tidak ada = default. `post_init_hook` membuat baris default untuk setiap company `SM_CODES`.
+    *(v20.4, C-1 → L-204)* Seed yang sama juga dijalankan saat `res.company` dibuat/diubah sehingga
+    `efn_brand_code ∈ SM_CODES` (PT SMD dibuat `efn_setup_supermarket` setelah modul ini terpasang). Seed idempoten:
+    baris yang sudah ada, termasuk yang diarsipkan atau diubah, tidak disentuh.
+  - *(v20.4, C-1 → L-204)* `value` **dikanonikkan** saat create/write: int tanpa nol di depan, float tanpa `.0` untuk
+    bilangan bulat (`2`, `0.5`), bool `0`/`1`, enum apa adanya. ETL memvalidasi ulang dengan registri yang sama
+    (`efn_etl/sm_kpi.py`); nilai tidak sah disalin dengan `active = 0`, sehingga view memakai default.
+  - Hanya company `SM_CODES` yang boleh punya baris (galat `kpi_company`); `key` dan `company_id` tidak bisa diubah
+    setelah dibuat (`kpi_readonly`). Validasi pasangan ambang juga dijalankan saat baris diarsipkan/dihapus.
 - **Hak ubah.** Hanya grup **`efn_insight_sm.group_insight_kpi_admin`** (create/write/unlink); grup persona hanya membaca
-  lewat Insight. Setiap perubahan teraudit `efn_audit` (aturan `audit_rule_efn_insight_sm_kpi`: nilai lama/baru, user,
-  waktu). Tanpa 4-eyes di v1; dapat ditambah bila Finance memintanya.
+  lewat Insight (`base.group_system` dapat membaca di Odoo). Setiap perubahan teraudit `efn_audit` (aturan
+  `audit_rule_efn_insight_sm_kpi`: nilai lama/baru, user, waktu). Tanpa 4-eyes di v1; dapat ditambah bila Finance
+  memintanya. Pemberian grup ini tidak dibatasi SoD (L-206); kendalinya audit perubahan nilai, audit perubahan grup user
+  (`efn_audit` `res.users.group_ids`), record rule multi-company, dan status sensitif di `efn_role`.
+  Menu: *Inventory → Configuration → Definisi KPI Insight (Supermarket)*.
 - **Kapan berlaku.**
   1. Simpan di Odoo.
   2. Siklus `sm_dims` berikutnya menyalin ke `dim_sm_kpi_config` (≤ 15 menit + durasi job).
@@ -4782,7 +4878,7 @@ view SM.
 | `v_sm_segment_daily` (W, `warehouse_id = 0`; marketing, exec) **#117** | hari × segmen | `day, company_id, warehouse_id, outlet_type, segment_code, member_count, run_id, campaign_id, campaign_state` (terakhir per hari) | `fact_sm_segment_run` | MK-3 |
 | `v_sm_campaign_result` (W, `warehouse_id = 0`; marketing, exec) **#117** | kampanye | semua kolom `fact_campaign_result` + `warehouse_id, outlet_type` | `fact_campaign_result` | MK-1 Voucher dipakai, Biaya vs anggaran (`discount_idr / budget_idr`), MK-4 |
 | `v_sm_freshness` (F; semua persona) | mart | `mart, freshness_class (near_live\|stock\|daily), data_as_of, source_as_of, last_run_at, last_status` | `etl_job_run`, `stock_snapshot_run`, `fact_lot_expiry` | badge kesegaran per kartu (§28.13.10); ambang dari `v_sm_kpi_config` `fresh.*` |
-| `v_sm_kpi_config` (C; semua persona) | PT × kunci | `company_id, key, value_num, value_str, is_default, effective_since` (default literal §28.13.8c bila baris Odoo tidak ada/nonaktif) | `dim_sm_kpi_config` × daftar kunci | definisi "i" per KPI, ambang warna & kesegaran semua kartu |
+| `v_sm_kpi_config` (C; semua persona) | PT × kunci | `company_id, key, value_num, value_str, is_default, effective_since` (nilai = default literal §28.13.8c bila baris Odoo tidak ada/nonaktif; **`is_default` = baris tidak ada/nonaktif ATAU nilai sama dengan literal default** (numerik dibanding sebagai angka, enum sebagai string), v20.4 C-1 → L-204; `effective_since` = `write_date` baris aktif, `NULL` bila default) | `dim_sm_kpi_config` × daftar kunci | definisi "i" per KPI, ambang warna & kesegaran semua kartu |
 
 **Kartu yang "menunggu" atau tidak dapat dipenuhi data:**
 
@@ -4808,7 +4904,7 @@ view SM.
 | `dc_purchase` | `near_live` | `sm_dc_purchase` | — | 30 / 60 | DC-5 |
 | `stock` | `stock` | `sm_stock_agg` | `max(snapshot_ts)` | **75 / 135** (snapshot tiap 60 mnt + ETL; 30/60 hanya bila `ETL_STOCK_SNAPSHOT_INTERVAL_SECONDS=900`, keputusan lead L-195) | ST-3, CM-2, CM-3 |
 | `sales` | `daily` | job penjualan POS yang ada | — | 1560 / 2880 | EX-1..5, ST-5 |
-| `waste` | `daily` | `waste_scrap` (G32) | — | 1560 / 2880 | ST-4, EX-5 |
+| `waste` | `daily` | `sm_scraps` (G47, v20.4 L-211; v20.3 menyebut `waste_scrap` G32) | — | 1560 / 2880 | ST-4, EX-5 |
 | `forecast_accuracy` | `daily` | job akurasi G44 | — | 1560 / 2880 | EX-6 |
 | `dc_fill_rate` | `daily` | `sm_dc_fill_rate` | — | 1560 / 2880 | DC-1, DC-3 |
 | `stock_value` | `daily` | `sm_stock_agg` | `max(snapshot_ts)` | 1560 / 2880 | DC-4 |
@@ -4836,9 +4932,28 @@ paling ketat.
 - **Tautan "Buka di Odoo"**: insight-web hanya menyusun URL dari `EFN_INSIGHT_ODOO_URL` + model + id yang disediakan view:
   `efn.replenishment.proposal` (`proposal_id`), `efn.expiry.alert` (`alert_id`), `efn.lot.markdown` (`markdown_id`),
   `stock.lot` (`lot_id`), `product.template` (`product_tmpl_id`), `purchase.order` (`order_id`), `stock.picking`
-  (`picking_id`), `efn.campaign` (`campaign_id`); daftar terfilter (tanpa id): `stock.scrap`, log bias. Format URL Odoo 19
-  (`/odoo/...`) **belum terverifikasi** — efn-odoo-functional menetapkan pola per model sebelum frontend menulis
-  `lib/odoo-links.ts`. Tidak ada data selain id di URL.
+  (`picking_id`), `efn.campaign` (`campaign_id`); daftar terfilter (tanpa id): `stock.scrap`. Tidak ada data selain id di
+  URL.
+- **Pola URL Odoo 19 (v20.4, C-8 → L-213; menggantikan "belum terverifikasi" v20.3).** Satu-satunya tempat pola ditulis =
+  `services/insight-web/lib/odoo-links.ts`:
+  - rekaman: `{EFN_INSIGHT_ODOO_URL}/odoo/action-<xmlid action>/<id>`; daftar: `{EFN_INSIGHT_ODOO_URL}/odoo/action-<xmlid>`.
+    Router 19.0 mengenali `action-<module.xmlid>`, dan `/odoo/<path>` tanpa sesi mengarah ke login lalu kembali ke tautan
+    [V fit-gap §5.1]. Format lama `/web#id=…` tidak dipakai.
+  - Allowlist model → xmlid action: `efn.replenishment.proposal` → `efn_replenishment.efn_replenishment_proposal_action`;
+    `efn.expiry.alert` → `efn_expiry_monitor.efn_expiry_alert_action`; `efn.lot.markdown` →
+    `efn_expiry_monitor.efn_lot_markdown_action`; `efn.campaign` → `efn_campaign.efn_campaign_action`; `purchase.order` →
+    **`purchase.purchase_rfq`** (bukan `purchase_form_action`, yang ber-domain `state='purchase'` sehingga RFQ draf salah
+    pager); `stock.picking` → `stock.action_picking_tree_all`; `stock.lot` → `stock.action_production_lot_form`;
+    `product.template` → `stock.product_template_action_product`; `product.product` → `stock.stock_product_normal_action`;
+    `stock.warehouse.orderpoint` → `stock.action_orderpoint_replenish` (belum dipakai kartu); `stock.scrap` (daftar) →
+    `stock.action_stock_scrap`.
+  - Model di luar allowlist, id bukan bilangan bulat > 0, atau origin yang bukan origin URL murni → tautan tidak dibuat.
+  - Tautan dibuka di tab baru dengan **`rel="noopener noreferrer"`**, agar URL Insight beserta filternya tidak masuk log
+    referer Odoo.
+  - Tautan daftar log bias (`efn_replenishment.efn_replenishment_bias_log_action`, disebut v20.3 dan fit-gap §5.2)
+    **tidak dibangun** di G47. Bila diperlukan cukup menambah satu entri allowlist.
+  - Hak akses tetap ditegakkan Odoo (ACL + record rule). Persona tanpa grup modul terkait melihat galat akses Odoo, bukan
+    data.
 - **Basis uang (Q-INS-S12, diputuskan pemilik proyek 20 Nov 2026 → L-202)**:
 
   | Angka | Kolom | Basis | Label wajib di kartu |
@@ -4871,7 +4986,7 @@ paling ketat.
 Tidak ada secret baru: `insight_scope_key` (sig v1 + sig2), `insight_sso_key`, `insight_session_key`,
 `clickhouse_password_insight` tetap (§26.10). `deploy-validate`: dua flag boolean baru + `EFN_INSIGHT_TOKEN_VERSION ∈ {1,2}`.
 
-#### 28.13.13 Keputusan (L-186..L-203)
+#### 28.13.13 Keputusan (L-186..L-215)
 | # | Keputusan |
 |---|---|
 | L-186 | Token/sesi supermarket = `eit2`/`eis2` (§28.13.4–5); Odoo 19.0.2.0.0 menerbitkan `eit2` untuk semua user (ESB + SM dalam satu sesi); `eit1` tetap diterima insight-web selama `INSIGHT_ACCEPT_EIT1=true`. Deploy insight-web **sebelum** Odoo. |
@@ -4892,10 +5007,24 @@ Tidak ada secret baru: `insight_scope_key` (sig v1 + sig2), `insight_sso_key`, `
 | **L-201** | Default yang berbeda dari contoh pemilik proyek: penyebut OOS = SKU ber-orderpoint (bukan "ter-assortment"); stok kritis = ≤ min **atau** cakupan < 2 hari; fill rate = qty **dikirim** DC. Alasannya ada di §28.13.8c. Definisi contoh pemilik tersedia persis sebagai pilihan konfigurasi (`critical.rule=cover_only`, `fill.basis=received`), kecuali OOS ter-assortment, yang penyebutnya tidak terdefinisi untuk kebijakan `open`. |
 | **L-202** | (Menutup **Q-INS-S12**) **Omzet ditampilkan termasuk PPN** (`net_sales_incl_tax`), dengan label "Omzet (termasuk PPN)". Margin kotor, GMROI, Waste %, dan semua nilai HPP tetap **tanpa PPN**, dengan label "Margin kotor (tanpa PPN)". Harga rak di CM-5 termasuk PPN. Halaman supermarket tidak memakai istilah PB1. Menggantikan L-199. |
 | **L-203** | (Menutup **Q-SM44**) Persona `store` melihat nilai HPP susut (`v_sm_waste_daily.waste_value_cost`) dan near-expiry (`v_sm_lot_expiry.value_cost`, `v_sm_expiry_daily.value_cost`), hanya untuk warehouse di `wids`-nya (row policy kelas W, tanpa kelas baru). Konsekuensi yang diterima: HPP satuan lot dapat diturunkan (`value_cost / qty`). Margin, GMROI, nilai stok total (`v_sm_stock_value_daily`), dan PO supplier (`v_sm_dc_purchase`) tetap tertutup bagi `store`. |
+| **L-204** | (v20.4, fit-gap C-1) `v_sm_kpi_config.is_default` = baris Odoo tidak ada/nonaktif **atau** nilainya sama dengan literal default. Alasan: seed membuat semua 39 baris, sehingga "baris ada" tidak berarti diubah. Nilai dikanonikkan di Odoo; seed juga berjalan saat company menjadi PT `SM_CODES` (§28.13.8c). |
+| **L-205** | (v20.4, fit-gap C-2) Satu `res.groups.privilege` per grup persona dan per `kpi_admin` (temuan widget hak akses Odoo 19). Lima xmlid sensitif (exec, category, dc, marketing, kpi_admin) masuk konstanta `efn_role` `SENSITIVE_GROUP_XMLIDS`; `store` tidak. Audit `efn_outlet_warehouse_ids`/`efn_insight_categ_ids` lewat `efn_audit.CONTROL_SPECS["res.users"]` (§28.13.2). |
+| **L-206** | (Keputusan pemilik proyek 21 Nov 2026, menutup **Q-G47-1**) `group_insight_kpi_admin` boleh diberikan ke user mana pun, termasuk pihak yang dinilai KPI. **Tidak ada SoD di kode**; usulan SoD fit-gap C-2 tidak dibangun. Kendali: audit nilai KPI + audit grup user + record rule multi-company + status sensitif `efn_role` (tidak ikut sinkron jabatan). Risiko yang diterima: pemegang yang juga dinilai dapat melonggarkan definisi; jejaknya tetap ada di `efn_audit`. |
+| **L-207** | (Keputusan pemilik proyek 21 Nov 2026, menutup **Q-G47-2**) Outlet SMD menerima barang **dua langkah (transit → Input → Stock) sejak awal**. Diterapkan di `efn_setup_supermarket` 19.0.3.0.0 (demo + migrasi `write(reception_steps)` + test rantai runtime `test_demo_resupply_chain_two_steps`). DC tetap `two_steps` + `pick_ship`. Konsekuensi: definisi `qty_received` L-208 wajib. |
+| **L-208** | (v20.4, fit-gap C-3) `qty_shipped` = move `done` bertujuan lokasi transit di picking usulan + backorder (ikuti satu langkah bila picking usulan = pick). `qty_received` = move lanjutan yang **melintasi batas outlet** (tujuan di outlet, asal bukan outlet), kedalaman ≤ 2. Qty dikonversi ke UoM produk lewat `uom_uom.factor` (§28.13.8). Menggantikan definisi `qty_received` v20.3. |
+| **L-209** | (v20.4, fit-gap C-4) Redemption online dihitung dari `sale_order_line.coupon_id`, SO `state='sale'`, baris reward = `reward_id IS NOT NULL` (bukan `is_reward_line`, compute non-stored). Satu sumber per pesanan = dokumen tempat kupon diterapkan. Kanal online aktif otomatis hanya bila grant kolomnya terpasang. |
+| **L-210** | (v20.4, fit-gap C-5) `cats` = id `efn_insight_categ_ids` yang masih ada (bukan "id aktif"; `product.category` CE 19 tanpa `active`). |
+| **L-211** | (v20.4, fit-gap C-6) Scrap PT SM dimuat job `sm_scraps` dengan fallback `warehouse_id = COALESCE(efn_warehouse_id, stock_location.warehouse_id)` dan `waste_value = COALESCE(efn_waste_value, NULLIF(Σ|stock_move.value|, 0), qty × standard_price, 0)`, dengan deteksi kolom `efn_*`. Kesegaran mart `waste` dibaca dari `sm_scraps`. Menjawab bagian teknis Q-SM40. |
+| **L-212** | (v20.4, fit-gap C-7) `from_orderpoint` = `purchase_order_line.orderpoint_id` ⋈ `stock_warehouse_orderpoint.efn_replenishment_managed`. |
+| **L-213** | (v20.4, fit-gap C-8) Pola tautan Odoo = `/odoo/action-<xmlid>/<id>` dengan allowlist §28.13.11, `rel="noopener noreferrer"`, `purchase.order` lewat `purchase.purchase_rfq`. Tautan daftar log bias tidak dibangun. |
+| **L-214** | (v20.4, fit-gap C-9) Status verifikasi §28.13.15 diperbarui: `purchase.order.line.qty_received` tersimpan, `sale.order.line.coupon_id` tersimpan, pola URL, dan aturan penggabungan picking CE 19 kini [V] source; perilaku runtime tetap belum diuji. |
+| **L-215** | (v20.4, selaras kode) `efn_etl` tidak mendapat grant `res_partner`; supplier DC dibaca lewat view `efn_etl.purchase_partner` (nama hanya untuk partner perusahaan). Menggantikan grant kolom `res_partner` v20.3. |
 
 #### 28.13.14 Pertanyaan klien baru (Q-SM40..Q-SM45)
 - **Q-SM40** (Finance/Ops) Nilai susut SMD: `efn_waste_value` (modul `efn_ck_production`) belum terbukti terisi untuk
   scrap gudang ritel; bila tidak, Waste % hanya qty sampai sumber nilai (biaya standar/valuasi CE 19) disepakati.
+  *(v20.4: bagian teknis terjawab L-211, fallback valuasi CE → biaya standar. Bagian bisnis tetap terbuka: Finance memilih
+  basis nilai.)*
 - **Q-SM41** (Marketing + DPO) "Pengunjung" MK-1: cukup Σ perangkat-hari (tersedia), atau perlu unik per periode (butuh
   view berparameter atas `fact_visitor_event` yang menyentuh `subject_key`, ±2 hari-engineer + review DPO)?
 - **Q-SM42** (Ops/Data) Produk SMD wajib ber-`company_id` = SMD (agar muncul di filter & indeks harga)? Produk lintas PT
@@ -4904,6 +5033,8 @@ Tidak ada secret baru: `insight_scope_key` (sig v1 + sig2), `insight_sso_key`, `
 - **Q-SM44** — *diputuskan pemilik proyek 20 Nov 2026 → L-203* (boleh, hanya untuk tokonya).
 - **Q-SM45** (Security/Ops, lanjutan Q-INS4) Kepala toko membuka `/store` dari ponsel: jaringan WireGuard ponsel atau
   jaringan outlet (`internal-only`)? Spesifikasi UX mobile-first tidak berguna bila hanya jaringan staf kantor.
+- **Q-G47-1** (fit-gap) — *diputuskan pemilik proyek 21 Nov 2026 → L-206* (`kpi_admin` boleh siapa saja, tanpa SoD kode).
+- **Q-G47-2** (fit-gap) — *diputuskan pemilik proyek 21 Nov 2026 → L-207* (outlet SMD dua langkah sejak awal).
 
 #### 28.13.15 Risiko & yang belum terverifikasi
 | Risiko | Mitigasi |
@@ -4914,13 +5045,30 @@ Tidak ada secret baru: `insight_scope_key` (sig v1 + sig2), `insight_sso_key`, `
 | R-T06 Keputusan dari data usang | `v_sm_freshness` + ambang dua kelas |
 | R-L01 / R-L13 Data pribadi staf & pengunjung | tanpa id pelaku di mart; supplier perorangan tanpa nama; visitor hanya agregat (k = 10) |
 
-Belum terverifikasi (sumber primer belum dibaca atau butuh runtime): nilai `payload_b64`/`sig_b64`/sig2 vektor;
-`efn_waste_value` & `efn_warehouse_id` pada scrap SMD; perilaku CE 19 menggabungkan move beberapa usulan ke satu picking
-DC; `sale.order.line` kupon (redemption online); `purchase.order.line.qty_received` tersimpan di 19.0; pola URL `/odoo/...`
-per model; ClickHouse menolak CREATE VIEW atas tabel yang belum ada (perilaku umum, belum diuji di 24.8 untuk view
-DEFINER); konfigurasi harga termasuk pajak SMD. **Terverifikasi di source Odoo 19.0** (github.com/odoo/odoo, 20 Nov 2026):
-`stock.location.warehouse_id` computed `store=True`; `stock.move.quantity` (tersimpan), `product_uom_qty`,
-`location_final_id`, `move_dest_ids` (tabel `stock_move_move_rel`); `pos.order.line.coupon_id` → `loyalty.card`.
+*(v20.4, C-9 → L-214: daftar di bawah menggantikan daftar v20.3.)*
+
+**Belum terverifikasi** (sumber primer belum dibaca atau butuh runtime):
+- nilai `payload_b64`/`sig_b64`/sig2 vektor (dihitung saat test kontrak lintas sisi; lead mencatat sebelum merge);
+- runtime rantai DC → outlet: jenis picking yang disimpan `proposal.picking_id` (diduga ship), push Input → Stock di
+  outlet dua langkah (dikunci test `test_demo_resupply_chain_two_steps`, belum dijalankan penulis dokumen ini);
+- runtime penggabungan picking (diharapkan `picking_shared` ≈ 0);
+- nilai `stock.move.value` pada scrap SMD (bergantung valuasi kategori) dan cara baca SQL `standard_price` jsonb per
+  company;
+- aturan satu-sumber redemption online ↔ POS (asumsi E-45: order pelunasan di kasir tanpa kupon);
+- render form `stock.warehouse.orderpoint` dari deep link; pindah company otomatis saat membuka record PT yang tidak
+  aktif di pemilih company;
+- ClickHouse menolak CREATE VIEW atas tabel yang belum ada (tidak relevan lagi karena #114/#117 sudah di `main`);
+- konfigurasi harga termasuk pajak SMD.
+
+**Terverifikasi di source Odoo 19.0** (github.com/odoo/odoo): (20 Nov 2026) `stock.location.warehouse_id` computed
+`store=True`; `stock.move.quantity` (tersimpan), `product_uom_qty`, `location_final_id`, `move_dest_ids` (tabel
+`stock_move_move_rel`); `pos.order.line.coupon_id` → `loyalty.card`. (21 Nov 2026, fit-gap G47 §5–§6 + architect)
+`purchase.order.line.qty_received` compute **tersimpan** (UoM baris, dikurangi retur), `purchase.order.line.orderpoint_id`;
+`sale.order.line.coupon_id`/`reward_id` tersimpan, `is_reward_line` **non-stored**; `stock.move.scrap_id`;
+`stock.move.value` (stock_account) tersimpan; `uom.uom.factor` tersimpan dengan `_compute_quantity = qty × factor /
+to_unit.factor`; pola router `/odoo/action-<xmlid>/<id>` dan redirect login; `_search_picking_for_assignation` tidak
+menggabungkan move tanpa `reference_ids` ke picking terbuka, sehingga satu picking per leg per usulan (source [V],
+runtime belum).
 
 #### 28.13.16 Estimasi
 | Komponen | Pekerjaan | Hari-engineer | Pemilik |

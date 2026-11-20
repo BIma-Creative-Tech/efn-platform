@@ -5,6 +5,9 @@ ADR-041 §3.3–§3.4 (Proposed), `docs/design/insight-supermarket.md`, ADR-031 
 hanya referensi desain). Worktree `efn-platform-g47`, branch `feat/wave-47-insight-supermarket`, sejajar `main`
 (G44, G45 #114, G50 #117 sudah masuk).
 
+**Pembaruan 21 Nov 2026 (efn-architect):** koreksi C-1..C-9 sudah diverifikasi terhadap kode G47 dan diserap ke
+`docs/04_SERVICE_CONTRACTS.md` §28.13 **v20.4** (L-204..L-215). Status per butir ada di tabel §9.
+
 Dokumen ini **tidak** menulis kode. Isinya keputusan Standar vs Custom, koreksi kecil untuk kontrak, dan lingkup
 minimal untuk efn-odoo-engineer.
 
@@ -156,7 +159,8 @@ Rekomendasi rinci:
   **Jangan** menambah field ini ke `SELF_WRITEABLE_FIELDS`.
 - **Koreksi kontrak (C-5):** §28.13.3 menulis "`cats` = id aktif". `product.category` tidak punya `active` [V], jadi
   cukup "id yang masih ada, urut naik". Kategori bersifat global (tanpa company), sehingga user bisa memilih kategori
-  F&B. Itu aman karena `cats` v1 hanya filter default (L-189). Batas 50 tetap dicek pembuat token.
+  F&B. Itu aman karena `cats` v1 hanya filter default (L-189). Batas 50 tetap dicek pembuat token. *(diserap docs/04
+  v20.4 (L-210))*
 
 ### 3.2 Audit: tambahkan ke spesifikasi kontrol `res.users` di `efn_audit` [R]
 
@@ -223,12 +227,13 @@ berupa id. `res.users` termasuk `PERSONAL_MODELS`, jadi `res_name` = `res.users,
 - **C-1 (`is_default`)**: §28.13.9 `v_sm_kpi_config.is_default` = "baris Odoo tidak ada/nonaktif". Karena
   `post_init_hook` membuat 39 baris, `is_default` akan selalu 0 dan tombol "i" tidak pernah menampilkan "default".
   Usul: `is_default = (baris tidak ada/nonaktif) OR (nilai = literal default)`. Literal default sudah ada di view,
-  jadi biayanya hampir nol.
+  jadi biayanya hampir nol. *(diserap docs/04 v20.4 (L-204))*
 - **C-2 (SoD, opsional)**: `group_insight_kpi_admin` mengubah definisi fill rate/OOS yang menilai kinerja DC/toko.
   Usulan:
   - tambahkan aturan SoD `efn_role` (data `efn_setup_role`): `kpi_admin` ✗ `group_replenishment_store` /
     `group_insight_store`;
-  - status: **saran**, menunggu Q-G47-1.
+  - status: ~~saran, menunggu Q-G47-1~~ → **tidak dibangun**: Q-G47-1 diputuskan 21 Nov 2026 (tanpa SoD). Bagian
+    privilege C-2 *diserap docs/04 v20.4 (L-205)*; keputusan SoD *diserap docs/04 v20.4 (L-206)*.
 
 ---
 
@@ -469,27 +474,28 @@ Tidak ada bagian `efn_insight`/`efn_assortment`/`efn_replenishment` yang mendupl
 
 ## 9. Usulan perubahan kontrak (untuk efn-lead/efn-architect)
 
-| ID | Bagian | Perubahan |
-|---|---|---|
-| **C-1** | §28.13.9 `v_sm_kpi_config.is_default` | `= baris tidak ada/nonaktif OR nilai = default`, karena hook membuat semua baris |
-| **C-2** | §28.13.2 | Satu `res.groups.privilege` per grup persona/kpi_admin (temuan widget §2.1). Tambah 5 xmlid ke daftar sensitif `efn_role` |
-| **C-3** | §28.13.8 `fact_dc_fill_rate.qty_received` | Hanya move yang melintasi batas outlet (`location_id.warehouse_id ≠ outlet`). Hindari dobel di penerimaan 2/3 langkah. `qty_shipped` = move `done` ber-`location_dest_id.usage='transit'` di `picking_id`+backorder |
-| **C-4** | §28.13.8 `fact_campaign_result` (online) | Reward line online = `sale_order_line.reward_id IS NOT NULL` (bukan `is_reward_line`, non-stored). SO `state='sale'`. Grant `sale_order(_line)`. Aturan satu-sumber bila online juga menjadi `pos.order` |
-| **C-5** | §28.13.3 `cats` | "id aktif" → "id yang ada". `product.category` tanpa `active` |
-| **C-6** | §28.13.8 `fact_scrap` (G47) | `COALESCE(efn_warehouse_id, stock_location.warehouse_id)` dan `COALESCE(efn_waste_value, Σ|stock_move.value|, qty×standard_price)` dengan deteksi kolom. Grant `stock_scrap`, `stock_location(id, warehouse_id)` |
-| **C-7** | §28.13.8 `fact_dc_purchase_line.from_orderpoint` | Sumber = `purchase_order_line.orderpoint_id` ⋈ `stock_warehouse_orderpoint.efn_replenishment_managed`. Tambah grant kolom |
-| **C-8** | §28.13.11 | Pola URL §5.2 menggantikan "belum terverifikasi". `rel="noopener noreferrer"`. `purchase.order` lewat `purchase_rfq` |
-| **C-9** | §28.13.15 | Pindahkan dari "belum terverifikasi" ke [V]: `qty_received` tersimpan, `sale.order.line.coupon_id` tersimpan, pola URL. "Penggabungan picking" → [V] source (tanpa `reference_ids` tidak digabung), runtime [B] |
+| ID | Bagian | Perubahan | Status |
+|---|---|---|---|
+| **C-1** | §28.13.9 `v_sm_kpi_config.is_default` | `= baris tidak ada/nonaktif OR nilai = default`, karena hook membuat semua baris | **diserap docs/04 v20.4 (L-204)**. Kode menambah kanonikalisasi nilai di Odoo dan seed saat company menjadi PT SM |
+| **C-2** | §28.13.2 | Satu `res.groups.privilege` per grup persona/kpi_admin (temuan widget §2.1). Tambah 5 xmlid ke daftar sensitif `efn_role` | **diserap docs/04 v20.4 (L-205)**. Bagian SoD opsional (§4.3) **tidak dibangun**, sesuai keputusan Q-G47-1 (L-206). Kode memakai `sequence` 20..70, bukan 10..60 (§2.2) |
+| **C-3** | §28.13.8 `fact_dc_fill_rate.qty_received` | Hanya move yang melintasi batas outlet (`location_id.warehouse_id ≠ outlet`). Hindari dobel di penerimaan 2/3 langkah. `qty_shipped` = move `done` ber-`location_dest_id.usage='transit'` di `picking_id`+backorder | **diserap docs/04 v20.4 (L-208)**, termasuk konversi UoM `uom_uom.factor` (§6.1 butir 3; semantik 19.0 diverifikasi architect) |
+| **C-4** | §28.13.8 `fact_campaign_result` (online) | Reward line online = `sale_order_line.reward_id IS NOT NULL` (bukan `is_reward_line`, non-stored). SO `state='sale'`. Grant `sale_order(_line)`. Aturan satu-sumber bila online juga menjadi `pos.order` | **diserap docs/04 v20.4 (L-209)**. Grant `sale_order` di kode lebih sempit: `(id, company_id, state)`, tanpa `date_order`/`amount_total` (§6.4) |
+| **C-5** | §28.13.3 `cats` | "id aktif" → "id yang ada". `product.category` tanpa `active` | **diserap docs/04 v20.4 (L-210)** |
+| **C-6** | §28.13.8 `fact_scrap` (G47) | `COALESCE(efn_warehouse_id, stock_location.warehouse_id)` dan `COALESCE(efn_waste_value, Σ|stock_move.value|, qty×standard_price)` dengan deteksi kolom. Grant `stock_scrap`, `stock_location(id, warehouse_id)` | **diserap docs/04 v20.4 (L-211)**. Kode: `NULLIF(Σ|value|, 0)` dan fallback akhir `0`; tautan move via `stock_move.scrap_id`; job `sm_scraps` menjadi sumber kesegaran mart `waste` |
+| **C-7** | §28.13.8 `fact_dc_purchase_line.from_orderpoint` | Sumber = `purchase_order_line.orderpoint_id` ⋈ `stock_warehouse_orderpoint.efn_replenishment_managed`. Tambah grant kolom | **diserap docs/04 v20.4 (L-212)** |
+| **C-8** | §28.13.11 | Pola URL §5.2 menggantikan "belum terverifikasi". `rel="noopener noreferrer"`. `purchase.order` lewat `purchase_rfq` | **diserap docs/04 v20.4 (L-213)**. Tautan daftar log bias (§5.2 baris terakhir) **tidak ada di kode** (`lib/odoo-links.ts`) |
+| **C-9** | §28.13.15 | Pindahkan dari "belum terverifikasi" ke [V]: `qty_received` tersimpan, `sale.order.line.coupon_id` tersimpan, pola URL. "Penggabungan picking" → [V] source (tanpa `reference_ids` tidak digabung), runtime [B] | **diserap docs/04 v20.4 (L-214)** |
 
 ---
 
 ## 10. Pertanyaan klien
 
-- **Q-G47-1** (Ops/Finance): Siapa pengelola definisi KPI (`kpi_admin`)? Bolehkah ia juga kepala toko/DC yang dinilai
-  KPI itu? Usul: tidak (SoD). Pemegangnya Finance/BI.
+- **Q-G47-1** — *diputuskan pemilik proyek 21 Nov 2026*: `kpi_admin` **boleh diberikan ke user mana pun**, tanpa SoD
+  di kode (docs/04 v20.4 L-206). Usulan semula (SoD, pemegang Finance/BI) tidak dipakai.
 - **Q-G47-2** — *diputuskan pemilik proyek 21 Nov 2026*: outlet SMD **dua langkah (Input → Stock) sejak awal**.
   - Diterapkan di `efn_setup_supermarket` 19.0.3.0.0 (demo + migrasi + test rantai runtime).
   - Konsekuensinya, **C-3 wajib**: `qty_received` = move receipt transit → Input, yang melintasi batas outlet.
+  - Dicatat di docs/04 v20.4 L-207.
 - **Q-SM29** (tetap): penetapan persona per jabatan. Default usulan: Direksi → exec; Category manager → category +
   `efn_insight_categ_ids`; Kepala toko → store + outlet; Manajer DC/buyer → dc; Marketing → marketing.
 - **Q-SM40** (tetap, bagian bisnis): basis nilai susut SMD (valuasi CE vs biaya standar) bila `efn_ck_production`

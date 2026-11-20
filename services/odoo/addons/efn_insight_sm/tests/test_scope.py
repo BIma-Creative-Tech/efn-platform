@@ -74,6 +74,16 @@ class TestInsightSmScope(TransactionCase):
         self.assertEqual(payload["cids"], sorted([self.smd.id, self.pb.id]))
         self.assertEqual(payload["wids"], [0, *self.smd_wh_ids])
 
+    def test_store_dropped_with_marketing_or_dc(self):
+        # SEC-G47-01: store + marketing/dc tidak boleh membuka view store untuk semua outlet.
+        for persona in ("marketing", "dc"):
+            with self.subTest(persona=persona):
+                user = self.make_user(f"efn_sm_scope_{persona}_store", [persona, "store"])
+                user.sudo().efn_outlet_warehouse_ids = [Command.set([self.outlet1.id])]
+                scope = self._scope(user)
+                self.assertEqual(scope["personas"], [persona])
+                self.assertEqual(self._token_payload(user)["roles"], [persona, "user"])
+
     def test_category_cats(self):
         user = self.make_user("efn_sm_scope_cat", ["category"])
         user.sudo().efn_insight_categ_ids = [Command.set([self.categ_b.id, self.categ_a.id])]
