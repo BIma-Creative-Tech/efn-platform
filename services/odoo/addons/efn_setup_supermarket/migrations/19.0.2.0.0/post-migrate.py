@@ -56,9 +56,7 @@ def migrate(cr, version):
     # <function> create: hanya bila belum ada (cegah duplikat putaway/jadwal).
     if not env["stock.putaway.rule"].search_count([("location_in_id", "in", outlets.lot_stock_id.ids)]):
         _apply(env, "demo/stock_location_demo.xml")
-    if not env["efn.delivery.schedule"].with_context(active_test=False).search_count(
-        [("company_id", "=", company.id)]
-    ):
+    if not env["efn.delivery.schedule"].with_context(active_test=False).search_count([("company_id", "=", company.id)]):
         _apply(env, "demo/efn_replenishment_demo.xml")
     _apply(env, "demo/res_users_demo.xml")
     _apply(env, "demo/ir_config_parameter_demo.xml")

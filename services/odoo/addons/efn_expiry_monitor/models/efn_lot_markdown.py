@@ -138,8 +138,10 @@ class EfnLotMarkdown(models.Model):
                 )
                 if overlap:
                     raise ValidationError(
-                        _("efn_expiry:markdown_overlap — sudah ada markdown draft/aktif untuk lot & outlet ini pada "
-                          "periode yang sama.")
+                        _(
+                            "efn_expiry:markdown_overlap — sudah ada markdown draft/aktif untuk lot & outlet ini pada "
+                            "periode yang sama."
+                        )
                     )
 
     # ------------------------------------------------------------ guard
@@ -161,8 +163,10 @@ class EfnLotMarkdown(models.Model):
                 raise AccessError(_("efn_expiry:server_field — status/qty terjual hanya diisi sistem."))
             if set(vals) & LOCKED_AFTER_DRAFT and self.filtered(lambda r: r.state != "draft"):
                 raise UserError(
-                    _("efn_expiry:markdown_locked — markdown yang sudah aktif/berakhir tidak bisa diubah; batalkan "
-                      "lalu buat markdown baru.")
+                    _(
+                        "efn_expiry:markdown_locked — markdown yang sudah aktif/berakhir tidak bisa diubah; batalkan "
+                        "lalu buat markdown baru."
+                    )
                 )
         if vals.get("notify_members"):
             vals = dict(vals, notify_state="pending")
@@ -204,8 +208,10 @@ class EfnLotMarkdown(models.Model):
             limit = rec._efn_role_limit()
             if limit is None:
                 raise AccessError(
-                    _("efn_expiry:markdown_role — hanya kepala toko outlet ini atau Markdown Manager yang bisa "
-                      "mengaktifkan markdown.")
+                    _(
+                        "efn_expiry:markdown_role — hanya kepala toko outlet ini atau Markdown Manager yang bisa "
+                        "mengaktifkan markdown."
+                    )
                 )
             pct = rec._efn_effective_discount()
             if pct > limit + 1e-6:
@@ -219,9 +225,7 @@ class EfnLotMarkdown(models.Model):
                 )
             if rec.date_to < today:
                 raise UserError(_("efn_expiry:markdown_dates — periode markdown sudah lewat."))
-            rec.sudo().write(
-                {"state": "active", "activated_by": self.env.uid, "activated_at": fields.Datetime.now()}
-            )
+            rec.sudo().write({"state": "active", "activated_by": self.env.uid, "activated_at": fields.Datetime.now()})
             if rec.alert_id and rec.alert_id.state == "open":
                 rec.alert_id.sudo().write({"state": "actioned"})
         return True

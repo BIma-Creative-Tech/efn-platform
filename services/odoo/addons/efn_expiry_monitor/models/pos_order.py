@@ -152,7 +152,8 @@ class PosOrder(models.Model):
 
     def _efn_expiry_override_approver(self, line, lot, sync_user):
         """Penyetuju sah override lot kedaluwarsa untuk baris ini, atau None. SEC-217: kasir = ``sync_user``
-        (env.uid saat sync) atau persetujuan PIN tersimpan server untuk kasir itu; ``order.user_id`` payload diabaikan."""
+        (env.uid saat sync) atau persetujuan PIN tersimpan server untuk kasir itu;
+        ``order.user_id`` payload diabaikan."""
         if sync_user and sync_user.has_group(GROUP_OVERRIDE):
             return sync_user
         approval = self.env["efn.expiry.pos.approval"]._efn_find_valid(self, line.product_id, lot.name, sync_user)
@@ -196,8 +197,9 @@ class PosOrder(models.Model):
         line.efn_markdown_id = markdown
         excess = qty - counted
         if excess > 1e-9:
-            Event._efn_log(**base, kind="markdown_cap_exceeded", lot_id=markdown.lot_id.id, qty=excess,
-                           markdown_id=markdown.id)
+            Event._efn_log(
+                **base, kind="markdown_cap_exceeded", lot_id=markdown.lot_id.id, qty=excess, markdown_id=markdown.id
+            )
         currency = self.currency_id
         effective_unit = line.price_unit * (1.0 - (line.discount or 0.0) / 100.0)
         if markdown.price:

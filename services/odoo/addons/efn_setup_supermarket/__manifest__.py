@@ -6,10 +6,10 @@
         "sisa umur minimum per kategori (placeholder Q-SM28/Q-SM9), DC assortment; demo capability outlet, kebijakan "
         "assortment, zona + cycle count + putaway, jadwal kirim DC -> outlet, user demo per persona."
     ),
-    # G44 tahap A + G45 tahap B (docs/04 §28.1, §28.4, §28.5, §28.5a; fit-gap docs/fit-gap/G45_SUPERMARKET.md S-01..S-16,
-    # §5). ADR-045 (DC satu PT + assortment, Proposed), ADR-046 (replenishment, Proposed), ADR-031 (tanpa modul pihak
-    # ketiga). Risiko: R-L14 (struktur DC satu PT vs perizinan gudang/PPN), R-L03 (tarif pajak placeholder), R-L07
-    # (traceability lot).
+    # G44 tahap A + G45 tahap B (docs/04 §28.1, §28.4, §28.5, §28.5a; fit-gap docs/fit-gap/G45_SUPERMARKET.md
+    # S-01..S-16, §5). ADR-045 (DC satu PT + assortment, Proposed), ADR-046 (replenishment, Proposed), ADR-031 (tanpa
+    # modul pihak ketiga). Risiko: R-L14 (struktur DC satu PT vs perizinan gudang/PPN), R-L03 (tarif pajak placeholder),
+    # R-L07 (traceability lot).
     # 19.0.2.0.0: tahap B; post_init_hook dihapus (efn_is_dc di XML); migrations/19.0.2.0.0 untuk DB tahap A.
     "version": "19.0.2.0.0",
     "category": "EFN/Setup",

@@ -112,13 +112,15 @@ class TestEfnLotMarkdown(EfnExpiryCommon):
 
     def test_notify_members_pending_and_audit(self):
         self.env.registry.clear_cache()
-        md = self.env["efn.lot.markdown"].with_user(self.store_head).create(
-            self.vals(discount_pct=20, notify_members=True)
+        md = (
+            self.env["efn.lot.markdown"]
+            .with_user(self.store_head)
+            .create(self.vals(discount_pct=20, notify_members=True))
         )
         self.assertEqual(md.notify_state, "pending", "G45 hanya menyimpan; outbox G46")
         md.action_efn_activate()
-        logs = self.env["efn.audit.log"].sudo().search(
-            [("model_name", "=", "efn.lot.markdown"), ("res_id", "=", md.id)]
+        logs = (
+            self.env["efn.audit.log"].sudo().search([("model_name", "=", "efn.lot.markdown"), ("res_id", "=", md.id)])
         )
         self.assertIn("create", logs.mapped("operation"))
         self.assertIn("write", logs.mapped("operation"), "aktivasi (state via sudo) teraudit")
@@ -129,8 +131,11 @@ class TestEfnLotMarkdown(EfnExpiryCommon):
         self.assertEqual(alert.stage, "markdown")
         action = alert.with_user(self.store_head).action_efn_create_markdown()
         self.assertEqual(action["context"]["default_lot_id"], self.lot.id)
-        md = self.env["efn.lot.markdown"].with_user(self.store_head).with_context(action["context"]).create(
-            {"discount_pct": 30}
+        md = (
+            self.env["efn.lot.markdown"]
+            .with_user(self.store_head)
+            .with_context(action["context"])
+            .create({"discount_pct": 30})
         )
         self.assertEqual((md.alert_id, md.warehouse_id, md.qty_cap), (alert, self.outlet_a, 10))
         md.action_efn_activate()

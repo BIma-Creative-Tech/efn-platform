@@ -257,26 +257,30 @@ class TestEfnAssortment(TransactionCase):
         self.assertIn("Terbuka", line.new_value)
 
     def _manual_picking(self, picking_type, source, dest, product):
-        return self.env["stock.picking"].with_company(self.company).create(
-            {
-                "picking_type_id": picking_type.id,
-                "location_id": source.id,
-                "location_dest_id": dest.id,
-                "company_id": self.company.id,
-                "move_ids": [
-                    (
-                        0,
-                        0,
-                        {
-                            "product_id": product.id,
-                            "company_id": self.company.id,
-                            "product_uom_qty": 1,
-                            "location_id": source.id,
-                            "location_dest_id": dest.id,
-                        },
-                    )
-                ],
-            }
+        return (
+            self.env["stock.picking"]
+            .with_company(self.company)
+            .create(
+                {
+                    "picking_type_id": picking_type.id,
+                    "location_id": source.id,
+                    "location_dest_id": dest.id,
+                    "company_id": self.company.id,
+                    "move_ids": [
+                        (
+                            0,
+                            0,
+                            {
+                                "product_id": product.id,
+                                "company_id": self.company.id,
+                                "product_uom_qty": 1,
+                                "location_id": source.id,
+                                "location_dest_id": dest.id,
+                            },
+                        )
+                    ],
+                }
+            )
         )
 
     def test_sec209_two_step_manual_transfer_checked_at_transit_leg(self):

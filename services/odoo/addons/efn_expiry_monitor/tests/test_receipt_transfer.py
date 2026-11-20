@@ -14,26 +14,30 @@ from .common import EfnExpiryCommon
 @tagged("post_install", "-at_install", "efn")
 class TestEfnExpiryReceipt(EfnExpiryCommon):
     def dc_transfer(self, lot, qty=2):
-        picking = self.env["stock.picking"].with_company(self.company).create(
-            {
-                "picking_type_id": self.dc.int_type_id.id,
-                "location_id": self.dc.lot_stock_id.id,
-                "location_dest_id": self.outlet_a.lot_stock_id.id,
-                "company_id": self.company.id,
-                "move_ids": [
-                    (
-                        0,
-                        0,
-                        {
-                            "product_id": self.product.id,
-                            "company_id": self.company.id,
-                            "product_uom_qty": qty,
-                            "location_id": self.dc.lot_stock_id.id,
-                            "location_dest_id": self.outlet_a.lot_stock_id.id,
-                        },
-                    )
-                ],
-            }
+        picking = (
+            self.env["stock.picking"]
+            .with_company(self.company)
+            .create(
+                {
+                    "picking_type_id": self.dc.int_type_id.id,
+                    "location_id": self.dc.lot_stock_id.id,
+                    "location_dest_id": self.outlet_a.lot_stock_id.id,
+                    "company_id": self.company.id,
+                    "move_ids": [
+                        (
+                            0,
+                            0,
+                            {
+                                "product_id": self.product.id,
+                                "company_id": self.company.id,
+                                "product_uom_qty": qty,
+                                "location_id": self.dc.lot_stock_id.id,
+                                "location_dest_id": self.outlet_a.lot_stock_id.id,
+                            },
+                        )
+                    ],
+                }
+            )
         )
         self.put(lot, self.dc, qty)
         picking.action_confirm()
@@ -53,9 +57,7 @@ class TestEfnExpiryReceipt(EfnExpiryCommon):
         with self.assertRaises(AccessError):
             picking.with_user(self.clerk).write({"efn_short_life_override_id": False})
         Wizard = self.env["efn.expiry.receipt.override.wizard"]
-        clerk_wizard = Wizard.with_user(self.clerk).create(
-            {"picking_id": picking.id, "reason": "alasan cukup panjang"}
-        )
+        clerk_wizard = Wizard.with_user(self.clerk).create({"picking_id": picking.id, "reason": "alasan cukup panjang"})
         with self.assertRaises(AccessError):
             clerk_wizard.action_confirm()
         with self.assertRaisesRegex(UserError, "reason"):
@@ -121,8 +123,8 @@ class TestEfnExpiryTransfer(EfnExpiryCommon):
         # Outlet B laku paling tinggi tetapi assortment menolak -> C.
         self.outlet_b.efn_assortment_policy = "closed"
         with self.rates({self.outlet_a.id: 1.0, self.outlet_b.id: 9.0, self.outlet_c.id: 4.0}):
-            wizard = self.env["efn.expiry.transfer.wizard"].with_user(self.store_head).create(
-                {"alert_id": self.alert.id}
+            wizard = (
+                self.env["efn.expiry.transfer.wizard"].with_user(self.store_head).create({"alert_id": self.alert.id})
             )
             self.assertEqual(wizard.dest_warehouse_id, self.outlet_c)
             self.assertEqual(wizard.qty, 6)
@@ -135,8 +137,9 @@ class TestEfnExpiryTransfer(EfnExpiryCommon):
             action = wizard.action_confirm()
         picking = self.env["stock.picking"].browse(action["res_id"])
         self.assertEqual(picking.state, "draft")
-        self.assertEqual((picking.location_id, picking.location_dest_id),
-                         (self.outlet_a.lot_stock_id, self.outlet_c.lot_stock_id))
+        self.assertEqual(
+            (picking.location_id, picking.location_dest_id), (self.outlet_a.lot_stock_id, self.outlet_c.lot_stock_id)
+        )
         self.assertEqual(picking.move_ids.product_uom_qty, 4)
         if "restrict_lot_id" in picking.move_ids._fields:
             self.assertEqual(picking.move_ids.restrict_lot_id, self.lot)

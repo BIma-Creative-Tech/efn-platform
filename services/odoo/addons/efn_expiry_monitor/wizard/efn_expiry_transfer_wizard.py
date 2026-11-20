@@ -64,28 +64,36 @@ class EfnExpiryTransferWizard(models.TransientModel):
         """(laju harian, sumber) — forecast v2 aktif bila ada, selain itu histori 28 hari."""
         today = fields.Date.context_today(self)
         if "efn.forecast.daily" in self.env:
-            rows = self.env["efn.forecast.daily"].sudo().search(
-                [
-                    ("warehouse_id", "=", warehouse.id),
-                    ("product_id", "=", product.id),
-                    ("run_id.is_active", "=", True),
-                    ("run_id.kind", "=", "daily"),
-                    ("date", ">=", today),
-                    ("date", "<", today + timedelta(days=FORECAST_DAYS)),
-                ]
+            rows = (
+                self.env["efn.forecast.daily"]
+                .sudo()
+                .search(
+                    [
+                        ("warehouse_id", "=", warehouse.id),
+                        ("product_id", "=", product.id),
+                        ("run_id.is_active", "=", True),
+                        ("run_id.kind", "=", "daily"),
+                        ("date", ">=", today),
+                        ("date", "<", today + timedelta(days=FORECAST_DAYS)),
+                    ]
+                )
             )
             if rows:
                 return sum(rows.mapped("yhat")) / len(rows), "forecast"
         since = fields.Datetime.now() - timedelta(days=HISTORY_DAYS)
-        moves = self.env["stock.move"].sudo().search(
-            [
-                ("product_id", "=", product.id),
-                ("state", "=", "done"),
-                ("date", ">=", since),
-                ("location_id", "child_of", warehouse.view_location_id.id),
-                ("location_id.usage", "=", "internal"),
-                ("location_dest_id.usage", "=", "customer"),
-            ]
+        moves = (
+            self.env["stock.move"]
+            .sudo()
+            .search(
+                [
+                    ("product_id", "=", product.id),
+                    ("state", "=", "done"),
+                    ("date", ">=", since),
+                    ("location_id", "child_of", warehouse.view_location_id.id),
+                    ("location_id.usage", "=", "internal"),
+                    ("location_dest_id.usage", "=", "customer"),
+                ]
+            )
         )
         return sum(moves.mapped("product_qty")) / HISTORY_DAYS, "history"
 
@@ -97,8 +105,10 @@ class EfnExpiryTransferWizard(models.TransientModel):
         src_rate, src_kind = self._efn_sales_rate(source, product)
         lines = [_("%(wh)s (asal): %(rate).2f/hari [%(kind)s]", wh=source.code, rate=src_rate, kind=src_kind)]
         best, best_rate = self.env["stock.warehouse"], src_rate
-        outlets = self.env["stock.warehouse"].sudo().search(
-            [("company_id", "=", alert.company_id.id), ("id", "!=", source.id), ("efn_is_dc", "=", False)]
+        outlets = (
+            self.env["stock.warehouse"]
+            .sudo()
+            .search([("company_id", "=", alert.company_id.id), ("id", "!=", source.id), ("efn_is_dc", "=", False)])
         )
         for outlet in outlets:
             _ok, reason = outlet._efn_assortment_allowed(product)
@@ -124,8 +134,12 @@ class EfnExpiryTransferWizard(models.TransientModel):
             raise UserError(_("efn_expiry:transfer_stage — lot kedaluwarsa/alert tertutup tidak dipindahkan."))
         dest = self.dest_warehouse_id
         if not dest:
-            raise UserError(_("efn_expiry:transfer_dest — tidak ada outlet dengan laju jual lebih tinggi; pilih "
-                              "outlet tujuan manual atau lakukan markdown."))
+            raise UserError(
+                _(
+                    "efn_expiry:transfer_dest — tidak ada outlet dengan laju jual lebih tinggi; pilih "
+                    "outlet tujuan manual atau lakukan markdown."
+                )
+            )
         if dest == alert.warehouse_id or dest.company_id != alert.company_id or dest.efn_is_dc:
             raise UserError(_("efn_expiry:transfer_dest — tujuan harus outlet lain di PT yang sama."))
         if not (0 < self.qty <= alert.qty + 1e-6):
@@ -133,8 +147,12 @@ class EfnExpiryTransferWizard(models.TransientModel):
         _ok, reason = dest._efn_assortment_allowed(alert.product_id)
         if reason not in ALLOWED_ASSORTMENT:
             raise UserError(
-                _("efn_expiry:transfer_assortment — %(product)s tidak diizinkan di %(wh)s (%(code)s).",
-                  product=alert.product_id.display_name, wh=dest.code, code=reason)
+                _(
+                    "efn_expiry:transfer_assortment — %(product)s tidak diizinkan di %(wh)s (%(code)s).",
+                    product=alert.product_id.display_name,
+                    wh=dest.code,
+                    code=reason,
+                )
             )
         source = alert.warehouse_id
         move_vals = {
@@ -146,15 +164,19 @@ class EfnExpiryTransferWizard(models.TransientModel):
         }
         if "restrict_lot_id" in self.env["stock.move"]._fields:
             move_vals["restrict_lot_id"] = alert.lot_id.id
-        picking = self.env["stock.picking"].with_company(alert.company_id).create(
-            {
-                "picking_type_id": source.int_type_id.id,
-                "location_id": source.lot_stock_id.id,
-                "location_dest_id": dest.lot_stock_id.id,
-                "company_id": alert.company_id.id,
-                "origin": _("EFN near-expiry %(lot)s", lot=alert.lot_id.name),
-                "move_ids": [(0, 0, move_vals)],
-            }
+        picking = (
+            self.env["stock.picking"]
+            .with_company(alert.company_id)
+            .create(
+                {
+                    "picking_type_id": source.int_type_id.id,
+                    "location_id": source.lot_stock_id.id,
+                    "location_dest_id": dest.lot_stock_id.id,
+                    "company_id": alert.company_id.id,
+                    "origin": _("EFN near-expiry %(lot)s", lot=alert.lot_id.name),
+                    "move_ids": [(0, 0, move_vals)],
+                }
+            )
         )
         alert.sudo().write({"state": "actioned", "transfer_picking_id": picking.id})
         return {

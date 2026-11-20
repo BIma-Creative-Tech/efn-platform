@@ -59,9 +59,7 @@ def param_int(env, key, default, low, high):
 
 def lot_blocked(lot, at):
     """True bila lot sudah melewati ``expiration_date`` atau ``removal_date`` pada waktu ``at`` (UTC naif)."""
-    return bool(
-        (lot.expiration_date and lot.expiration_date <= at) or (lot.removal_date and lot.removal_date <= at)
-    )
+    return bool((lot.expiration_date and lot.expiration_date <= at) or (lot.removal_date and lot.removal_date <= at))
 
 
 def days_left(record, lot, today):

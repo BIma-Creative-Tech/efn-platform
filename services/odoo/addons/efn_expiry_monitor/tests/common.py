@@ -15,8 +15,9 @@ class EfnExpiryCommon(TransactionCase):
         env["ir.config_parameter"].sudo().set_param("efn_assortment.enforce", "true")
         cls.company = env["res.company"].create({"name": "PT Uji Expiry"})
         Warehouse = env["stock.warehouse"]
-        cls.dc = Warehouse.create({"name": "DC expiry uji", "code": "EDC1", "company_id": cls.company.id,
-                                   "efn_is_dc": True})
+        cls.dc = Warehouse.create(
+            {"name": "DC expiry uji", "code": "EDC1", "company_id": cls.company.id, "efn_is_dc": True}
+        )
         cls.outlet_a = Warehouse.create({"name": "Outlet A expiry", "code": "EOA1", "company_id": cls.company.id})
         cls.outlet_b = Warehouse.create({"name": "Outlet B expiry", "code": "EOB1", "company_id": cls.company.id})
         cls.outlet_c = Warehouse.create({"name": "Outlet C expiry", "code": "EOC1", "company_id": cls.company.id})

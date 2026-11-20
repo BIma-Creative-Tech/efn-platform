@@ -133,54 +133,65 @@ class TestEfnPosExpiry(TestPoSCommon):
         self.assertEqual(res["markdowns"][0]["discount_pct"], 30)
         self.assertEqual(self.config.efn_expiry_lot_candidates(True)["error_code"], "invalid_product")
         self.assertEqual(self.config.efn_expiry_lot_candidates(self.product.id, "x" * 80)["error_code"], "invalid_lot")
-        plain = new_test_user(self.env, login="efn_exp_plain_uji", groups="base.group_user",
-                              company_id=self.env.company.id)
+        plain = new_test_user(
+            self.env, login="efn_exp_plain_uji", groups="base.group_user", company_id=self.env.company.id
+        )
         with self.assertRaises(AccessError):
             self.config.with_user(plain).efn_expiry_lot_candidates(self.product.id)
 
     # ------------------------------------------------------------ markdown
     def test_markdown_cap_settled_on_sync(self):
-        first = self.sync([self.line(self.lot_md, qty=2, discount=30, efn_lot_source="gs1",
-                                     efn_markdown_ref=self.markdown.id)])
+        first = self.sync(
+            [self.line(self.lot_md, qty=2, discount=30, efn_lot_source="gs1", efn_markdown_ref=self.markdown.id)]
+        )
         self.assertEqual(first.state, "paid")
         self.assertEqual(self.markdown.qty_sold, 2)
         self.assertEqual(first.lines.efn_markdown_id, self.markdown)
         self.assertFalse(self.events(first))
-        second = self.sync([self.line(self.lot_md, qty=2, discount=30, efn_lot_source="manual",
-                                      efn_markdown_ref=self.markdown.id)])
+        second = self.sync(
+            [self.line(self.lot_md, qty=2, discount=30, efn_lot_source="manual", efn_markdown_ref=self.markdown.id)]
+        )
         self.assertEqual(self.markdown.qty_sold, 3, "kuota 3: hanya 1 dihitung")
         cap = self.events(second, "markdown_cap_exceeded")
         self.assertEqual(cap.qty, 1)
 
     def test_markdown_from_fefo_or_wrong_lot_invalid(self):
-        order = self.sync([self.line(self.lot_md, qty=1, discount=30, efn_lot_source="fefo",
-                                     efn_markdown_ref=self.markdown.id)])
+        order = self.sync(
+            [self.line(self.lot_md, qty=1, discount=30, efn_lot_source="fefo", efn_markdown_ref=self.markdown.id)]
+        )
         self.assertEqual(order.state, "paid", "order lunas tidak ditolak")
         self.assertTrue(self.events(order, "markdown_invalid"))
         self.assertEqual(self.markdown.qty_sold, 0)
-        other = self.sync([self.line(self.lot_late, qty=1, discount=30, efn_lot_source="gs1",
-                                     efn_markdown_ref=self.markdown.id)])
+        other = self.sync(
+            [self.line(self.lot_late, qty=1, discount=30, efn_lot_source="gs1", efn_markdown_ref=self.markdown.id)]
+        )
         self.assertTrue(self.events(other, "markdown_invalid"), "lot tidak cocok dengan markdown")
-        greedy = self.sync([self.line(self.lot_md, qty=1, discount=50, efn_lot_source="gs1",
-                                      efn_markdown_ref=self.markdown.id)])
+        greedy = self.sync(
+            [self.line(self.lot_md, qty=1, discount=50, efn_lot_source="gs1", efn_markdown_ref=self.markdown.id)]
+        )
         self.assertTrue(self.events(greedy, "markdown_price_mismatch"))
 
     def test_markdown_refund_restores_quota(self):
         """QA G45: retur baris markdown (refunded_orderline_id, tanpa klaim markdown) memulihkan kuota; tidak < 0."""
-        sold = self.sync([self.line(self.lot_md, qty=2, discount=30, efn_lot_source="gs1",
-                                    efn_markdown_ref=self.markdown.id)])
+        sold = self.sync(
+            [self.line(self.lot_md, qty=2, discount=30, efn_lot_source="gs1", efn_markdown_ref=self.markdown.id)]
+        )
         origin = sold.lines
         self.assertEqual((self.markdown.qty_sold, origin.efn_markdown_id), (2, self.markdown))
-        refund_line = self.env["pos.order.line"].sudo().create(
-            {
-                "order_id": sold.id,
-                "product_id": self.product.id,
-                "qty": -1,
-                "price_unit": origin.price_unit,
-                "price_subtotal": -origin.price_unit,
-                "price_subtotal_incl": -origin.price_unit,
-                "refunded_orderline_id": origin.id,
-            }
+        refund_line = (
+            self.env["pos.order.line"]
+            .sudo()
+            .create(
+                {
+                    "order_id": sold.id,
+                    "product_id": self.product.id,
+                    "qty": -1,
+                    "price_unit": origin.price_unit,
+                    "price_subtotal": -origin.price_unit,
+                    "price_subtotal_incl": -origin.price_unit,
+                    "refunded_orderline_id": origin.id,
+                }
+            )
         )
         sold.sudo()._efn_expiry_after_sync()
         self.assertEqual(self.markdown.qty_sold, 1, "retur 1 dari 2 -> kuota terpakai tinggal 1")
@@ -189,16 +200,20 @@ class TestEfnPosExpiry(TestPoSCommon):
         sold.sudo()._efn_expiry_after_sync()
         self.assertEqual(self.markdown.qty_sold, 1, "idempoten: baris yang sudah dicek tidak diproses ulang")
         # Retur melebihi qty_sold (mis. kuota sebagian terhitung) tidak membuat angka negatif.
-        refund_big = self.env["pos.order.line"].sudo().create(
-            {
-                "order_id": sold.id,
-                "product_id": self.product.id,
-                "qty": -5,
-                "price_unit": origin.price_unit,
-                "price_subtotal": -5 * origin.price_unit,
-                "price_subtotal_incl": -5 * origin.price_unit,
-                "refunded_orderline_id": origin.id,
-            }
+        refund_big = (
+            self.env["pos.order.line"]
+            .sudo()
+            .create(
+                {
+                    "order_id": sold.id,
+                    "product_id": self.product.id,
+                    "qty": -5,
+                    "price_unit": origin.price_unit,
+                    "price_subtotal": -5 * origin.price_unit,
+                    "price_subtotal_incl": -5 * origin.price_unit,
+                    "refunded_orderline_id": origin.id,
+                }
+            )
         )
         sold.sudo()._efn_expiry_after_sync()
         self.assertEqual((self.markdown.qty_sold, refund_big.efn_expiry_checked), (0, True))
@@ -221,8 +236,9 @@ class TestEfnPosExpiry(TestPoSCommon):
         self.assertGreaterEqual(self.env["efn.lot.markdown"]._cron_efn_expire(), 1)
         self.assertEqual(stale.state, "expired")
         self.assertNotIn(stale.id, [md["id"] for md in self.payload()["markdowns"]])
-        order = self.sync([self.line(self.lot_late, qty=1, discount=20, efn_lot_source="gs1",
-                                     efn_markdown_ref=stale.id)])
+        order = self.sync(
+            [self.line(self.lot_late, qty=1, discount=20, efn_lot_source="gs1", efn_markdown_ref=stale.id)]
+        )
         self.assertEqual(order.state, "paid")
         self.assertTrue(self.events(order, "markdown_invalid"))
         self.assertEqual(stale.qty_sold, 0)
@@ -239,16 +255,19 @@ class TestEfnPosExpiry(TestPoSCommon):
         order_ref = str(uuid.uuid4())
         approvers = self.config.efn_expiry_override_approvers()
         self.assertIn(self.supervisor.id, [row["id"] for row in approvers["approvers"]])
-        bad = self.config.efn_expiry_override_request(order_ref, self.product.id, "POS-OLD", self.supervisor.id,
-                                                      "000000", "lot rusak")
+        bad = self.config.efn_expiry_override_request(
+            order_ref, self.product.id, "POS-OLD", self.supervisor.id, "000000", "lot rusak"
+        )
         self.assertEqual(bad["error_code"], "invalid_pin")
         self.assertEqual(
-            self.config.efn_expiry_override_request(order_ref, self.product.id, "POS-OLD", self.supervisor.id, PIN,
-                                                    "x")["error_code"],
+            self.config.efn_expiry_override_request(
+                order_ref, self.product.id, "POS-OLD", self.supervisor.id, PIN, "x"
+            )["error_code"],
             "invalid_input",
         )
-        ok = self.config.efn_expiry_override_request(order_ref, self.product.id, "POS-OLD", self.supervisor.id, PIN,
-                                                     "dijual sesuai SOP")
+        ok = self.config.efn_expiry_override_request(
+            order_ref, self.product.id, "POS-OLD", self.supervisor.id, PIN, "dijual sesuai SOP"
+        )
         self.assertTrue(ok["ok"])
         order = self.sync([self.line(self.lot_old, efn_expiry_override=True)], order_uuid=order_ref)
         event = self.events(order)
@@ -278,7 +297,8 @@ class TestEfnPosExpiry(TestPoSCommon):
         self.assertEqual(event.user_id, self.env.user)
 
     def test_sec217_clock_skew_uses_server_time(self):
-        """SEC-217: jam perangkat dimundurkan sebelum sesi -> clock_skew + lot dinilai kedaluwarsa dengan waktu server."""
+        """SEC-217: jam perangkat dimundurkan sebelum sesi -> clock_skew + lot dinilai kedaluwarsa
+        dengan waktu server."""
         data = self.create_ui_order_data([self.line(self.lot_old)], uuid=str(uuid.uuid4()))
         data["date_order"] = fields.Datetime.to_string(fields.Datetime.now() - timedelta(days=10))
         self.env["pos.order"].sync_from_ui([data])
@@ -307,18 +327,22 @@ class TestEfnPosExpiry(TestPoSCommon):
         """SEC-222: baris retur dengan klaim markdown tetapi tanpa baris asal markdown tidak membuka kuota."""
         self.markdown.sudo().write({"qty_sold": 2})
         sold = self.sync([self.line(self.lot_late, qty=1)])
-        refund_line = self.env["pos.order.line"].sudo().create(
-            {
-                "order_id": sold.id,
-                "product_id": self.product.id,
-                "qty": -1,
-                "price_unit": sold.lines.price_unit,
-                "price_subtotal": -sold.lines.price_unit,
-                "price_subtotal_incl": -sold.lines.price_unit,
-                "refunded_orderline_id": sold.lines.id,
-                "efn_markdown_ref": self.markdown.id,
-                "efn_lot_source": "gs1",
-            }
+        refund_line = (
+            self.env["pos.order.line"]
+            .sudo()
+            .create(
+                {
+                    "order_id": sold.id,
+                    "product_id": self.product.id,
+                    "qty": -1,
+                    "price_unit": sold.lines.price_unit,
+                    "price_subtotal": -sold.lines.price_unit,
+                    "price_subtotal_incl": -sold.lines.price_unit,
+                    "refunded_orderline_id": sold.lines.id,
+                    "efn_markdown_ref": self.markdown.id,
+                    "efn_lot_source": "gs1",
+                }
+            )
         )
         sold.sudo()._efn_expiry_after_sync()
         self.assertEqual(self.markdown.qty_sold, 2)

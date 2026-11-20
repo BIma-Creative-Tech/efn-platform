@@ -318,9 +318,7 @@ class TestSetupSupermarket(TransactionCase):
         for categ, zone in cases:
             with self.subTest(category=categ):
                 product = self._product(categ)
-                self.assertEqual(
-                    outlet.lot_stock_id._get_putaway_strategy(product), self.env.ref(f"{MODULE}.{zone}")
-                )
+                self.assertEqual(outlet.lot_stock_id._get_putaway_strategy(product), self.env.ref(f"{MODULE}.{zone}"))
 
     # --- Demo: jadwal kirim (S-12, Q-SM11) ------------------------------------------------------------------------
     def test_demo_delivery_schedules(self):
@@ -330,8 +328,14 @@ class TestSetupSupermarket(TransactionCase):
                 schedules = self.env["efn.delivery.schedule"].search([("warehouse_id", "=", outlet.id)])
                 keys = [
                     self.env["ir.model.data"]
-                    .search([("model", "=", "product.category"), ("res_id", "=", s.product_group.id),
-                             ("module", "=", MODULE)], limit=1)
+                    .search(
+                        [
+                            ("model", "=", "product.category"),
+                            ("res_id", "=", s.product_group.id),
+                            ("module", "=", MODULE),
+                        ],
+                        limit=1,
+                    )
                     .name.removeprefix(prefix)
                     for s in schedules
                 ]

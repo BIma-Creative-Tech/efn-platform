@@ -43,8 +43,11 @@ class TestEfnExpiryAlert(EfnExpiryCommon):
         created = Alert._cron_efn_expiry_scan()
         self.assertEqual(created, 3)
         stages = {a.lot_id.name: a.stage for a in self.alerts()}
-        self.assertEqual(stages, {"EXP-NEAR": "near", "EXP-MD": "markdown", "EXP-OLD": "expired"},
-                         "DC, lot jauh, dan kategori tanpa ambang tidak di-alert")
+        self.assertEqual(
+            stages,
+            {"EXP-NEAR": "near", "EXP-MD": "markdown", "EXP-OLD": "expired"},
+            "DC, lot jauh, dan kategori tanpa ambang tidak di-alert",
+        )
         near = self.alerts().filtered(lambda a: a.lot_id == lot_near)
         self.assertEqual((near.qty, near.warehouse_id, near.state), (5, self.outlet_a, "open"))
         # Idempoten: run kedua di hari yang sama tidak membuat alert/aktivitas baru.
@@ -54,8 +57,12 @@ class TestEfnExpiryAlert(EfnExpiryCommon):
         self.assertEqual(self.env["mail.activity"].search_count([("res_model", "=", "efn.expiry.alert")]), activities)
         # Tahap naik (near -> markdown) membuka ulang + notifikasi baru.
         near.sudo().write({"state": "actioned"})
-        lot_near.write({"expiration_date": fields.Datetime.now() + timedelta(days=1),
-                        "removal_date": fields.Datetime.now() + timedelta(days=1)})
+        lot_near.write(
+            {
+                "expiration_date": fields.Datetime.now() + timedelta(days=1),
+                "removal_date": fields.Datetime.now() + timedelta(days=1),
+            }
+        )
         self.assertEqual(Alert._cron_efn_expiry_scan(), 1)
         self.assertEqual((near.stage, near.state), ("markdown", "open"))
         # Stok habis -> alert ditutup.
@@ -102,9 +109,7 @@ class TestEfnExpiryAlert(EfnExpiryCommon):
         buyer = Activity.search([("res_model", "=", "efn.expiry.alert"), ("user_id", "=", self.manager.id)])
         self.assertEqual(len(buyer), 1, "satu ringkasan per PT untuk Markdown Manager")
         # Cakupan record rule: kepala toko hanya melihat alert outletnya; manager semua outlet PT.
-        self.assertEqual(
-            self.env["efn.expiry.alert"].with_user(self.store_head).search([]).warehouse_id, self.outlet_a
-        )
+        self.assertEqual(self.env["efn.expiry.alert"].with_user(self.store_head).search([]).warehouse_id, self.outlet_a)
         self.assertEqual(
             set(self.env["efn.expiry.alert"].with_user(self.manager).search([]).warehouse_id.ids),
             {self.outlet_a.id, self.outlet_b.id},

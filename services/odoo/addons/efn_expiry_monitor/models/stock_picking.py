@@ -32,9 +32,7 @@ class StockPicking(models.Model):
         copy=False,
         help="Diisi wizard override (Markdown Manager / Inventory Administrator); jejak di efn.expiry.event.",
     )
-    efn_short_life_warning = fields.Text(
-        string="Peringatan sisa umur", compute="_compute_efn_short_life_warning"
-    )
+    efn_short_life_warning = fields.Text(string="Peringatan sisa umur", compute="_compute_efn_short_life_warning")
 
     def _compute_efn_short_life_warning(self):
         enabled = is_enabled(self.env)

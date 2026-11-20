@@ -170,7 +170,8 @@ class EfnExpiryPosApproval(models.Model):
     def _efn_find_valid(self, order, product, lot_name, cashier):
         """Persetujuan sah untuk baris order POS (sudah dipakai order yang sama = idempoten).
 
-        SEC-217: ``cashier`` = user yang menyinkronkan order (``env.uid`` saat sync), bukan ``order.user_id`` payload."""
+        SEC-217: ``cashier`` = user yang menyinkronkan order (``env.uid`` saat sync),
+        bukan ``order.user_id`` payload."""
         candidates = self.sudo().search(
             [
                 ("config_id", "=", order.config_id.id),
@@ -216,9 +217,9 @@ class EfnPosReturnApproval(models.Model):
 
     @api.model
     def _efn_pin_failures_total(self, approver):
-        return super()._efn_pin_failures_total(approver) + self.env[
-            "efn.expiry.pos.approval"
-        ]._efn_recent_failures(approver)
+        return super()._efn_pin_failures_total(approver) + self.env["efn.expiry.pos.approval"]._efn_recent_failures(
+            approver
+        )
 
     @api.model
     def _efn_cashier_pin_failures_total(self, cashier):

@@ -37,8 +37,9 @@ class EfnExpiryAlert(models.Model):
     _check_company_auto = True
 
     company_id = fields.Many2one("res.company", required=True, index=True, readonly=True)
-    warehouse_id = fields.Many2one("stock.warehouse", string="Outlet", required=True, index=True, readonly=True,
-                                   check_company=True)
+    warehouse_id = fields.Many2one(
+        "stock.warehouse", string="Outlet", required=True, index=True, readonly=True, check_company=True
+    )
     lot_id = fields.Many2one("stock.lot", required=True, index=True, readonly=True)
     product_id = fields.Many2one("product.product", required=True, index=True, readonly=True)
     categ_id = fields.Many2one(related="product_id.categ_id", store=True, string="Kategori")
@@ -57,8 +58,9 @@ class EfnExpiryAlert(models.Model):
     date = fields.Date(string="Terdeteksi", required=True, readonly=True, index=True)
     last_run_date = fields.Date(string="Diperbarui", readonly=True)
     markdown_ids = fields.One2many("efn.lot.markdown", "alert_id", string="Markdown")
-    transfer_picking_id = fields.Many2one("stock.picking", string="Transfer antar outlet", readonly=True,
-                                          check_company=True)
+    transfer_picking_id = fields.Many2one(
+        "stock.picking", string="Transfer antar outlet", readonly=True, check_company=True
+    )
 
     _efn_alert_uniq = models.Constraint(
         "UNIQUE(company_id, warehouse_id, lot_id, date)",
