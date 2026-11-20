@@ -197,11 +197,24 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
         with:
           persist-credentials: false
+      # G50 (keputusan pemilik proyek 20 Nov 2026, ADR-044 §Lisensi): `libsignal` (GPL-3.0, dependensi Baileys) HANYA
+      # boleh dipakai `services/wa-unofficial` (service terpisah proses, berlisensi GPL-3.0-only). allow-dependencies-
+      # licenses berlaku global, jadi langkah ini memastikan pengecualian tidak merembet ke service lain.
+      - name: Pengecualian GPL libsignal hanya untuk wa-unofficial
+        run: |
+          set -euo pipefail
+          found=$(grep -rlE '"(node_modules/)?libsignal"' --include=package-lock.json services || true)
+          if [ -n "$found" ] && [ "$found" != "services/wa-unofficial/package-lock.json" ]; then
+            echo "::error::libsignal (GPL-3.0) hanya diizinkan di services/wa-unofficial (ADR-044). Ditemukan: $found"
+            exit 1
+          fi
+          grep -q '"license": "GPL-3.0-only"' services/wa-unofficial/package.json \
+            || { echo "::error::services/wa-unofficial wajib berlisensi GPL-3.0-only (memuat libsignal)"; exit 1; }
       - uses: actions/dependency-review-action@2031cfc080254a8a887f58cffee85186f0e49e48  # v4.9.0
         with:
           fail-on-severity: high
           deny-licenses: GPL-3.0-only, AGPL-3.0-only   # untuk dependensi NPM/Py; addons Odoo sendiri AGPL dan dikecualikan
-          allow-dependencies-licenses: pkg:pypi/odoo
+          allow-dependencies-licenses: pkg:pypi/odoo, pkg:npm/libsignal
 
   checkov:
     # G16: bridgecrewio/checkov-action@2fb0e6d… tidak bisa di-resolve lagi (SHA hilang dari repo action). Diganti image

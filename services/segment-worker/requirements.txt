@@ -1,0 +1,14 @@
+# Runtime segment-worker (Python 3.12, G50, ADR-047 Proposed). Dependensi langsung di-pin (versi sama dengan
+# forecast-worker agar satu basis audit). Lock ber-hash (termasuk transitif) = requirements.lock, dibuat di container:
+#   pip-compile --generate-hashes --allow-unsafe --output-file=requirements.lock requirements.txt
+# Image memasang `pip install --require-hashes -r requirements.lock` (SEC-214). Lisensi (metadata paket, belum
+# diverifikasi ulang terhadap repo primer): clickhouse-connect Apache-2.0, requests Apache-2.0, urllib3 MIT,
+# certifi MPL-2.0; transitif (lz4 BSD-3, zstandard BSD-3, pytz MIT, idna BSD-3, charset-normalizer MIT) di-resolve
+# pip-compile. Tanpa numpy/pandas/statsforecast: logika segmen = Python murni.
+# ClickHouse HTTPS 8443 (sama dengan services/etl & forecast-worker).
+clickhouse-connect==0.8.9
+# HTTPS + mTLS ke BFF internal & odoo-rpc-gateway.
+requests==2.34.2
+urllib3==2.8.0
+# >= perbaikan GHSA-6q48-6c7w-9gw2 (sama dengan services/etl).
+certifi==2026.10.19

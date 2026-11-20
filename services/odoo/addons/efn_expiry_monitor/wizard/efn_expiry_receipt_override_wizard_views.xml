@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="efn_expiry_receipt_override_wizard_view_form" model="ir.ui.view">
+        <field name="name">efn.expiry.receipt.override.wizard.form</field>
+        <field name="model">efn.expiry.receipt.override.wizard</field>
+        <field name="arch" type="xml">
+            <form>
+                <group>
+                    <field name="picking_id"/>
+                    <field name="summary"/>
+                    <field name="reason" placeholder="Mis. disetujui category manager karena stok outlet kosong (min. 10 karakter)"/>
+                </group>
+                <footer>
+                    <button name="action_confirm" type="object" string="Catat override" class="btn-primary"/>
+                    <button string="Batal" class="btn-secondary" special="cancel"/>
+                </footer>
+            </form>
+        </field>
+    </record>
+</odoo>

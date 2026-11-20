@@ -23,7 +23,7 @@ from odoo.exceptions import AccessError, UserError
 from odoo.addons.efn_core.scope import touch_row
 
 from .efn_pos_return_approval import APPROVAL_TTL_SECONDS, LOCK_MINUTES
-from .return_pin import PIN_MAX_INPUT, verify_pin
+from .return_pin import PIN_MAX_INPUT, log_pin_failure, pin_locked, verify_pin
 
 _logger = logging.getLogger(__name__)
 
@@ -113,6 +113,7 @@ class PosConfig(models.Model):
                 "Terlalu banyak PIN salah. Persetujuan Store Manager ini dikunci %(minutes)s menit.",
                 minutes=LOCK_MINUTES,
             ),
+            "cashier_locked": _("Terlalu banyak PIN salah dari kasir ini. Coba lagi dalam 1 jam."),
         }
         return {"ok": False, "error_code": code, "message": messages.get(code, messages["invalid_input"])}
 
@@ -224,19 +225,17 @@ class PosConfig(models.Model):
             "amount_max": self.currency_id.round(amount),
             "reason": reason,
         }
-        if Approval._efn_is_locked(approver):
+        # SEC-216: lockout bersama lintas jalur PIN E-41 (approver 5/15 menit + kasir 10/60 menit).
+        locked, lock_code = pin_locked(self.env, approver, self.env.user)
+        if locked:
             Approval.create({**base_vals, "state": "failed", "failure_reason": "locked"})
-            _logger.warning("EFN return approval: approver %s terkunci (config %s)", approver.id, self.id)
-            return self._efn_approval_error("locked")
+            log_pin_failure(_logger, "return_approval", self.id, self.env.uid, approver.id, lock_code)
+            return self._efn_approval_error(lock_code)
         if not verify_pin(pin, approver.efn_return_pin_hash):
             Approval.create({**base_vals, "state": "failed", "failure_reason": "wrong_pin"})
-            _logger.warning(
-                "EFN return approval: PIN salah approver %s oleh kasir %s (config %s)",
-                approver.id,
-                self.env.uid,
-                self.id,
-            )
-            return self._efn_approval_error("locked" if Approval._efn_is_locked(approver) else "invalid_pin")
+            log_pin_failure(_logger, "return_approval", self.id, self.env.uid, approver.id, "wrong_pin")
+            locked, lock_code = pin_locked(self.env, approver, self.env.user)
+            return self._efn_approval_error(lock_code if locked else "invalid_pin")
         Approval.search([("config_id", "=", self.id), ("order_ref", "=", order_ref), ("state", "=", "approved")]).write(
             {"state": "superseded"}
         )

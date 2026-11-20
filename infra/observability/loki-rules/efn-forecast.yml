@@ -1,0 +1,62 @@
+# G44 / SEC-215 (devsecops): alert forecast-worker dari LOG (worker tanpa endpoint metrik; status run juga di Odoo
+# efn.forecast.run). Sumber = ringkasan run services/forecast-worker/efn_forecast/runner.py (logger efn_forecast.runner):
+#   <YYYY-MM-DD HH:MM:SS,mmm> INFO efn_forecast.runner EFN_FORECAST_RUN {"run_id":"..","kind":"daily|weekly_minmax",
+#     "status":"ok|failed|dry_run",...,"error":"<kode>"}
+# dan galat start batch dari logger efn_forecast (__main__.py): `ERROR efn_forecast batch <kind> tidak dapat dimulai: <Kelas>`.
+# Label `service` = label Docker container (promtail.yml), tidak bisa dipalsukan container lain. Payload tanpa PII
+# (angka agregat + kode galat). Dicocokkan BERJANGKAR (timestamp, level, logger, tag), bukan substring.
+# Dampak bisnis: tanpa run, Odoo tidak membuat usulan reorder/min-max baru hari itu (toko tetap berjualan; reorder rule
+# terakhir berlaku) -> severity warning (jam kerja), bukan critical. Runbook: docs/runbooks/forecast-worker.md.
+groups:
+  - name: efn-forecast
+    interval: 1m
+    rules:
+      # Run harian/mingguan selesai `failed`, atau batch tidak dapat dimulai (secret/konfigurasi). Jendela 2 jam: satu
+      # notifikasi per kejadian (run terjadwal sekali sehari), lalu resolve sendiri.
+      - alert: EfnForecastRunFailed
+        expr: |
+          sum by (forecast_kind) (
+            count_over_time({service="forecast-worker"}
+              |~ `^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},\d{3} (INFO efn_forecast\.runner EFN_FORECAST_RUN \{"run_id":"[^"]{1,80}","kind":"(daily|weekly_minmax)","status":"failed"|ERROR efn_forecast batch (daily|weekly_minmax) tidak dapat dimulai: )`
+              | regexp `(?:"kind":"|batch )(?P<forecast_kind>daily|weekly_minmax)` [2h])
+          ) > 0
+        labels:
+          severity: warning
+          team: data
+        annotations:
+          summary: "forecast-worker: run {{ $labels.forecast_kind }} gagal"
+          description: "Usulan reorder/min-max hari ini tidak dibuat (toko tetap berjalan dengan reorder rule terakhir). Lihat kode galat di log EFN_FORECAST_RUN dan menu Demand Forecast -> Runs."
+          runbook_url: "https://github.com/efn/efn-platform/blob/main/docs/runbooks/forecast-worker.md#run-gagal"
+      # 401/403 dari Odoo = API key bot efn_forecast_<pt> kedaluwarsa/dicabut atau company salah (R-T15). Pasangan
+      # metrik masa berlaku key: alert-rules.yml grup efn-forecast-key.
+      - alert: EfnForecastOdooAuthFailure
+        expr: |
+          sum (count_over_time({service="forecast-worker"}
+            |~ `^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},\d{3} INFO efn_forecast\.runner EFN_FORECAST_RUN \{"run_id":"[^"]{1,80}","kind":"(daily|weekly_minmax)","status":"failed",.*"error":"odoo_(auth|company_mismatch)` [2h])) > 0
+        labels:
+          severity: warning
+          team: ops
+        annotations:
+          summary: "forecast-worker: Odoo menolak API key bot forecast (401/403)"
+          description: "API key user teknis efn_forecast_<pt> kedaluwarsa/dicabut, atau user bukan company PT itu. Buat key baru (runbook §3-§4)."
+          runbook_url: "https://github.com/efn/efn-platform/blob/main/docs/runbooks/forecast-worker.md#rotasi"
+      # DEAD-MAN: tidak ada run harian `ok` > 26 jam (jadwal 1x sehari + durasi <= 2 jam), HANYA bila worker terbukti
+      # AKTIF dalam 4 hari terakhir (baris `forecast-worker mulai:` / `batch berikutnya` / EFN_FORECAST_RUN hanya
+      # dicetak bila FORECAST_ENABLED=true; mode idle hanya mencetak WARNING FORECAST_ENABLED=false). Tanpa syarat itu
+      # alert menyala terus di env yang sengaja mematikan forecast (default semua env). Batas: worker yang mati/hang
+      # > 4 hari berhenti memicu alert ini -> EfnServiceDown/cadvisor + pemeriksaan pagi planner (runbook §5).
+      - alert: EfnForecastRunStale
+        expr: |
+          sum(absent_over_time({service="forecast-worker"}
+            |~ `^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},\d{3} INFO efn_forecast\.runner EFN_FORECAST_RUN \{"run_id":"[^"]{1,80}","kind":"daily","status":"ok"` [26h]))
+          and
+          sum(count_over_time({service="forecast-worker"}
+            |~ `^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},\d{3} (INFO efn_forecast forecast-worker mulai: |INFO efn_forecast batch berikutnya |INFO efn_forecast\.runner EFN_FORECAST_RUN )` [4d])) > 0
+        for: 30m
+        labels:
+          severity: warning
+          team: data
+        annotations:
+          summary: "forecast-worker: tidak ada run harian sukses > 26 jam"
+          description: "Worker aktif tetapi tidak menyelesaikan run harian (crash, hang, jadwal salah, ClickHouse/Odoo tidak terjangkau). Usulan reorder basi."
+          runbook_url: "https://github.com/efn/efn-platform/blob/main/docs/runbooks/forecast-worker.md#run-basi"

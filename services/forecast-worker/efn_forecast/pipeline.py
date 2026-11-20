@@ -28,7 +28,7 @@ import numpy as np
 from efn_forecast.calendar import CalendarConfig, CalendarEntry, build_features, build_spec, for_warehouse
 from efn_forecast.contract import SERVICE_LEVEL_MAX, SERVICE_LEVEL_MIN
 from efn_forecast.factors import Factors, estimate_factors, merge_factors, multipliers
-from efn_forecast.models import CANDIDATE_MODELS, Z80, ModelRunner, classify, model_for_class, select_model
+from efn_forecast.models import DEFAULT_MODELS, Z80, ModelRunner, classify, model_for_class, select_model
 
 log = logging.getLogger(__name__)
 # G46b: label internal seri tidak aktif (ramalan 0). TIDAK dikirim ke Odoo (forecast_lines melewatinya), tetap dihitung
@@ -41,7 +41,7 @@ class PipelineConfig:
     horizon_days: int = 28
     min_history_days: int = 56
     intermittent_zero_ratio: float = 0.6
-    candidates: tuple[str, ...] = CANDIDATE_MODELS
+    candidates: tuple[str, ...] = DEFAULT_MODELS
     cv_windows: int = 4
     fit_days: int = 365
     shrink_days: float = 5.0

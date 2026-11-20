@@ -1,6 +1,8 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
+import { FeatureGate } from '@/components/engage/FeatureGate';
+import { InboxLink } from '@/components/engage/InboxLink';
 import { bffFetch, type MeResponse } from '@/lib/bff';
 import { formatNumber } from '@/lib/format';
 import { currentExpiryNotice, parsePointsExpiry } from '@/lib/points';
@@ -68,6 +70,17 @@ export default async function AkunPage() {
           Data akun belum dapat dimuat. Silakan muat ulang halaman beberapa saat lagi.
         </p>
       )}
+      <InboxLink />
+      <FeatureGate feature={['wishlist', 'restock', 'priceAlert']}>
+        <section className="card stack" aria-labelledby="wishlist-judul">
+          <h2 id="wishlist-judul" style={{ margin: 0 }}>
+            Wishlist &amp; pengingat
+          </h2>
+          <p style={{ margin: 0 }}>
+            <Link href="/wishlist">Lihat wishlist</Link>, pengingat stok, dan pengingat harga Anda.
+          </p>
+        </section>
+      </FeatureGate>
       <section className="card stack" aria-labelledby="privasi-judul">
         <h2 id="privasi-judul" style={{ margin: 0 }}>
           Privasi &amp; data
@@ -76,6 +89,11 @@ export default async function AkunPage() {
           <li>
             <Link href="/akun/privasi">Pengaturan Privasi</Link> — persetujuan lokasi dan info promo.
           </li>
+          <FeatureGate feature="tracking">
+            <li>
+              <Link href="/privasi/pelacakan">Pengaturan Pelacakan</Link> — pelacakan aktivitas di perangkat dan akun.
+            </li>
+          </FeatureGate>
           <li>
             <Link href="/akun/data-saya">Data Saya</Link> — unduh data, hapus akun, riwayat permintaan.
           </li>

@@ -65,7 +65,7 @@ python -m efn_forecast seed-calendar --company SMD [--dry-run]
 | `FORECAST_DAILY_CRON`, `FORECAST_TZ`, `FORECAST_MINMAX_WEEKDAY` | `30 23 * * *`, `Asia/Jakarta`, `6` (Minggu; `-1` = mati) |
 | `FORECAST_HORIZON_DAYS`, `FORECAST_CHUNK_SIZE` | `28` (7..60), `500` (1..500) |
 | `FORECAST_HISTORY_DAYS`, `FORECAST_STOCK_DAYS`, `FORECAST_FIT_DAYS` | `800`, `400`, `365` |
-| `FORECAST_MODELS`, `FORECAST_CV_WINDOWS`, `FORECAST_MIN_HISTORY_DAYS`, `FORECAST_INTERMITTENT_ZERO_RATIO` | `AutoETS,AutoARIMA`, `4`, `56`, `0.6` |
+| `FORECAST_MODELS`, `FORECAST_CV_WINDOWS`, `FORECAST_MIN_HISTORY_DAYS`, `FORECAST_INTERMITTENT_ZERO_RATIO` | `AutoETS` (pilihan `AutoETS,AutoARIMA`), `4`, `56`, `0.6` |
 | `FORECAST_JOBS` | `1` (1..32): proses paralel per gudang (G46b, `spawn`; hasil identik dengan 1). Log `forecast gudang i/N` per gudang. Uji PB 112 hari: `AutoETS,AutoARIMA` + CV 4 + backtest = jam-an di 1 core; untuk run cepat `FORECAST_MODELS=AutoETS` (tanpa CV) |
 | `FORECAST_INACTIVE_DAYS` | `28` (0..365; 0 = mati): seri tanpa jual dan tanpa hari OOS selama N hari terakhir → ramalan 0 (`inactive`), **tidak dikirim** ke Odoo (tanpa usulan forecast/min-max), tetap dihitung di backtest (L-168). Level `category_mean` = median seri pembanding |
 | `FORECAST_PAYDAY_TAIL_DAYS`, `FORECAST_PAYDAY_HEAD_DAYS`, `FORECAST_WEEKEND_DAYS` | `7`, `7`, `5,6` (0=Senin) — **samakan dengan parameter Odoo per company** |
@@ -81,10 +81,15 @@ python -m efn_forecast seed-calendar --company SMD [--dry-run]
 | `CH_HOST`, `CH_PORT`, `CH_USER`, `CH_PASSWORD_FILE`, `CH_DATABASE`, `CH_SECURE`, `CH_CA_FILE`, `CH_QUERY_TIMEOUT_SECONDS` | `clickhouse`, `8443`, `efn_forecast_reader`, secret `clickhouse_password_forecast`, `efn_forecast`, `true`, `/run/secrets/efn_ca_crt`, `300` |
 | `NUMBA_CACHE_DIR` | `/tmp/numba` (rootfs read-only) |
 
-## Lisensi dependency (belum diverifikasi ulang ke repo primer)
-statsforecast Apache-2.0, holidays MIT, numpy/pandas/scipy/statsmodels BSD-3-Clause, numba/llvmlite BSD-2-Clause,
-clickhouse-connect Apache-2.0, requests Apache-2.0, urllib3 MIT, certifi MPL-2.0 — semua kompatibel untuk pemakaian
-internal; tidak ada kode vendor yang disalin.
+## Lisensi dependency (33 paket `requirements.lock`, metadata paket terpasang, 19 Nov 2026)
+Diperiksa dari metadata `License-Expression`/`License`/classifier setelah `pip install --require-hashes` (bukan dari
+repo primer). Semua permisif; tidak ada copyleft kuat; tidak ada kode vendor yang disalin.
+- **Apache-2.0**: adagio, clickhouse-connect, coreforecast, fugue, pyarrow, requests, statsforecast, triad, tzdata,
+  utilsforecast; packaging (Apache-2.0 OR BSD-2-Clause).
+- **BSD (2/3-Clause)**: cloudpickle, fsspec, idna, llvmlite, lz4, numba, numpy, pandas, patsy, python-dateutil, scipy,
+  statsmodels, threadpoolctl, zstandard.
+- **MIT**: charset-normalizer, holidays, narwhals, pytz, six, urllib3.
+- **MPL-2.0** (copyleft lemah per file, tidak dimodifikasi): certifi; tqdm (MPL-2.0 AND MIT).
 
 ## Test
 ```

@@ -158,6 +158,27 @@ services:
       MGM_ENABLED: ${MGM_ENABLED:-false}
       MGM_CLAIM_WINDOW_DAYS: ${MGM_CLAIM_WINDOW_DAYS:-30}
       MGM_SETTLE_INTERVAL_MS: ${MGM_SETTLE_INTERVAL_MS:-300000}
+      # G50 (docs/04 §28.9, ADR-048): kanal email dev -> Mailpit (SMTP implicit TLS, sertifikat CA dev, tanpa relai ke
+      # internet, tanpa AUTH). EMAIL_ENABLED tetap dari .env (default false). Unsubscribe = halaman Super-App dev.
+      EMAIL_SMTP_HOST: ${EMAIL_SMTP_HOST:-mailpit}
+      EMAIL_SMTP_PORT: ${EMAIL_SMTP_PORT:-1025}
+      EMAIL_SMTP_TLS_MODE: ${EMAIL_SMTP_TLS_MODE:-implicit}
+      EMAIL_SMTP_CA_FILE: /run/secrets/efn_ca_crt
+      EMAIL_FROM: ${EMAIL_FROM:-EFN Dev <promo@efn.local>}
+      EMAIL_UNSUBSCRIBE_URL: ${EMAIL_UNSUBSCRIBE_URL:-https://app.efn.local/berhenti-langganan}
+      # Teks consent `tracking` DRAFT (services/superapp-web/lib/tracking.ts TRACKING_TEXT): versi + sha256 UTF-8 body.
+      # Kosong sampai sha256 dihitung (laporan frontend G50 §4) -> banner tracking tidak tampil walau flag aktif.
+      CONSENT_TRACKING_VERSION: ${CONSENT_TRACKING_VERSION:-}
+      CONSENT_TRACKING_TEXT_SHA256: ${CONSENT_TRACKING_TEXT_SHA256:-}
+    # Base + `mail` (G50: network khusus api-gateway <-> mailpit). Daftar base diulang agar hasil sama walau merge list.
+    # K25-06: bentuk map + alias scrape Prometheus `api-gateway-metrics` (hanya `internal`) sama dengan base.
+    networks:
+      internal:
+        aliases: [api-gateway-metrics]
+      data:
+      cache:
+      egress:
+      mail:
     volumes:
       - ../../services/api-gateway/src:/app/src:ro
     read_only: false
@@ -249,16 +270,75 @@ services:
     environment:
       APP_ENV: dev
 
+  # G50 (docs/04 §28.9, ADR-048): penangkap email DEV. SMTP implicit TLS :1025 + UI HTTPS :8025, sertifikat leaf
+  # `mailpit` dari CA dev (scripts/gen-pki.sh, DEV_ONLY_SERVICES). Tanpa relai ke internet (network `mail` internal,
+  # MP_SMTP_RELAY_* tidak diset), tanpa AUTH (hanya api-gateway yang satu network). UI hanya 127.0.0.1:8025:
+  # https://localhost:8025 (CA secrets/efn_ca_crt.txt; SAN localhost). Pesan di tmpfs (hilang saat restart).
+  mailpit:
+    # Digest = indeks multi-arch tag v1.34.0 (Docker Hub, 20 Nov 2026) - verifikasi: docker buildx imagetools inspect
+    image: axllent/mailpit:v1.34.0@sha256:23a2ef85bc50853ab3093645d1d64679afd8887e89da5e48a88940c172591a4e
+    profiles: ["core"]
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"
+        labels: "service"
+    security_opt:
+      - no-new-privileges:true
+    user: "65534:65534"
+    environment:
+      MP_SMTP_BIND_ADDR: 0.0.0.0:1025
+      MP_SMTP_TLS_CERT: /run/secrets/tls_mailpit_crt
+      MP_SMTP_TLS_KEY: /run/secrets/tls_mailpit_key
+      # Implicit TLS (sama dengan EMAIL_SMTP_TLS_MODE=implicit BFF dev); koneksi tanpa TLS ditolak
+      MP_SMTP_REQUIRE_TLS: "true"
+      MP_UI_BIND_ADDR: 0.0.0.0:8025
+      MP_UI_TLS_CERT: /run/secrets/tls_mailpit_crt
+      MP_UI_TLS_KEY: /run/secrets/tls_mailpit_key
+      MP_MAX_MESSAGES: "500"
+      MP_DISABLE_VERSION_CHECK: "true"
+    secrets: [tls_mailpit_crt, tls_mailpit_key]
+    ports: ["127.0.0.1:8025:8025"]   # UI https saja; SMTP tidak dipublish
+    networks: [mail]
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    deploy:
+      resources:
+        limits: { memory: 128M }
+    healthcheck:
+      test: ["CMD", "/mailpit", "readyz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    labels:
+      service: mailpit
+
   # Docker Desktop (WSL2): "/" bukan shared/slave mount -> propagasi rslave ditolak daemon. Target sama = mengganti
   # entri base (/:/host:ro,rslave). Produksi (Linux) tetap rslave.
   node-exporter:
     volumes:
       - /:/host:ro
 
+# G50: network dev khusus api-gateway <-> mailpit (tanpa jalur keluar)
+# K25-06: nama `<EFN_STACK>_mail`, subnet <EFN_SUBNET_BASE>.20.0/24.
+networks:
+  mail:
+    name: ${EFN_STACK:-efn}_mail
+    internal: true
+    ipam:
+      config: [{ subnet: "${EFN_SUBNET_BASE:-172.30}.20.0/24" }]
+
 # Dev saja (bukan bagian scripts/secrets.list / produksi): sertifikat edge self-signed dari scripts/gen-secrets.sh
 secrets:
   dev_edge_crt: { file: ../../secrets/dev_edge_crt.txt }
   dev_edge_key: { file: ../../secrets/dev_edge_key.txt }
+  # G50: leaf `mailpit` dari CA dev (scripts/gen-pki.sh, DEV_ONLY_SERVICES)
+  tls_mailpit_crt: { file: ../../secrets/tls_mailpit_crt.txt }
+  tls_mailpit_key: { file: ../../secrets/tls_mailpit_key.txt }
   # Kunci PII Odoo (odoo_pii_key_v1/_bidx_key/_name_key): definisi top-level kini di compose base (G21 AC-13, sama dengan
   # scripts/secrets.list). Dev: 32 byte acak dari scripts/gen-secrets.sh (bagian "PII Odoo"); menghapus file key ring =
   # data partner terlindungi di DB dev tidak terbaca; bidx/name hilang = indeks/token dihitung ulang.

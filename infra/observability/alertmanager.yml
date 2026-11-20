@@ -38,6 +38,10 @@ inhibit_rules:
   - source_matchers: ['alertname="EfnLoyaltyLiabilityReconCritical"']
     target_matchers: ['alertname="EfnLoyaltyLiabilityReconMismatch"']
     equal: [company_code]
+  # G45 (SEC-216): brute force PIN supervisor POS (>= 10/15 menit) menekan warning (>= 5) config yang sama
+  - source_matchers: ['alertname="EfnPosPinBruteForce"']
+    target_matchers: ['alertname="EfnPosPinFailures"']
+    equal: [config_id]
   - source_matchers: ['alertname="EfnDiskUsageCritical"']
     target_matchers: ['alertname="EfnDiskUsageHigh"']
     equal: [instance, mountpoint]

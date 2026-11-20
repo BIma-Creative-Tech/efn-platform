@@ -17,11 +17,18 @@ Terkait: ADR-004, `docs/02` §4, [dev-stack-boot.md](dev-stack-boot.md), [intern
 | `EFN_SUBNET_BASE` | `172.30` | dua oktet pertama subnet semua network: `<base>.<n>.0/24` | privat RFC1918, bukan `10.88`/`10.89` (WireGuard) |
 
 Peta oktet ketiga (tetap): 0 `edge`, 1 `internal`, 2 `data`, 3 `egress`, 4 `socket-proxy`, 5 `cache`, 6 `objstore`,
-7 `esb`, 8 `egress-esb`, 9 `insight-ingress`, 10 `insight-data`, 11 `forecast-ch`, 12 `forecast-rpc`.
+7 `esb`, 8 `egress-esb`, 9 `insight-ingress`, 10 `insight-data`, 11 `forecast-ch`, 12 `forecast-rpc`, 13 `rmq`,
+14 `wa-egress` (proxy egress IP statis `.14.10`), 15 `wa-internet`, 16 `wa-admin`, 17 `segment-ch`, 18 `segment-rpc`,
+19 `segment-bff`, 20 `mail` (dev), 21 `wa-ingress` (relay admin WA IP statis `.21.10`).
 
 Turunan otomatis (tidak perlu diisi):
 
 - `TRUSTED_PROXIES` BFF = `<base>.1.0/24` (bila tidak diset di `.env`; bila diset, wajib memuat subnet itu — dicek).
+- HOST user ClickHouse (SEC-215): `CH_FORECAST_READER_HOST_CIDR` = `<base>.11.0/24`, `CH_SEGMENT_READER_HOST_CIDR` =
+  `<base>.17.0/24` (bila overlay ter-render, wajib sama dengan ipam `forecast-ch`/`segment-ch` — dicek). Hapus nilai lama
+  `CH_FORECAST_READER_HOST_CIDR=172.30.11.0/24` dari `.env` stack ber-base lain.
+- WA tidak resmi: IP statis relay `<base>.21.10` (env `WA_RELAY_BIND_IP` untuk `admin-relay.cfg`, tanpa env = gagal start)
+  dan proxy egress `<base>.14.10` (`extra_hosts`); Prometheus men-scrape alias `wa-admin-relay-ingress`.
 - `pg_hba.conf` memakai `samenet` (postgres hanya di network `data`, dicek CI) — tidak ada CIDR literal.
 - Prometheus men-scrape `api-gateway-metrics` / `ocr-worker-metrics` (alias ber-scope network `internal`) dengan
   relabel keep oktet ketiga `1`; tidak ada nama network di `prometheus.yml`.
@@ -73,7 +80,9 @@ COMPOSE_PROFILES=core,data,observability,ops   # tanpa ai di 12 GB (§7)
 FORECAST_ENABLED=false              # default SEMUA env (§5.4)
 ```
 
-Hapus/biarkan terkomentar: `IMAGE_*` (default compose sudah per stack) dan `TRUSTED_PROXIES` (turunan subnet). Baris
+Hapus/biarkan terkomentar: `IMAGE_*` (termasuk `IMAGE_FORECAST_WORKER`, `IMAGE_SEGMENT_WORKER`, `IMAGE_WA_UNOFFICIAL`;
+default compose sudah per stack), `TRUSTED_PROXIES`, `CH_FORECAST_READER_HOST_CIDR`, `CH_SEGMENT_READER_HOST_CIDR`
+(turunan subnet). Baris
 `IMAGE_*=ghcr.io/efn/...:dev` peninggalan `.env` lama membuat stack berbagi image dengan `efn` → ditolak check-encryption
 (aturan h).
 
@@ -100,7 +109,7 @@ tetap default `172.16.0.0/12` dan bisa ditimpa `.env` yang sama.
 cd ../efn-prod
 DC="docker compose -f infra/compose/docker-compose.yml -f infra/compose/docker-compose.prod.yml \
   -f infra/compose/docker-compose.local-edge.yml --env-file infra/compose/.env"
-$DC config -q && bash scripts/check-encryption.sh      # render prod-stack/dev-stack ikut diperiksa
+$DC config -q && bash scripts/check-encryption.sh      # render prod-stack/dev-stack (+ esb/forecast/segment/wa-unofficial)
 $DC --profile core --profile data build                 # image ghcr.io/efn-prod/<svc>:dev, tidak menimpa stack lain
 ```
 
@@ -210,8 +219,8 @@ utama: ClickHouse menyesuaikan cache dengan plafon cgroup (16G) dan Odoo 6 worke
 
 ## 8. Batasan yang diketahui
 
-- `CH_FORECAST_READER_HOST_CIDR` (catatan gladi) tidak ada di `main`; user ClickHouse dibuat `HOST ANY` (isolasi lewat
-  network `forecast-ch`). Bila CIDR host diperkenalkan, turunkan dari `EFN_SUBNET_BASE` (`<base>.11.0/24`).
+- User ClickHouse lain (`efn_etl`, `efn_text2sql`, `efn_metabase`, `efn_esb`, `efn_insight`) tetap `HOST ANY` (isolasi
+  lewat network Docker); hanya `efn_forecast_reader` dan `efn_segment_reader` dibatasi `HOST IP` (§1).
 - Secret: path tetap `../../secrets/` (satu worktree per env). `SECRETS_DIR` per env di compose belum dibuat.
 - Sertifikat edge lokal hanya `efn.local`/`*.efn.local`; domain per env (mis. `stg.efn.local`) butuh perluasan SAN di
   `gen-secrets.sh` (belum).

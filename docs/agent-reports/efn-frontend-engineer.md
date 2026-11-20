@@ -597,3 +597,49 @@ cd services/insight-web
 docker run --rm -v "$(pwd -W)":/app -w /app node:22.23-alpine sh -c "npm install && npm test && npm run lint && npm run typecheck && npm run build"
 ```
 lalu commit `package-lock.json`; `docker build --target runtime services/insight-web`; uji end-to-end SSO dengan Odoo `efn_insight` (Origin/Referrer), dan SQL katalog di ClickHouse 24.8 (`docs/design/insight-web-queries.md`). Bila lint menolak `react-hooks/*`, sesuaikan pola efek di `components/Chrome.tsx`/`EChart.tsx`.
+
+## Gelombang 50 (G50) — Super-App web: consent tracking, event perilaku, wishlist, notify-me, price alert (20 Nov 2026)
+
+Referensi: docs/04 §28.6/§28.8/§28.10, ADR-047 (Proposed). Tanpa shell: **belum ada `npm test`, `tsc`, lint, atau `next build` yang dijalankan.** Tidak ada commit. Hanya `services/superapp-web/**` + laporan ini yang disentuh.
+
+### 1. Halaman & komponen
+- Provider: `components/engage/EngageProvider.tsx` (di `app/layout.tsx`): memuat flag dari `GET /api/config`, konteks `{features, ready, loggedIn, announce, disableTracking}`, live region/toast yang bisa ditutup, dan `TrackingRuntime` (flush periodik, `visibilitychange`/`pagehide`, status tautan akun). `FeatureGate.tsx` menyembunyikan anak bila flag mati.
+- Consent: `TrackingBanner.tsx` (di alur dokumen, tidak menutupi fokus; Izinkan/Tolak setara; teks bertanda DRAFT menunggu DPO), halaman publik `app/privasi/pelacakan/page.tsx` + `TrackingSettings.tsx` (pilihan perangkat + tombol eksplisit consent akun `tracking`). Tautan di footer, `/akun`, `/akun/privasi` (semua lewat `FeatureGate`).
+- Event: `lib/tracking.ts` (murni: teks/versi, UUID v4, allowlist event, `EventQueue`, `TrackingSender` mesin status 429/disabled/403, `VisibleTimer`, `parseFeatures`), `lib/tracking-client.ts` (cookie `efn_tc`/`efn_did` + cermin localStorage, try/catch, fetch + `sendBeacon`), `components/engage/BehaviorTrackers.tsx` (`ProductViewTracker`, `SearchTracker`). Hook: `AddToCart` (`cart_add`), `CartView` (`cart_add`/`cart_remove` per klik, `checkout_start` per kelompok PT), `WishlistButton` (`wishlist_add/remove`), `NotifyMe` (`notify_me_request`), `PriceAlert` (`price_alert_set`), `app/belanja/page.tsx` (`search`), `app/belanja/[id]/page.tsx` (`product_view` + `duration_s`).
+- Wishlist: `WishlistButton.tsx` (hati `aria-pressed`, kartu + detail; kartu = saudara `<Link>`, bukan di dalamnya), `wishlist-store.ts` (satu GET per kanal, `useSyncExternalStore`), halaman `app/wishlist/page.tsx` + `WishlistView.tsx` (wishlist, pengingat stok, pengingat harga; nama/harga dari katalog publik maks 30 produk).
+- Notify-me: `NotifyMe.tsx` dalam `AddToCart` (muncul bila stok toko terpilih `out`); kanal hanya yang ada di `features.channels`; `409 already_in_stock` -> pesan + status stok dipaksa `in_stock`; batas 50 -> pesan. Price alert: `PriceAlert.tsx` di halaman produk (validasi UX < harga tampil).
+- Route Handler baru: `app/api/{config,events,events/consent,me/tracking-consent,me/wishlist,me/wishlist/items,me/wishlist/items/[channel]/[product],me/restock-alerts,me/restock-alerts/[id],me/price-alerts}/route.ts`; helper `lib/engage.ts` (parser/validasi/pesan, murni) dan `lib/engage-route.ts`.
+- Perubahan di file lama: `lib/bff.ts` (+`retryAfterS` pada hasil gagal; kode error juga dibaca dari `{ error: "string" }` sesuai §28.6), `app/layout.tsx`, `app/belanja/page.tsx`, `app/belanja/[id]/page.tsx`, `components/online/{AddToCart,CartView}.tsx`, `app/akun/page.tsx`, `app/akun/privasi/page.tsx`, `README.md`. `lib/consent.ts` TIDAK diubah (test lama mengunci purpose `location|marketing`); purpose `tracking` memakai route terpisah.
+- Test baru: `tests/g50-tracking.test.ts`, `tests/g50-engage.test.ts` (logika murni; tidak ada runner DOM, komponen tidak diuji).
+
+### 2. Ketergantungan ke endpoint BFF (kontrak yang diasumsikan)
+| Browser -> Next | BFF | Asumsi |
+|---|---|---|
+| `GET /api/config` | `GET /v1/config` (publik) | `{ features: { tracking, wishlist, restock_alert, price_alert, push?, email?, wa_unofficial? } }` boolean. **Nama kunci wishlist/restock/price & kanal TIDAK ada di kontrak (hanya `features.tracking`)**; alias `restock`, `restock_alerts`, `price_alerts`, `notify_channels.{push,email,wa_unofficial}` diterima. Hanya `true` menyalakan fitur; kunci hilang = mati; `push` aktif kecuali `false` eksplisit. Gagal/404 -> semua mati. |
+| `POST /api/events[?link=1]` | `POST /v1/events` | body §28.6 persis (`schema_version 1`, `device_id`, `channel:"web"`, `events[]` allowlist). `202 {accepted,duplicates,rejected[],disabled?}`; `403` (kode `tracking_consent_required`, string atau `{error:{code}}`); `429` + `Retry-After`. 404/501 -> diperlakukan `disabled`. Bearer hanya bila `link=1` (consent akun aktif). |
+| `POST /api/events/consent` | `POST /v1/events/consent` | `{device_id,granted,version}` -> 2xx (`204/200/202`; `{disabled:true}` = fitur mati). Tanpa Bearer. |
+| `GET/PUT /api/me/tracking-consent` | `GET /v1/me/consents` (cari purpose `tracking`), `PUT /v1/me/consents/tracking {granted,version}` | purpose `tracking` diterima BFF (ADR-047 §2); teks versi `tracking@2026-11-20` + sha256 body harus ada di env teks consent BFF. |
+| `GET /api/me/wishlist?channel=` | `GET /v1/me/wishlist?channel=` | §28.8 `{items:[{channel_code,product_id,added_at}]}` |
+| `PUT /api/me/wishlist/items` | `PUT /v1/me/wishlist/items` | 204; batas 200 = 409/422 (kode asumsi `limit_reached`/`wishlist_limit`) |
+| `DELETE /api/me/wishlist/items/:ch/:pid` | `DELETE /v1/me/wishlist/items/:ch/:pid` | 204; 404 -> 204 |
+| `GET/POST /api/me/restock-alerts` | idem `/v1/me/restock-alerts` | POST `{channel_code,outlet_code,product_id,channels[]}` -> 201 `{id}`; `409 already_in_stock`; batas 50 |
+| `DELETE /api/me/restock-alerts/:id` | idem | 204; 404 -> 204 |
+| `GET/POST/DELETE /api/me/price-alerts` | idem `/v1/me/price-alerts` | **Asumsi**: GET `{items:[{channel_code,product_id,target_price_idr,created_at?,expires_at?}]}`; DELETE = body `{channel_code,product_id}` pada koleksi (kontrak hanya menulis "GET/POST/DELETE"). |
+
+### 3. Keputusan & asumsi yang perlu dikonfirmasi
+1. **Menolak consent = tidak ada panggilan server dan tidak ada ID** (kontrak `POST /v1/events/consent` mewajibkan `device_id`; ADR-047 §3.1 no. 3: ID hanya setelah consent). Hanya cookie pilihan `efn_tc=0.<versi>`. Penarikan setelah pernah setuju dicatat ke server (`granted:false`) dan ID dihapus.
+2. ID disimpan setelah BFF mengonfirmasi consent (bukan sebelum). Cookie `efn_did` Max-Age 180 hari (= retensi `device_link`), `efn_tc` 365 hari; keduanya first-party, SameSite=Lax, Secure di https, tidak HttpOnly (dibaca JS, tidak berisi otorisasi).
+3. Consent akun tidak otomatis; event dikirim tanpa Bearer sampai member menyalakan consent akun (route `?link=1`). Bila 403 `tracking_consent_required`, pengirim berhenti dan antrean dikosongkan sampai consent berubah.
+4. `channel_code` event dibatasi <= 8 karakter (kontrak §28.6) tetapi `CHANNEL_RE` katalog mengizinkan 16: kanal >= 9 karakter tidak ikut tercatat (event dibuang, tidak dipotong). Kode kanal nyata (GL, PB, BCR...) pendek.
+5. `price alert`: "harga saat ini" yang divalidasi di UI = harga yang tampil (F&B = sebelum pajak, ritel = termasuk pajak). BFF harus memakai acuan yang sama atau kontrak perlu menetapkan.
+6. `notify-me` untuk member tanpa app: kanal `push` tersedia di web hanya sebagai kanal ke perangkat app member; web tidak punya Web Push. Bila `features.push` tidak dikirim BFF, push tampil sebagai pilihan.
+7. `DELETE` wishlist/restock/price 404 dianggap sukses (idempoten).
+8. Event `cart_add/cart_remove` per klik +/−/Hapus (qty 1 atau `l.qty`), bukan selisih total keranjang.
+9. StrictMode dev memicu `product_view` ganda (mount-unmount-mount); tidak terjadi di production.
+
+### 4. Belum diverifikasi
+- `vitest`, `tsc`, `eslint` (react-hooks v7), `next build`: belum dijalankan. Risiko lint: efek di `WishlistView`/`NotifyMe`/`PriceAlert` memanggil `setState` hanya setelah `await`.
+- Browser nyata: `sendBeacon` same-origin membawa header `Origin` (route menolak tanpa Origin -> event beacon hilang diam-diam bila peramban tidak mengirimnya); cookie `efn_tc` terbaca antartab; layout banner di semua tema brand (kontras token tidak diuji otomatis); pembaca layar untuk toast/live region dan hati `aria-pressed`.
+- Kontrak BFF belum ada saat ini ditulis (dibangun paralel): semua bentuk respons di §2 adalah pembacaan dokumen. Nama flag `features.*` selain `tracking` dan nama kode error batas jumlah adalah tebakan.
+- Teks consent `TRACKING_TEXT` DRAFT: menunggu DPO/Legal (Q-SM16/17/26); mengubah `body` wajib menaikkan `version` dan memperbarui env BFF (`text_sha256`). Belum ada test hash karena tidak ada shell untuk menghitung sha256; lead/BFF perlu menghitung `sha256(TRACKING_TEXT.body)` (UTF-8) untuk env.
+- Tidak ada uji komponen (tidak ada runner DOM) dan tidak ada E2E.

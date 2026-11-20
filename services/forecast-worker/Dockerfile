@@ -1,5 +1,9 @@
 # forecast-worker: ClickHouse efn_forecast.* (read-only) -> statsforecast -> Odoo /json/2 (G44, ADR-046 Proposed).
 # SEC-47: base image dipin tag@digest (sama dengan services/etl & esb-extract; Dependabot `docker` memperbarui digest).
+# SEC-214: dependency di-install HANYA dari requirements.lock (pin penuh + hash sha256 setiap wheel, termasuk transitif).
+# requirements.txt = input pin langsung (sumber review + pip-audit); requirements.lock dibuat ulang dengan
+# `bash scripts/lock-python-deps.sh forecast-worker` (image base yang SAMA dengan baris FROM di bawah) dan diperiksa CI
+# `bash scripts/check-py-lock.sh forecast-worker` (runbook docs/runbooks/python-dependency-lock.md).
 FROM python:3.12-slim@sha256:05cda9777409a9c3ffddd94a4c476b79f0769a0b4857f0c7ed9226b6800b0d6f
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
@@ -22,8 +26,16 @@ WORKDIR /app
 
 # Dependency di site-packages sistem (world-readable) -> bisa dibaca user 65534 dari compose. Wheel manylinux
 # (numba/llvmlite/scipy) -> tanpa compiler di image.
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# Fail closed (SEC-214): lock placeholder / tanpa hash = build GAGAL dengan pesan jelas (bukan install tanpa hash).
+# --require-hashes: setiap paket wajib ber-hash dan ber-pin `==`; --no-deps: pip tidak me-resolve apa pun di luar lock;
+# `pip check`: lock lengkap (tidak ada dependency transitif yang hilang).
+COPY requirements.txt requirements.lock ./
+RUN if grep -q 'EFN_LOCK_PLACEHOLDER' requirements.lock || ! grep -q -- '--hash=sha256:' requirements.lock; then \
+      echo "requirements.lock belum dibuat: jalankan 'bash scripts/lock-python-deps.sh forecast-worker' (docs/runbooks/python-dependency-lock.md)" >&2; \
+      exit 1; \
+    fi \
+    && pip install --no-cache-dir --require-hashes --no-deps -r requirements.lock \
+    && pip check
 
 # Kode milik root, hanya-baca untuk user runtime; container read_only + tmpfs /tmp (cache JIT numba di /tmp/numba).
 COPY efn_forecast ./efn_forecast

@@ -1,0 +1,13 @@
+id,name,model_id:id,group_id:id,perm_read,perm_write,perm_create,perm_unlink
+access_efn_expiry_alert_stock_user,efn.expiry.alert stock user,model_efn_expiry_alert,stock.group_stock_user,1,1,0,0
+access_efn_expiry_alert_override,efn.expiry.alert supervisor override,model_efn_expiry_alert,group_expiry_override,1,0,0,0
+access_efn_lot_markdown_stock_user,efn.lot.markdown stock user,model_efn_lot_markdown,stock.group_stock_user,1,1,1,1
+access_efn_lot_markdown_override,efn.lot.markdown supervisor override,model_efn_lot_markdown,group_expiry_override,1,0,0,0
+access_efn_expiry_event_stock_user,efn.expiry.event stock user,model_efn_expiry_event,stock.group_stock_user,1,0,0,0
+access_efn_expiry_event_pos_manager,efn.expiry.event pos manager,model_efn_expiry_event,point_of_sale.group_pos_manager,1,0,0,0
+access_efn_expiry_event_override,efn.expiry.event supervisor override,model_efn_expiry_event,group_expiry_override,1,0,0,0
+access_efn_expiry_pos_approval_pos_manager,efn.expiry.pos.approval pos manager,model_efn_expiry_pos_approval,point_of_sale.group_pos_manager,1,0,0,0
+access_efn_expiry_pos_approval_markdown_manager,efn.expiry.pos.approval markdown manager,model_efn_expiry_pos_approval,group_markdown_manager,1,0,0,0
+access_efn_expiry_pos_approval_override,efn.expiry.pos.approval supervisor override,model_efn_expiry_pos_approval,group_expiry_override,1,0,0,0
+access_efn_expiry_transfer_wizard_stock_user,efn.expiry.transfer.wizard stock user,model_efn_expiry_transfer_wizard,stock.group_stock_user,1,1,1,1
+access_efn_expiry_receipt_override_wizard_stock_user,efn.expiry.receipt.override.wizard stock user,model_efn_expiry_receipt_override_wizard,stock.group_stock_user,1,1,1,1

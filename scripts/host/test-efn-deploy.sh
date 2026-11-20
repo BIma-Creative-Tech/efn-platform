@@ -97,7 +97,7 @@ EOF
 }
 write_conf
 
-SVCS=(postgres odoo api-gateway superapp-web insight-web ai-ocr-worker etl text2sql minio metabase)
+SVCS=(postgres odoo api-gateway superapp-web insight-web ai-ocr-worker etl text2sql minio metabase forecast-worker)
 dg() { printf '%s' "$1" | sha256sum | cut -d' ' -f1; }
 : > /etc/fake-cosign/signed
 for s in "${SVCS[@]}"; do echo "${PREFIX}${s}@sha256:$(dg "$s-1")" >> /etc/fake-cosign/signed; done
@@ -112,7 +112,7 @@ make_release() {
   cp "$SRC/scripts/lib/deploy-validate.sh" "$d/r/scripts/lib/deploy-validate.sh"
   cat > "$d/r/scripts/deploy.sh" <<'EOF'
 #!/usr/bin/env bash
-{ env | grep -E '^(IMAGE_|APP_ENV=|EFN_RELEASE_|WHATSAPP_OTP_TEMPLATE=|EFN_WG_|EFN_PUBLIC_BIND=|COMPOSE_PROFILES=|TRAEFIK_DOMAIN=|PAYMENT_PROVIDER=|JWT_SECRET=|EFN_ALLOW_FEATURE_ON=|LOYALTY_EXPIRY_ENABLED=|FNB_QR_ENABLED=|LOYALTY_EXPIRY_NOTICE_REQUIRE_CONSENT=|ETL_ENABLE_KDS=|BOOKING_ENABLED=|ONLINE_SLOTS_ENABLED=|PROMO_ENABLED=|PRIVACY_CONSENT_ENFORCED=|MGM_ENABLED=)' | sort; } > /tmp/deploy-ran
+{ env | grep -E '^(IMAGE_|APP_ENV=|EFN_RELEASE_|WHATSAPP_OTP_TEMPLATE=|EFN_WG_|EFN_PUBLIC_BIND=|COMPOSE_PROFILES=|TRAEFIK_DOMAIN=|PAYMENT_PROVIDER=|JWT_SECRET=|EFN_ALLOW_FEATURE_ON=|LOYALTY_EXPIRY_ENABLED=|FNB_QR_ENABLED=|LOYALTY_EXPIRY_NOTICE_REQUIRE_CONSENT=|ETL_ENABLE_KDS=|BOOKING_ENABLED=|ONLINE_SLOTS_ENABLED=|PROMO_ENABLED=|PRIVACY_CONSENT_ENFORCED=|MGM_ENABLED=|FORECAST_ENABLED=|FORECAST_DAILY_CRON=)' | sort; } > /tmp/deploy-ran
 # SEC-120: kunci host bersama dipegang efn-deploy (fd 8 diwarisi) selama deploy.sh berjalan
 if flock -n /run/efn/deploy.lock true; then echo LOCK=free; else echo LOCK=held; fi >> /tmp/deploy-ran
 EOF
@@ -375,6 +375,27 @@ neg_man "270 MGM_ENABLED bukan true/false ditolak" "config manifest rilis tidak 
 neg_man "271 MGM_CLAIM_WINDOW_DAYS di luar 1..365 ditolak" "config manifest rilis tidak valid" '.config.MGM_CLAIM_WINDOW_DAYS = "0"'
 neg_man "272 MGM_SETTLE_INTERVAL_MS di luar 0..86400000 ditolak" "config manifest rilis tidak valid" '.config.MGM_SETTLE_INTERVAL_MS = "90000000"'
 neg_env "273 MGM_ENABLED lewat stdin ditolak (config manifest)" "variabel tidak diizinkan: MGM_ENABLED" "MGM_ENABLED=true"
+# G44 (docs/04 §28.10): forecast-worker = kunci config manifest; image IMAGE_FORECAST_WORKER wajib di manifest
+neg_man "274a manifest tanpa IMAGE_FORECAST_WORKER ditolak (jumlah image skema)" "skema" 'del(.images.IMAGE_FORECAST_WORKER)'
+neg_man "274b IMAGE_FORECAST_WORKER image svc lain ditolak" "IMAGE_FORECAST_WORKER di manifest tidak sesuai" \
+  '.images.IMAGE_FORECAST_WORKER = .images.IMAGE_ETL'
+neg_env "274c FORECAST_ENABLED lewat stdin ditolak (config manifest)" "variabel tidak diizinkan: FORECAST_ENABLED" "FORECAST_ENABLED=true"
+neg_man "274d production FORECAST_ENABLED=true tanpa EFN_ALLOW_FEATURE_ON ditolak (ADR-046)" "config manifest rilis tidak valid" \
+  '.config.FORECAST_ENABLED = "true"'
+neg_man "274e FORECAST_DAILY_CRON berisi karakter shell ditolak" "config manifest rilis tidak valid" \
+  '.config.FORECAST_DAILY_CRON = "30 23 * * *; id"'
+neg_man "274f CH_FORECAST_READER_HOST_CIDR=0.0.0.0/0 ditolak (SEC-215)" "config manifest rilis tidak valid" \
+  '.config.CH_FORECAST_READER_HOST_CIDR = "0.0.0.0/0"'
+write_conf "" "EFN_ALLOW_FEATURE_ON='FORECAST_ENABLED'"
+SEQ=$((SEQ + 1))
+make_release "N$SEQ" "$SEQ" 1.3.0 '.config.FORECAST_ENABLED = "true" | .config.FORECAST_DAILY_CRON = "15 22 * * *"'
+make_env "N$SEQ"; run "N$SEQ"
+expect_ok "274g production FORECAST_ENABLED=true dengan EFN_ALLOW_FEATURE_ON di deploy.conf diterima"
+if grep -qxF 'FORECAST_ENABLED=true' /tmp/deploy-ran 2> /dev/null && grep -qxF 'FORECAST_DAILY_CRON=15 22 * * *' /tmp/deploy-ran \
+   && grep -qxF "IMAGE_FORECAST_WORKER=${PREFIX}forecast-worker@sha256:$(dg forecast-worker-1)" /tmp/deploy-ran; then
+  ok "274h config forecast (cron berspasi utuh) + IMAGE_FORECAST_WORKER dari manifest diteruskan ke deploy.sh"
+else bad "274h config forecast ke deploy.sh"; fi
+write_conf
 neg_man "40 config manifest multi-baris ditolak" "skema" '.config.RABBITMQ_STRICT_PERMISSIONS = "true\nIMAGE_ODOO=evil"'
 neg_man "41 kunci config manifest tidak dikenal ditolak" "skema" '.config.IMAGE_ODOO = "evil.example/odoo"'
 neg_man "101 saklar dev ODOO_ONLINE_MOCK di config manifest ditolak (G17)" "skema" '.config.ODOO_ONLINE_MOCK = "true"'
@@ -817,6 +838,68 @@ vc "273e G42 production INSIGHT_ENABLED=true + izin Superadmin diterima" 0 produ
 vc "269c G32 ETL_ENABLE_WASTE=true + ETL_ENABLE_ODOO=false ditolak" 1 staging ETL_ENABLE_WASTE=true ETL_ENABLE_ODOO=false
 vc "269d G32 production ETL_ENABLE_WASTE=true + ETL_ENABLE_ODOO kosong diterima (aktif setelah grant)" 0 production \
   ETL_ENABLE_WASTE=true
+# G44 (docs/04 §28.10, ADR-046) + SEC-215: konfigurasi forecast-worker di manifest rilis
+vc "275a G44 FORECAST_* default diterima" 0 production
+vc "275b G44 FORECAST_ENABLED=ya ditolak (boolean)" 1 staging FORECAST_ENABLED=ya
+vc "275c G44 staging FORECAST_ENABLED=true tanpa izin diterima" 0 staging FORECAST_ENABLED=true
+vc "275d G44 production FORECAST_ENABLED=true tanpa izin ditolak" 1 production FORECAST_ENABLED=true
+vc "275e G44 production FORECAST_ENABLED=true + izin Superadmin diterima" 0 production FORECAST_ENABLED=true \
+  EFN_ALLOW_FEATURE_ON=FORECAST_ENABLED
+vc "275f G44 FORECAST_DAILY_CRON '30 23 * * *' diterima" 0 staging "FORECAST_DAILY_CRON=30 23 * * *"
+vc "275g G44 FORECAST_DAILY_CRON '*/30 * * * *' diterima" 0 staging "FORECAST_DAILY_CRON=*/30 * * * *"
+vc "275h G44 FORECAST_DAILY_CRON 4 kolom ditolak" 1 staging "FORECAST_DAILY_CRON=30 23 * *"
+vc "275i G44 FORECAST_DAILY_CRON dengan \$() ditolak" 1 staging "FORECAST_DAILY_CRON=30 23 * * \$(id)"
+vc "275j G44 FORECAST_DAILY_CRON dengan kutip ditolak" 1 staging "FORECAST_DAILY_CRON=30 23 * * '*'"
+vc "275k G44 FORECAST_TZ=Asia/Jakarta diterima" 0 staging FORECAST_TZ=Asia/Jakarta
+vc "275l G44 FORECAST_TZ=../etc ditolak" 1 staging FORECAST_TZ=../etc
+vc "275m G44 FORECAST_HORIZON_DAYS=61 ditolak (worker 7..60)" 1 staging FORECAST_HORIZON_DAYS=61
+vc "275n G44 FORECAST_CHUNK_SIZE=501 ditolak (§28.2)" 1 staging FORECAST_CHUNK_SIZE=501
+vc "275o G44 FORECAST_ODOO_RPC_TIMEOUT_SECONDS=30 ditolak (< gateway 30 s)" 1 staging FORECAST_ODOO_RPC_TIMEOUT_SECONDS=30
+vc "275p G44 FORECAST_MEMORY_LIMIT=768M diterima" 0 staging FORECAST_MEMORY_LIMIT=768M
+vc "275q G44 FORECAST_MEMORY_LIMIT=8G ditolak (K25-06)" 1 staging FORECAST_MEMORY_LIMIT=8G
+vc "275r G44 FORECAST_MEMORY_LIMIT=5000M ditolak" 1 staging FORECAST_MEMORY_LIMIT=5000M
+vc "275s G44 FORECAST_CPUS=0.5 diterima" 0 staging FORECAST_CPUS=0.5
+vc "275t G44 FORECAST_CPUS=8 ditolak" 1 staging FORECAST_CPUS=8
+vc "275u SEC-215 CH_FORECAST_READER_HOST_CIDR=172.30.11.0/24 diterima" 0 production CH_FORECAST_READER_HOST_CIDR=172.30.11.0/24
+vc "275v SEC-215 CH_FORECAST_READER_HOST_CIDR=0.0.0.0/0 ditolak" 1 production CH_FORECAST_READER_HOST_CIDR=0.0.0.0/0
+vc "275w SEC-215 CH_FORECAST_READER_HOST_CIDR=10.0.0.0/8 (prefix < /16) ditolak" 1 production CH_FORECAST_READER_HOST_CIDR=10.0.0.0/8
+vc "275x SEC-215 CH_FORECAST_READER_HOST_CIDR publik ditolak" 1 production CH_FORECAST_READER_HOST_CIDR=203.0.113.0/24
+vc "275y SEC-215 CH_FORECAST_READER_HOST_CIDR bit host ditolak" 1 production CH_FORECAST_READER_HOST_CIDR=172.30.11.5/24
+# SEC-223 (G45): prefix minimal /24 -- 172.30.0.0/16 mencakup semua network EFN (meniadakan SEC-215)
+vc "275ya SEC-223 CH_FORECAST_READER_HOST_CIDR=172.30.0.0/16 ditolak" 1 production CH_FORECAST_READER_HOST_CIDR=172.30.0.0/16
+vc "275yb SEC-223 CH_FORECAST_READER_HOST_CIDR=172.30.10.0/23 ditolak" 1 production CH_FORECAST_READER_HOST_CIDR=172.30.10.0/23
+vc "275yc SEC-223 CH_FORECAST_READER_HOST_CIDR=10.88.0.0/20 (WireGuard lebar) ditolak" 1 production CH_FORECAST_READER_HOST_CIDR=10.88.0.0/20
+vc "275yd SEC-223 CH_FORECAST_READER_HOST_CIDR=10.88.0.7/32 (IP WireGuard mesin data) diterima" 0 production CH_FORECAST_READER_HOST_CIDR=10.88.0.7/32
+vc "275ye SEC-223 CH_FORECAST_READER_HOST_CIDR=192.168.50.16/28 diterima" 0 production CH_FORECAST_READER_HOST_CIDR=192.168.50.16/28
+# SEC-223: init ClickHouse menegakkan batas yang sama (fungsi sh diekstrak dari clickhouse-init.sh, diuji apa adanya)
+CHI_FN=$(awk '/^private_cidr_ok\(\) \{/{f=1} f{print} f&&/^\}$/{exit}' "$SRC/infra/clickhouse/clickhouse-init.sh")
+# shellcheck disable=SC2016  # "$1" dievaluasi di sh -c (argumen posisi), bukan di shell ini
+chi_cidr() { sh -c "${CHI_FN}"$'\n''private_cidr_ok "$1"' sh "$1"; }
+chi_ok=1
+for c in 172.30.11.0/24 10.88.0.7/32 192.168.50.16/28; do chi_cidr "$c" || chi_ok=0; done
+for c in 172.30.0.0/16 172.30.10.0/23 0.0.0.0/0 203.0.113.0/24 "172.30.11.0/24';DROP" 172.30.11.0; do
+  if chi_cidr "$c"; then chi_ok=0; fi
+done
+if [[ -n "$CHI_FN" && $chi_ok -eq 1 ]]; then ok "275yf SEC-223 clickhouse-init private_cidr_ok: /24../32 privat diterima, /16../23 + publik + injeksi ditolak"
+else bad "275yf SEC-223 clickhouse-init private_cidr_ok"; fi
+u "275z G44 EFN_FORECAST_COMPANY_CODES subset EFN_COMPANY_CODES" 0 efn_validate_company_lists
+
+# G44 (SEC-42): daftar image rantai rilis SAMA di efn-deploy (IMAGE_VARS), deploy.sh (cek digest + .env) dan deploy.yml
+# (cosign verify + manifest). Image yang lupa di salah satu = rilis gagal di host / tidak terverifikasi.
+img_list() { tr ' ' '\n' | grep -E '^IMAGE_[A-Z0-9_]+$' | sort -u | paste -sd' '; }
+L_EFN=$(sed -nE 's/^IMAGE_VARS=\((.*)\)$/\1/p' "$SRC/scripts/host/efn-deploy" | img_list)
+L_DEPLOY=$(awk '/^for v in IMAGE_POSTGRES/{f=1} f{print} f&&/; do$/{exit}' "$SRC/scripts/deploy.sh" | tr -d '\\;' | img_list)
+L_DOTENV=$(grep -oE '^  "IMAGE_[A-Z0-9_]+=' "$SRC/scripts/deploy.sh" | tr -d ' "=' | img_list)
+L_YML_SVC=$(sed -nE 's/^[[:space:]]*for svc in (.*); do$/\1/p' "$SRC/.github/workflows/deploy.yml" | tr ' ' '\n' \
+  | awk 'NF{gsub("-","_"); print "IMAGE_" toupper($0)}' | img_list)
+L_YML_MAN=$(grep -oE 'IMAGE_[A-Z0-9_]+: \$[a-z0-9]+' "$SRC/.github/workflows/deploy.yml" | cut -d: -f1 | img_list)
+if [[ -n "$L_EFN" && "$L_EFN" == "$L_DEPLOY" && "$L_EFN" == "$L_DOTENV" && "$L_EFN" == "$L_YML_SVC" && "$L_EFN" == "$L_YML_MAN" ]] \
+   && [[ " $L_EFN " == *" IMAGE_FORECAST_WORKER "* ]]; then
+  ok "276 daftar IMAGE_* sama di efn-deploy/deploy.sh/.env/deploy.yml (termasuk IMAGE_FORECAST_WORKER)"
+else
+  RC=1 OUT="efn-deploy=[$L_EFN] deploy.sh=[$L_DEPLOY] dotenv=[$L_DOTENV] yml-svc=[$L_YML_SVC] yml-manifest=[$L_YML_MAN]"
+  bad "276 daftar IMAGE_* tidak sama"
+fi
 
 # G44/G46 (docs/04 §28.1/§28.2a): mart forecast + histori penjualan ESB pra-cutover
 vc "274a G46 ETL_ENABLE_FORECAST_LEGACY=ya ditolak (boolean)" 1 staging ETL_ENABLE_FORECAST_LEGACY=ya

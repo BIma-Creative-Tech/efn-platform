@@ -49,7 +49,15 @@ EFN_RELEASE_CONFIG_VARS=(ACME_EMAIL PAYMENT_PROVIDER PG_SUPERUSER WHATSAPP_ENABL
   ONLINE_SLOTS_ENABLED
   PROMO_ENABLED PROMO_PUSH_ENABLED PROMO_COMPANIES PROMO_SYNC_SECONDS
   MGM_ENABLED MGM_CLAIM_WINDOW_DAYS MGM_SETTLE_INTERVAL_MS
-  CONSENT_PRIVACY_VERSION CONSENT_PRIVACY_TEXT_SHA256 PRIVACY_CONSENT_ENFORCED)
+  CONSENT_PRIVACY_VERSION CONSENT_PRIVACY_TEXT_SHA256 PRIVACY_CONSENT_ENFORCED
+  BEHAVIOR_TRACKING_ENABLED BEHAVIOR_TRACKING_DPO_APPROVAL_REF CONSENT_TRACKING_VERSION CONSENT_TRACKING_TEXT_SHA256
+  BEHAVIOR_EVENT_RETENTION_DAYS WISHLIST_ENABLED RESTOCK_ALERT_ENABLED PRICE_ALERT_ENABLED ALERT_WATCH_INTERVAL_SECONDS
+  PROMO_CAMPAIGN_ENABLED PROMO_CAMPAIGN_APPROVAL_REF CAMPAIGN_FREQUENCY_CAP_ENABLED CAMPAIGN_BUDGET_CAP_ENABLED
+  CAMPAIGN_MAX_PER_MEMBER_PER_WEEK CAMPAIGN_COMPANIES CAMPAIGN_SYNC_SECONDS
+  EMAIL_ENABLED EMAIL_SMTP_HOST EMAIL_SMTP_PORT EMAIL_SMTP_TLS_MODE EMAIL_SMTP_USER EMAIL_FROM EMAIL_UNSUBSCRIBE_URL
+  EMAIL_RATE_PER_MIN EMAIL_DPA_APPROVAL_REF WA_UNOFFICIAL_ENABLED WA_UNOFFICIAL_RISK_ACCEPTANCE_REF ETL_ENABLE_BEHAVIOR
+  FORECAST_ENABLED FORECAST_DAILY_CRON FORECAST_TZ FORECAST_HORIZON_DAYS FORECAST_CHUNK_SIZE
+  FORECAST_ODOO_RPC_TIMEOUT_SECONDS FORECAST_MEMORY_LIMIT FORECAST_CPUS CH_FORECAST_READER_HOST_CIDR)
 # G22 (docs/04 §14.D.1, L-72 D-22-18): env yang DIHAPUS kontrak. Bukan konfigurasi rilis (kunci manifest tak dikenal =
 # ditolak efn-deploy); jalur manual `sudo -E bash deploy.sh` -> production DITOLAK, staging peringatan (BFF: gagal start
 # di production, warning di luar production).
@@ -61,8 +69,14 @@ EFN_REMOVED_CONFIG_VARS=(LOYALTY_POINT_EXPIRY_DAYS)
 # hanya bisa dinyalakan di production lewat izin Superadmin, bukan variabel CI/manifest saja.
 # G42 (docs/04 §26.12 L-125, ADR-041): dashboard Insight menunggu review security, DPO (nama staf di cookie + log audit),
 # Q-ESB1/7/9 dan Q-INS1/Q-INS4 -> INSIGHT_ENABLED=true di production juga hanya dengan izin Superadmin.
+# G44 (docs/04 §28.10, ADR-046 Proposed): forecast-worker menulis usulan reorder ke Odoo produksi; aktif di production
+# hanya setelah backtest G44 lulus + user teknis per PT dibuat -> FORECAST_ENABLED=true juga butuh izin Superadmin.
+# G50 (docs/04 §28.10): tracking perilaku, kampanye tertarget dan WA tidak resmi = OFF di production; selain izin
+# Superadmin ini, efn_validate_g50_config mewajibkan ref persetujuan di manifest (DPO / pemilik risiko + Legal).
+# SEC-G50-10: EMAIL_ENABLED juga (penyedia SMTP pihak ketiga, mungkin luar negeri: DPA + transfer PDP Pasal 56, Q-SM19).
 EFN_GATED_FEATURES=(LOYALTY_EXPIRY_ENABLED LOYALTY_INACTIVE_ANONYMIZE LOYALTY_EXPIRY_NOTICE_REQUIRE_CONSENT
-  FNB_QR_POINTS_ENABLED ONLINE_LOYALTY_REDEEM_ENABLED INSIGHT_ENABLED)
+  FNB_QR_POINTS_ENABLED ONLINE_LOYALTY_REDEEM_ENABLED INSIGHT_ENABLED FORECAST_ENABLED
+  BEHAVIOR_TRACKING_ENABLED PROMO_CAMPAIGN_ENABLED WA_UNOFFICIAL_ENABLED EMAIL_ENABLED)
 # Subset EFN_GATED_FEATURES yang nilai berisikonya `false` (default true = filter perlindungan aktif). SEC-171 (r15):
 # melepas filter consent `marketing` untuk notice hangus = keputusan Legal yang sama jenisnya dengan L-73, jadi memakai
 # izin yang sama (EFN_ALLOW_FEATURE_ON), bukan izin darurat EFN_ALLOW_CONTROL_OFF.
@@ -79,6 +93,10 @@ EFN_BOOKING_COMPANY_CODES=(PB BCF)
 # odoo_api_key_promo_<pt>, overlay infra/compose/docker-compose.online-promo-<pt>.yml (scripts/deploy.sh),
 # efn-rotate-online-key --channel=PROMO-<PT>. PT lain = tambah di sini + secrets.list + compose + overlay + ALLOWED_CHANNELS.
 EFN_PROMO_COMPANY_CODES=(PB)
+# G44 (docs/04 §28.2): PT yang punya user teknis forecast (efn_forecast_<pt>) + secret odoo_api_key_forecast_<pt> di
+# overlay infra/compose/docker-compose.forecast.yml. PT baru = tambah di sini + secrets.list + overlay (env + mount) +
+# EFN_FORECAST_COMPANIES di scripts/host/efn-forecast-key-status + check-encryption.sh (regex secret forecast).
+EFN_FORECAST_COMPANY_CODES=(SMD)
 # G21 AC-13 (docs/04 §13.2, ADR-036 §0): kunci PII Odoo produksi (scripts/secrets.list host:disabled [SA]) - di-mount ke
 # odoo oleh infra/compose/docker-compose.pii.yml hanya bila EFN_ODOO_PII_ENABLED=true (scripts/deploy.sh).
 EFN_ODOO_PII_KEY_NAMES=(odoo_pii_key_v1 odoo_pii_bidx_key odoo_pii_name_key)
@@ -303,7 +321,7 @@ efn_validate_company_code() { # kode
 efn_validate_company_lists() {
   local c
   for c in "${EFN_ONLINE_CHANNEL_CODES[@]}" "${EFN_FNB_QR_COMPANY_CODES[@]}" "${EFN_BOOKING_COMPANY_CODES[@]}" \
-           "${EFN_PROMO_COMPANY_CODES[@]}"; do
+           "${EFN_PROMO_COMPANY_CODES[@]}" "${EFN_FORECAST_COMPANY_CODES[@]}"; do
     efn_validate_company_code "$c" || return 1
   done
 }
@@ -531,7 +549,9 @@ efn_validate_config() { # app_env
       _efn_err "$ver dan $sha harus di-set berpasangan"; return 1
     fi
   done
+  efn_validate_forecast_config || return 1
   efn_validate_g22_config "$app_env" || return 1
+  efn_validate_g50_config "$app_env" || return 1
   # SEC-50c: kontrol keamanan tidak bisa dimatikan di production kecuali izin eksplisit Superadmin di deploy.conf
   if [[ "$app_env" == production ]]; then
     local -a allow
@@ -542,6 +562,44 @@ efn_validate_config() { # app_env
         return 1
       fi
     done
+  fi
+}
+
+# ── G44 (docs/04 §28.2/§28.10, ADR-046): forecast-worker (overlay docker-compose.forecast.yml) ─────────────────────
+# Dipanggil efn_validate_config. Kosong = default compose (MATI, 23:30 WIB, 28 hari, 500 baris, 25 s, 1536M, 2 CPU,
+# 172.30.11.0/24). Rentang = services/forecast-worker/efn_forecast/config.py (horizon 7..60, chunk 1..500) dan gateway
+# (timeout < 30 s). Gerbang production FORECAST_ENABLED=true = EFN_GATED_FEATURES (efn_validate_g22_config). Cek API key
+# Odoo nyata + profil data = scripts/deploy.sh (host).
+efn_validate_forecast_config() {
+  local spec name lo hi
+  [[ -z "${FORECAST_ENABLED:-}" || "$FORECAST_ENABLED" == true || "$FORECAST_ENABLED" == false ]] \
+    || _efn_err "FORECAST_ENABLED harus true|false" || return 1
+  # cron 5 kolom: angka, '*', '/', ',', '-' saja (nilai ditulis apa adanya ke .env, dipisah spasi tunggal)
+  [[ -z "${FORECAST_DAILY_CRON:-}" || "$FORECAST_DAILY_CRON" =~ ^[0-9*/,-]{1,20}( [0-9*/,-]{1,20}){4}$ ]] \
+    || _efn_err "FORECAST_DAILY_CRON harus cron 5 kolom (mis. '30 23 * * *')" || return 1
+  [[ -z "${FORECAST_TZ:-}" || "$FORECAST_TZ" =~ ^[A-Z][A-Za-z_]{1,30}(/[A-Z][A-Za-z0-9_+-]{1,30}){1,2}$ ]] \
+    || _efn_err "FORECAST_TZ harus nama zona IANA (mis. Asia/Jakarta)" || return 1
+  for spec in FORECAST_HORIZON_DAYS:7:60 FORECAST_CHUNK_SIZE:1:500 FORECAST_ODOO_RPC_TIMEOUT_SECONDS:5:29; do
+    IFS=: read -r name lo hi <<< "$spec"
+    [[ -z "${!name:-}" ]] && continue
+    [[ "${!name}" =~ ^[1-9][0-9]{0,2}$ ]] && (( ${!name} >= lo && ${!name} <= hi )) \
+      || _efn_err "$name harus bilangan bulat ${lo}..${hi}" || return 1
+  done
+  # K25-06: batas memori/CPU kecil (ADR-046 §4.2: 1-2 GB; > 4 GB = tinjau ulang ADR-046 §7)
+  if [[ -n "${FORECAST_MEMORY_LIMIT:-}" ]]; then
+    [[ "$FORECAST_MEMORY_LIMIT" =~ ^([1-9][0-9]{2,3})M$ ]] && (( BASH_REMATCH[1] >= 256 && BASH_REMATCH[1] <= 4096 )) \
+      || [[ "$FORECAST_MEMORY_LIMIT" =~ ^[1-4]G$ ]] \
+      || _efn_err "FORECAST_MEMORY_LIMIT harus 256M..4096M atau 1G..4G" || return 1
+  fi
+  [[ -z "${FORECAST_CPUS:-}" || "$FORECAST_CPUS" =~ ^(0\.5|[1-4])$ ]] \
+    || _efn_err "FORECAST_CPUS harus 0.5|1|2|3|4" || return 1
+  # SEC-215: HOST user ClickHouse efn_forecast_reader. CIDR privat kanonik /24../32 (clickhouse-init memvalidasi ulang).
+  # SEC-223: /16../23 ditolak (172.30.0.0/16 = semua network EFN -> pembatasan HOST tidak berarti).
+  if [[ -n "${CH_FORECAST_READER_HOST_CIDR:-}" ]]; then
+    efn_is_cidr "$CH_FORECAST_READER_HOST_CIDR" && (( ${CH_FORECAST_READER_HOST_CIDR#*/} >= 24 )) \
+      && { efn_cidr_within "$CH_FORECAST_READER_HOST_CIDR" 10.0.0.0/8 || efn_cidr_within "$CH_FORECAST_READER_HOST_CIDR" 172.16.0.0/12 \
+           || efn_cidr_within "$CH_FORECAST_READER_HOST_CIDR" 192.168.0.0/16; } \
+      || _efn_err "CH_FORECAST_READER_HOST_CIDR harus CIDR IPv4 privat kanonik /24../32 (subnet network forecast-ch, SEC-223)" || return 1
   fi
 }
 
@@ -671,6 +729,89 @@ efn_validate_g22_config() { # app_env
         return 1
       fi
     done
+  fi
+}
+
+# ── G50 (docs/04 §28.6-§28.10; ADR-044/047/048 Proposed): tracking, wishlist/alert, kampanye, email, WA tidak resmi ──
+# Dipanggil efn_validate_config. Kosong = default compose (SEMUA flag mati). Rentang = BFF app-config.ts / email.config.ts.
+# Production (selain izin Superadmin EFN_GATED_FEATURES di efn_validate_g22_config):
+#   BEHAVIOR_TRACKING_ENABLED=true -> wajib BEHAVIOR_TRACKING_DPO_APPROVAL_REF (DPO: Q-SM16/17/26)
+#   PROMO_CAMPAIGN_ENABLED=true    -> wajib PROMO_CAMPAIGN_APPROVAL_REF (DPO profiling + Marketing + Finance)
+#   WA_UNOFFICIAL_ENABLED=true     -> wajib WA_UNOFFICIAL_RISK_ACCEPTANCE_REF (pemilik proyek + Legal, Q-SM14)
+#   EMAIL_ENABLED=true             -> wajib EMAIL_DPA_APPROVAL_REF (DPA penyedia + SPF/DKIM/DMARC + DPO, Q-SM19; SEC-G50-10)
+#   ETL_ENABLE_BEHAVIOR / SEGMENT_ENABLED=true ditolak selama fitur sumbernya mati (laporan data-AI G50 no. 6)
+# Secret G50 hanya di service yang tercantum (§28.10 baris terakhir) = scripts/check-encryption.sh (render compose).
+efn_validate_g50_config() { # app_env
+  local app_env="$1" v spec name lo hi c
+  local ref_re='^[A-Za-z0-9._/-]{3,64}$'
+  local num_re='^(0|[1-9][0-9]{0,5})$'
+  for v in BEHAVIOR_TRACKING_ENABLED WISHLIST_ENABLED RESTOCK_ALERT_ENABLED PRICE_ALERT_ENABLED PROMO_CAMPAIGN_ENABLED \
+           CAMPAIGN_FREQUENCY_CAP_ENABLED CAMPAIGN_BUDGET_CAP_ENABLED EMAIL_ENABLED WA_UNOFFICIAL_ENABLED \
+           ETL_ENABLE_BEHAVIOR SEGMENT_ENABLED; do
+    efn_no_cntrl "$v" "${!v:-}" || return 1
+    [[ -z "${!v:-}" || "${!v}" == true || "${!v}" == false ]] || _efn_err "$v harus true|false" || return 1
+  done
+  for v in BEHAVIOR_TRACKING_DPO_APPROVAL_REF PROMO_CAMPAIGN_APPROVAL_REF WA_UNOFFICIAL_RISK_ACCEPTANCE_REF \
+           EMAIL_DPA_APPROVAL_REF; do
+    efn_no_cntrl "$v" "${!v:-}" || return 1
+    [[ -z "${!v:-}" || "${!v}" =~ $ref_re ]] \
+      || _efn_err "$v harus nomor dokumen persetujuan ^[A-Za-z0-9._/-]{3,64}\$ (bukan isi dokumen)" || return 1
+  done
+  for spec in BEHAVIOR_EVENT_RETENTION_DAYS:1:7 ALERT_WATCH_INTERVAL_SECONDS:60:86400 CAMPAIGN_MAX_PER_MEMBER_PER_WEEK:1:50 \
+              CAMPAIGN_SYNC_SECONDS:15:3600 EMAIL_SMTP_PORT:1:65535 EMAIL_RATE_PER_MIN:1:10000; do
+    IFS=: read -r name lo hi <<< "$spec"
+    [[ -z "${!name:-}" ]] && continue
+    [[ "${!name}" =~ $num_re ]] && (( ${!name} >= lo && ${!name} <= hi )) \
+      || _efn_err "$name harus bilangan bulat ${lo}..${hi}" || return 1
+  done
+  # Teks consent tracking: format sama dengan purpose lain, berpasangan
+  _efn_re CONSENT_TRACKING_VERSION '^[A-Za-z0-9._@-]{1,32}$' || return 1
+  _efn_re CONSENT_TRACKING_TEXT_SHA256 '^[0-9a-f]{64}$' || return 1
+  if [[ -n "${CONSENT_TRACKING_VERSION:-}" && -z "${CONSENT_TRACKING_TEXT_SHA256:-}" ]] \
+     || [[ -z "${CONSENT_TRACKING_VERSION:-}" && -n "${CONSENT_TRACKING_TEXT_SHA256:-}" ]]; then
+    _efn_err "CONSENT_TRACKING_VERSION dan CONSENT_TRACKING_TEXT_SHA256 harus di-set berpasangan"; return 1
+  fi
+  if [[ "${BEHAVIOR_TRACKING_ENABLED:-false}" == true && -z "${CONSENT_TRACKING_VERSION:-}" ]]; then
+    _efn_err "BEHAVIOR_TRACKING_ENABLED=true wajib CONSENT_TRACKING_VERSION + CONSENT_TRACKING_TEXT_SHA256 (teks consent disetujui DPO)"; return 1
+  fi
+  # Kampanye: daftar PT = subset entitas §12.1 (API key odoo_api_key_campaign_<pt> per PT di compose)
+  if [[ -n "${CAMPAIGN_COMPANIES:-}" ]]; then
+    [[ "$CAMPAIGN_COMPANIES" =~ ^[A-Z]{2,8}(,[A-Z]{2,8}){0,9}$ ]] \
+      || _efn_err "CAMPAIGN_COMPANIES tidak valid (kode PT huruf besar dipisah koma)" || return 1
+    local -a camp
+    IFS=, read -r -a camp <<< "$CAMPAIGN_COMPANIES"
+    for c in "${camp[@]}"; do efn_validate_company_code "$c" || return 1; done
+  fi
+  # Email (ADR-048 §3.2): tanpa mode plaintext; aktif = host, from, URL unsubscribe https wajib (BFF gagal kirim tanpa itu)
+  _efn_re EMAIL_SMTP_TLS_MODE '^(implicit|starttls)$' || return 1
+  _efn_re EMAIL_SMTP_HOST '^[A-Za-z0-9.-]{1,253}$' || return 1
+  _efn_re EMAIL_SMTP_USER '^[A-Za-z0-9._%+@-]{1,128}$' || return 1
+  _efn_re EMAIL_FROM '^([A-Za-z0-9 ._-]{1,64} )?<?[A-Za-z0-9._%+-]{1,64}@[A-Za-z0-9.-]{1,253}\.[A-Za-z]{2,24}>?$' || return 1
+  _efn_re EMAIL_UNSUBSCRIBE_URL '^https://([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}(/[A-Za-z0-9._~-]+)*$' || return 1
+  if [[ "${EMAIL_ENABLED:-false}" == true ]]; then
+    for v in EMAIL_SMTP_HOST EMAIL_FROM EMAIL_UNSUBSCRIBE_URL; do
+      [[ -n "${!v:-}" ]] || _efn_err "EMAIL_ENABLED=true wajib ${v} (docs/04 §28.9)" || return 1
+    done
+  fi
+  if [[ "$app_env" == production ]]; then
+    if [[ "${BEHAVIOR_TRACKING_ENABLED:-false}" == true && -z "${BEHAVIOR_TRACKING_DPO_APPROVAL_REF:-}" ]]; then
+      _efn_err "production menolak BEHAVIOR_TRACKING_ENABLED=true tanpa BEHAVIOR_TRACKING_DPO_APPROVAL_REF (DPO Q-SM16/17/26, docs/04 §28.10)"; return 1
+    fi
+    if [[ "${PROMO_CAMPAIGN_ENABLED:-false}" == true && -z "${PROMO_CAMPAIGN_APPROVAL_REF:-}" ]]; then
+      _efn_err "production menolak PROMO_CAMPAIGN_ENABLED=true tanpa PROMO_CAMPAIGN_APPROVAL_REF (DPO + Marketing + Finance, docs/04 §28.10)"; return 1
+    fi
+    if [[ "${WA_UNOFFICIAL_ENABLED:-false}" == true && -z "${WA_UNOFFICIAL_RISK_ACCEPTANCE_REF:-}" ]]; then
+      _efn_err "production menolak WA_UNOFFICIAL_ENABLED=true tanpa WA_UNOFFICIAL_RISK_ACCEPTANCE_REF (penerimaan risiko tertulis pemilik proyek + Legal, Q-SM14, ADR-044)"; return 1
+    fi
+    if [[ "${EMAIL_ENABLED:-false}" == true && -z "${EMAIL_DPA_APPROVAL_REF:-}" ]]; then
+      _efn_err "production menolak EMAIL_ENABLED=true tanpa EMAIL_DPA_APPROVAL_REF (DPA penyedia SMTP + SPF/DKIM/DMARC + DPO, Q-SM19, ADR-048; SEC-G50-10)"; return 1
+    fi
+    if [[ "${ETL_ENABLE_BEHAVIOR:-false}" == true && "${BEHAVIOR_TRACKING_ENABLED:-false}" != true ]]; then
+      _efn_err "production menolak ETL_ENABLE_BEHAVIOR=true selama BEHAVIOR_TRACKING_ENABLED mati (docs/04 §28.10)"; return 1
+    fi
+    if [[ "${SEGMENT_ENABLED:-false}" == true && "${PROMO_CAMPAIGN_ENABLED:-false}" != true ]]; then
+      _efn_err "production menolak SEGMENT_ENABLED=true selama PROMO_CAMPAIGN_ENABLED mati (docs/04 §28.10)"; return 1
+    fi
   fi
 }
 

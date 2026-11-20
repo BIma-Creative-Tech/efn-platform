@@ -84,6 +84,13 @@ class Publisher(Protocol):
     def publish(self, messages: Sequence[OutgoingMessage]) -> None: ...
 
 
+class SubjectHook(Protocol):
+    """G50 (L-154): penghapusan data yang tidak memakai member_hash (perilaku visitor per subject_key,
+    efn_etl.behavior.BehaviorDsarHook). Kembalikan jumlah baris yang MASIH tersisa (0 = selesai)."""
+
+    def erase(self, request_id: str) -> int: ...
+
+
 def require_hash(value: Any) -> str:
     text = "" if value is None else str(value).strip()
     if not HASH_RE.fullmatch(text):
@@ -146,7 +153,12 @@ def completed_message(request_id: str) -> OutgoingMessage:
     return OutgoingMessage(queue=QUEUE_ERASURE_COMPLETED, body=body, message_id=key)
 
 
-def erase_one(request: ErasureRequest, store: ErasureStore, publisher: Publisher) -> ErasureResult:
+def erase_one(
+    request: ErasureRequest,
+    store: ErasureStore,
+    publisher: Publisher,
+    hooks: Sequence[SubjectHook] = (),
+) -> ErasureResult:
     deleted: dict[str, int] = {}
     for table, column in ERASURE_TARGETS:
         found = store.count(table, column, request.member_hash)
@@ -155,6 +167,10 @@ def erase_one(request: ErasureRequest, store: ErasureStore, publisher: Publisher
         deleted[table] = found
     remaining = {table: store.count(table, column, request.member_hash) for table, column in ERASURE_TARGETS}
     leftover = {table: n for table, n in remaining.items() if n > 0}
+    for i, hook in enumerate(hooks):
+        rest = hook.erase(request.request_id)
+        if rest > 0:
+            leftover[f"hook{i}"] = rest
     if leftover:
         # Mutation belum selesai/ gagal: JANGAN lapor selesai. Diulang siklus berikutnya.
         return ErasureResult(request.request_id, "pending", deleted, f"sisa baris: {leftover}")
@@ -166,12 +182,14 @@ def run_erasure(
     requests: Sequence[ErasureRequest],
     store: ErasureStore,
     publisher: Publisher,
+    hooks: Sequence[SubjectHook] = (),
 ) -> list[ErasureResult]:
-    """Proses semua request; kegagalan satu request tidak menghentikan yang lain."""
+    """Proses semua request; kegagalan satu request tidak menghentikan yang lain. `hooks` (G50): penghapusan tambahan
+    per request_id (mis. perilaku visitor); sisa > 0 = request tetap pending."""
     results: list[ErasureResult] = []
     for request in requests:
         try:
-            result = erase_one(request, store, publisher)
+            result = erase_one(request, store, publisher, hooks)
         except Exception as exc:  # I/O (ClickHouse/RabbitMQ): dicatat, diulang siklus berikutnya
             log.exception("erasure request=%s gagal", request.request_id)
             result = ErasureResult(request.request_id, "error", {}, type(exc).__name__)

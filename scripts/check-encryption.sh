@@ -46,22 +46,35 @@
 #           forecast-worker di network lain, root, tanpa read_only/cap_drop ALL, ODOO_RPC_URL bukan
 #           https://odoo-rpc-gateway:8443, env *_FILE tidak cocok; FORECAST_ENABLED bukan default false di render
 #           prod-forecast; ACL CN haproxy odoo-rpc-gateway selain cn_bff=api-gateway / cn_forecast=forecast-worker
+#   - (G50) secret kampanye di luar service §28.10 (behavior_*_pepper/email_*/odoo_api_key_campaign_smd -> api-gateway;
+#           odoo_api_key_segment_smd/tls_segment_worker_* -> segment-worker; clickhouse_password_segment -> clickhouse-init
+#           + segment-worker; wa_unofficial_* sesuai §28.9 + prometheus untuk token metrik) atau env *_FILE tidak cocok;
+#           network segment-*/rmq/wa-*/mail beranggota lain atau tidak internal (wa-internet: enable_icc=false);
+#           segment-worker / wa-unofficial / wa-egress-proxy tanpa hardening; WA_UNOFFICIAL_PROXY_URL di env; port 9466
+#           dipublish; flag G50 bukan default false di render prod/prod-segment/prod-wa-unofficial; ACL CN gateway
+#           selain tiga CN, path kampanye bocor antar-CN
 #   - (G43) clickhouse_password_mig di luar clickhouse-init/esb-migrate; migration_bundle_key di luar esb-migrate/odoo,
 #           atau di odoo tanpa overlay docker-compose.migration.yml; esb-migrate di network selain esb (egress), dengan
 #           port/label Traefik, root, tanpa read_only/cap_drop ALL/tmpfs /work, di luar profil migrate, CH bukan https
 #           8443 + CA internal, env *_FILE tanpa secret ter-mount; overlay migration menambah network ke odoo atau
 #           me-mount kode migrasi read-write (render prod-esb-migrate, prod-migration)
+#   - (SEC-215/SEC-223) clickhouse-init tanpa CH_FORECAST_READER_HOST_CIDR /24../32 atau != subnet ipam forecast-ch;
+#           user efn_forecast_reader tidak dibuat dengan HOST IP; pagar allowlist objek efn_forecast hilang; pagar
+#           definisi view efn_forecast (SQL SECURITY DEFINER + definer) hilang; pola sama untuk efn_segment_reader
+#           (CH_SEGMENT_READER_HOST_CIDR = subnet ipam segment-ch, HOST IP $SEGMENT_CIDR, K25-06)
 #   - (at rest) service metabase tanpa secret metabase_encryption_key / dengan MB_ENCRYPTION_SECRET_KEY di env /
 #     dengan override entrypoint apa pun termasuk `[]`/`''` / dengan image resmi metabase/metabase (G16b, SEC-86)
 #   - (K25-06, identitas stack) nama project != EFN_STACK; network tanpa nama `<EFN_STACK>_<key>` atau subnet di luar
 #     `<EFN_SUBNET_BASE>.<n>.0/24` / duplikat; router Traefik tanpa traefik.enable + label traefik.docker.network
 #     `<EFN_STACK>_<network yang dipakai service dan Traefik>`; postgres di network selain `data` (pg_hba samenet);
-#     alias scrape api-gateway-metrics / ocr-worker-metrics hilang atau di network selain `internal`; TRUSTED_PROXIES
-#     tanpa `<EFN_SUBNET_BASE>.1.0/24`; Traefik/Promtail tanpa render-config.sh + EFN_STACK; stack selain `efn` memakai tag
-#     image lokal bersama (ghcr.io/efn/<svc>:dev, efn/<svc>:dev). Render tambahan EFN_STACK=efn-prod EFN_SUBNET_BASE=10.250
-#     (prod + local-edge + esb + forecast) dan EFN_STACK=efn-dev EFN_SUBNET_BASE=10.252 (dev) wajib lolos SEMUA aturan.
+#     alias scrape api-gateway-metrics / ocr-worker-metrics (internal), wa-admin-relay-ingress (wa-ingress) hilang atau
+#     di network lain; TRUSTED_PROXIES tanpa `<EFN_SUBNET_BASE>.1.0/24`; IP statis relay WA / WA_RELAY_BIND_IP != <base>.21.10,
+#     extra_hosts wa-unofficial / IP wa-egress-proxy != <base>.14.10; Traefik/Promtail tanpa render-config.sh + EFN_STACK;
+#     stack selain `efn` memakai tag image lokal bersama (ghcr.io/efn/<svc>:dev, efn/<svc>:dev). Render tambahan
+#     EFN_STACK=efn-prod EFN_SUBNET_BASE=10.250 (prod + local-edge + esb + forecast + segment + wa-unofficial) dan
+#     EFN_STACK=efn-dev EFN_SUBNET_BASE=10.252 (dev + forecast + segment + wa-unofficial) wajib lolos SEMUA aturan.
 #     File: traefik.yml (constraint + network ber-placeholder), promtail.yml (filter project), prometheus.yml (tanpa nama
-#     network / subnet literal), pg_hba.conf (samenet, tanpa CIDR literal).
+#     network / subnet literal), pg_hba.conf (samenet, tanpa CIDR literal), wa-egress/admin-relay.cfg (bind env + .alert).
 # Pengecualian hanya lewat ADR-022; tambahkan di sini dengan komentar alasan.
 set -euo pipefail
 
@@ -505,6 +518,28 @@ check_compose() {
   jq -e '(.services["clickhouse-init"] // null) as $c | $c == null
          or ([$c.secrets[]? | (.source // .)] | index("clickhouse_password_forecast") != null)' <<< "$json" > /dev/null \
     || err "[$label] clickhouse-init: secret clickhouse_password_forecast wajib di-mount (user efn_forecast_reader, G44)"
+  # SEC-215: user efn_forecast_reader HOST IP = subnet network forecast-ch. clickhouse-init wajib meneruskan
+  # CH_FORECAST_READER_HOST_CIDR; bila overlay forecast ter-render (satu host), nilainya HARUS sama dengan ipam
+  # forecast-ch (CIDR lain = worker ditolak login, atau HOST lebih lebar dari network yang dimaksud).
+  jq -e '(.services["clickhouse-init"] // null) as $c | $c == null
+         or ((($c.environment // {}).CH_FORECAST_READER_HOST_CIDR // "") | test("^[0-9]{1,3}(\\.[0-9]{1,3}){3}/(2[4-9]|3[0-2])$"))' \
+      <<< "$json" > /dev/null \
+    || err "[$label] clickhouse-init: CH_FORECAST_READER_HOST_CIDR wajib CIDR IPv4 /24../32 (HOST user efn_forecast_reader, SEC-215/SEC-223)"
+  jq -e '(.networks["forecast-ch"] // null) as $n | (.services["clickhouse-init"] // null) as $c
+         | $n == null or $c == null
+         or ((($c.environment // {}).CH_FORECAST_READER_HOST_CIDR // "") == (($n.ipam.config // [])[0].subnet // "-"))' \
+      <<< "$json" > /dev/null \
+    || err "[$label] clickhouse-init: CH_FORECAST_READER_HOST_CIDR != subnet ipam network forecast-ch (SEC-215)"
+  # K25-06 + pola SEC-215: user efn_segment_reader HOST IP = subnet network segment-ch (overlay segment).
+  jq -e '(.services["clickhouse-init"] // null) as $c | $c == null
+         or ((($c.environment // {}).CH_SEGMENT_READER_HOST_CIDR // "") | test("^[0-9]{1,3}(\\.[0-9]{1,3}){3}/(2[4-9]|3[0-2])$"))' \
+      <<< "$json" > /dev/null \
+    || err "[$label] clickhouse-init: CH_SEGMENT_READER_HOST_CIDR wajib CIDR IPv4 /24../32 (HOST user efn_segment_reader, pola SEC-215/SEC-223)"
+  jq -e '(.networks["segment-ch"] // null) as $n | (.services["clickhouse-init"] // null) as $c
+         | $n == null or $c == null
+         or ((($c.environment // {}).CH_SEGMENT_READER_HOST_CIDR // "") == (($n.ipam.config // [])[0].subnet // "-"))' \
+      <<< "$json" > /dev/null \
+    || err "[$label] clickhouse-init: CH_SEGMENT_READER_HOST_CIDR != subnet ipam network segment-ch (pola SEC-215)"
   jq -e '[.services | to_entries[] | select((.value.networks // {}) | has("forecast-ch")) | .key]
          - ["clickhouse", "forecast-worker"] | length == 0' <<< "$json" > /dev/null \
     || err "[$label] network forecast-ch dipakai service selain clickhouse/forecast-worker (docs/04 §28.2)"
@@ -537,6 +572,147 @@ check_compose() {
       | (.key | capture("^ODOO_API_KEY_FORECAST_(?<k>[A-Z0-9]+)_FILE$") | .k) as $k
       | [$k, (.value // ""), (if ($m | index("odoo_api_key_forecast_" + ($k | ascii_downcase))) != null then "1" else "0" end)]
       | @tsv' <<< "$json")
+  # 6b6) G50 (docs/04 §28.7/§28.9/§28.10, ADR-044/047/048): secret kampanye supermarket hanya di service yang tercantum
+  #      (§28.10 baris terakhir), network overlay segment/wa-unofficial terisolasi, hardening service baru.
+  local gsec gok spec svc e s
+  for gsec in "behavior_subject_pepper:api-gateway" "behavior_device_pepper:api-gateway" \
+              "email_smtp_password:api-gateway" "email_unsubscribe_key:api-gateway" \
+              "clickhouse_password_segment:clickhouse-init,segment-worker" \
+              "tls_segment_worker_crt:segment-worker" "tls_segment_worker_key:segment-worker" \
+              "wa_unofficial_hash_key:api-gateway,wa-unofficial" "wa_unofficial_session_key:wa-unofficial" \
+              "wa_unofficial_admin_token:wa-unofficial" "wa_unofficial_metrics_token:wa-unofficial,prometheus" \
+              "rabbitmq_password_wa_unofficial:rabbitmq,wa-unofficial" \
+              "tls_wa_unofficial_crt:wa-unofficial" "tls_wa_unofficial_key:wa-unofficial"; do
+    gok="${gsec#*:}"
+    jq -e --arg s "${gsec%%:*}" --arg ok "$gok" '
+        [.services | to_entries[] | select([.value.secrets[]? | (.source // .)] | index($s) != null) | .key]
+        - ($ok | split(",")) | length == 0' <<< "$json" > /dev/null \
+      || err "[$label] secret ${gsec%%:*} di-mount ke service selain ${gok} (least privilege, docs/04 §28.10)"
+  done
+  # API key Odoo kampanye per PT: user teknis efn_campaign_<pt> HANYA BFF; efn_segment_<pt> HANYA segment-worker (smd)
+  while IFS= read -r fsec; do
+    [[ -z "$fsec" ]] && continue
+    if [[ "$fsec" == odoo_api_key_campaign_* ]]; then gok=api-gateway; else gok=segment-worker; fi
+    [[ "$fsec" =~ ^odoo_api_key_(campaign|segment)_(smd)$ ]] || err "[$label] secret $fsec bukan PT kampanye (smd, docs/04 §28.7)"
+    jq -e --arg s "$fsec" --arg ok "$gok" '[.services | to_entries[] | select([.value.secrets[]? | (.source // .)] | index($s) != null)
+            | .key] - [$ok] | length == 0' <<< "$json" > /dev/null \
+      || err "[$label] secret $fsec di-mount ke service selain $gok (least privilege, docs/04 §28.7)"
+  done < <(jq -r '.secrets // {} | keys[] | select(test("^odoo_api_key_(campaign|segment)_"))' <<< "$json")
+  jq -e '(.services["clickhouse-init"] // null) as $c | $c == null
+         or ([$c.secrets[]? | (.source // .)] | index("clickhouse_password_segment") != null)' <<< "$json" > /dev/null \
+    || err "[$label] clickhouse-init: secret clickhouse_password_segment wajib di-mount (user efn_segment_reader, G50)"
+  # BFF: env *_FILE secret G50 cocok dengan secret ter-mount (base); WA hash key hanya bila overlay me-mount-nya
+  for spec in api-gateway:BEHAVIOR_SUBJECT_PEPPER_FILE:behavior_subject_pepper \
+              api-gateway:BEHAVIOR_DEVICE_PEPPER_FILE:behavior_device_pepper \
+              api-gateway:EMAIL_SMTP_PASSWORD_FILE:email_smtp_password \
+              api-gateway:EMAIL_UNSUBSCRIBE_KEY_FILE:email_unsubscribe_key \
+              api-gateway:ODOO_API_KEY_CAMPAIGN_SMD_FILE:odoo_api_key_campaign_smd \
+              segment-worker:ODOO_API_KEY_CAMPAIGN_SMD_FILE:odoo_api_key_segment_smd \
+              segment-worker:CH_PASSWORD_FILE:clickhouse_password_segment \
+              segment-worker:CH_CA_FILE:efn_ca_crt segment-worker:ODOO_RPC_CA_FILE:efn_ca_crt \
+              segment-worker:SEGMENT_BFF_CA_FILE:efn_ca_crt \
+              segment-worker:SEGMENT_CLIENT_CERT_FILE:tls_segment_worker_crt \
+              segment-worker:SEGMENT_CLIENT_KEY_FILE:tls_segment_worker_key \
+              wa-unofficial:RABBITMQ_PASSWORD_FILE:rabbitmq_password_wa_unofficial \
+              wa-unofficial:WA_UNOFFICIAL_SESSION_KEY_FILE:wa_unofficial_session_key \
+              wa-unofficial:WA_UNOFFICIAL_HASH_KEY_FILE:wa_unofficial_hash_key \
+              wa-unofficial:WA_UNOFFICIAL_ADMIN_TOKEN_FILE:wa_unofficial_admin_token \
+              wa-unofficial:WA_UNOFFICIAL_METRICS_TOKEN_FILE:wa_unofficial_metrics_token \
+              wa-unofficial:TLS_CERT_FILE:tls_wa_unofficial_crt wa-unofficial:TLS_KEY_FILE:tls_wa_unofficial_key \
+              wa-unofficial:AMQP_TLS_CA_FILE:efn_ca_crt; do
+    IFS=: read -r svc e s <<< "$spec"
+    jq -e --arg svc "$svc" --arg e "$e" --arg s "$s" '
+        (.services[$svc] == null)
+        or (([.services[$svc].secrets[]? | (.source // .)] | index($s) != null)
+            and ((.services[$svc].environment // {})[$e] == ("/run/secrets/" + $s)))' <<< "$json" > /dev/null \
+      || err "[$label] ${svc}: secret ${s} tidak di-mount atau ${e} != /run/secrets/${s} (docs/04 §28.10)"
+  done
+  jq -e '(.services["api-gateway"] // null) as $a | $a == null
+         or (([$a.secrets[]? | (.source // .)] | index("wa_unofficial_hash_key")) == null)
+         or (($a.environment // {}).WA_UNOFFICIAL_HASH_KEY_FILE == "/run/secrets/wa_unofficial_hash_key")' <<< "$json" > /dev/null \
+    || err "[$label] api-gateway: wa_unofficial_hash_key ter-mount tetapi WA_UNOFFICIAL_HASH_KEY_FILE tidak cocok (docs/04 §28.7)"
+  # Listener segmen BFF :9466 tidak boleh dipublish ke host (hanya network segment-bff, mTLS CN segment-worker)
+  jq -e '[(.services["api-gateway"].ports // [])[] | (.target // 0 | tostring)] | index("9466") == null' <<< "$json" > /dev/null \
+    || err "[$label] api-gateway: port segmen 9466 tidak boleh dipublish (docs/04 §28.7)"
+  # Network overlay G50: anggota persis
+  for spec in "segment-ch:clickhouse,segment-worker" "segment-rpc:odoo-rpc-gateway,segment-worker" \
+              "segment-bff:api-gateway,segment-worker" "rmq:rabbitmq,wa-unofficial" \
+              "wa-egress:wa-unofficial,wa-egress-proxy" "wa-internet:wa-egress-proxy" \
+              "wa-admin:wa-admin-relay,wa-unofficial" "wa-ingress:traefik,prometheus,wa-admin-relay" \
+              "mail:api-gateway,mailpit"; do
+    jq -e --arg n "${spec%%:*}" --arg ok "${spec#*:}" '[.services | to_entries[] | select((.value.networks // {}) | has($n)) | .key]
+           - ($ok | split(",")) | length == 0' <<< "$json" > /dev/null \
+      || err "[$label] network ${spec%%:*} dipakai service selain ${spec#*:} (docs/04 §28.7/§28.9)"
+  done
+  jq -e '(.networks["wa-internet"] // null) as $n | $n == null
+         or ((($n.driver_opts // {})["com.docker.network.bridge.enable_icc"] // "" | tostring) == "false")' \
+      <<< "$json" > /dev/null \
+    || err "[$label] network wa-internet wajib driver_opts com.docker.network.bridge.enable_icc=\"false\" (pola SEC-183)"
+  for spec in rmq wa-egress wa-admin wa-ingress segment-ch segment-rpc segment-bff mail; do
+    jq -e --arg n "$spec" '(.networks[$n] // null) as $x | $x == null or ($x.internal == true)' <<< "$json" > /dev/null \
+      || err "[$label] network ${spec} wajib internal: true (tanpa jalur keluar)"
+  done
+  jq -e '(.services["segment-worker"] // null) as $w | $w == null
+         or (((($w.networks // {}) | keys) - ["segment-ch", "segment-rpc", "segment-bff"] | length == 0)
+             and ($w.read_only == true)
+             and ((($w.cap_drop // []) | index("ALL")) != null)
+             and ((($w.ports // []) | length) == 0)
+             and ((($w.user // "") | tostring) | test("^[1-9][0-9]*(:[0-9]+)?$"))
+             and ((($w.environment // {}).ODOO_RPC_URL // "") == "https://odoo-rpc-gateway:8443")
+             and ((($w.environment // {}).SEGMENT_BFF_URL // "") == "https://api-gateway:9466")
+             and ((($w.environment // {}).SEGMENT_ENABLED // "") | tostring | test("^(true|false)$")))' \
+      <<< "$json" > /dev/null \
+    || err "[$label] segment-worker: wajib hanya network segment-ch/rpc/bff, read_only, cap_drop ALL, tanpa port, user non-root, ODOO_RPC_URL https://odoo-rpc-gateway:8443, SEGMENT_BFF_URL https://api-gateway:9466, SEGMENT_ENABLED boolean (docs/04 §28.7)"
+  jq -e '(.services["wa-unofficial"] // null) as $w | $w == null
+         or (((($w.networks // {}) | keys) - ["rmq", "wa-egress", "wa-admin"] | length == 0)
+             and ($w.read_only == true)
+             and ((($w.cap_drop // []) | index("ALL")) != null)
+             and ((($w.cap_add // []) | length) == 0)
+             and ((($w.ports // []) | length) == 0)
+             and (($w.profiles // []) == ["wa-unofficial"])
+             and ((($w.user // "") | tostring) | (. != "" and (test("^(0|root)(:.*)?$") | not)))
+             and ((($w.environment // {}).AMQP_URL // "") | startswith("amqps://"))
+             and (($w.environment // {}) | has("WA_UNOFFICIAL_PROXY_URL") | not)
+             and ((($w.environment // {}).WA_UNOFFICIAL_ENABLED // "") | tostring | test("^(true|false)$"))
+             and ((($w.labels // {}) | keys | map(select(startswith("traefik."))) | length) == 0))' \
+      <<< "$json" > /dev/null \
+    || err "[$label] wa-unofficial: wajib hanya network rmq/wa-egress/wa-admin, read_only, cap_drop ALL tanpa cap_add, tanpa port, profil wa-unofficial, user non-root, AMQP amqps://, tanpa WA_UNOFFICIAL_PROXY_URL, flag boolean, tanpa label Traefik (rute admin lewat wa-admin-relay, SEC-G50-06)"
+  # SEC-G50-06: relay admin = satu-satunya jalur Traefik/Prometheus -> wa-unofficial; listen hanya IP wa-ingress
+  # K25-06: IP statis = <EFN_SUBNET_BASE>.21.10, WA_RELAY_BIND_IP (bind admin-relay.cfg) = IP itu, label network
+  # <EFN_STACK>_wa-ingress; extra_hosts wa-unofficial menunjuk IP statis wa-egress-proxy (<base>.14.10).
+  local wstack wbase
+  wstack="$(stack_setting EFN_STACK efn)"
+  wbase="$(stack_setting EFN_SUBNET_BASE 172.30)"
+  jq -e --arg b "$wbase" --arg s "$wstack" '(.services["wa-admin-relay"] // null) as $w | $w == null
+         or (((($w.networks // {}) | keys | sort) == ["wa-admin", "wa-ingress"])
+             and ((($w.networks // {})["wa-ingress"].ipv4_address // "") == ($b + ".21.10"))
+             and ((($w.environment // {}).WA_RELAY_BIND_IP // "") == ($b + ".21.10"))
+             and ($w.read_only == true)
+             and ((($w.cap_drop // []) | index("ALL")) != null)
+             and ((($w.cap_add // []) | length) == 0)
+             and ((($w.ports // []) | length) == 0)
+             and ((($w.labels // {})["traefik.docker.network"] // "") == ($s + "_wa-ingress"))
+             and ((($w.labels // {})["traefik.http.routers.wa-admin.entrypoints"] // "") == "wg-https")
+             and ((($w.labels // {})["traefik.http.routers.wa-admin.tls.options"] // "") == "efn-mtls@file")
+             and ((($w.labels // {})["traefik.http.routers.wa-admin.middlewares"] // "") | split(",") | index("internal-ops@file") != null))' \
+      <<< "$json" > /dev/null \
+    || err "[$label] wa-admin-relay: wajib network wa-admin + wa-ingress (IP + WA_RELAY_BIND_IP ${wbase}.21.10), read_only, cap_drop ALL, tanpa port, router admin wg-https + internal-ops + efn-mtls di network ${wstack}_wa-ingress (SEC-G50-06, K25-06)"
+  jq -e --arg b "$wbase" '(.services["wa-unofficial"] // null) as $w | $w == null
+         or ((($w.extra_hosts // []) | if type == "object" then to_entries | map(.key + ":" + (.value | if type == "array" then .[0] else . end | tostring)) else . end
+              | map(select(startswith("web.whatsapp.com"))) | map(sub("^web\\.whatsapp\\.com[:=]"; ""))) == [$b + ".14.10"])' \
+      <<< "$json" > /dev/null \
+    || err "[$label] wa-unofficial: extra_hosts web.whatsapp.com wajib ${wbase}.14.10 (IP statis wa-egress-proxy, K25-06)"
+  jq -e --arg b "$wbase" '(.services["wa-egress-proxy"] // null) as $w | $w == null
+         or ((($w.networks // {})["wa-egress"].ipv4_address // "") == ($b + ".14.10"))' <<< "$json" > /dev/null \
+    || err "[$label] wa-egress-proxy: ipv4_address wa-egress wajib ${wbase}.14.10 (tujuan extra_hosts wa-unofficial, K25-06)"
+  jq -e '(.services["wa-egress-proxy"] // null) as $w | $w == null
+         or (((($w.networks // {}) | keys) - ["wa-egress", "wa-internet"] | length == 0)
+             and ($w.read_only == true)
+             and ((($w.cap_drop // []) | index("ALL")) != null)
+             and ((($w.cap_add // []) | length) == 0)
+             and ((($w.ports // []) | length) == 0)
+             and ((($w.labels // {}) | keys | map(select(startswith("traefik."))) | length) == 0))' <<< "$json" > /dev/null \
+    || err "[$label] wa-egress-proxy: wajib hanya network wa-egress/wa-internet, read_only, cap_drop ALL tanpa cap_add, tanpa port/Traefik (ADR-044 §3.6)"
   # 6a) G21 (docs/04 §13.1 no. 3, L-61): kunci tanda tangan kebijakan poin WAJIB di-mount ke odoo (penanda tangan) DAN
   #     api-gateway (pemverifikasi) dengan env *_FILE yang cocok; di luar keduanya sudah ditolak loop di atas.
   local lp
@@ -623,10 +799,21 @@ check_compose() {
     done
     jq -e '.services["insight-web"] != null' <<< "$json" > /dev/null \
       || err "[$label] insight-web tidak ter-render (profil data, docs/04 §26.11)"
+    # G50 (docs/04 §28.10): semua flag kampanye supermarket diteruskan dengan default false di render prod
+    for ks in BEHAVIOR_TRACKING_ENABLED WISHLIST_ENABLED RESTOCK_ALERT_ENABLED PRICE_ALERT_ENABLED PROMO_CAMPAIGN_ENABLED \
+              CAMPAIGN_FREQUENCY_CAP_ENABLED CAMPAIGN_BUDGET_CAP_ENABLED EMAIL_ENABLED WA_UNOFFICIAL_ENABLED; do
+      jq -e --arg k "$ks" '(.services["api-gateway"].environment[$k] // "") == "false"' <<< "$json" > /dev/null \
+        || err "[$label] api-gateway: ${ks} harus diteruskan dengan default false di render prod (docs/04 §28.10)"
+    done
+    jq -e '(.services.etl.environment.ETL_ENABLE_BEHAVIOR // "") == "false"' <<< "$json" > /dev/null \
+      || err "[$label] etl: ETL_ENABLE_BEHAVIOR harus diteruskan dengan default false di render prod (docs/04 §28.10)"
+    # Mode TLS SMTP tanpa nilai plaintext (L-160)
+    jq -e '(.services["api-gateway"].environment.EMAIL_SMTP_TLS_MODE // "") | test("^(implicit|starttls)$")' <<< "$json" > /dev/null \
+      || err "[$label] api-gateway: EMAIL_SMTP_TLS_MODE wajib implicit|starttls (ADR-048, L-160)"
   fi
 
   # 8) G41: kill switch ekstraksi ESB default MATI di render prod + overlay (aktivasi lewat .env/config, runbook esb-extract)
-  if [[ "$kind" == prod-esb ]]; then
+  if [[ "$kind" == prod-esb || "$label" == prod-stack ]]; then
     jq -e '.services["esb-extract"] != null' <<< "$json" > /dev/null \
       || err "[$label] esb-extract tidak ter-render (overlay docker-compose.esb.yml / profil data)"
     jq -e '(.services["esb-extract"].environment.ESB_ENABLED // "") == "false"' <<< "$json" > /dev/null \
@@ -648,11 +835,27 @@ check_compose() {
   fi
 
   # 9) G44 (docs/04 §28.10): kill switch forecast default MATI di render prod + overlay (aktivasi lewat .env/config)
-  if [[ "$kind" == prod-forecast ]]; then
+  if [[ "$kind" == prod-forecast || "$label" == prod-stack ]]; then
     jq -e '.services["forecast-worker"] != null' <<< "$json" > /dev/null \
       || err "[$label] forecast-worker tidak ter-render (overlay docker-compose.forecast.yml / profil data)"
     jq -e '(.services["forecast-worker"].environment.FORECAST_ENABLED // "") == "false"' <<< "$json" > /dev/null \
       || err "[$label] forecast-worker: FORECAST_ENABLED harus diteruskan dengan default false di render prod (docs/04 §28.10)"
+  fi
+  # 10) G50 (docs/04 §28.10): kill switch overlay kampanye default MATI di render prod
+  # K25-06: render paksaan prod-stack memuat overlay esb/forecast/segment/wa-unofficial -> aturan kill switch ikut.
+  if [[ "$label" == prod-segment || "$label" == prod-stack ]]; then
+    jq -e '.services["segment-worker"] != null' <<< "$json" > /dev/null \
+      || err "[$label] segment-worker tidak ter-render (overlay docker-compose.segment.yml / profil data)"
+    jq -e '(.services["segment-worker"].environment.SEGMENT_ENABLED // "") == "false"' <<< "$json" > /dev/null \
+      || err "[$label] segment-worker: SEGMENT_ENABLED harus diteruskan dengan default false di render prod (docs/04 §28.10)"
+  fi
+  if [[ "$label" == prod-wa-unofficial || "$label" == prod-stack ]]; then
+    jq -e '.services["wa-unofficial"] != null and .services["wa-egress-proxy"] != null and .services["wa-admin-relay"] != null' <<< "$json" > /dev/null \
+      || err "[$label] wa-unofficial/wa-egress-proxy/wa-admin-relay tidak ter-render (overlay docker-compose.wa-unofficial.yml / --profile wa-unofficial)"
+    for svc in wa-unofficial api-gateway; do
+      jq -e --arg s "$svc" '(.services[$s].environment.WA_UNOFFICIAL_ENABLED // "") == "false"' <<< "$json" > /dev/null \
+        || err "[$label] ${svc}: WA_UNOFFICIAL_ENABLED harus diteruskan dengan default false di render prod (ADR-044, docs/04 §28.10)"
+    done
   fi
 
   check_stack_identity "$label" "$json"
@@ -707,17 +910,19 @@ check_stack_identity() {
 
   # (e) alias scrape Prometheus hanya di network internal service pemiliknya
   local spec svc alias
-  for spec in api-gateway:api-gateway-metrics ocr-worker:ocr-worker-metrics; do
-    svc="${spec%%:*}"; alias="${spec#*:}"
-    jq -e --arg svc "$svc" --arg a "$alias" '
+  local anet
+  for spec in api-gateway:api-gateway-metrics:internal ocr-worker:ocr-worker-metrics:internal \
+              wa-admin-relay:wa-admin-relay-ingress:wa-ingress; do
+    IFS=: read -r svc alias anet <<< "$spec"
+    jq -e --arg svc "$svc" --arg a "$alias" --arg n "$anet" '
         (.services[$svc] == null)
-        or (((.services[$svc].networks.internal // {}).aliases // []) | index($a) != null)' <<< "$json" > /dev/null \
-      || err "[$label] ${svc}: alias ${alias} hilang dari network internal (target Prometheus hilang)"
-    jq -e --arg svc "$svc" --arg a "$alias" '
+        or ((((.services[$svc].networks // {})[$n] // {}).aliases // []) | index($a) != null)' <<< "$json" > /dev/null \
+      || err "[$label] ${svc}: alias ${alias} hilang dari network ${anet} (target Prometheus hilang)"
+    jq -e --arg svc "$svc" --arg a "$alias" --arg n "$anet" '
         [.services | to_entries[] | .key as $k | (.value.networks // {}) | to_entries[]
          | select(((.value // {}).aliases // []) | index($a) != null) | ($k + "/" + .key)]
-        - [$svc + "/internal"] | length == 0' <<< "$json" > /dev/null \
-      || err "[$label] alias ${alias} dipakai di luar ${svc}/internal (scrape lewat network lain)"
+        - [$svc + "/" + $n] | length == 0' <<< "$json" > /dev/null \
+      || err "[$label] alias ${alias} dipakai di luar ${svc}/${anet} (scrape lewat network lain)"
   done
 
   # (f) TRUSTED_PROXIES BFF memuat subnet internal stack ini
@@ -791,20 +996,67 @@ check_files() {
     || err "infra/odoo-rpc-gateway/haproxy.cfg: listener :8443 tanpa ssl + 'ca-file ... verify required' (mTLS)"
   grep -qE '^[[:space:]]*acl[[:space:]]+cn_bff[[:space:]]+ssl_c_s_dn\(CN\)[[:space:]]+-m[[:space:]]+str[[:space:]]+api-gateway$' "$hap" \
     || err "infra/odoo-rpc-gateway/haproxy.cfg: allowlist CN klien harus persis api-gateway"
-  # G44 (docs/04 §28.2): hanya dua ACL CN (cn_bff = api-gateway, cn_forecast = forecast-worker), keduanya `-m str`
-  # (persis, bukan sub/beg/reg); CN lain = perubahan kontrak.
+  # G44 (docs/04 §28.2) + G50 (§28.7): hanya tiga ACL CN (cn_bff = api-gateway, cn_forecast = forecast-worker,
+  # cn_segment = segment-worker), semuanya `-m str` (persis, bukan sub/beg/reg); CN lain = perubahan kontrak.
   local cn_acls
   cn_acls=$(grep -E '^[[:space:]]*acl[[:space:]]+[a-z_]+[[:space:]]+ssl_c_s_dn\(CN\)' "$hap" \
             | sed -E 's/^[[:space:]]*acl[[:space:]]+//; s/[[:space:]]+/ /g' | sort)
-  [[ "$cn_acls" == "$(printf '%s\n%s' 'cn_bff ssl_c_s_dn(CN) -m str api-gateway' \
-                       'cn_forecast ssl_c_s_dn(CN) -m str forecast-worker')" ]] \
-    || err "infra/odoo-rpc-gateway/haproxy.cfg: ACL CN klien hanya cn_bff=api-gateway dan cn_forecast=forecast-worker (-m str), ditemukan: ${cn_acls//$'\n'/; }"
+  [[ "$cn_acls" == "$(printf '%s\n%s\n%s' 'cn_bff ssl_c_s_dn(CN) -m str api-gateway' \
+                       'cn_forecast ssl_c_s_dn(CN) -m str forecast-worker' \
+                       'cn_segment ssl_c_s_dn(CN) -m str segment-worker' | sort)" ]] \
+    || err "infra/odoo-rpc-gateway/haproxy.cfg: ACL CN klien hanya cn_bff=api-gateway, cn_forecast=forecast-worker, cn_segment=segment-worker (-m str), ditemukan: ${cn_acls//$'\n'/; }"
+  # G50: path kampanye per CN - proposal_upsert HANYA di p_segment; claim/ack HANYA di p_allowed (BFF)
+  grep -qE '^[[:space:]]*acl[[:space:]]+p_segment[[:space:]]+path[[:space:]]+-m[[:space:]]+str[[:space:]]+/json/2/efn\.campaign/efn_campaign_proposal_upsert$' "$hap" \
+    || err "infra/odoo-rpc-gateway/haproxy.cfg: p_segment wajib persis /json/2/efn.campaign/efn_campaign_proposal_upsert"
+  if grep -qE '^[[:space:]]*acl[[:space:]]+p_(allowed|forecast)[[:space:]].*efn_campaign_proposal_upsert' "$hap" \
+     || grep -qE '^[[:space:]]*acl[[:space:]]+p_(segment|forecast)[[:space:]].*efn_campaign_(claim|ack)' "$hap"; then
+    err "infra/odoo-rpc-gateway/haproxy.cfg: path kampanye bocor ke CN lain (proposal_upsert hanya segment-worker; claim/ack hanya api-gateway)"
+  fi
   grep -qE '^[[:space:]]*server[[:space:]].*[[:space:]]ssl[[:space:]]+verify[[:space:]]+required[[:space:]]+ca-file[[:space:]].*[[:space:]]crt[[:space:]].*[[:space:]]verifyhost[[:space:]]+odoo([[:space:]]|$)' "$hap" \
     || err "infra/odoo-rpc-gateway/haproxy.cfg: backend Odoo tanpa 'ssl verify required ca-file .. crt .. verifyhost odoo'"
   if grep -qE 'verify[[:space:]]+none|^[[:space:]]*(stats|option[[:space:]]+forwardfor)' "$hap"; then
     err "infra/odoo-rpc-gateway/haproxy.cfg: verify none / stats / forwardfor dilarang"
   fi
   check_stack_files
+  # G50 (SEC-G50-10, docs/04 §28.10): ref persetujuan production tidak boleh berisi nilai di file repo (.env.example /
+  # compose) - ref hanya dari config rilis bertanda tangan; nilai contoh akan memenuhi gerbang deploy-validate diam-diam.
+  local ref_var ref_line
+  for ref_var in BEHAVIOR_TRACKING_DPO_APPROVAL_REF PROMO_CAMPAIGN_APPROVAL_REF WA_UNOFFICIAL_RISK_ACCEPTANCE_REF \
+                 EMAIL_DPA_APPROVAL_REF; do
+    ref_line="$(grep -E "^${ref_var}=" "$COMPOSE_DIR/.env.example" || true)"
+    [[ -n "$ref_line" ]] || err "infra/compose/.env.example: ${ref_var} wajib ada (kosong) sebagai dokumentasi gerbang G50"
+    [[ -z "$ref_line" || "$ref_line" =~ ^${ref_var}=[[:space:]]*(#.*)?$ ]] \
+      || err "infra/compose/.env.example: ${ref_var} wajib kosong (ref persetujuan hanya dari config rilis, SEC-G50-10)"
+    ref_line="$(grep -hE "^[[:space:]]*-?[[:space:]]*${ref_var}[:=]" "$COMPOSE_DIR"/docker-compose*.yml || true)"
+    if [[ -n "$ref_line" ]] \
+       && grep -vqE "${ref_var}[:=][[:space:]]*\\\$\\{${ref_var}:-\\}[[:space:]]*(#.*)?$" <<< "$ref_line"; then
+      err "infra/compose/docker-compose*.yml: ${ref_var} di-hardcode; wajib \${${ref_var}:-} (SEC-G50-10)"
+    fi
+  done
+  # SEC-215 (G44): user ClickHouse forecast dibatasi HOST IP (bukan HOST ANY) + pagar allowlist objek efn_forecast
+  local chi="${ROOT_DIR}/infra/clickhouse/clickhouse-init.sh"
+  # shellcheck disable=SC2016  # literal $FORECAST_CIDR di file target, bukan ekspansi
+  grep -qE '^create_user efn_forecast_reader /run/secrets/clickhouse_password_forecast "\$FORECAST_CIDR"$' "$chi" \
+    || err "infra/clickhouse/clickhouse-init.sh: efn_forecast_reader wajib dibuat dengan HOST IP \$FORECAST_CIDR (SEC-215)"
+  # K25-06 + pola SEC-215: efn_segment_reader HOST IP subnet segment-ch, divalidasi private_cidr_ok (/24../32)
+  # shellcheck disable=SC2016  # literal $SEGMENT_CIDR di file target, bukan ekspansi
+  grep -qE '^create_user efn_segment_reader /run/secrets/clickhouse_password_segment "\$SEGMENT_CIDR"$' "$chi" \
+    || err "infra/clickhouse/clickhouse-init.sh: efn_segment_reader wajib dibuat dengan HOST IP \$SEGMENT_CIDR (pola SEC-215)"
+  # shellcheck disable=SC2016  # literal $SEGMENT_CIDR di file target, bukan ekspansi
+  grep -qE '^private_cidr_ok "\$SEGMENT_CIDR"' "$chi" \
+    || err "infra/clickhouse/clickhouse-init.sh: SEGMENT_CIDR wajib divalidasi private_cidr_ok (pola SEC-223)"
+  grep -qF 'REVOKE SELECT ON efn_forecast.* FROM forecast_reader' "$chi" \
+    || err "infra/clickhouse/clickhouse-init.sh: pagar objek efn_forecast (REVOKE bila di luar allowlist) hilang (SEC-215)"
+  # SEC-223 (G45): pagar definisi view (DEFINER + SQL SECURITY DEFINER + sumber efn_dwh.v_fc_*) lewat create_table_query
+  grep -qF "DEFINER = efn_forecast_definer SQL SECURITY DEFINER AS SELECT [A-Za-z0-9_, ]+ FROM efn_dwh[.]v_fc_" "$chi" \
+    || err "infra/clickhouse/clickhouse-init.sh: regex pagar definisi view efn_forecast (create_table_query, SEC-223) hilang"
+  # shellcheck disable=SC2016  # literal $FC_BADDEF di file target, bukan ekspansi
+  grep -qE '^[[:space:]]+if \[ -n "\$FC_BADDEF" \]; then$' "$chi" \
+    || err "infra/clickhouse/clickhouse-init.sh: REVOKE pagar definisi view efn_forecast (SEC-223) hilang"
+  # SEC-223: prefix HOST user forecast minimal /24 (172.30.0.0/16 = semua network EFN)
+  # shellcheck disable=SC2016  # literal $c_p di file target, bukan ekspansi
+  grep -qE '\[ "\$c_p" -lt 24 \]' "$chi" \
+    || err "infra/clickhouse/clickhouse-init.sh: private_cidr_ok wajib menolak prefix < /24 (SEC-223)"
   check_esb_users
   echo "check-encryption: file konfigurasi infra diperiksa"
 }
@@ -819,7 +1071,7 @@ check_stack_files() {
   grep -qE '^[[:space:]]+network:[[:space:]]*"@EFN_STACK@_internal"[[:space:]]*$' "$tf" \
     || err "infra/traefik/traefik.yml: providers.docker.network wajib \"@EFN_STACK@_internal\" (K25-06)"
   local body
-  local net_re='efn_(internal|edge|data|egress|cache|socket-proxy|objstore|insight-[a-z]+|esb|egress-esb|forecast-[a-z]+)([^a-z_-]|$)'
+  local net_re='efn_(internal|edge|data|egress|cache|socket-proxy|objstore|insight-[a-z]+|esb|egress-esb|forecast-[a-z]+|segment-[a-z]+|rmq|wa-[a-z]+|mail)([^a-z_-]|$)'
   body="$(grep -vE "$COMMENT_RE" "$tf" || true)"
   if grep -qE "$net_re" <<< "$body"; then
     err "infra/traefik/traefik.yml: nama network tetap efn_* (pakai @EFN_STACK@_<network>)"
@@ -836,6 +1088,19 @@ check_stack_files() {
   fi
   grep -qE '^hostssl[[:space:]]+[^[:space:]]+[[:space:]]+efn_odoo[[:space:]]+samenet[[:space:]]+scram-sha-256' "$hba" \
     || err "infra/postgres/pg_hba.conf: baris efn_odoo wajib hostssl ... samenet scram-sha-256"
+  # SEC-G50-06 + K25-06: relay admin WA bind HANYA "${WA_RELAY_BIND_IP}:8443" (IP wa-ingress dari compose) + loopback
+  # health; env tidak ada/kosong = .alert (start gagal), bukan bind semua interface.
+  local rc="${ROOT_DIR}/infra/wa-egress/admin-relay.cfg" binds
+  binds="$({ grep -E '^[[:space:]]*bind[[:space:]]' "$rc" || true; } | sed -E 's/^[[:space:]]+//; s/[[:space:]]+/ /g' | sort)"
+  # shellcheck disable=SC2016  # literal ${WA_RELAY_BIND_IP} di file target (ekspansi env HAProxy), bukan shell
+  [[ "$binds" == "$(printf '%s\n%s' 'bind "${WA_RELAY_BIND_IP}:8443"' 'bind 127.0.0.1:8408' | sort)" ]] \
+    || err "infra/wa-egress/admin-relay.cfg: bind wajib persis \"\${WA_RELAY_BIND_IP}:8443\" + 127.0.0.1:8408 (SEC-G50-06/K25-06), ditemukan: ${binds//$'\n'/; }"
+  { grep -qE '^\.if !defined\(WA_RELAY_BIND_IP\)$' "$rc" && grep -qE '^[[:space:]]*\.alert ' "$rc"; } \
+    || err "infra/wa-egress/admin-relay.cfg: pagar .if !defined(WA_RELAY_BIND_IP) + .alert hilang (fail-open bind)"
+  body="$(grep -vE "$COMMENT_RE" "$rc" || true)"
+  if grep -qE '172\.30\.' <<< "$body"; then
+    err "infra/wa-egress/admin-relay.cfg: IP 172.30.x literal (K25-06: pakai WA_RELAY_BIND_IP)"
+  fi
   return 0
 }
 
@@ -906,6 +1171,13 @@ case "$MODE" in
     # G44 (docs/04 §28.2): render dev/prod + overlay forecast-worker (network forecast-ch/forecast-rpc, API key + mTLS)
     check_compose dev-forecast -f docker-compose.yml -f docker-compose.dev.yml -f docker-compose.forecast.yml
     check_compose prod-forecast -f docker-compose.yml -f docker-compose.prod.yml -f docker-compose.forecast.yml
+    # G50 (docs/04 §28.7/§28.9): overlay segment-worker dan WA tidak resmi (profil wa-unofficial), dev + prod
+    check_compose dev-segment -f docker-compose.yml -f docker-compose.dev.yml -f docker-compose.segment.yml
+    check_compose prod-segment -f docker-compose.yml -f docker-compose.prod.yml -f docker-compose.segment.yml
+    check_compose dev-wa-unofficial -f docker-compose.yml -f docker-compose.dev.yml -f docker-compose.wa-unofficial.yml \
+      --profile wa-unofficial
+    check_compose prod-wa-unofficial -f docker-compose.yml -f docker-compose.prod.yml -f docker-compose.wa-unofficial.yml \
+      --profile wa-unofficial
     # G43 (docs/04 §27.2): esb-migrate hanya ter-render dengan --profile migrate; render kedua + overlay sisi Odoo
     # (migration_bundle_key + direktori pertukaran ke odoo selama jendela migrasi).
     check_compose prod-esb-migrate -f docker-compose.yml -f docker-compose.prod.yml -f docker-compose.esb.yml \
@@ -913,13 +1185,15 @@ case "$MODE" in
     check_compose prod-migration -f docker-compose.yml -f docker-compose.prod.yml -f docker-compose.esb.yml \
       -f docker-compose.migration.yml --profile migrate
     # K25-06 (docs/runbooks/multi-env-local.md): stack bernama lain + subnet lain (gladi prod lokal di host yang rentang
-    # 172.16-31-nya dipakai project lain) wajib lolos SEMUA aturan di atas + identitas stack. Overlay esb + forecast
-    # ikut agar semua network (oktet 0..12) ter-render.
+    # 172.16-31-nya dipakai project lain) wajib lolos SEMUA aturan di atas + identitas stack. Overlay esb, forecast,
+    # segment, wa-unofficial (+ mail di dev) ikut agar semua network (oktet 0..21) ter-render.
     CC_STACK=efn-prod CC_BASE=10.250
     check_compose prod-stack -f docker-compose.yml -f docker-compose.prod.yml -f docker-compose.local-edge.yml \
-      -f docker-compose.esb.yml -f docker-compose.forecast.yml
+      -f docker-compose.esb.yml -f docker-compose.forecast.yml -f docker-compose.segment.yml \
+      -f docker-compose.wa-unofficial.yml --profile wa-unofficial
     CC_STACK=efn-dev CC_BASE=10.252
-    check_compose dev-stack -f docker-compose.yml -f docker-compose.dev.yml -f docker-compose.forecast.yml
+    check_compose dev-stack -f docker-compose.yml -f docker-compose.dev.yml -f docker-compose.forecast.yml \
+      -f docker-compose.segment.yml -f docker-compose.wa-unofficial.yml --profile wa-unofficial
     CC_STACK="" CC_BASE=""
     check_files
     ;;

@@ -188,6 +188,15 @@ class Settings:
     forecast_legacy_enabled: bool = False
     forecast_accuracy_weeks: int = 2
     forecast_accuracy_interval_seconds: int = 86_400
+    # G50 (ADR-047, docs/04 §28.6/§28.7, L-153/L-154): event perilaku visitor (PG behavior.event_raw, DB platform) ->
+    # fact_visitor_event + agg_visitor_*, erasure per subject_key. Default mati sampai tabel BFF + grant
+    # sql/platform-behavior-grants.sql diterapkan; production OFF selama BEHAVIOR_TRACKING_ENABLED OFF (DPO).
+    behavior_enabled: bool = False
+    behavior_agg_days: int = 3
+    behavior_agg_interval_seconds: int = 3600
+    behavior_k_min: int = 10
+    behavior_erasure_recheck_hours: int = 24
+    behavior_erasure_batch_size: int = 500
 
     @property
     def amqp_user(self) -> str:
@@ -359,4 +368,12 @@ class Settings:
             forecast_accuracy_interval_seconds=_int_range(
                 e, "ETL_FORECAST_ACCURACY_INTERVAL_SECONDS", 86_400, 900, 7 * 86_400
             ),
+            behavior_enabled=_bool(e, "ETL_ENABLE_BEHAVIOR", False),
+            # Staging PG hanya 7 hari -> hitung ulang agregat maksimal 7 hari ke belakang.
+            behavior_agg_days=_int_range(e, "ETL_BEHAVIOR_AGG_DAYS", 3, 1, 7),
+            behavior_agg_interval_seconds=_int_range(e, "ETL_BEHAVIOR_AGG_INTERVAL_SECONDS", 3600, 900, 86_400),
+            # k-anonim istilah pencarian di agregat 2 tahun (usulan 10, menunggu DPO Q-SM17).
+            behavior_k_min=_int_range(e, "ETL_BEHAVIOR_K_MIN", 10, 2, 1000),
+            behavior_erasure_recheck_hours=_int_range(e, "ETL_BEHAVIOR_ERASURE_RECHECK_HOURS", 24, 1, 168),
+            behavior_erasure_batch_size=_int_range(e, "ETL_BEHAVIOR_ERASURE_BATCH_SIZE", 500, 1, 1000),
         )

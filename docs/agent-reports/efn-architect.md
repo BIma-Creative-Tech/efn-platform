@@ -1086,3 +1086,72 @@ mengubah `CLAUDE.md` atas instruksi agent. Teks siap-tempel:
   (Apache-2.0) dan `holidays` (MIT) dari repo primer; cakupan "Cuti Bersama" `holidays` per tahun; volume event
   (asumsi ±0,5 juta/hari simulasi); semua estimasi biaya = perkiraan architect. Mermaid tidak dirender. Tidak ada
   runtime/test yang dijalankan (dokumen saja).
+
+# G50 — kontrak §28 diselaraskan dengan implementasi kampanye supermarket (2026-11-20)
+
+Worktree `E:\Projects\efn-platform-g50`, branch `feat/wave-50-supermarket-campaign`. Dokumen saja, tanpa kode, tidak
+di-commit.
+
+## Ringkasan (untuk manajemen)
+Kontrak kampanye supermarket kini mengikuti kode yang sudah dibangun (v20.2). Semua fitur mati secara default dan
+terkunci di production sampai ada nomor persetujuan DPO/Marketing/Finance/Legal (termasuk DPA email) dan izin
+Superadmin. Temuan penting: Odoo dan BFF, serta segment-worker dan Odoo, belum memakai format data yang sama, sehingga
+uji end-to-end pasti gagal sampai Odoo (payload klaim) dan segment-worker (ringkasan segmen) diperbaiki (±1,5–2
+hari-engineer). Sembilan pertanyaan klien baru (Q-SM30..Q-SM39; Q-SM35 sudah diputuskan lead → L-185).
+
+## File diubah
+- `docs/04_SERVICE_CONTRACTS.md`: header v20.2; §28 (status + penomoran G50 + ringkasan); §28.1; §28.5a (catatan);
+  §28.6 (consent/galat/`company_code`/`unknown_channel`/`purchase`); **§28.6a baru** (staging `behavior.*`, retensi,
+  erasure `subject_erasure`, ClickHouse); §28.7 (tabel queue + catatan); **§28.7a** (RPC `efn_campaign`), **§28.7b**
+  (payload kanonik + selisih implementasi, fixture normatif), **§28.7c** (segmen → BFF); §28.8 + **§28.8a**
+  (`GET /v1/me/inbox`, price alert, `GET /v1/config`); §28.9; §28.10 (flag, gate, secret, izin RMQ); §28.11 (catatan);
+  §28.12 (L-154/L-156/L-163 dianotasi, **L-169..L-185**, **Q-SM30..Q-SM39**).
+- **Koreksi lead (putaran 2, 20 Nov 2026), sudah diterapkan:** ringkasan segmen = validator Odoo (`metrics` datar
+  `{kunci: angka}`, `generated_at`, `summary` ≤ 256), segment-worker menyesuaikan; `voucher_program_ref` =
+  `loyalty.program:<id>`; konvensi tanggal WIB → UTC dipakai; Odoo: regex `segment_code` 40 karakter, tolak kampanye
+  tanpa kanal, `kind=segment` wajib segmen saat approval; Q-SM35 → **L-185** (event `purchase` dari `order.paid`, consent
+  `tracking` akun, POS belum tercakup); `features.notify_channels` di §28.8a; layar `/inbox` Super-App (sedang dibuat);
+  normalizer payload lama di BFF dihapus (satu format + fixture normatif).
+- **Re-review security (putaran 3, 20 Nov 2026), sudah diterapkan:** §28.7c body segmen wajib `company_code` (satu run =
+  satu PT, `409 run_company_mismatch`, `400 unsupported_schema`, fixture `services/segment-worker/tests/fixtures/
+  segment_members_v1.json`; SEC-G50-16/SEC-08); §28.6 + Q-SM33/Q-SM35: teks consent `tracking` wajib menyebut pembelian
+  online & penautan akun sebelum production (SEC-G50-17); DLQ WA TTL 24 jam + max-length, `behavior.event.dlq` 7 hari.
+  `docs/compliance/PDP_DATA_INVENTORY.md` **v19**: §2.8.12a baru (member_email, email_outbound, email_unsubscribe_used,
+  wa_unofficial_recipient/outbound, antrean WA, purchase_emitted, event `purchase`, subject_erasure, segment_member,
+  inbox/delivery, member_voucher — tujuan, dasar, kolom PII, enkripsi, retensi dari kode, penerima SMTP/WhatsApp) +
+  9 baris retensi §3 (SEC-G50-18). Temuan: `member_email.email_enc` dan `member_voucher.code_enc` belum terdaftar di
+  registry rotasi kunci; email & jejak WA belum ikut DSAR export.
+- ADR-044 §3.2, ADR-047 §6a, ADR-048 §3.1: bagian "Revisi G50"; status tetap Proposed.
+
+## Temuan (untuk lead)
+1. **Pemblokir end-to-end (SEC-G50-02 + temuan kedua):** (a) `_efn_outbox_payload` Odoo mengirim `title`/`body` datar,
+   `voucher{…}` bersarang, `voucher_program_ref` integer, tanggal `YYYY-MM-DD`, tanpa `voucher_value_idr` → semua baris
+   ditolak `parseCampaignPayload` BFF; (b) **belum tercatat di security review:** `efn_campaign_proposal_upsert` menolak
+   `metrics` bukan angka, padahal segment-worker mengirim `as_of` (string), `top_products` (list), `reason_counts`
+   (objek) → semua ringkasan `422 invalid_input`. Kontrak (L-181, koreksi lead): (a) Odoo menyesuaikan ke BFF,
+   (b) segment-worker menyesuaikan ke Odoo — `top_products` dan `as_of` tidak dikirim di v1.
+2. Regex `segment_code` Odoo `{1,47}` vs BFF `{1,39}`; Odoo mengizinkan kampanye tanpa kanal, BFF menolak — Odoo
+   menyesuaikan (§28.7b). Catatan: `summary` Odoo saat ini menerima ≤ 500, kontrak menetapkan ≤ 256.
+3. Pemisahan user `efn_segment_<kode>` / `efn_campaign_<kode>` hanya ditegakkan gateway (path per CN); kedua user satu
+   grup Odoo `group_campaign_bot` → usulan grup per metode (backlog).
+4. README `services/segment-worker` dan docstring `config.py`/`odoo.py` masih menyebut `odoo_api_key_campaign_<kode>`;
+   compose sudah menunjuk secret segmen — README perlu disesuaikan.
+5. Fixture `efn_campaign/tests/fixtures/campaign_payload_v1.json` belum ada di worktree; gate `EMAIL_DPA_APPROVAL_REF`
+   belum ada di `deploy-validate.sh` — keduanya dicatat "menyusul" di kontrak.
+
+## Keputusan yang butuh tanda tangan klien
+Q-SM30 `member_bound` (Marketing + DPO), Q-SM31 markdown lewat approval (Marketing + Ops), Q-SM32 ambang 4-eyes
+(Marketing + Finance), Q-SM33 teks banner (DPO + Legal), Q-SM34 alur email member (Pemilik + DPO), Q-SM36 host egress WA (IT/Security, PoC), Q-SM37 `outlet_code → warehouse_id` (Data + Ops),
+Q-SM38 consent per purpose vs kanal (DPO), Q-SM39 re-grant `tracking` (DPO). Tetap terbuka: Q-SM14/16/17/18/19/24/26.
+
+## Terverifikasi / belum terverifikasi
+- **Dibaca dari kode:** `odoo-campaign.ts`, `campaign-message.ts`, `campaign-inbox.controller.ts`, `behavior.controller.ts`,
+  `behavior-message.ts`, `alert-message.ts`, `wishlist.controller.ts/service.ts`, `segment-ingest.service.ts`,
+  `segment-internal.server.ts`, `wa-unofficial.contract.ts`, `email.notifier.ts`, `efn_campaign.py`,
+  `efn_campaign_outbox.py`, `campaign_api.py`, `segment-worker/contract.py`, `config.py` (grep), `haproxy.cfg` (grep),
+  `deploy-validate.sh`, `docker-compose.segment.yml` (grep), daftar tabel `20/21-platform-g50*.sql`, `16-g50-behavior.sql`.
+- **Diverifikasi sumber primer (github.com/advisories, 20 Nov 2026):** GHSA-qvv5-jq5g-4cgg (Baileys < 6.7.22, kritis,
+  CVE-2026-48063); GHSA-c7w3-x93f-qmm8 (nodemailer < 8.0.4, rendah).
+- **Belum terverifikasi:** semua perilaku runtime (tidak ada test yang saya jalankan); kolom lengkap tabel SQL (hanya
+  nama tabel + laporan agent); host egress WhatsApp; lisensi nodemailer 10.x; isi `rabbitmq-entrypoint.sh`; bahwa
+  consumer `notify.push` adalah jalur WhatsApp Cloud API (diambil dari keputusan lead/laporan BFF).

@@ -212,14 +212,49 @@ ALTER TABLE efn_dwh.audit_log_line_copy MODIFY TTL toDateTime(create_date) + INT
 EOF
 
 create_user() {
-  # $1 = nama user, $2 = file secret. ClickHouse menyamarkan password CREATE/ALTER USER di query_log/log server.
+  # $1 = nama user, $2 = file secret, $3 (opsional) = CIDR IPv4 tervalidasi -> HOST IP '<cidr>' (CREATE + ALTER, jadi
+  # user lama ikut dipersempit). Tanpa $3 = HOST ANY (pola lama; kontrol utama = isolasi network Docker).
+  # ClickHouse menyamarkan password CREATE/ALTER USER di query_log/log server.
   pw="$(cat "$2")"
   pw_ok "$pw" || { echo "clickhouse-init: $2 tidak valid (charset/panjang)" >&2; exit 1; }
-  $CH --multiquery <<EOF
+  if [ -n "${3:-}" ]; then
+    $CH --multiquery <<EOF
+CREATE USER IF NOT EXISTS $1 IDENTIFIED WITH sha256_password BY '${pw}' HOST IP '$3';
+ALTER USER $1 IDENTIFIED WITH sha256_password BY '${pw}' HOST IP '$3';
+EOF
+  else
+    $CH --multiquery <<EOF
 CREATE USER IF NOT EXISTS $1 IDENTIFIED WITH sha256_password BY '${pw}' HOST ANY;
 ALTER USER $1 IDENTIFIED WITH sha256_password BY '${pw}';
 EOF
+  fi
   unset pw
+}
+
+# SEC-215 (G44) + SEC-223 (G45): CIDR IPv4 privat dengan prefix /24../32. /16../23 ditolak: 172.30.0.0/16 mencakup
+# SEMUA network EFN (data/insight-data/esb/...) dan meniadakan pembatasan HOST. Nilai disisipkan sebagai literal SQL ->
+# charset dibatasi [0-9./] sebelum apa pun. Kanonik (bit host nol) ditegakkan di deploy-validate.sh.
+private_cidr_ok() {
+  case "$1" in
+    */*) ;;
+    *) return 1 ;;
+  esac
+  case "$1" in *[!0-9./]*) return 1 ;; esac
+  c_ip="${1%/*}"; c_p="${1#*/}"
+  case "$c_p" in ''|*[!0-9]*) return 1 ;; esac
+  if [ "${#c_p}" -gt 2 ] || [ "$c_p" -lt 24 ] || [ "$c_p" -gt 32 ]; then return 1; fi
+  IFS=. read -r o1 o2 o3 o4 c_rest <<EOF
+$c_ip
+EOF
+  [ -z "$c_rest" ] || return 1
+  for o in "$o1" "$o2" "$o3" "$o4"; do
+    case "$o" in ''|*[!0-9]*) return 1 ;; esac
+    if [ "${#o}" -gt 3 ] || [ "$o" -gt 255 ]; then return 1; fi
+  done
+  if [ "$o1" -eq 10 ]; then return 0; fi
+  if [ "$o1" -eq 172 ] && [ "$o2" -ge 16 ] && [ "$o2" -le 31 ]; then return 0; fi
+  if [ "$o1" -eq 192 ] && [ "$o2" -eq 168 ]; then return 0; fi
+  return 1
 }
 create_user efn_etl /run/secrets/clickhouse_password_etl
 create_user efn_text2sql /run/secrets/clickhouse_password_text2sql
@@ -232,7 +267,25 @@ create_user efn_insight /run/secrets/clickhouse_password_insight
 # G44 (ADR-046, docs/04 §28.2): user forecast-worker (read-only efn_forecast). Devsecops (G44) me-mount secret
 # clickhouse_password_forecast ke clickhouse-init di base compose (semua env; scripts/secrets.list `random`) -> WAJIB
 # seperti efn_insight: secret hilang = init gagal (fail closed, bukan user tanpa password).
-create_user efn_forecast_reader /run/secrets/clickhouse_password_forecast
+# SEC-215 (pertahanan berlapis di atas isolasi network): login HANYA dari subnet network `forecast-ch`
+# (overlay docker-compose.forecast.yml, ipam <EFN_SUBNET_BASE>.11.0/24) -> password yang bocor tidak berguna dari network
+# lain (data/insight-data/esb). CH_FORECAST_READER_HOST_CIDR (compose clickhouse-init, default turunan EFN_SUBNET_BASE,
+# K25-06) WAJIB = subnet itu (scripts/check-encryption.sh); antar-mesin (K25-02) = subnet WireGuard mesin data (runbook
+# forecast-worker §7). Fallback di bawah hanya bila skrip dijalankan tanpa compose.
+FORECAST_CIDR="${CH_FORECAST_READER_HOST_CIDR:-${EFN_SUBNET_BASE:-172.30}.11.0/24}"
+private_cidr_ok "$FORECAST_CIDR" \
+  || { echo "clickhouse-init: CH_FORECAST_READER_HOST_CIDR harus CIDR IPv4 privat /24../32 (dapat: ${FORECAST_CIDR}; SEC-223)" >&2; exit 1; }
+create_user efn_forecast_reader /run/secrets/clickhouse_password_forecast "$FORECAST_CIDR"
+# G50 (ADR-047 Proposed, docs/04 §28.7): user segment-worker (read-only efn_segment.v_*, access/segment-access.sql).
+# Pola efn_forecast_reader: secret clickhouse_password_segment di-mount ke clickhouse-init di base compose (semua env;
+# scripts/secrets.list `random`) -> secret hilang = init gagal (fail closed). segment-worker hanya di overlay
+# docker-compose.segment.yml.
+# K25-06 + pola SEC-215/SEC-223: login HANYA dari subnet network `segment-ch` (ipam <EFN_SUBNET_BASE>.17.0/24).
+# CH_SEGMENT_READER_HOST_CIDR (compose clickhouse-init) WAJIB = subnet itu (scripts/check-encryption.sh).
+SEGMENT_CIDR="${CH_SEGMENT_READER_HOST_CIDR:-${EFN_SUBNET_BASE:-172.30}.17.0/24}"
+private_cidr_ok "$SEGMENT_CIDR" \
+  || { echo "clickhouse-init: CH_SEGMENT_READER_HOST_CIDR harus CIDR IPv4 privat /24../32 (dapat: ${SEGMENT_CIDR}; SEC-223)" >&2; exit 1; }
+create_user efn_segment_reader /run/secrets/clickhouse_password_segment "$SEGMENT_CIDR"
 # G43 (docs/04 §27.10): user mesin migrasi `efn_mig` HANYA selama program migrasi. Secret tidak di-mount / kosong /
 # placeholder (`disabled`, scripts/secrets.list) -> user dihapus (bukan gagal: stack normal tidak butuh migrasi).
 # Secret ada tetapi tidak valid (charset/panjang) -> init gagal (create_user, fail closed).
@@ -293,6 +346,56 @@ $CH --multiquery <<'EOF'
 GRANT forecast_reader TO efn_forecast_reader;
 SET DEFAULT ROLE forecast_reader TO efn_forecast_reader;
 ALTER USER efn_forecast_reader SETTINGS PROFILE 'forecast_readonly';
+EOF
+# SEC-215: forecast-access.sql memberi `SELECT ON efn_forecast.*` (wildcard; test_access_sql.py milik data-AI mengunci
+# bentuk itu) -> objek APA PUN yang kelak dibuat di efn_forecast otomatis terbaca forecast_reader. Pagar fail-closed:
+# database efn_forecast hanya boleh berisi VIEW berikut (= VIEW_COLUMNS services/forecast-worker/efn_forecast/source.py);
+# objek lain (tabel, view baru yang belum ditinjau) -> grant role dicabut + init gagal. View baru = tambah di sini
+# DAN di forecast-access.sql + test data-AI dalam PR yang sama (runbook forecast-worker §5).
+FC_ALLOWED="'v_sales_daily','v_stock_daily','v_scrap_daily','v_calendar','v_product','v_warehouse'"
+FC_UNEXPECTED="$($CH --query "SELECT name || ' (' || engine || ')' FROM system.tables WHERE database = 'efn_forecast'
+  AND (engine != 'View' OR name NOT IN (${FC_ALLOWED})) ORDER BY name FORMAT TSV")"
+if [ -n "$FC_UNEXPECTED" ]; then
+  $CH --query "REVOKE SELECT ON efn_forecast.* FROM forecast_reader" < /dev/null
+  echo "clickhouse-init: objek di luar allowlist di efn_forecast (grant forecast_reader dicabut, SEC-215):" >&2
+  printf '%s\n' "$FC_UNEXPECTED" >&2
+  exit 1
+fi
+# SEC-223 (G45): nama + engine saja tidak cukup -- view allowlist yang di-CREATE OR REPLACE menjadi SELECT atas tabel
+# lain (atau SQL SECURITY INVOKER/NONE, definer lain) tetap lolos pagar di atas. Bila ClickHouse mengekspos
+# system.tables.create_table_query (24.8: ya; kolom dicek lewat system.columns agar versi lain tidak salah gagal),
+# definisi tiap view WAJIB berbentuk persis (setelah backtick dibuang dan spasi dinormalkan):
+#   ... DEFINER = efn_forecast_definer SQL SECURITY DEFINER AS SELECT <daftar kolom polos> FROM efn_dwh.v_fc_<nama tanpa v_>
+# Daftar kolom hanya [A-Za-z0-9_, ] -> tanpa fungsi/table function (remote/url/file), subquery, JOIN, atau db.tabel lain.
+# Regex tanpa backslash ([.] / [[:space:]]) agar tidak bergantung pada escape string literal ClickHouse.
+FC_HAS_CTQ="$($CH --query "SELECT count() FROM system.columns WHERE database = 'system' AND table = 'tables'
+  AND name = 'create_table_query' FORMAT TSV")"
+if [ "$FC_HAS_CTQ" = "1" ]; then
+  # Satu SELECT dan satu FROM saja (menutup UNION ALL ... SELECT ... FROM <tabel tanpa prefix db>).
+  FC_BADDEF="$($CH --query "SELECT name FROM (SELECT name,
+      replaceRegexpAll(replaceAll(create_table_query, '\`', ''), '[[:space:]]+', ' ') AS q
+    FROM system.tables WHERE database = 'efn_forecast' AND engine = 'View')
+    WHERE NOT match(q, concat('DEFINER = efn_forecast_definer SQL SECURITY DEFINER AS SELECT [A-Za-z0-9_, ]+ FROM efn_dwh[.]v_fc_',
+                              substring(name, 3), ' ?\$'))
+      OR countSubstrings(upper(q), 'SELECT ') != 1 OR countSubstrings(upper(q), ' FROM ') != 1
+    ORDER BY name FORMAT TSV")"
+  if [ -n "$FC_BADDEF" ]; then
+    $CH --query "REVOKE SELECT ON efn_forecast.* FROM forecast_reader" < /dev/null
+    echo "clickhouse-init: definisi view efn_forecast menyimpang (wajib DEFINER = efn_forecast_definer SQL SECURITY DEFINER," \
+      "SELECT kolom polos FROM efn_dwh.v_fc_*; grant forecast_reader dicabut, SEC-223):" >&2
+    printf '%s\n' "$FC_BADDEF" >&2
+    exit 1
+  fi
+else
+  echo "clickhouse-init: PERINGATAN system.tables.create_table_query tidak tersedia; pagar definisi view efn_forecast (SEC-223) dilewati" >&2
+fi
+
+# G50: segment-access.sql membuat role segment_reader, profil segment_readonly, kuota segment_quota, definer
+# efn_segment_definer (HOST NONE) dan view efn_segment.v_*; pengikatan ke user di sini (pola forecast G44).
+$CH --multiquery <<'EOF'
+GRANT segment_reader TO efn_segment_reader;
+SET DEFAULT ROLE segment_reader TO efn_segment_reader;
+ALTER USER efn_segment_reader SETTINGS PROFILE 'segment_readonly';
 EOF
 
 # G38 (docs/04 §23.3): row policy cakupan PT pada view efn_t2s. Service text2sql mengirim setting SQL_efn_cids
@@ -355,4 +458,4 @@ if [ -n "$INSIGHT_MISSING" ]; then
 fi
 
 rm -f "$CFG"
-echo "clickhouse-init: skema, user (efn_etl, efn_text2sql, efn_metabase, efn_esb, efn_insight, efn_forecast_reader, efn_mig bila aktif) dan grant diterapkan"
+echo "clickhouse-init: skema, user (efn_etl, efn_text2sql, efn_metabase, efn_esb, efn_insight, efn_forecast_reader, efn_segment_reader, efn_mig bila aktif) dan grant diterapkan"

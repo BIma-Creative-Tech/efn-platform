@@ -7,6 +7,9 @@ import { loadChannels, loadProduct, pickChannel } from '@/lib/catalog-server';
 import { formatRupiah } from '@/lib/format';
 import { getSessionToken } from '@/lib/session';
 import { AddToCart } from '@/components/online/AddToCart';
+import { ProductViewTracker } from '@/components/engage/BehaviorTrackers';
+import { PriceAlert } from '@/components/engage/PriceAlert';
+import { WishlistButton } from '@/components/engage/WishlistButton';
 import { OnlineUnavailable } from '@/components/online/OnlineUnavailable';
 import { ProductImage } from '@/components/online/ProductImage';
 import styles from '@/components/online/online.module.css';
@@ -78,6 +81,9 @@ export default async function ProductPage({
             Dijual oleh {companyDisplayName(channel.company_code)}. Total akhir dihitung saat checkout.
           </p>
           {p.description && <p className={styles.description}>{p.description}</p>}
+          <div>
+            <WishlistButton channelCode={channel.channel_code} productId={p.product_id} name={p.name} variant="detail" returnPath={returnPath} />
+          </div>
           <AddToCart
             product={{ product_id: p.product_id, name: p.name, max_qty: p.max_qty, attributes: p.attributes }}
             channelCode={channel.channel_code}
@@ -86,7 +92,15 @@ export default async function ProductPage({
             loggedIn={loggedIn}
             returnPath={returnPath}
           />
+          <PriceAlert
+            channelCode={channel.channel_code}
+            productId={p.product_id}
+            productName={p.name}
+            currentPrice={price.amount}
+            returnPath={returnPath}
+          />
         </div>
+        <ProductViewTracker channelCode={channel.channel_code} productId={p.product_id} />
       </div>
     </div>
   );

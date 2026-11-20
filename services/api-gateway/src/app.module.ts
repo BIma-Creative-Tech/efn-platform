@@ -20,6 +20,11 @@ import { OtpModule } from './otp/otp.module';
 import { PaymentsModule } from './payments/payments.module';
 import { PosModule } from './pos/pos.module';
 import { PrivacyModule } from './privacy/privacy.module';
+import { BehaviorModule } from './behavior/behavior.module';
+import { CampaignModule } from './campaign/campaign.module';
+import { EmailModule } from './notification/email/email.module';
+import { WaUnofficialModule } from './notification/wa-unofficial/wa-unofficial.module';
+import { WishlistModule } from './wishlist/wishlist.module';
 
 /**
  * Modul root. Bounded context (docs/04_SERVICE_CONTRACTS.md):
@@ -52,6 +57,14 @@ import { PrivacyModule } from './privacy/privacy.module';
     BookingModule,
     // G27 promo Super-App (docs/04 §18): kill switch PROMO_ENABLED / PROMO_PUSH_ENABLED (default false)
     PromoModule,
+    // G50 supermarket (docs/04 §28.6–§28.10, ADR-044/047/048 Proposed) — semua kill switch default false, prod OFF:
+    // BEHAVIOR_TRACKING_ENABLED, WISHLIST_ENABLED/RESTOCK_ALERT_ENABLED/PRICE_ALERT_ENABLED, PROMO_CAMPAIGN_ENABLED (G50-A);
+    // EMAIL_ENABLED, WA_UNOFFICIAL_ENABLED (G50-B)
+    EmailModule,
+    WaUnofficialModule,
+    BehaviorModule,
+    WishlistModule,
+    CampaignModule,
   ],
   controllers: [HealthController],
   providers: [{ provide: APP_FILTER, useClass: ContractExceptionFilter }],

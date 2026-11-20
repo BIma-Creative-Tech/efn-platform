@@ -37,3 +37,6 @@ data/brand-catalog/
 
 # dev lokal (APK BlueStacks/LAN): sertifikat + router per mesin
 infra/traefik/dev/local/
+
+# arsip kit pribadi Claude (bukan bagian repo)
+docs/claude-standard-kit.zip

@@ -1,0 +1,144 @@
+# G50 (docs/04 §28.7/§28.10, ADR-047 Proposed, K25-02, K25-06): segment-worker - segmentasi harian perilaku visitor
+# supermarket untuk USULAN kampanye. Membaca ClickHouse (user efn_segment_reader, view efn_segment.* saja), mengirim
+# anggota segmen (subject_key pseudonim) ke BFF lewat listener mTLS :9466 dan ringkasan TANPA data member ke Odoo lewat
+# odoo-rpc-gateway (/json/2, mTLS CN segment-worker, HANYA path #32 efn_campaign_proposal_upsert, API key user teknis
+# efn_segment_<pt>). Tidak menulis ClickHouse. Runbook: docs/runbooks/supermarket-campaign-channels.md §4.
+#
+# Pola overlay forecast (G44): image belum masuk rantai rilis bertanda tangan, deploy.sh TIDAK menyertakan overlay ini.
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml -f docker-compose.segment.yml \
+#     --profile core --profile data up -d segment-worker
+#
+# SEGMENT_ENABLED=false default di SEMUA env (proses hidup, idle, tanpa secret dibaca). Production OFF sampai DPO
+# (Q-SM16/17/26) + PROMO_CAMPAIGN_ENABLED disetujui; deploy-validate menolak true di production bila kampanye mati.
+# Listener BFF :9466 hanya dibuka bila PROMO_CAMPAIGN_ENABLED=true -> segment-worker aktif tanpa kampanye = gagal kirim.
+#
+# Jaringan (least privilege, dicek scripts/check-encryption.sh):
+#   segment-ch  (internal): HANYA clickhouse <-> segment-worker (HTTPS 8443, CA internal)
+#   segment-rpc (internal): HANYA odoo-rpc-gateway <-> segment-worker (HTTPS 8443 mTLS)
+#   segment-bff (internal): HANYA api-gateway <-> segment-worker (HTTPS 9466 mTLS; BFF memeriksa CN segment-worker dan
+#                           hanya melayani POST /internal/v1/segments/{run_id}/members di port itu)
+#   Tiga network terpisah: gateway Odoo, BFF dan ClickHouse tidak saling terjangkau lewat network ini. segment-worker TIDAK
+#   di data/internal/egress: tanpa PostgreSQL, RabbitMQ, Odoo langsung, internet. Antar-mesin (K25-02): jalur WireGuard
+#   ke api-gateway:9466 / odoo-rpc-gateway:8443 belum dibangun (sama dengan forecast-worker).
+#
+# Secret (semua lewat /run/secrets):
+#   odoo_api_key_segment_smd       host:disabled (dibuat di Odoo, user efn_segment_smd; worker menolak `disabled`)
+#   tls_segment_worker_crt/_key    pki (gen-pki.sh profil client, CN segment-worker)
+#   clickhouse_password_segment    random (juga di-mount clickhouse-init di base untuk CREATE USER)
+#   efn_ca_crt                     bundle CA internal
+services:
+  segment-worker:
+    image: ${IMAGE_SEGMENT_WORKER:-ghcr.io/${EFN_STACK:-efn}/segment-worker:dev}
+    build:
+      context: ../../services/segment-worker
+    profiles: ["data"]
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"
+        labels: "service"
+    security_opt:
+      - no-new-privileges:true
+    # Tidak depends_on api-gateway/odoo-rpc-gateway (profil core, bisa di mesin lain): worker retry/backoff.
+    depends_on:
+      clickhouse-init:
+        condition: service_completed_successfully
+    user: "65534:65534"
+    command: ["python", "-m", "efn_segment", "run"]
+    environment:
+      APP_ENV: ${APP_ENV:-production}
+      SEGMENT_ENABLED: ${SEGMENT_ENABLED:-false}
+      SEGMENT_COMPANIES: ${SEGMENT_COMPANIES:-SMD}
+      SEGMENT_DAILY_CRON: ${SEGMENT_DAILY_CRON:-15 2 * * *}
+      SEGMENT_TZ: ${SEGMENT_TZ:-Asia/Jakarta}
+      SEGMENT_LOOKBACK_DAYS: ${SEGMENT_LOOKBACK_DAYS:-14}
+      SEGMENT_MIN_SIZE: ${SEGMENT_MIN_SIZE:-10}
+      SEGMENT_K_MIN: ${SEGMENT_K_MIN:-10}
+      SEGMENT_INCLUDE_DEVICE: ${SEGMENT_INCLUDE_DEVICE:-false}
+      # ClickHouse HTTPS 8443, CA internal, user efn_segment_reader (SELECT view efn_segment.* saja)
+      CH_HOST: clickhouse
+      CH_PORT: "8443"
+      CH_SECURE: "true"
+      CH_CA_FILE: /run/secrets/efn_ca_crt
+      CH_DATABASE: efn_segment
+      CH_USER: efn_segment_reader
+      CH_PASSWORD_FILE: /run/secrets/clickhouse_password_segment
+      # BFF: listener mTLS segmen (BUKAN :3000 API publik yang tidak meminta sertifikat klien)
+      SEGMENT_BFF_URL: https://api-gateway:9466
+      SEGMENT_BFF_CA_FILE: /run/secrets/efn_ca_crt
+      SEGMENT_BFF_TIMEOUT_SECONDS: ${SEGMENT_BFF_TIMEOUT_SECONDS:-25}
+      # Odoo /json/2 HANYA lewat filter (bukan odoo:8443 langsung; odoo-tls tidak mengizinkan CN segment-worker)
+      ODOO_RPC_URL: https://odoo-rpc-gateway:8443
+      ODOO_RPC_CA_FILE: /run/secrets/efn_ca_crt
+      ODOO_RPC_TIMEOUT_SECONDS: ${SEGMENT_ODOO_RPC_TIMEOUT_SECONDS:-25}
+      # Satu sertifikat klien (CN segment-worker) untuk BFF dan gateway
+      SEGMENT_CLIENT_CERT_FILE: /run/secrets/tls_segment_worker_crt
+      SEGMENT_CLIENT_KEY_FILE: /run/secrets/tls_segment_worker_key
+      # Nama env dibaca kode worker (ODOO_API_KEY_CAMPAIGN_<PT>_FILE) tetapi file = secret user teknis TERPISAH
+      # efn_segment_<pt> (bukan key BFF efn_campaign_<pt>; docs/04 §7.3 kredensial per service).
+      ODOO_API_KEY_CAMPAIGN_SMD_FILE: /run/secrets/odoo_api_key_segment_smd
+      HOME: /tmp
+    secrets:
+      - odoo_api_key_segment_smd
+      - tls_segment_worker_crt
+      - tls_segment_worker_key
+      - clickhouse_password_segment
+      - efn_ca_crt
+    networks: [segment-ch, segment-rpc, segment-bff]
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    cap_drop: [ALL]
+    deploy:
+      resources:
+        # Python murni atas agregat per subjek x produk (60 hari). Belum diukur dengan volume nyata (laporan data-AI G50).
+        limits: { cpus: "1", memory: "${SEGMENT_MEMORY_LIMIT:-768M}" }
+    # Tanpa port HTTP: healthcheck memastikan proses utama hidup; hasil run di log EFN_SEGMENT_RUN.
+    healthcheck:
+      test: ["CMD", "python", "-c", "import os; os.kill(1, 0)"]
+      interval: 60s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    labels:
+      service: segment-worker
+
+  # Union dengan base (+ overlay lain): sertifikat ber-SAN nama service berlaku di network mana pun.
+  clickhouse:
+    networks: [data, insight-data, segment-ch]
+  odoo-rpc-gateway:
+    networks: [internal, segment-rpc]
+  # Bentuk map + alias sama dengan base (K25-06): alias scrape Prometheus `api-gateway-metrics` hanya di `internal`.
+  api-gateway:
+    networks:
+      internal:
+        aliases: [api-gateway-metrics]
+      data:
+      cache:
+      egress:
+      segment-bff:
+
+# K25-06: nama `<EFN_STACK>_<key>` + subnet <EFN_SUBNET_BASE>.17/.18/.19 (peta oktet di docker-compose.yml).
+networks:
+  segment-ch:     # hanya clickhouse <-> segment-worker (dicek scripts/check-encryption.sh)
+    name: ${EFN_STACK:-efn}_segment-ch
+    internal: true
+    ipam:
+      config: [{ subnet: "${EFN_SUBNET_BASE:-172.30}.17.0/24" }]
+  segment-rpc:    # hanya odoo-rpc-gateway <-> segment-worker
+    name: ${EFN_STACK:-efn}_segment-rpc
+    internal: true
+    ipam:
+      config: [{ subnet: "${EFN_SUBNET_BASE:-172.30}.18.0/24" }]
+  segment-bff:    # hanya api-gateway <-> segment-worker (listener mTLS :9466)
+    name: ${EFN_STACK:-efn}_segment-bff
+    internal: true
+    ipam:
+      config: [{ subnet: "${EFN_SUBNET_BASE:-172.30}.19.0/24" }]
+
+secrets:
+  odoo_api_key_segment_smd: { file: ../../secrets/odoo_api_key_segment_smd.txt }
+  tls_segment_worker_crt: { file: ../../secrets/tls_segment_worker_crt.txt }
+  tls_segment_worker_key: { file: ../../secrets/tls_segment_worker_key.txt }

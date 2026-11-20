@@ -42,6 +42,8 @@ while read -r name kind _; do
   [[ "$name" == odoo_pii_* ]] && continue
   # G43: secret migrasi ESB (host:disabled di produksi) -> nilai nyata dev/CI dibuat di bagian "Migrasi ESB" di bawah.
   [[ "$name" == clickhouse_password_mig || "$name" == migration_bundle_key ]] && continue
+  # G50: secret WA tidak resmi (host:disabled di produksi) -> nilai nyata dev/CI dibuat di bagian "WA tidak resmi" di bawah.
+  [[ "$name" == wa_unofficial_* || "$name" == rabbitmq_password_wa_unofficial ]] && continue
   f="${OUT_DIR}/${name}.txt"
   if [[ -s "$f" ]]; then
     chmod 644 "$f"
@@ -108,6 +110,35 @@ for spec in clickhouse_password_mig:random migration_bundle_key:hex32; do
   else
     ( umask 022; printf 'disabled' > "$f" )
     echo "dibuat : $f (disabled: migrasi ESB nonaktif di APP_ENV='${APP_ENV:-}')"
+  fi
+  chmod 644 "$f"
+done
+
+# WA tidak resmi (G50, ADR-044 Proposed, docs/04 §28.9/§28.10): di scripts/secrets.list berjenis host:disabled
+# (production OFF sampai penerimaan risiko tertulis Q-SM14 + DPO Q-SM18). Pola SEC-199 (migrasi ESB di atas): nilai
+# NYATA hanya bila APP_ENV = dev|development|ci|test; selain itu (termasuk gladi prod lokal K25-06) `disabled`:
+#   rabbitmq : user efn-wa-unofficial TIDAK dibuat broker; wa-unofficial menolak start bila diaktifkan.
+#   APP_ENV=dev bash scripts/gen-secrets.sh
+# Panjang: kunci HMAC/token >= 32 karakter (hex32 = 64), kunci sesi = 32 byte base64 (b64key32). Idempoten: nilai nyata
+# yang ada tidak ditimpa (menimpa session key = sesi WhatsApp tidak terbaca -> pairing ulang). metrics != admin
+# (dua nilai acak independen).
+for spec in wa_unofficial_hash_key:hex32 wa_unofficial_session_key:b64key32 wa_unofficial_admin_token:hex32 \
+            wa_unofficial_metrics_token:hex32 rabbitmq_password_wa_unofficial:hex32; do
+  name="${spec%%:*}"
+  f="${OUT_DIR}/${name}.txt"
+  if [[ -s "$f" ]] && ! grep -qx 'disabled' "$f"; then
+    chmod 644 "$f"
+    echo "ada    : $f"
+    continue
+  fi
+  if (( mig_real )); then
+    ( umask 022; gen_value "${spec#*:}" > "$f" )
+    echo "dibuat : $f (WA tidak resmi, dev/ci/test saja)"
+  elif [[ ! -s "$f" ]]; then
+    ( umask 022; printf 'disabled' > "$f" )
+    echo "dibuat : $f (disabled: WA tidak resmi nonaktif di APP_ENV='${APP_ENV:-}')"
+  else
+    echo "ada    : $f (disabled)"
   fi
   chmod 644 "$f"
 done

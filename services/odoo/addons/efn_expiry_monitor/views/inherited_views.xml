@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="product_category_form_efn_expiry" model="ir.ui.view">
+        <field name="name">product.category.form.efn.expiry</field>
+        <field name="model">product.category</field>
+        <field name="inherit_id" ref="product.product_category_form_view"/>
+        <field name="arch" type="xml">
+            <xpath expr="//sheet" position="inside">
+                <group string="Kedaluwarsa (EFN)" name="efn_expiry">
+                    <field name="efn_near_expiry_days"/>
+                    <field name="efn_markdown_days"/>
+                    <field name="efn_min_receipt_days"/>
+                    <div colspan="2" class="text-muted">0 = memakai nilai kategori induk terdekat yang terisi.</div>
+                </group>
+            </xpath>
+        </field>
+    </record>
+
+    <record id="view_picking_form_efn_expiry" model="ir.ui.view">
+        <field name="name">stock.picking.form.efn.expiry</field>
+        <field name="model">stock.picking</field>
+        <field name="inherit_id" ref="stock.view_picking_form"/>
+        <field name="arch" type="xml">
+            <xpath expr="//header" position="inside">
+                <button name="action_efn_expiry_receipt_override" type="object" string="Override sisa umur"
+                        invisible="not efn_short_life_warning or state in ('done', 'cancel')"
+                        groups="efn_expiry_monitor.group_markdown_manager,stock.group_stock_manager"/>
+            </xpath>
+            <xpath expr="//sheet" position="before">
+                <div class="alert alert-warning mb-0" role="alert"
+                     invisible="not efn_short_life_warning">
+                    <strong>Sisa umur lot di bawah minimum kategori (penerimaan akan ditolak):</strong>
+                    <field name="efn_short_life_warning" nolabel="1"/>
+                </div>
+            </xpath>
+            <xpath expr="//field[@name='origin']" position="after">
+                <field name="efn_short_life_override_id" invisible="not efn_short_life_override_id"/>
+            </xpath>
+        </field>
+    </record>
+</odoo>

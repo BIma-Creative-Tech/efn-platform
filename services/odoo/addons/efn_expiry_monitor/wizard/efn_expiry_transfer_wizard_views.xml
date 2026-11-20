@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="efn_expiry_transfer_wizard_view_form" model="ir.ui.view">
+        <field name="name">efn.expiry.transfer.wizard.form</field>
+        <field name="model">efn.expiry.transfer.wizard</field>
+        <field name="arch" type="xml">
+            <form>
+                <group>
+                    <group>
+                        <field name="alert_id"/>
+                        <field name="company_id" invisible="1"/>
+                        <field name="source_warehouse_id"/>
+                        <field name="product_id"/>
+                        <field name="lot_id"/>
+                    </group>
+                    <group>
+                        <field name="qty"/>
+                        <field name="dest_warehouse_id"/>
+                    </group>
+                </group>
+                <field name="candidate_info" nolabel="1"/>
+                <footer>
+                    <button name="action_confirm" type="object" string="Buat transfer (draft)" class="btn-primary"/>
+                    <button string="Batal" class="btn-secondary" special="cancel"/>
+                </footer>
+            </form>
+        </field>
+    </record>
+</odoo>

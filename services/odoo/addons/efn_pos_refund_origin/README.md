@@ -190,6 +190,17 @@ Modul ini menjadi lapis **integritas order & pembayaran POS** untuk semua modul 
   qty -1 -> Cash -> Validate -> PIN salah (pesan) -> PIN benar -> struk tersinkron; server: 1 `failed` + 1 `consumed`.
 - Manual: jual split tunai+kartu -> Orders -> refund sebagian -> cek alokasi & coba ganti metode (ditolak saat sync).
 
+## SEC-216 (19.0.1.5.0, G45) — lockout PIN bersama
+- PIN E-41 juga dipakai override kedaluwarsa POS (`efn_expiry_monitor`). Penghitung kegagalan disatukan:
+  `return_pin.pin_failure_count(env, approver)` / `pin_locked(env, approver, cashier)` memanggil
+  `efn.pos.return.approval._efn_pin_failures_total` dan `_efn_cashier_pin_failures_total` — titik perluasan yang
+  di-`super()` modul lain untuk menambah tabelnya. API lama `_efn_recent_failures` tidak berubah.
+- Batas: approver 5 PIN salah / 15 menit (lintas jalur) dan **kasir 10 PIN salah / 60 menit lintas approver**
+  (`cashier_locked`).
+- Setiap kegagalan/kunci menulis satu WARNING terstruktur
+  `EFN_POS_PIN_FAIL path=<return_approval|expiry_override> config=<id> cashier=<uid> approver=<uid>
+  reason=<wrong_pin|locked|cashier_locked>` (tanpa PIN/hash) untuk alert Loki (devsecops; aturan alert belum dibuat).
+
 ## Belum / batasan
 - Exchange (refund + barang baru) dinilai pada pembayaran negatifnya saja.
 - Order asal dari sesi/POS lain yang belum termuat saat offline: tanpa saringan klien; server tetap menolak.

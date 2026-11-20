@@ -47,7 +47,7 @@ def test_params_defaults_match_contract() -> None:
     assert p.pipeline.horizon_days == 28 and p.chunk_size == 500
     assert p.calendar.payday_tail_days == p.calendar.payday_head_days == 7 and p.calendar.weekend_days == (5, 6)
     assert p.daily_cron == "30 23 * * *" and p.tz == "Asia/Jakarta" and p.dc_codes == ("SMDDC",)
-    assert p.production is True and p.pipeline.candidates == ("AutoETS", "AutoARIMA")
+    assert p.production is True and p.pipeline.candidates == ("AutoETS",)
 
 
 @pytest.mark.parametrize(

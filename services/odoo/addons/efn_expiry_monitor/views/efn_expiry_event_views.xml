@@ -1,0 +1,72 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="efn_expiry_event_view_list" model="ir.ui.view">
+        <field name="name">efn.expiry.event.list</field>
+        <field name="model">efn.expiry.event</field>
+        <field name="arch" type="xml">
+            <list create="0" edit="0" delete="0" decoration-danger="kind in ('pos_expired_no_override', 'markdown_invalid', 'markdown_price_mismatch')">
+                <field name="create_date"/>
+                <field name="kind"/>
+                <field name="warehouse_id"/>
+                <field name="product_id"/>
+                <field name="lot_id"/>
+                <field name="qty"/>
+                <field name="picking_id" optional="show"/>
+                <field name="pos_order_id" optional="show"/>
+                <field name="markdown_id" optional="hide"/>
+                <field name="user_id"/>
+                <field name="approver_id"/>
+                <field name="reason"/>
+                <field name="note" optional="hide"/>
+                <field name="company_id" groups="base.group_multi_company"/>
+            </list>
+        </field>
+    </record>
+    <record id="efn_expiry_event_view_search" model="ir.ui.view">
+        <field name="name">efn.expiry.event.search</field>
+        <field name="model">efn.expiry.event</field>
+        <field name="arch" type="xml">
+            <search>
+                <field name="warehouse_id"/>
+                <field name="product_id"/>
+                <field name="lot_id"/>
+                <field name="kind"/>
+                <group>
+                    <filter name="by_kind" string="Jenis" context="{'group_by': 'kind'}"/>
+                    <filter name="by_wh" string="Outlet" context="{'group_by': 'warehouse_id'}"/>
+                </group>
+            </search>
+        </field>
+    </record>
+    <record id="efn_expiry_event_action" model="ir.actions.act_window">
+        <field name="name">Jejak Kedaluwarsa &amp; Markdown</field>
+        <field name="res_model">efn.expiry.event</field>
+        <field name="view_mode">list</field>
+    </record>
+
+    <record id="efn_expiry_pos_approval_view_list" model="ir.ui.view">
+        <field name="name">efn.expiry.pos.approval.list</field>
+        <field name="model">efn.expiry.pos.approval</field>
+        <field name="arch" type="xml">
+            <list create="0" edit="0" delete="0">
+                <field name="create_date"/>
+                <field name="config_id"/>
+                <field name="order_ref"/>
+                <field name="product_id"/>
+                <field name="lot_name"/>
+                <field name="cashier_user_id"/>
+                <field name="approver_user_id"/>
+                <field name="reason"/>
+                <field name="state"/>
+                <field name="failure_reason"/>
+                <field name="consumed_order_id"/>
+                <field name="company_id" groups="base.group_multi_company"/>
+            </list>
+        </field>
+    </record>
+    <record id="efn_expiry_pos_approval_action" model="ir.actions.act_window">
+        <field name="name">Persetujuan Override POS</field>
+        <field name="res_model">efn.expiry.pos.approval</field>
+        <field name="view_mode">list</field>
+    </record>
+</odoo>

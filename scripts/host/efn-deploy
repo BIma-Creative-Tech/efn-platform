@@ -43,7 +43,7 @@
 #                           scripts/secrets.list (allowed_names). Nilai tanpa karakter kontrol (PEM: newline saja).
 # efn-release.json (manifest, DI DALAM arsip bertanda tangan -> terikat tanda tangan, SEC-42/SEC-50):
 #   {"schema":2,"app_env":"production","version":"1.2.3","seq":<github.run_number>,"git_sha":"<40 hex>",
-#    "signer_ref":"refs/tags/v1.2.3","images":{"IMAGE_POSTGRES":"ghcr.io/<org>/postgres@sha256:<hex>",...8},
+#    "signer_ref":"refs/tags/v1.2.3","images":{"IMAGE_POSTGRES":"ghcr.io/<org>/postgres@sha256:<hex>",...11},
 #    "pki":{"root_sha256":"<hex>","extra_trust_sha256":["<hex>",...]},
 #    "config":{"PAYMENT_PROVIDER":"disabled","ETL_AUDIT_COPY_ENABLED":"",...}}   (EFN_RELEASE_CONFIG_VARS; "" = default)
 #
@@ -76,7 +76,9 @@ ALLOW_DOWNGRADE=/etc/efn/allow-downgrade
 APPROVED_RELEASE=/etc/efn/approved-release
 # G42: IMAGE_INSIGHT_WEB (dashboard Insight). Menambah image = manifest lama/baru tidak kompatibel (jumlah image dicek
 # skema) -> Superadmin memasang ulang wrapper ini di host SEBELUM deploy rilis yang memuatnya (key-custody.md §4).
-IMAGE_VARS=(IMAGE_POSTGRES IMAGE_ODOO IMAGE_API_GATEWAY IMAGE_SUPERAPP_WEB IMAGE_INSIGHT_WEB IMAGE_AI_OCR_WORKER IMAGE_ETL IMAGE_TEXT2SQL IMAGE_MINIO IMAGE_METABASE)
+# G44: IMAGE_FORECAST_WORKER (forecast statistik, docs/04 §28.2) - sama: pasang ulang wrapper sebelum rilis G44. Image
+# selalu ada di manifest & diverifikasi cosign; dipakai compose hanya bila FORECAST_ENABLED=true (overlay, deploy.sh).
+IMAGE_VARS=(IMAGE_POSTGRES IMAGE_ODOO IMAGE_API_GATEWAY IMAGE_SUPERAPP_WEB IMAGE_INSIGHT_WEB IMAGE_AI_OCR_WORKER IMAGE_ETL IMAGE_TEXT2SQL IMAGE_MINIO IMAGE_METABASE IMAGE_FORECAST_WORKER)
 log() { logger -t efn-deploy -- "$*" 2> /dev/null || true; echo "efn-deploy: $*" >&2; }
 die() { log "GAGAL: $*"; exit 1; }
 

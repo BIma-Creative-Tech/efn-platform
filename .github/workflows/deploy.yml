@@ -167,7 +167,9 @@ jobs:
           # shellcheck disable=SC2153  # OWNER berasal dari env step, bukan salah ketik `owner`
           owner="${OWNER,,}"
           identity="https://github.com/${REPO}/.github/workflows/build-push.yml@${SIGNER_REF}"
-          for svc in postgres odoo api-gateway superapp-web insight-web ai-ocr-worker etl text2sql minio metabase; do
+          # G44: forecast-worker ikut (image selalu di manifest; compose memakainya hanya bila FORECAST_ENABLED=true).
+          # Daftar ini WAJIB sama dengan IMAGE_VARS scripts/host/efn-deploy (diuji scripts/host/test-efn-deploy.sh).
+          for svc in postgres odoo api-gateway superapp-web insight-web ai-ocr-worker etl text2sql minio metabase forecast-worker; do
             ref="ghcr.io/${owner}/${svc}:${TAG}"
             digest=$(cosign verify \
                 --certificate-identity "$identity" \
@@ -222,6 +224,7 @@ jobs:
           IMAGE_TEXT2SQL: ${{ steps.digests.outputs.IMAGE_TEXT2SQL }}
           IMAGE_MINIO: ${{ steps.digests.outputs.IMAGE_MINIO }}
           IMAGE_METABASE: ${{ steps.digests.outputs.IMAGE_METABASE }}
+          IMAGE_FORECAST_WORKER: ${{ steps.digests.outputs.IMAGE_FORECAST_WORKER }}
           # SEC-50: konfigurasi non-rahasia ikut DITANDATANGANI (manifest `config`); host menolaknya dari stdin.
           # Topologi host (TRAEFIK_DOMAIN, EFN_PUBLIC_BIND, EFN_WG_*, COMPOSE_PROFILES) TIDAK dari CI: dipin Superadmin
           # di /etc/efn/deploy.conf (docs/runbooks/key-custody.md §4c). Validasi: scripts/lib/deploy-validate.sh.
@@ -382,6 +385,50 @@ jobs:
           CFG_CONSENT_PRIVACY_VERSION: ${{ vars.CONSENT_PRIVACY_VERSION }}
           CFG_CONSENT_PRIVACY_TEXT_SHA256: ${{ vars.CONSENT_PRIVACY_TEXT_SHA256 }}
           CFG_PRIVACY_CONSENT_ENFORCED: ${{ vars.PRIVACY_CONSENT_ENFORCED || 'false' }}
+          # G50 (docs/04 §28.10): kampanye supermarket. Production: tracking/kampanye/WA tidak resmi OFF; true ditolak
+          # deploy-validate tanpa *_REF persetujuan + EFN_ALLOW_FEATURE_ON Superadmin (deploy.conf).
+          CFG_BEHAVIOR_TRACKING_ENABLED: ${{ vars.BEHAVIOR_TRACKING_ENABLED || 'false' }}
+          CFG_BEHAVIOR_TRACKING_DPO_APPROVAL_REF: ${{ vars.BEHAVIOR_TRACKING_DPO_APPROVAL_REF }}
+          CFG_CONSENT_TRACKING_VERSION: ${{ vars.CONSENT_TRACKING_VERSION }}
+          CFG_CONSENT_TRACKING_TEXT_SHA256: ${{ vars.CONSENT_TRACKING_TEXT_SHA256 }}
+          CFG_BEHAVIOR_EVENT_RETENTION_DAYS: ${{ vars.BEHAVIOR_EVENT_RETENTION_DAYS }}
+          CFG_WISHLIST_ENABLED: ${{ vars.WISHLIST_ENABLED || 'false' }}
+          CFG_RESTOCK_ALERT_ENABLED: ${{ vars.RESTOCK_ALERT_ENABLED || 'false' }}
+          CFG_PRICE_ALERT_ENABLED: ${{ vars.PRICE_ALERT_ENABLED || 'false' }}
+          CFG_ALERT_WATCH_INTERVAL_SECONDS: ${{ vars.ALERT_WATCH_INTERVAL_SECONDS }}
+          CFG_PROMO_CAMPAIGN_ENABLED: ${{ vars.PROMO_CAMPAIGN_ENABLED || 'false' }}
+          CFG_PROMO_CAMPAIGN_APPROVAL_REF: ${{ vars.PROMO_CAMPAIGN_APPROVAL_REF }}
+          CFG_CAMPAIGN_FREQUENCY_CAP_ENABLED: ${{ vars.CAMPAIGN_FREQUENCY_CAP_ENABLED || 'false' }}
+          CFG_CAMPAIGN_BUDGET_CAP_ENABLED: ${{ vars.CAMPAIGN_BUDGET_CAP_ENABLED || 'false' }}
+          CFG_CAMPAIGN_MAX_PER_MEMBER_PER_WEEK: ${{ vars.CAMPAIGN_MAX_PER_MEMBER_PER_WEEK }}
+          CFG_CAMPAIGN_COMPANIES: ${{ vars.CAMPAIGN_COMPANIES }}
+          CFG_CAMPAIGN_SYNC_SECONDS: ${{ vars.CAMPAIGN_SYNC_SECONDS }}
+          CFG_EMAIL_ENABLED: ${{ vars.EMAIL_ENABLED || 'false' }}
+          CFG_EMAIL_SMTP_HOST: ${{ vars.EMAIL_SMTP_HOST }}
+          CFG_EMAIL_SMTP_PORT: ${{ vars.EMAIL_SMTP_PORT }}
+          CFG_EMAIL_SMTP_TLS_MODE: ${{ vars.EMAIL_SMTP_TLS_MODE }}
+          CFG_EMAIL_SMTP_USER: ${{ vars.EMAIL_SMTP_USER }}
+          CFG_EMAIL_FROM: ${{ vars.EMAIL_FROM }}
+          CFG_EMAIL_UNSUBSCRIBE_URL: ${{ vars.EMAIL_UNSUBSCRIBE_URL }}
+          CFG_EMAIL_RATE_PER_MIN: ${{ vars.EMAIL_RATE_PER_MIN }}
+          # SEC-G50-10: production EMAIL_ENABLED=true wajib ref DPA + EFN_ALLOW_FEATURE_ON (deploy-validate)
+          CFG_EMAIL_DPA_APPROVAL_REF: ${{ vars.EMAIL_DPA_APPROVAL_REF }}
+          CFG_WA_UNOFFICIAL_ENABLED: ${{ vars.WA_UNOFFICIAL_ENABLED || 'false' }}
+          CFG_WA_UNOFFICIAL_RISK_ACCEPTANCE_REF: ${{ vars.WA_UNOFFICIAL_RISK_ACCEPTANCE_REF }}
+          CFG_ETL_ENABLE_BEHAVIOR: ${{ vars.ETL_ENABLE_BEHAVIOR || 'false' }}
+          # G44 (docs/04 §28.10, ADR-046): forecast-worker. true -> overlay docker-compose.forecast.yml + API key forecast
+          # host:* nyata per PT (deploy.sh); production true hanya dengan EFN_ALLOW_FEATURE_ON di deploy.conf.
+          # Kosong = default compose (23:30 WIB, Asia/Jakarta, 28 hari, 500 baris, 25 s, 1536M, 2 CPU, 172.30.11.0/24).
+          CFG_FORECAST_ENABLED: ${{ vars.FORECAST_ENABLED || 'false' }}
+          CFG_FORECAST_DAILY_CRON: ${{ vars.FORECAST_DAILY_CRON }}
+          CFG_FORECAST_TZ: ${{ vars.FORECAST_TZ }}
+          CFG_FORECAST_HORIZON_DAYS: ${{ vars.FORECAST_HORIZON_DAYS }}
+          CFG_FORECAST_CHUNK_SIZE: ${{ vars.FORECAST_CHUNK_SIZE }}
+          CFG_FORECAST_ODOO_RPC_TIMEOUT_SECONDS: ${{ vars.FORECAST_ODOO_RPC_TIMEOUT_SECONDS }}
+          CFG_FORECAST_MEMORY_LIMIT: ${{ vars.FORECAST_MEMORY_LIMIT }}
+          CFG_FORECAST_CPUS: ${{ vars.FORECAST_CPUS }}
+          # SEC-215: HOST login user ClickHouse efn_forecast_reader (= subnet network forecast-ch; kosong = 172.30.11.0/24)
+          CFG_CH_FORECAST_READER_HOST_CIDR: ${{ vars.CH_FORECAST_READER_HOST_CIDR }}
         run: |
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/efn-release"
@@ -409,11 +456,11 @@ jobs:
              --arg root "$root_fp" --argjson extra "$extra_json" --argjson config "$config_json" \
              --arg pg "$IMAGE_POSTGRES" --arg odoo "$IMAGE_ODOO" --arg api "$IMAGE_API_GATEWAY" \
              --arg web "$IMAGE_SUPERAPP_WEB" --arg ocr "$IMAGE_AI_OCR_WORKER" --arg etl "$IMAGE_ETL" --arg t2s "$IMAGE_TEXT2SQL" --arg minio "$IMAGE_MINIO" --arg mb "$IMAGE_METABASE" \
-             --arg ins "$IMAGE_INSIGHT_WEB" \
+             --arg ins "$IMAGE_INSIGHT_WEB" --arg fc "$IMAGE_FORECAST_WORKER" \
              '{schema: 2, app_env: $env, version: $ver, seq: $seq, git_sha: $git, signer_ref: $ref,
                images: {IMAGE_POSTGRES: $pg, IMAGE_ODOO: $odoo, IMAGE_API_GATEWAY: $api, IMAGE_SUPERAPP_WEB: $web,
                         IMAGE_INSIGHT_WEB: $ins, IMAGE_AI_OCR_WORKER: $ocr, IMAGE_ETL: $etl, IMAGE_TEXT2SQL: $t2s,
-                        IMAGE_MINIO: $minio, IMAGE_METABASE: $mb},
+                        IMAGE_MINIO: $minio, IMAGE_METABASE: $mb, IMAGE_FORECAST_WORKER: $fc},
                pki: {root_sha256: $root, extra_trust_sha256: $extra}, config: $config}' > efn-release.json
           cat efn-release.json
           paths=(infra scripts efn-release.json)

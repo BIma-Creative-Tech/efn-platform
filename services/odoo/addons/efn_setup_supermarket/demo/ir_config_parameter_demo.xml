@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- DEMO tahap B — sakelar fitur (docs/04 §28.10). Parameter dimiliki modulnya masing-masing (default "false" di
+     efn_replenishment/efn_expiry_monitor data); modul ini TIDAK membuat ulang record parameternya di data/.
+
+     - efn_replenishment.enabled = "true" HANYA di DB demo: jadwal kirim & kepala toko demo sudah ada, sehingga alur
+       usulan -> approval bisa didemokan begitu run forecast ditutup. Production tetap "false" sampai Ops menetapkan
+       jadwal & approver (Q-SM11).
+     - efn_expiry_monitor.enabled SENGAJA TIDAK dinyalakan, juga di demo: syarat §28.10 = ambang per kategori diisi oleh
+       category manager (Q-SM28, fit-gap Q-SM9); nilai di data/product_category_expiry_data.xml masih placeholder.
+       Nyalakan manual (Settings -> Technical -> System Parameters) untuk demo near-expiry/markdown.
+     <function> di noupdate hanya jalan saat install (DB demo tahap A: migrasi 19.0.2.0.0). -->
+<odoo noupdate="1">
+    <function model="ir.config_parameter" name="set_param" eval="['efn_replenishment.enabled', 'true']"/>
+</odoo>
