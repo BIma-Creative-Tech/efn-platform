@@ -1546,6 +1546,10 @@ services:
       CH_MART_RETENTION_YEARS: ${CH_MART_RETENTION_YEARS:-10}
       CH_PSEUDONYM_RETENTION_YEARS: ${CH_PSEUDONYM_RETENTION_YEARS:-5}
       CH_GEO_RETENTION_DAYS: ${CH_GEO_RETENTION_DAYS:-90}
+      # SEC-215 (G44): user efn_forecast_reader hanya boleh login dari subnet network forecast-ch (overlay
+      # docker-compose.forecast.yml). WAJIB sama dengan ipam forecast-ch (dicek scripts/check-encryption.sh); antar-mesin
+      # (K25-02, belum dibangun) = subnet WireGuard mesin data. Divalidasi clickhouse-init (CIDR privat /24../32, SEC-223).
+      CH_FORECAST_READER_HOST_CIDR: ${CH_FORECAST_READER_HOST_CIDR:-172.30.11.0/24}
     secrets:
       - clickhouse_password
       - clickhouse_password_etl

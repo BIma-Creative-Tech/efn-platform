@@ -1,0 +1,132 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- DEMO tahap B — capability & kebijakan assortment outlet SMD01..SMD05 (fit-gap G45 S-11, docs/04 §28.5, ADR-045
+     Proposed, L-150). Matriks sengaja bervariasi agar setiap kode alasan _efn_assortment_allowed bisa didemokan:
+
+       Outlet | chiller | freezer | alcohol_license | non_halal_allowed | kebijakan | catatan demo
+       SMD01  |    v    |    v    |        v        |         v         | open      | outlet flagship, semua boleh
+       SMD02  |    v    |    v    |                 |                   | open      | baris DENY "Impor Premium" -> denied
+       SMD03  |    v    |    v    |                 |                   | closed    | format kecil: hanya kategori ber-allow
+                                                                                       (tanpa Alkohol & Impor) -> not_listed
+       SMD04  |    v    |    v    |        v        |         v         | open      | outlet kedua berizin alkohol
+       SMD05  |    v    |         |                 |         v         | open      | tanpa freezer -> missing_capability:freezer
+
+     Izin alkohol & non-halal PLACEHOLDER: daftar outlet nyata = Q-SM13 (Legal) dan Q-SM21. Kekurangan capability
+     alcohol_license / non_halal_allowed TIDAK bisa di-override (L-150, Q-SM22).
+
+     Syarat capability PRODUK (product.template.efn_required_capability_ids) TIDAK diisi di sini: modul ini tidak membuat
+     produk. Seed katalog G48 wajib mengisi (rekomendasi, README §Capability):
+       Frozen -> freezer; Dairy & Chilled, Daging, Ikan & Seafood -> chiller; Alkohol -> alcohol_license (+ non_halal_allowed
+       bila Q-SM21 menetapkan alkohol sebagai non-halal); Impor Premium -> per produk (chiller/freezer/non_halal_allowed
+       sesuai jenis). CE/efn_assortment tidak punya syarat capability per kategori (hanya per template).
+
+     Penulisan efn_capability_ids/efn_assortment_policy dijaga SEC-208 (hanya Assortment Manager); pemuatan data modul
+     berjalan sebagai superuser sehingga lolos guard. noupdate="1": perubahan Assortment Manager tidak ditimpa upgrade. -->
+<odoo noupdate="1">
+    <record id="warehouse_smd01" model="stock.warehouse">
+        <field name="efn_assortment_policy">open</field>
+        <field name="efn_capability_ids" eval="[Command.set([
+            ref('efn_assortment.capability_chiller'),
+            ref('efn_assortment.capability_freezer'),
+            ref('efn_assortment.capability_alcohol'),
+            ref('efn_assortment.capability_non_halal'),
+        ])]"/>
+    </record>
+    <record id="warehouse_smd02" model="stock.warehouse">
+        <field name="efn_assortment_policy">open</field>
+        <field name="efn_capability_ids" eval="[Command.set([
+            ref('efn_assortment.capability_chiller'),
+            ref('efn_assortment.capability_freezer'),
+        ])]"/>
+    </record>
+    <record id="warehouse_smd03" model="stock.warehouse">
+        <field name="efn_assortment_policy">closed</field>
+        <field name="efn_capability_ids" eval="[Command.set([
+            ref('efn_assortment.capability_chiller'),
+            ref('efn_assortment.capability_freezer'),
+        ])]"/>
+    </record>
+    <record id="warehouse_smd04" model="stock.warehouse">
+        <field name="efn_assortment_policy">open</field>
+        <field name="efn_capability_ids" eval="[Command.set([
+            ref('efn_assortment.capability_chiller'),
+            ref('efn_assortment.capability_freezer'),
+            ref('efn_assortment.capability_alcohol'),
+            ref('efn_assortment.capability_non_halal'),
+        ])]"/>
+    </record>
+    <record id="warehouse_smd05" model="stock.warehouse">
+        <field name="efn_assortment_policy">open</field>
+        <field name="efn_capability_ids" eval="[Command.set([
+            ref('efn_assortment.capability_chiller'),
+            ref('efn_assortment.capability_non_halal'),
+        ])]"/>
+    </record>
+
+    <!-- SMD02: contoh larangan kategori (outlet format menengah tidak menjual impor premium). -->
+    <record id="assortment_line_smd02_deny_imported" model="efn.assortment.line">
+        <field name="company_id" ref="company_smd"/>
+        <field name="warehouse_id" ref="warehouse_smd02"/>
+        <field name="categ_id" ref="product_category_smd_imported_premium"/>
+        <field name="mode">deny</field>
+        <field name="note">DEMO: outlet format menengah tanpa impor premium (PLACEHOLDER, Q-SM2)</field>
+    </record>
+
+    <!-- SMD03 closed: hanya kategori di bawah yang boleh dikirim DC. Kapasitas rak (shelf_capacity_qty) TIDAK diisi di
+         baris kategori karena satuannya UoM produk (kg vs unit); isi per baris PRODUK setelah seed G48 (S-16). -->
+    <record id="assortment_line_smd03_fresh" model="efn.assortment.line">
+        <field name="company_id" ref="company_smd"/>
+        <field name="warehouse_id" ref="warehouse_smd03"/>
+        <field name="categ_id" ref="product_category_smd_fresh"/>
+        <field name="mode">allow</field>
+        <field name="supply_mode">dc</field>
+    </record>
+    <record id="assortment_line_smd03_dairy_chilled" model="efn.assortment.line">
+        <field name="company_id" ref="company_smd"/>
+        <field name="warehouse_id" ref="warehouse_smd03"/>
+        <field name="categ_id" ref="product_category_smd_dairy_chilled"/>
+        <field name="mode">allow</field>
+        <field name="supply_mode">dc</field>
+    </record>
+    <record id="assortment_line_smd03_frozen" model="efn.assortment.line">
+        <field name="company_id" ref="company_smd"/>
+        <field name="warehouse_id" ref="warehouse_smd03"/>
+        <field name="categ_id" ref="product_category_smd_frozen"/>
+        <field name="mode">allow</field>
+        <field name="supply_mode">dc</field>
+    </record>
+    <record id="assortment_line_smd03_dry_grocery" model="efn.assortment.line">
+        <field name="company_id" ref="company_smd"/>
+        <field name="warehouse_id" ref="warehouse_smd03"/>
+        <field name="categ_id" ref="product_category_smd_dry_grocery"/>
+        <field name="mode">allow</field>
+        <field name="supply_mode">dc</field>
+    </record>
+    <record id="assortment_line_smd03_beverage" model="efn.assortment.line">
+        <field name="company_id" ref="company_smd"/>
+        <field name="warehouse_id" ref="warehouse_smd03"/>
+        <field name="categ_id" ref="product_category_smd_beverage"/>
+        <field name="mode">allow</field>
+        <field name="supply_mode">dc</field>
+    </record>
+    <record id="assortment_line_smd03_snack" model="efn.assortment.line">
+        <field name="company_id" ref="company_smd"/>
+        <field name="warehouse_id" ref="warehouse_smd03"/>
+        <field name="categ_id" ref="product_category_smd_snack"/>
+        <field name="mode">allow</field>
+        <field name="supply_mode">dc</field>
+    </record>
+    <record id="assortment_line_smd03_personal_care" model="efn.assortment.line">
+        <field name="company_id" ref="company_smd"/>
+        <field name="warehouse_id" ref="warehouse_smd03"/>
+        <field name="categ_id" ref="product_category_smd_personal_care"/>
+        <field name="mode">allow</field>
+        <field name="supply_mode">dc</field>
+    </record>
+    <record id="assortment_line_smd03_household" model="efn.assortment.line">
+        <field name="company_id" ref="company_smd"/>
+        <field name="warehouse_id" ref="warehouse_smd03"/>
+        <field name="categ_id" ref="product_category_smd_household"/>
+        <field name="mode">allow</field>
+        <field name="supply_mode">dc</field>
+    </record>
+</odoo>

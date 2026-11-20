@@ -40,6 +40,39 @@ def hash_pin(env, pin):
     return pin_crypt_context(pin_kdf_rounds(env)).hash(pin)
 
 
+PIN_FAIL_EVENT = "EFN_POS_PIN_FAIL"
+
+
+def pin_failure_count(env, approver):
+    """SEC-216: PIN salah approver lintas SEMUA jalur PIN E-41 (retur tanpa struk + modul yang memperluas
+    ``efn.pos.return.approval._efn_pin_failures_total``, mis. override kedaluwarsa POS)."""
+    return env["efn.pos.return.approval"].sudo()._efn_pin_failures_total(approver)
+
+
+def pin_locked(env, approver, cashier):
+    """SEC-216: (terkunci, kode) — ``locked`` (approver, 5/15 menit) atau ``cashier_locked`` (kasir, 10/60 menit),
+    keduanya dihitung lintas jalur."""
+    approval = env["efn.pos.return.approval"].sudo()
+    if approval._efn_is_locked(approver):
+        return True, "locked"
+    if approval._efn_cashier_locked(cashier):
+        return True, "cashier_locked"
+    return False, None
+
+
+def log_pin_failure(logger, path, config_id, cashier_id, approver_id, reason):
+    """SEC-216: WARNING terstruktur satu baris untuk alert Loki. Tanpa PIN, hash, atau data pelanggan."""
+    logger.warning(
+        "%s path=%s config=%s cashier=%s approver=%s reason=%s",
+        PIN_FAIL_EVENT,
+        path,
+        config_id,
+        cashier_id,
+        approver_id,
+        reason,
+    )
+
+
 def verify_pin(pin, pin_hash):
     """Verifikasi waktu-konstan (passlib). Hash kosong/rusak -> False (tidak pernah exception ke pemanggil)."""
     if not pin_hash or not isinstance(pin, str):

@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <menuitem id="menu_efn_expiry_root" name="Kedaluwarsa EFN" parent="stock.menu_stock_root" sequence="97"
+              groups="stock.group_stock_user,efn_expiry_monitor.group_expiry_override"/>
+    <menuitem id="menu_efn_expiry_alert" name="Alert Kedaluwarsa" parent="menu_efn_expiry_root"
+              action="efn_expiry_alert_action" sequence="10"/>
+    <menuitem id="menu_efn_lot_markdown" name="Markdown Lot" parent="menu_efn_expiry_root"
+              action="efn_lot_markdown_action" sequence="20"/>
+    <menuitem id="menu_efn_expiry_event" name="Jejak Audit" parent="menu_efn_expiry_root"
+              action="efn_expiry_event_action" sequence="30"/>
+    <menuitem id="menu_efn_expiry_pos_approval" name="Persetujuan Override POS" parent="menu_efn_expiry_root"
+              action="efn_expiry_pos_approval_action" sequence="40"
+              groups="point_of_sale.group_pos_manager,efn_expiry_monitor.group_markdown_manager,efn_expiry_monitor.group_expiry_override"/>
+</odoo>

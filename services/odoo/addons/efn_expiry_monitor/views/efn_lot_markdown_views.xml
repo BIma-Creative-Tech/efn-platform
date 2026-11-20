@@ -1,0 +1,103 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="efn_lot_markdown_view_list" model="ir.ui.view">
+        <field name="name">efn.lot.markdown.list</field>
+        <field name="model">efn.lot.markdown</field>
+        <field name="arch" type="xml">
+            <list decoration-muted="state in ('expired', 'cancelled')" decoration-success="state == 'active'">
+                <field name="warehouse_id"/>
+                <field name="product_id"/>
+                <field name="lot_id"/>
+                <field name="price"/>
+                <field name="discount_pct"/>
+                <field name="effective_discount_pct"/>
+                <field name="date_from"/>
+                <field name="date_to"/>
+                <field name="qty_cap"/>
+                <field name="qty_sold"/>
+                <field name="notify_state" optional="show"/>
+                <field name="state"/>
+                <field name="company_id" groups="base.group_multi_company"/>
+            </list>
+        </field>
+    </record>
+    <record id="efn_lot_markdown_view_form" model="ir.ui.view">
+        <field name="name">efn.lot.markdown.form</field>
+        <field name="model">efn.lot.markdown</field>
+        <field name="arch" type="xml">
+            <form>
+                <header>
+                    <button name="action_efn_activate" type="object" string="Aktifkan" class="btn-primary"
+                            invisible="state != 'draft'"/>
+                    <button name="action_efn_cancel" type="object" string="Batalkan"
+                            invisible="state not in ('draft', 'active')"/>
+                    <field name="state" widget="statusbar" statusbar_visible="draft,active,expired"/>
+                </header>
+                <sheet>
+                    <group>
+                        <group>
+                            <field name="company_id" groups="base.group_multi_company" readonly="state != 'draft'"/>
+                            <field name="warehouse_id" readonly="state != 'draft'"
+                                   domain="[('company_id', '=', company_id), ('efn_is_dc', '=', False)]"/>
+                            <field name="lot_id" readonly="state != 'draft'"
+                                   domain="[('product_id.tracking', '=', 'lot')]"/>
+                            <field name="product_id"/>
+                            <field name="lot_expiration_date"/>
+                            <field name="alert_id" force_save="1"/>
+                        </group>
+                        <group>
+                            <field name="currency_id" invisible="1"/>
+                            <field name="list_price"/>
+                            <field name="price" readonly="state != 'draft'"/>
+                            <field name="discount_pct" readonly="state != 'draft'"/>
+                            <field name="effective_discount_pct"/>
+                            <field name="date_from" readonly="state != 'draft'"/>
+                            <field name="date_to" readonly="state != 'draft'"/>
+                            <field name="qty_cap" readonly="state != 'draft'"/>
+                            <field name="qty_sold"/>
+                        </group>
+                    </group>
+                    <group>
+                        <group>
+                            <field name="notify_members"/>
+                            <field name="notify_state"/>
+                        </group>
+                        <group>
+                            <field name="activated_by"/>
+                            <field name="activated_at"/>
+                            <field name="note"/>
+                        </group>
+                    </group>
+                    <div class="text-muted">
+                        Isi harga markdown ATAU diskon persen. Batas diskon efektif: kepala toko 50 %, Markdown Manager
+                        90 % (parameter, Q-SM4). Harga hanya berlaku di POS untuk lot dari pindaian stiker GS1 (01)(10)
+                        atau dipilih kasir; FEFO otomatis tidak memilih lot markdown. Tidak berlaku di kanal online
+                        (fase 1). "Kirim ke member" disimpan; pengiriman dibangun G46.
+                    </div>
+                </sheet>
+                <chatter/>
+            </form>
+        </field>
+    </record>
+    <record id="efn_lot_markdown_view_search" model="ir.ui.view">
+        <field name="name">efn.lot.markdown.search</field>
+        <field name="model">efn.lot.markdown</field>
+        <field name="arch" type="xml">
+            <search>
+                <field name="warehouse_id"/>
+                <field name="product_id"/>
+                <field name="lot_id"/>
+                <filter name="active_md" string="Aktif" domain="[('state', '=', 'active')]"/>
+                <filter name="draft" string="Draft" domain="[('state', '=', 'draft')]"/>
+                <group>
+                    <filter name="by_wh" string="Outlet" context="{'group_by': 'warehouse_id'}"/>
+                </group>
+            </search>
+        </field>
+    </record>
+    <record id="efn_lot_markdown_action" model="ir.actions.act_window">
+        <field name="name">Markdown Lot</field>
+        <field name="res_model">efn.lot.markdown</field>
+        <field name="view_mode">list,form</field>
+    </record>
+</odoo>

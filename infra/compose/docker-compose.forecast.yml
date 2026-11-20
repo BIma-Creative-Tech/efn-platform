@@ -4,9 +4,10 @@
 # Runbook: docs/runbooks/forecast-worker.md.
 #
 # Mengapa overlay (pola docker-compose.esb.yml G41), bukan service di base:
-#   - Image forecast-worker belum masuk rantai rilis bertanda tangan (IMAGE_* di deploy.yml/efn-deploy/deploy.sh,
-#     SEC-42). Di base, deploy produksi profil `data` akan menarik ghcr.io/efn/forecast-worker:dev -> gagal.
 #   - Tanpa overlay TIDAK ada service yang memegang API key Odoo forecast maupun jalur stack data -> Odoo.
+#   - Staging/prod: IMAGE_FORECAST_WORKER = digest bertanda tangan dari manifest rilis (deploy.yml -> efn-deploy ->
+#     deploy.sh, SEC-42). deploy.sh menyertakan overlay ini HANYA bila FORECAST_ENABLED=true (+ profil data + API key
+#     Odoo nyata); FORECAST_ENABLED=false -> container dihapus (--remove-orphans), key tidak di-mount di mana pun.
 #   - K25-02: stack data bisa dipisah ke mesin lain; overlay ini memetakan jaringan untuk SATU host (dev/stg/prod
 #     lokal). Jalur antar-mesin (WireGuard ke odoo-rpc-gateway) belum dibangun, lihat runbook §7.
 #   Dev/staging lokal:
@@ -109,7 +110,8 @@ services:
         # bila > 4 GB.
         limits: { cpus: "${FORECAST_CPUS:-2}", memory: "${FORECAST_MEMORY_LIMIT:-1536M}" }
     # Tanpa port HTTP (pola etl/esb-extract): healthcheck hanya memastikan proses utama hidup. Hasil run dipantau di
-    # Odoo (efn.forecast.run: ok/failed; run tak ditutup 6 jam -> failed oleh cron Odoo), runbook §5.
+    # Odoo (efn.forecast.run: ok/failed; run tak ditutup 6 jam -> failed oleh cron Odoo), runbook §5, dan alert ruler
+    # Loki dari log EFN_FORECAST_RUN (infra/observability/loki-rules/efn-forecast.yml, SEC-215).
     healthcheck:
       test: ["CMD", "python", "-c", "import os; os.kill(1, 0)"]
       interval: 60s

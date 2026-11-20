@@ -7,7 +7,9 @@
     "append-only, SoD kepala toko vs PO supplier.",
     # 19.0.1.1.0 (G44 perbaikan): SEC-210 batas qty_approved, SEC-213 SoD button_approve, QA-2 jendela dari tanggal
     # proyeksi pertama, QA-3 offset hari order supplier, aktivitas run tanpa baris diterima.
-    "version": "19.0.1.1.0",
+    # 19.0.1.2.0 (G45): constraint jadwal kirim tumpang-tindih per outlet; sisa umur minimum mewarisi kategori induk
+    # (helper efn_expiry_monitor, bila terpasang).
+    "version": "19.0.1.2.0",
     "category": "EFN/Inventory",
     "author": "Era Food and Nourishment",
     # LGPL-3. Tanpa dependency modul pihak ketiga (ADR-031). OCA stock_request / stock_warehouse_calendar /
