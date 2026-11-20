@@ -7,21 +7,23 @@
 #     -d efn_smd_demo --no-http < scripts/dev/seed_demo_supermarket.py
 """G48 seed data simulasi supermarket PT Supermarket Demo (SMD). Idempoten, deterministik, tanpa PII nyata.
 
-Prasyarat: DB dengan efn_setup_supermarket (DENGAN demo data), efn_legacy_history, efn_expiry_monitor, point_of_sale.
+Prasyarat: DB dengan efn_setup_supermarket (DENGAN demo data), efn_expiry_monitor, point_of_sale (+ dependensinya).
+Seed TIDAK memakai modul/data migrasi brand lama: histori penjualan = pos.order sintetis yang dibaca ETL apa adanya.
 Semua record memakai company SMD dan xmlid demo efn_setup_supermarket (company, DC SMDDC, outlet SMD01..05, user
 persona); tidak ada duplikat master. Penanda idempoten: default_code berprefiks ``SMD-`` (produk), ref ``SMD-SUP-``
-(supplier) / ``SMD-MBR-`` (member), catatan ``[DEMO SUPERMARKET]`` (baris assortment, markdown, season), nama lot
-deterministik, run_id histori tetap (bulk_upsert ON CONFLICT -> run kedua = 0 insert).
+(supplier) / ``SMD-MBR-`` (member), catatan ``[DEMO SUPERMARKET]`` (baris assortment, markdown, season, sesi POS
+histori), nama lot deterministik, ``pos_reference`` order histori ``DEMO-<outlet>-<YYYYMMDD>-<n>``.
 
 Tahap (setiap tahap di-commit; bila gagal, perbaiki lalu jalankan ulang: tahap yang sudah ada dilewati):
   1 supplier fiktif     2 SKU placeholder (lot + expiry, EAN-13 fiktif 299..., capability)   3 supplierinfo
   4 assortment (DSD, kapasitas rak) + jadwal supplier     5 kalender forecast + season v1 (PLACEHOLDER tanggal)
-  6 stok awal lot (inventory adjustment)   7 markdown contoh   8 member fiktif   9 POS config outlet (opsional)
-  10 verifikasi user persona   11 histori penjualan sintetis (efn.legacy.sales.daily + efn.legacy.flow.daily)
+  6 stok awal lot (inventory adjustment)   7 markdown contoh   8 member fiktif   9 POS config outlet
+  10 verifikasi user persona   11 histori penjualan = pos.order sintetis di sesi POS histori tertutup per outlet
 
-Parameter env (default): SMD_SEED_SKUS=400, SMD_SEED_DAYS=730, SMD_SEED_CUTOVER=hari ini (histori s/d H-1),
-SMD_SEED_STOCK_SKUS=150, SMD_SEED_LOTS_MAX=3, SMD_SEED_EXPIRED_LOTS=8, SMD_SEED_MARKDOWNS=12, SMD_SEED_MEMBERS=50,
-SMD_SEED_SHELF_SKUS=30, SMD_SEED_HISTORY=1, SMD_SEED_POS=1.
+Parameter env (default): SMD_SEED_SKUS=400, SMD_SEED_DAYS=730, SMD_SEED_HISTORY_END=hari ini (histori s/d H-1),
+SMD_SEED_ORDERS_PER_DAY=1, SMD_SEED_HISTORY_SKUS=0 (0 = semua SKU), SMD_SEED_STOCK_SKUS=150, SMD_SEED_LOTS_MAX=3,
+SMD_SEED_EXPIRED_LOTS=8, SMD_SEED_MARKDOWNS=12, SMD_SEED_MEMBERS=50, SMD_SEED_SHELF_SKUS=30, SMD_SEED_HISTORY=1,
+SMD_SEED_POS=1.
 """
 
 import calendar
@@ -35,11 +37,11 @@ from odoo import Command, fields
 
 TAG = "[DEMO SUPERMARKET]"
 SEED = 4848
-RUN_ID = "00000048-5345-4544-8000-534d44000001"
-ESB_BRAND = "DEMO"
 COMPANY_CODE = "SMD"
 MODULE = "efn_setup_supermarket"
-REQUIRED_MODULES = ("efn_setup_supermarket", "efn_legacy_history", "efn_expiry_monitor", "point_of_sale")
+REQUIRED_MODULES = ("efn_setup_supermarket", "efn_expiry_monitor", "point_of_sale")
+ORDER_REF_PREFIX = "DEMO-"
+ORDER_HOUR_UTC = 5  # 12:00 WIB
 OUTLET_SCALE = {"SMD01": 1.30, "SMD02": 1.00, "SMD03": 0.60, "SMD04": 1.15, "SMD05": 0.80}
 WEEKDAY_FACTOR = (0.92, 0.90, 0.95, 0.97, 1.05, 1.25, 1.20)
 TREND_PER_YEAR = 0.08
@@ -518,6 +520,8 @@ MEMBERS = env_int("SMD_SEED_MEMBERS", 50, 0, 999)
 SHELF_SKUS = env_int("SMD_SEED_SHELF_SKUS", 30, 0, 2000)
 DO_HISTORY = env_int("SMD_SEED_HISTORY", 1, 0, 1)
 DO_POS = env_int("SMD_SEED_POS", 1, 0, 1)
+ORDERS_PER_DAY = env_int("SMD_SEED_ORDERS_PER_DAY", 1, 1, 50)
+HISTORY_SKUS = env_int("SMD_SEED_HISTORY_SKUS", 0, 0, 2000)
 
 _installed = set(
     env["ir.module.module"]
@@ -544,16 +548,19 @@ company = env.ref(f"{MODULE}.company_smd")
 dc = env.ref(f"{MODULE}.warehouse_smd_dc")
 outlets = [env.ref(f"{MODULE}.warehouse_smd0{i}") for i in range(1, 6)]
 today = fields.Date.context_today(admin)
-_cut_raw = (os.environ.get("SMD_SEED_CUTOVER") or "").strip()
+_end_raw = (os.environ.get("SMD_SEED_HISTORY_END") or "").strip()
 try:
-    cutover = date.fromisoformat(_cut_raw) if _cut_raw else today
+    hist_end = date.fromisoformat(_end_raw) if _end_raw else today  # eksklusif: histori berakhir H-1
 except ValueError:
-    abort(f"SMD_SEED_CUTOVER={_cut_raw!r} bukan YYYY-MM-DD")
-hist_days = [cutover - timedelta(days=DAYS - i) for i in range(DAYS)]
+    abort(f"SMD_SEED_HISTORY_END={_end_raw!r} bukan YYYY-MM-DD")
+if hist_end > today:
+    abort(f"SMD_SEED_HISTORY_END={hist_end} di masa depan (order POS histori harus sebelum hari ini)")
+hist_days = [hist_end - timedelta(days=DAYS - i) for i in range(DAYS)]
 say(
-    f"parameter: SKU={SKUS} hari={DAYS} cutover={cutover} (histori {hist_days[0]}..{hist_days[-1]}) "
-    f"stok_sku={STOCK_SKUS} lot_maks={LOTS_MAX} lot_kedaluwarsa={EXPIRED_LOTS} markdown={MARKDOWNS} "
-    f"member={MEMBERS} rak={SHELF_SKUS} histori={DO_HISTORY} pos={DO_POS}"
+    f"parameter: SKU={SKUS} hari={DAYS} histori {hist_days[0]}..{hist_days[-1]} order/hari={ORDERS_PER_DAY} "
+    f"sku_histori={HISTORY_SKUS or 'semua'} stok_sku={STOCK_SKUS} lot_maks={LOTS_MAX} "
+    f"lot_kedaluwarsa={EXPIRED_LOTS} markdown={MARKDOWNS} member={MEMBERS} rak={SHELF_SKUS} "
+    f"histori={DO_HISTORY} pos={DO_POS}"
 )
 _outlet_codes = ", ".join(w.code for w in outlets)
 say(f"company {company.name} id={company.id}; DC {dc.code}; outlet {_outlet_codes}; hari ini {today}")
@@ -1206,7 +1213,7 @@ def build_day_factors():
         month_len = calendar.monthrange(day.year, day.month)[1]
         payday = day.day <= 7 or day.day > month_len - 7
         offset = min(((day - h).days for h in lebaran), key=abs)
-        trend = 1.0 + TREND_PER_YEAR * (day - cutover).days / 365.0
+        trend = 1.0 + TREND_PER_YEAR * (day - hist_end).days / 365.0
         in_ramadan = day in ramadan
         pre = -14 <= offset <= -1
         ram_flags.append(in_ramadan and not pre)
@@ -1262,71 +1269,198 @@ def synth_series(info, scale, rng, factors, ram_flags, pre_flags):
     return series
 
 
-def history_rows(label, products, allowed, day_factors, counter):
+def history_configs():
+    """{warehouse_id: pos.config} kasir demo per outlet (dibuat tahap 9)."""
+    Config = env["pos.config"].sudo()
+    configs = {}
+    for wh in outlets:
+        domain = [("name", "=", f"Kasir {wh.code} (DEMO)"), ("company_id", "=", company.id)]
+        config = Config.search(domain, limit=1)
+        if config:
+            configs[wh.id] = config
+    return configs
+
+
+def history_session(config, wh):
+    """Satu pos.session histori per outlet, state ``closed`` sejak dibuat: tidak dihitung sebagai sesi terbuka oleh
+    ``_check_pos_config`` CE (``state != 'closed'``), jadi kasir tetap bisa membuka sesi baru. Akuntansi penutupan
+    (jurnal, picking, statement) sengaja tidak dijalankan."""
+    Session = env["pos.session"].sudo().with_context(onboarding_creation=True)
+    name = f"{TAG} histori {wh.code}"
+    start_at = datetime.combine(hist_days[0], time(0, 0)) - timedelta(hours=7)  # 00:00 WIB
+    stop_at = datetime.combine(hist_days[-1], time(15, 0))  # 22:00 WIB
+    session = Session.search([("config_id", "=", config.id), ("name", "=", name)], limit=1)
+    if not session:
+        session = Session.create(
+            {
+                "config_id": config.id,
+                "user_id": admin.id,
+                "name": name,
+                "state": "closed",
+                "start_at": start_at,
+                "stop_at": stop_at,
+            }
+        )
+    vals = {}
+    if session.state != "closed":
+        vals["state"] = "closed"
+    if not session.start_at or session.start_at > start_at:
+        vals["start_at"] = start_at
+    if not session.stop_at or session.stop_at < stop_at:
+        vals["stop_at"] = stop_at
+    if vals:
+        session.write(vals)
+    return session
+
+
+def make_unit_amounts(products):
+    """Pajak per produk dihitung SEKALI (harga satuan), lalu dikalikan qty per baris."""
+    cache = {}
+    currency = company.currency_id
+
+    def unit_amounts(code):
+        if code not in cache:
+            info = meta[code]
+            product = products[code]
+            taxes = product.taxes_id.filtered(lambda tax: tax.company_id == company)
+            if taxes:
+                res = taxes.compute_all(info["price"], currency, 1.0, product=product)
+                cache[code] = (res["total_excluded"], res["total_included"], taxes.ids)
+            else:
+                cache[code] = (info["price"], info["price"], [])
+        return cache[code]
+
+    return unit_amounts
+
+
+def outlet_daily_sales(wh, allowed, day_factors, codes):
+    """{indeks hari: [(kode, qty)]} untuk outlet (pola permintaan sama untuk semua kanal histori)."""
     factors, ram_flags, pre_flags = day_factors
-    categ_names = {k: (categs[k].complete_name or categs[k].name)[:128] for k in KIND_ORDER}
-    for wh_no, wh in enumerate(outlets, start=1):
-        scale = OUTLET_SCALE.get(wh.code, 1.0)
-        for info in plan:
-            code = info["code"]
-            if not is_sold(allowed, wh, code):
-                continue
-            product_id = products[code].id
-            rng = random.Random(f"{SEED}:hist:{code}:{wh.code}")
-            disc_rng = random.Random(f"{SEED}:disc:{code}:{wh.code}")
-            per_trx = KG_PER_TRX if info["is_kg"] else 1.3
-            for idx, qty in synth_series(info, scale, rng, factors, ram_flags, pre_flags):
-                counter["rows"] += 1
-                counter[wh.code] = counter.get(wh.code, 0) + 1
-                if counter["rows"] % 100000 == 0:
-                    say(f"histori {label}: {counter['rows']} baris disiapkan")
-                row = {
-                    "day": hist_days[idx],
-                    "company_id": company.id,
-                    "warehouse_id": wh.id,
-                    "product_id": product_id,
-                    "esb_brand": ESB_BRAND,
-                    "esb_branch_id": 9000 + wh_no,
+    scale = OUTLET_SCALE.get(wh.code, 1.0)
+    by_day = {}
+    for code in codes:
+        if not is_sold(allowed, wh, code):
+            continue
+        rng = random.Random(f"{SEED}:hist:{code}:{wh.code}")
+        for idx, qty in synth_series(meta[code], scale, rng, factors, ram_flags, pre_flags):
+            by_day.setdefault(idx, []).append((code, qty))
+    return by_day
+
+
+def history_order_vals(wh, session, idx, n, items, products, unit_amounts):
+    day = hist_days[idx]
+    ref = f"{ORDER_REF_PREFIX}{wh.code}-{day:%Y%m%d}-{n}"
+    lines = []
+    total = tax = 0.0
+    for code, qty in items:
+        info = meta[code]
+        excl, incl, tax_ids = unit_amounts(code)
+        subtotal = round(excl * qty, 2)
+        subtotal_incl = round(incl * qty, 2)
+        total += subtotal_incl
+        tax += subtotal_incl - subtotal
+        lines.append(
+            Command.create(
+                {
+                    "product_id": products[code].id,
+                    "name": info["name"],
+                    "full_product_name": info["name"],
+                    "qty": qty,
+                    "price_unit": info["price"],
+                    "discount": 0.0,
+                    "price_subtotal": subtotal,
+                    "price_subtotal_incl": subtotal_incl,
+                    "tax_ids": [Command.set(tax_ids)],
+                    "total_cost": round(qty * info["cost"], 2),
                 }
-                if label == "sales":
-                    gross = round(qty * info["price"], 2)
-                    row.update(
-                        {
-                            "esb_menu_code": code,
-                            "menu_name": info["name"][:256],
-                            "menu_category": categ_names[info["kind"]],
-                            "is_takeaway": False,
-                            "qty": qty,
-                            "gross": gross,
-                            "discount": round(gross * 0.10, 2) if disc_rng.random() < 0.08 else 0.0,
-                            "cogs": round(qty * info["cost"], 2),
-                            "trx_count": max(1, int(round(qty / per_trx))),
-                        }
-                    )
-                else:
-                    row.update({"sold": qty, "esb_product_code": code, "esb_product_name": info["name"][:256]})
-                yield row
+            )
+        )
+    total = round(total, 2)
+    vals = {
+        "name": ref,
+        "pos_reference": ref,
+        "session_id": session.id,
+        "company_id": company.id,
+        "date_order": datetime.combine(day, time(ORDER_HOUR_UTC, 0)) + timedelta(minutes=7 * (n - 1)),
+        "state": "paid",
+        "amount_total": total,
+        "amount_tax": round(tax, 2),
+        "amount_paid": total,
+        "amount_return": 0.0,
+        "lines": lines,
+    }
+    return ref, vals, len(lines)
+
+
+def flush_orders(Order, batch, batch_lines, wh_code, month, totals):
+    """Buat satu batch order (outlet x bulan) lalu commit + kosongkan cache ORM."""
+    if not batch:
+        return 0
+    Order.create(batch)
+    env.cr.commit()
+    env.invalidate_all()
+    totals["orders"] += len(batch)
+    totals["lines"] += batch_lines
+    label = f"{month[0]}-{month[1]:02d}" if month else "-"
+    say(f"histori {wh_code} {label}: {len(batch)} order, {batch_lines} baris (total {totals['orders']} order)")
+    return len(batch)
 
 
 def stage_history(products, allowed):
-    from odoo.addons.efn_legacy_history.bulk import DEFAULT_BATCH, PARAM_CUTOVER_PREFIX, bulk_upsert
+    """Histori = pos.order ``paid`` di sesi histori tertutup (dibaca ETL ``_SQL_SALES_FACT`` apa adanya).
 
-    key = PARAM_CUTOVER_PREFIX + COMPANY_CODE
-    icp = env["ir.config_parameter"].sudo()
-    old = icp.get_param(key)
-    icp.set_param(key, cutover.isoformat())
-    say(f"parameter {key}: {old or '-'} -> {cutover.isoformat()}")
+    Jalur ORM ``pos.order.create`` sudo langsung, BUKAN ``sync_from_ui``/``_process_order``: semua hook efn POS
+    (loyalty/OTP/KDS/expiry/refund) ada di ``_process_order``/``_process_saved_order`` sehingga tidak terpicu; guard
+    create ``efn_pos_refund_origin`` (state paid) melewati ``env.su``. Tanpa stock move, tanpa pos.payment."""
+    configs = history_configs()
+    missing = [w.code for w in outlets if w.id not in configs]
+    if missing:
+        say(f"PERINGATAN histori: pos.config demo tidak ada untuk {', '.join(missing)} (perlu SMD_SEED_POS=1)")
+    codes = [i["code"] for i in sorted(plan, key=lambda i: i["rank"])]
+    if HISTORY_SKUS:
+        codes = codes[:HISTORY_SKUS]
     day_factors = build_day_factors()
-    for model_name, label in (("efn.legacy.sales.daily", "sales"), ("efn.legacy.flow.daily", "flow")):
+    unit_amounts = make_unit_amounts(products)
+    Order = env["pos.order"].sudo()
+    domain = [("company_id", "=", company.id), ("pos_reference", "=like", f"{ORDER_REF_PREFIX}SMD%")]
+    existing = {row["pos_reference"] for row in Order.search_read(domain, ["pos_reference"])}
+    totals = {"orders": 0, "lines": 0, "skipped": 0}
+    per_outlet = {}
+    seq_field = "sequence_number" in Order._fields
+    for wh in outlets:
+        config = configs.get(wh.id)
+        if not config:
+            continue
         started = monotonic()
-        Model = env[model_name].sudo().with_context(efn_legacy_import=True)
-        counter = {"rows": 0}
-        rows = history_rows(label, products, allowed, day_factors, counter)
-        stats = bulk_upsert(Model, rows, RUN_ID, company_ids=[company.id], batch_size=DEFAULT_BATCH, max_day=cutover)
-        env.cr.commit()
-        per_outlet = ", ".join(f"{w.code}={counter.get(w.code, 0)}" for w in outlets)
-        summary[f"histori_{label}"] = f"{stats} ({per_outlet})"
-        say(f"histori {model_name}: {stats} per outlet {per_outlet} ({monotonic() - started:.1f} s), commit")
+        session = history_session(config, wh)
+        by_day = outlet_daily_sales(wh, allowed, day_factors, codes)
+        batch, batch_lines, month = [], 0, None
+        created = 0
+        for idx in sorted(by_day):
+            day = hist_days[idx]
+            if month != (day.year, day.month):
+                created += flush_orders(Order, batch, batch_lines, wh.code, month, totals)
+                batch, batch_lines, month = [], 0, (day.year, day.month)
+            items = by_day[idx]
+            for n in range(1, ORDERS_PER_DAY + 1):
+                part = items[n - 1 :: ORDERS_PER_DAY]
+                if not part:
+                    continue
+                ref, vals, n_lines = history_order_vals(wh, session, idx, n, part, products, unit_amounts)
+                if ref in existing:
+                    totals["skipped"] += 1
+                    continue
+                if seq_field:
+                    vals["sequence_number"] = idx * ORDERS_PER_DAY + n
+                batch.append(vals)
+                batch_lines += n_lines
+        created += flush_orders(Order, batch, batch_lines, wh.code, month, totals)
+        per_outlet[wh.code] = created
+        say(f"histori {wh.code}: {created} order baru ({monotonic() - started:.1f} s), sesi {session.name}")
+    summary["histori_pos_order"] = (
+        f"order baru {totals['orders']}, baris baru {totals['lines']}, dilewati (sudah ada) {totals['skipped']}; "
+        f"per outlet {per_outlet}; SKU histori {len(codes)}"
+    )
 
 
 # ---------------------------------------------------------------- tahap 12: pindai near-expiry (bila flag menyala)
@@ -1356,7 +1490,7 @@ if DO_POS:
     run_stage("9 pos.config", stage_pos)
 run_stage("10 verifikasi persona", stage_personas)
 if DO_HISTORY:
-    run_stage("11 histori penjualan", stage_history, products, allowed)
+    run_stage("11 histori penjualan (pos.order)", stage_history, products, allowed)
 else:
     summary["histori"] = "dilewati (SMD_SEED_HISTORY=0)"
 run_stage("12 pindai near-expiry", stage_expiry_scan)
