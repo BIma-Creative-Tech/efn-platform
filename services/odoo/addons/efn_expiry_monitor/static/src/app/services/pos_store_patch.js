@@ -39,6 +39,21 @@ function lotTracked(product) {
     return (tmpl?.tracking || product?.tracking) === "lot";
 }
 
+/**
+ * Produk baris dari `vals` addLineToOrder. Kartu produk CE 19 (`ProductScreen.addProductToOrder`) hanya mengirim
+ * `{ product_tmpl_id }`; core lalu memakai varian pertama. Pindaian barcode/GS1 mengirim `product_id` juga.
+ */
+function lineProduct(pos, vals) {
+    if (vals?.product_id && typeof vals.product_id === "object") {
+        return vals.product_id;
+    }
+    let tmpl = vals?.product_tmpl_id;
+    if (typeof tmpl === "number") {
+        tmpl = pos.data?.models?.["product.template"]?.get(tmpl);
+    }
+    return (tmpl && typeof tmpl === "object" && tmpl.product_variant_ids?.[0]) || null;
+}
+
 function packLotNames(result) {
     const names = (result?.newPackLotLines || []).map((line) => line?.lot_name).filter(Boolean);
     const modified = result?.modifiedPackLotLines;
@@ -206,7 +221,7 @@ patch(PosStore.prototype, {
         if (!editing) {
             const name = efnPickFefo(lots, markdowns, product.id, nowMs, today, this.efnLocalUsedQty(product.id));
             if (name) {
-                this._efnLotPick = { source: "fefo", name, lots, markdowns, override: false };
+                this._efnLotPick = { source: "fefo", name, lots, markdowns, override: false, productId: product.id };
                 return { newPackLotLines: [{ lot_name: name }] };
             }
         }
@@ -238,6 +253,7 @@ patch(PosStore.prototype, {
             lots,
             markdowns,
             override: false,
+            productId: product.id,
         };
         if (blocked) {
             const allowed = await this.efnRequestOverride(this._efnPendingOrder || this.getOrder(), product, blocked);
@@ -251,8 +267,10 @@ patch(PosStore.prototype, {
     },
 
     async addLineToOrder(vals, order, opts = {}, configure = true) {
-        const product = vals?.product_id;
-        if (!this.efnExpiryEnabled() || !product || typeof product !== "object" || !lotTracked(product)) {
+        // G48: kartu produk hanya mengirim product_tmpl_id -> produk diturunkan dari template (sebelumnya patch ini
+        // dilewati sehingga efn_lot_source/markdown/override tidak pernah dipasang dari kartu produk).
+        const product = lineProduct(this, vals);
+        if (!this.efnExpiryEnabled() || !product || !lotTracked(product)) {
             return super.addLineToOrder(...arguments);
         }
         this._efnLotPick = null;
@@ -269,7 +287,7 @@ patch(PosStore.prototype, {
                     return;
                 }
             }
-            this._efnLotPick = { source: "gs1", name: lotName, lots, markdowns, override };
+            this._efnLotPick = { source: "gs1", name: lotName, lots, markdowns, override, productId: product.id };
         }
         this._efnPendingOrder = order;
         let line;
@@ -280,14 +298,17 @@ patch(PosStore.prototype, {
         }
         const pick = this._efnLotPick;
         this._efnLotPick = null;
+        // Produk aktual baris (varian bisa diganti konfigurator core) harus sama dengan produk saat lot dipilih.
+        const picked = line?.product_id;
         if (
             line &&
             pick?.name &&
             !line.efn_lot_source &&
-            line.product_id?.id === product.id &&
+            picked &&
+            picked.id === pick.productId &&
             (line.pack_lot_ids || []).some((lot) => lot.lot_name === pick.name)
         ) {
-            this.efnApplyLotPick(line, product, pick);
+            this.efnApplyLotPick(line, picked, pick);
         }
         return line;
     },

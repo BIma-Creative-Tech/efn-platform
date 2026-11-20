@@ -1,6 +1,6 @@
 """POS tanpa browser (JS-less): data preload, RPC kandidat lot, override PIN, dan validasi server saat sync order.
 
-Tour UI (FEFO/blokir/markdown di layar kasir) belum ditulis: lihat README "Belum terverifikasi".
+Tour UI (FEFO/blokir/markdown di layar kasir): tests/test_expiry_tour.py (tag efn_tour, G48).
 """
 
 import json

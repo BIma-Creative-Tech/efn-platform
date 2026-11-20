@@ -137,9 +137,18 @@ penyalahgunaan diskon (batas per peran + audit), replay persetujuan (terikat ord
 
 ## Batasan / belum
 - **Belum dijalankan di Odoo 19 nyata oleh penulis** (tanpa runtime di mesin penulis); lead menjalankan test container.
-- **Tour POS (HttpCase) belum ditulis**: perilaku layar kasir (FEFO tanpa popup, blokir, dialog PIN, harga markdown,
-  `setQuantity` kuota) tidak diuji otomatis. Pengganti: test server JS-less `tests/test_pos_expiry.py` (data preload,
-  RPC, PIN, validasi sync).
+- **Tour POS (G48)** `tests/test_expiry_tour.py` + `static/tests/tours/efn_expiry_tour.js` (tag `efn_tour`, job CI
+  "Odoo POS UI tours"): (1) FEFO dari kartu produk tanpa popup, lot markdown aktif dilewati; (2) lot markdown dipilih
+  lewat popup lot CE -> harga markdown -> bayar -> server `efn_markdown_id` + `qty_sold`; (3) lot kedaluwarsa -> dialog
+  supervisor -> Batal (baris tidak masuk) -> PIN salah -> PIN benar -> baris override -> event `pos_expired_override`
+  + persetujuan `consumed`. **Belum dicakup tour**: pindaian GS1 `(01)(10)` (butuh nomenklatur GS1 + helper scan),
+  batas `qty_cap` lewat `setQuantity`, override lokal kasir ber-grup (`ask`), dan perilaku offline. Test server
+  JS-less tetap di `tests/test_pos_expiry.py`.
+- **Perbaikan G48 (ditemukan saat menulis tour)**: kartu produk CE 19 (`ProductScreen.addProductToOrder`) memanggil
+  `addLineToCurrentOrder({ product_tmpl_id })` tanpa `product_id`, sehingga patch `addLineToOrder` dulu dilewati: lot
+  tetap dipilih FEFO/override oleh `editLots`, tetapi `efn_lot_source`, harga markdown, dan `efn_expiry_override`
+  tidak pernah dipasang dari kartu produk (hanya dari pindaian barcode). Sekarang produk diturunkan dari template
+  (varian pertama, seperti core) dan pilihan lot dicocokkan dengan `product_id` baris aktual.
 - API POS 19.0 diverifikasi dari source GitHub 19.0 (WebFetch, ringkasan): `PosStore.editLots(product,
   packLotLinesToEdit)` (auto-pilih 1 lot / fifo / lifo, tanpa fefo; popup mengembalikan `{modifiedPackLotLines,
   newPackLotLines}`), `addLineToOrder(vals, order, opts, configure)` dengan `opts.code.type === "lot"` → `lot_name =

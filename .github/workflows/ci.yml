@@ -540,11 +540,12 @@ jobs:
           --health-cmd "pg_isready -U odoo"
           --health-interval 5s --health-timeout 5s --health-retries 20
     env:
-      EFN_TOUR_MODULES: efn_pos_otp_gate,efn_pos_payment_gateway,efn_pos_loyalty_ledger,efn_pos_kds,efn_online_order,efn_pos_refund_origin,efn_online_pos_counter
+      EFN_TOUR_MODULES: efn_pos_otp_gate,efn_pos_payment_gateway,efn_pos_loyalty_ledger,efn_pos_kds,efn_online_order,efn_pos_refund_origin,efn_online_pos_counter,efn_expiry_monitor
       # Jumlah test tour yang WAJIB berjalan (HttpCase di-skip diam-diam bila Chrome/websocket tidak ada).
       # 5 (OTP gate 3 + gateway 2) + 4 Poin EFN (Gelombang 13b) + 4 KDS efn_pos_kds (Gelombang 14)
       # + 1 KDS cetak cadangan saat tiket gagal (Gelombang 15, SEC-76). Total terhitung runner 20.
-      EFN_TOUR_MIN_TESTS: "29"
+      # G48: +2 efn_expiry_monitor (FEFO + markdown lot; lot kedaluwarsa batal + override PIN) -> 31.
+      EFN_TOUR_MIN_TESTS: "31"
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
         with:

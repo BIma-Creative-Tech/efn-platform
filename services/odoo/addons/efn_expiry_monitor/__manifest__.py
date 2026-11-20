@@ -42,6 +42,10 @@
         "point_of_sale._assets_pos": [
             "efn_expiry_monitor/static/src/**/*",
         ],
+        # G48: tour POS (tests/test_expiry_tour.py, tag efn_tour), pola efn_pos_refund_origin.
+        "web.assets_tests": [
+            "efn_expiry_monitor/static/tests/tours/**/*",
+        ],
     },
     "installable": True,
     "application": False,
