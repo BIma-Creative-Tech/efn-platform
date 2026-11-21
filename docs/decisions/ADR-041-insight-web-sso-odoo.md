@@ -3,7 +3,8 @@
 - **Status:** Proposed — belum disetujui klien. G42 boleh dibangun mengikuti rekomendasi ini dengan
   `INSIGHT_ENABLED=false` default (Odoo dan insight-web); production menunggu review security, DPO (nama tampilan di
   cookie + log audit), **Q-ESB1/Q-ESB7/Q-ESB9** (G41), dan **Q-INS1/Q-INS4** (ADR ini).
-- **Tanggal:** 2026-11-18 (Gelombang 42); **revisi 2026-11-18 (Supermarket, §3.3): cakupan level outlet + 5 persona**
+- **Tanggal:** 2026-11-18 (Gelombang 42); **revisi 2026-11-18 (Supermarket, §3.3): cakupan level outlet + 5 persona**;
+  §3.4 2026-11-20; **addendum §3.5 2026-11-21 (G51): filter terpadu F&B + SMD, Proposed**
 - **Pemutus:** pemilik proyek (lingkup pengguna & grup Holding), IT klien (jaringan staf/outlet), Legal/DPO (data
   pribadi staf di sesi & log), Security (kunci SSO)
 - **Referensi review:** R-L01 (PDP), R-S03 (Odoo tidak terekspos), R-S10 (insider), R-T06 (angka dashboard dipakai
@@ -186,6 +187,39 @@ Rekomendasi **S2**. Penyesuaian lain: grup persona di modul **`efn_insight_sm`**
 `warehouse_id = 0` hanya untuk persona exec/category/dc/marketing. Keputusan L-186..L-199, pertanyaan Q-SM40..Q-SM45 di
 `docs/04` §28.13. Risiko baru: R-S22 (usulan; bug cakupan outlet), R-T22 (usulan; metrik turunan menyesatkan).
 
+### 3.5 Addendum 21 Nov 2026 — filter terpadu F&B + supermarket di halaman F&B (G51, Proposed)
+
+> **Ringkasan manajemen.** Direksi bisa memilih SMD langsung di halaman Insight F&B (Ringkasan, Penjualan, Pembayaran,
+> Distribusi, Forecast), seperti memilih brand F&B lain. Tidak ada login, kunci, atau database baru: pembatasan per
+> toko dan per peran tetap sama dengan dashboard supermarket. Biaya ±5–6,5 hari-engineer di aplikasi web, bagian dari
+> G51 (±15–20 hari total termasuk data demo). Yang perlu diputuskan klien: apakah total gabungan F&B + SMD perlu
+> ditampilkan, karena omzet F&B tanpa pajak dan omzet SMD termasuk PPN (Q-SM46).
+
+**Konteks.** Spesifikasi lead G51 (`docs/design/G51_SMD_E2E_LEAD_SPEC.md` B1, keputusan pemilik proyek 21 Nov 2026
+"lengkapi data end to end") meminta SMD menjadi filter sungguhan di halaman F&B. Ini bertentangan dengan dua aturan yang
+berlaku: `docs/04` §28.13.6 ("sesi tanpa kode ESB → query ESB tidak dikirim, **menu F&B disembunyikan**") dan §28.13.11
+("`pt` tidak dipakai di halaman SM"; halaman SM dan F&B terpisah). PR #133 hanya menambah chip **tautan** ke halaman SM.
+
+| # | Opsi | Kelebihan | Kekurangan | Biaya |
+|---|---|---|---|---|
+| **U1** | **Gabung di aplikasi**: loader halaman F&B menjalankan query ESB (scope v1) dan query SM (sig2 sesi) lalu menggabungkan per kode PT; hanya persona `exec` | Tanpa format token/tanda tangan/row policy baru; cakupan outlet & persona tetap ditegakkan ClickHouse; dapat dibalik (hapus chip) | Dua query per kartu; basis pajak berbeda harus diberi label; aturan "tidak berlaku" per kartu | **±5–6,5 hari** (insight-web) + ±1–1,5 hari 3 view baru |
+| U2 | Tetap terpisah (chip tautan PR #133) | Rp0; tidak ada risiko angka campuran | Tidak memenuhi B1; Direksi berpindah dua dashboard untuk membandingkan PT | 0 |
+| U3 | Mart terpadu: view ClickHouse UNION ESB + SM dengan satu row policy | Satu query per kartu | Row policy gabungan v1 (`company_code`) + v2 (`warehouse_id`, persona) jadi rumit dan rawan bocor; mencampur data legacy ESB dengan mart Odoo (bertentangan L-196); harus dibongkar saat brand F&B cutover ke Odoo | ±6–8 hari + review security ulang |
+
+**Keputusan yang direkomendasikan: U1.** Rinci di `docs/04` §28.14 (L-219..L-233): hanya sesi `eis2` dengan `exec` + kode
+SM + `INSIGHT_SM_ENABLED`; cabang `sm:<warehouse_id>` ⊆ `wids`; omzet SMD termasuk PPN (L-202) dan HPP % selalu dari basis
+tanpa pajak; halaman `/flow`, menu/BOM/FIN, dan Kualitas data ESB "Tidak berlaku untuk SMD".
+
+**Konsekuensi.** (+) Satu tempat perbandingan antar-PT bagi Direksi; tidak ada kunci baru; persona lain tidak berubah.
+(−) Angka total gabungan berbasis pajak berbeda (wajib label; Q-SM46); dua jalur query per kartu menambah beban
+`max_concurrent_queries_for_user` (semaphore §26.7 tetap); aturan menu F&B §28.13.6 diralat.
+
+**Risiko terkait.** R-T22 (angka gabungan disalahartikan), R-S22 (query SM di halaman F&B membuka outlet di luar sesi:
+dimitigasi sig2 sesi + row policy kelas W + test negatif baru), R-T06.
+
+**Pertanyaan terbuka.** Q-SM46 (total gabungan & basis), Q-SM47 (lot di luar ambang alert di tabel umur simpan),
+Q-INS-S9 tetap (exec membuka halaman persona lain).
+
 ## 4. Konsekuensi
 
 ### 4.1 Positif
@@ -241,6 +275,9 @@ jadwal rotasi kunci SSO/sesi.
 ## 7. Kapan ditinjau ulang
 - Revisi §3.3 (outlet & persona supermarket) dibangun di G47 — tinjau format `eit2`/`eis2` dan Q-SM29.
 - §3.4: klien meminta pembatasan data per kategori (Q-INS-S6) atau PT supermarket kedua (`SM_CODES`).
+- §3.5: Q-SM46 dijawab; brand F&B pertama cutover ke Odoo (halaman F&B bisa membaca mart Odoo, opsi U3 ditinjau ulang);
+  persona selain `exec` meminta filter SMD di halaman F&B; galat `TOO_MANY_SIMULTANEOUS_QUERIES` muncul di halaman
+  campuran.
 - Klien memilih identity provider terpusat (opsi 2) atau butuh MFA untuk dashboard.
 - Kebutuhan multi-replika/HA insight-web (→ Redis).
 - G43 (company IMD/CUP dibuat, halaman dari mart Odoo) dan G44 (forecast).

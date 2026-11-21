@@ -3,6 +3,7 @@ import { Block } from '@/components/blocks';
 import { ChartCard } from '@/components/ChartCard';
 import { DataTable, type TableRow } from '@/components/DataTable';
 import { FilterNotice } from '@/components/FilterNotice';
+import { MixedScopeNote, NotApplicableSmd } from '@/components/SmdNotice';
 import { InfoTip, KpiRow, KpiTile, PageHeader, Section } from '@/components/ui';
 import { summarize, type ChartSpec, type ColorToken } from '@/lib/chart-spec';
 import { fmtDayShort, fmtRange } from '@/lib/format';
@@ -26,9 +27,20 @@ interface TrendRow { period: string; ck_prod: number; store_prod: number; ck_out
 const statusColor = (s: Status): ColorToken => (s === 'good' ? 'good' : s === 'warn' ? 'warn' : s === 'bad' ? 'bad' : 'muted');
 
 export default async function FlowPage({ searchParams }: { searchParams: SearchParams }) {
-  const { ctx, adjusted } = await pageCtx(searchParams);
+  const { ctx, adjusted, sel } = await pageCtx(searchParams);
   const { from, to, product } = ctx.filters;
   const single = product.length === 1 ? product[0] : null;
+
+  // G51 B1: halaman khusus F&B. Hanya SMD dipilih -> tanpa query ESB; campuran -> brand ESB saja + catatan.
+  if (!sel.esb) {
+    return (
+      <>
+        <PageHeader title="Produksi vs Penjualan" question="Apakah yang diproduksi dan dikirim sebanding dengan yang terjual? Di mana barang menumpuk atau kurang?" />
+        <FilterNotice adjusted={adjusted} />
+        <NotApplicableSmd reason="Produksi CK, produk FIN, dan sell-through adalah konsep brand F&B. Pilih brand F&B pada filter Brand / PT." />
+      </>
+    );
+  }
 
   const [sumR, brR, dailyR, weeklyR, outR, prodR, detailR] = await Promise.all([
     settle(run<Summary>('flow_summary', ctx)),
@@ -61,6 +73,7 @@ export default async function FlowPage({ searchParams }: { searchParams: SearchP
     <>
       <PageHeader title="Produksi vs Penjualan" question="Apakah yang diproduksi dan dikirim sebanding dengan yang terjual? Di mana barang menumpuk atau kurang?" />
       <FilterNotice adjusted={adjusted} />
+      {sel.smd ? <MixedScopeNote /> : null}
       <p className="notice">Berdasarkan arus barang, bukan stok: sell-through periode pendek dapat melebihi 100% atau menyesatkan karena stok awal/akhir toko tidak tersedia.</p>
       <p className="muted small">Periode: {fmtRange(from, to)}. Hanya produk FIN (satuan EA).</p>
 

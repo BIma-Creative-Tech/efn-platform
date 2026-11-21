@@ -24,6 +24,20 @@ Parameter env (default): SMD_SEED_SKUS=400, SMD_SEED_DAYS=730, SMD_SEED_HISTORY_
 SMD_SEED_ORDERS_PER_DAY=1, SMD_SEED_HISTORY_SKUS=0 (0 = semua SKU), SMD_SEED_STOCK_SKUS=150, SMD_SEED_LOTS_MAX=3,
 SMD_SEED_EXPIRED_LOTS=8, SMD_SEED_MARKDOWNS=12, SMD_SEED_MEMBERS=50, SMD_SEED_SHELF_SKUS=30, SMD_SEED_HISTORY=1,
 SMD_SEED_POS=1.
+
+G51 (docs/design/G51_SMD_E2E_LEAD_SPEC.md bagian A; runbook §7), tahap 13-14, hanya PT SMD, jendela E2E = N hari
+terakhir histori (default 90):
+  13 loop harian kronologis (commit per hari, penanda hari selesai per bagian di ir.config_parameter
+     ``efn_seed_smd.g51_done.<bagian>``):
+       flow = A2 PO supplier -> DC (diterima, ~10% terlambat, orderpoint DC terkelola) + A1 usulan replenishment
+              ``approved`` -> ``_efn_create_supply_document`` (rute resupply CE) -> pick/ship/receipt/storage done,
+              ~6% baris kurang kirim (sebagian backorder H+1, sisanya dibatalkan)
+       a7   = keluar stok penjualan POS sintetis per outlet per hari (POS -> Partners/Customers, 21:00 WIB, FEFO, dibatasi
+              stok tersedia)
+       a3   = scrap outlet 1-3/outlet/hari (tag Kedaluwarsa / Rusak / Kualitas)
+  14 a4 = pos.payment untuk order histori DEMO yang belum punya pembayaran (tunai / QRIS / debit / kredit)
+A5 (umur simpan) sudah diisi tahap 2 (``expiration_time``), tidak ada tahap baru.
+Parameter G51: SMD_SEED_PARTS=all|g48|g51|<daftar flow,a7,a3,a4>, SMD_SEED_E2E_DAYS=90, SMD_SEED_E2E_SKUS=30.
 """
 
 import calendar
@@ -522,6 +536,23 @@ DO_HISTORY = env_int("SMD_SEED_HISTORY", 1, 0, 1)
 DO_POS = env_int("SMD_SEED_POS", 1, 0, 1)
 ORDERS_PER_DAY = env_int("SMD_SEED_ORDERS_PER_DAY", 1, 1, 50)
 HISTORY_SKUS = env_int("SMD_SEED_HISTORY_SKUS", 0, 0, 2000)
+# G51: bagian yang dijalankan. all = tahap G48 1-12 + semua bagian G51; g48 = hanya 1-12; g51 = hanya bagian G51
+# (tahap 1-2 tetap dipanggil untuk mencari supplier/produk; idempoten, tidak membuat apa-apa bila sudah ada).
+G51_PARTS = ("flow", "a7", "a3", "a4")
+E2E_DAYS = env_int("SMD_SEED_E2E_DAYS", 90, 7, 120)
+E2E_SKUS = env_int("SMD_SEED_E2E_SKUS", 30, 0, 2000)
+_parts_raw = (os.environ.get("SMD_SEED_PARTS") or "all").strip().lower()
+if _parts_raw == "all":
+    RUN_G48, PARTS = True, set(G51_PARTS)
+elif _parts_raw == "g48":
+    RUN_G48, PARTS = True, set()
+elif _parts_raw == "g51":
+    RUN_G48, PARTS = False, set(G51_PARTS)
+else:
+    PARTS = {p.strip() for p in _parts_raw.split(",") if p.strip()}
+    if not PARTS or PARTS - set(G51_PARTS):
+        abort(f"SMD_SEED_PARTS={_parts_raw!r}: pakai all, g48, g51, atau daftar dari {', '.join(G51_PARTS)}")
+    RUN_G48 = False
 
 _installed = set(
     env["ir.module.module"]
@@ -560,7 +591,8 @@ say(
     f"parameter: SKU={SKUS} hari={DAYS} histori {hist_days[0]}..{hist_days[-1]} order/hari={ORDERS_PER_DAY} "
     f"sku_histori={HISTORY_SKUS or 'semua'} stok_sku={STOCK_SKUS} lot_maks={LOTS_MAX} "
     f"lot_kedaluwarsa={EXPIRED_LOTS} markdown={MARKDOWNS} member={MEMBERS} rak={SHELF_SKUS} "
-    f"histori={DO_HISTORY} pos={DO_POS}"
+    f"histori={DO_HISTORY} pos={DO_POS} | G48={'ya' if RUN_G48 else 'tidak'} G51={','.join(sorted(PARTS)) or '-'} "
+    f"e2e_hari={E2E_DAYS} e2e_sku={E2E_SKUS or 'semua'}"
 )
 _outlet_codes = ", ".join(w.code for w in outlets)
 say(f"company {company.name} id={company.id}; DC {dc.code}; outlet {_outlet_codes}; hari ini {today}")
@@ -1476,24 +1508,961 @@ def stage_expiry_scan():
     say(f"pindai near-expiry: {total} alert SMD")
 
 
+# ================================================================ G51 (A1-A4, A7): alur 90 hari terakhir
+# Fakta Odoo 19.0 yang dipakai (source github.com/odoo/odoo/tree/19.0, dibaca 21 Nov 2026):
+# - stock.move._search_picking_for_assignation: move tanpa reference_ids -> selalu picking baru; orderpoint tanpa
+#   context 'origins' tidak mengisi reference_ids -> satu usulan = satu set picking (tidak bergabung dengan picking lain).
+# - stock.picking.button_validate: context skip_backorder + picking_ids_not_to_backorder (batal sisa) / sisanya
+#   backorder; product_expiry._pre_action_done_hook dilewati dengan skip_expired.
+# - stock_account 19.0: tidak ada stock.valuation.layer; stock_move.value ditulis saat done; jurnal real_time memakai
+#   context force_period_date (fallback hari ini) -> diisi tanggal histori.
+# - stock.scrap.do_scrap menulis date_done = now; move scrap tanpa tanggal dari scrap -> di-back-date sesudahnya.
+# - stock.scrap.reason.tag: tanpa data bawaan CE, nama unik (dicari dulu, dibuat bila tidak ada).
+# - pos.payment: constraint metode harus ada di config sesi; pos.config.write payment_method_ids saat sesi terbuka
+#   ditolak kecuali context bypass_payment_method_ids_forbidden_change.
+# Tanggal disimpan UTC naive; jam lokal WIB (+7), SMD05 WITA (+8). Back-date tanggal (date_done, date, in_date) lewat
+# SQL UPDATE kolom tanggal saja setelah validasi ORM (nilai/qty/quant tetap dari ORM).
+G51_TAG = f"{TAG} G51"
+G51_DONE_PARAM = "efn_seed_smd.g51_done.{part}"
+SHORT_PROPOSAL_PCT = 0.18  # usulan yang punya baris kurang kirim
+SHORT_LINE_PCT = 0.35  # baris kurang kirim di usulan itu -> ±6% baris
+BACKORDER_PCT = 0.40  # usulan kurang kirim yang sisanya dikirim H+1 (sisanya dibatalkan)
+PO_LATE_PCT = 0.10
+DC_ORDERPOINT_PCT = 0.70  # SKU E2E yang diberi orderpoint DC terkelola (sisanya PO manual buyer)
+SCRAP_TAGS = (("expired", "Kedaluwarsa"), ("damaged", "Rusak"), ("quality", "Kualitas"))
+NONCASH_METHODS = (
+    ("SMQR", "QRIS (DEMO)", 0.35),
+    ("SMDB", "Kartu Debit (DEMO)", 0.18),
+    ("SMCR", "Kartu Kredit (DEMO)", 0.12),
+)
+VALIDATE_CTX = {"skip_backorder": True, "skip_expired": True, "skip_sms": True, "tracking_disable": True}
+
+e2e_end = min(hist_days[-1], today - timedelta(days=1))
+e2e_start = e2e_end - timedelta(days=E2E_DAYS - 1)
+loop_start = e2e_start - timedelta(days=3)  # PO + kirim DC untuk pengiriman hari pertama (lead SMD05 = 2)
+
+
+def wh_offset(wh):
+    return 8 if wh.code == "SMD05" else 7
+
+
+def local_dt(day, hour, offset=7, minute=0):
+    return datetime.combine(day, time(hour, minute)) - timedelta(hours=offset)
+
+
+def days_between(start, end):
+    """[start, end) per hari."""
+    day = start
+    while day < end:
+        yield day
+        day += timedelta(days=1)
+
+
+def round_up(qty, is_kg):
+    return math.ceil(qty * 2 - 1e-9) / 2.0 if is_kg else float(math.ceil(qty - 1e-9))
+
+
+def round_down(qty, is_kg):
+    return math.floor(qty * 2 + 1e-9) / 2.0 if is_kg else float(math.floor(qty + 1e-9))
+
+
+def done_days(part):
+    raw = env["ir.config_parameter"].sudo().get_param(G51_DONE_PARAM.format(part=part)) or ""
+    return {date.fromisoformat(x) for x in raw.split(",") if x.strip()}
+
+
+def mark_done(part, days_set, day):
+    days_set.add(day)
+    value = ",".join(d.isoformat() for d in sorted(days_set))
+    env["ir.config_parameter"].sudo().set_param(G51_DONE_PARAM.format(part=part), value)
+
+
+def e2e_codes(allowed):
+    """SKU E2E: terlaris, dipasok DC (bukan DSD), lolos assortment 'ok' di >= 1 outlet."""
+    codes = []
+    for info in sorted(plan, key=lambda i: i["rank"]):
+        if info["dsd"] or not any(allowed[(w.id, info["code"])] == "ok" for w in outlets):
+            continue
+        codes.append(info["code"])
+    return codes[:E2E_SKUS] if E2E_SKUS else codes
+
+
+def load_sales(products, codes):
+    """{(warehouse_id, hari WIB, kode): qty} dari order POS histori DEMO (sumber kebenaran A1/A7)."""
+    by_pid = {products[c].id: c for c in codes}
+    sales = {}
+    for wh in outlets:
+        env.cr.execute(
+            """
+            SELECT (o.date_order + interval '7 hours')::date AS day, l.product_id, SUM(l.qty)
+              FROM pos_order_line l JOIN pos_order o ON o.id = l.order_id
+             WHERE o.company_id = %s AND o.state IN ('paid', 'done') AND o.pos_reference LIKE %s
+               AND o.date_order >= %s AND o.date_order < %s AND l.product_id = ANY(%s)
+             GROUP BY 1, 2
+            """,
+            (
+                company.id,
+                f"{ORDER_REF_PREFIX}{wh.code}-%",
+                local_dt(e2e_start, 0),
+                local_dt(e2e_end + timedelta(days=1), 0),
+                list(by_pid),
+            ),
+        )
+        for day, pid, qty in env.cr.fetchall():
+            if qty and qty > 0:
+                sales[(wh.id, day, by_pid[pid])] = float(qty)
+    return sales
+
+
+def backdate_pickings(when_by_picking):
+    """Tulis tanggal histori (picking, move, move line done) + in_date quant lot yang tiba di lokasi tujuan."""
+    if not when_by_picking:
+        return
+    env.flush_all()
+    groups = {}
+    for pid, when in when_by_picking.items():
+        groups.setdefault(when, []).append(pid)
+    cr = env.cr
+    for when, ids in groups.items():
+        cr.execute(
+            "UPDATE stock_picking SET date_done = %s, scheduled_date = %s WHERE id = ANY(%s) AND state = 'done'",
+            (when, when, ids),
+        )
+        cr.execute("UPDATE stock_move SET date = %s WHERE picking_id = ANY(%s) AND state = 'done'", (when, ids))
+        cr.execute(
+            "UPDATE stock_move_line SET date = %s WHERE move_id IN "
+            "(SELECT id FROM stock_move WHERE picking_id = ANY(%s) AND state = 'done')",
+            (when, ids),
+        )
+    cr.execute(
+        """
+        UPDATE stock_quant q SET in_date = s.dt
+          FROM (SELECT ml.location_dest_id AS loc, ml.lot_id, MAX(ml.date) AS dt
+                  FROM stock_move_line ml JOIN stock_move m ON m.id = ml.move_id
+                 WHERE m.picking_id = ANY(%s) AND m.state = 'done' AND ml.lot_id IS NOT NULL
+                 GROUP BY 1, 2) s
+         WHERE q.location_id = s.loc AND q.lot_id = s.lot_id AND q.in_date > s.dt
+        """,
+        (list(when_by_picking),),
+    )
+    env.invalidate_all()
+
+
+def validate(pickings, day, cancel=None):
+    """Validasi batch. ``cancel`` = picking yang sisanya dibatalkan (None = semua); lainnya -> backorder.
+    Picking tanpa qty siap dilewati. Mengembalikan picking yang done."""
+    todo = pickings.filtered(lambda p: p.state not in ("done", "cancel"))
+    ready = todo.filtered(lambda p: any(m.quantity > 0 for m in p.move_ids if m.state not in ("done", "cancel")))
+    if not ready:
+        return ready
+    moves = ready.move_ids.filtered(lambda m: m.state not in ("done", "cancel") and m.quantity > 0)
+    moves.write({"picked": True})
+    cancel_ids = ready.ids if cancel is None else [i for i in cancel.ids if i in set(ready.ids)]
+    ctx = dict(VALIDATE_CTX, picking_ids_not_to_backorder=cancel_ids, force_period_date=day)
+    result = ready.with_context(**ctx).button_validate()
+    if isinstance(result, dict):
+        say(f"PERINGATAN validasi {len(ready)} picking -> wizard {result.get('res_model')} (tidak diterapkan)")
+    return ready.filtered(lambda p: p.state == "done")
+
+
+def reduce_move(move, target):
+    """Kurangi qty reservasi move (UoM produk = UoM move pada data seed) menjadi ``target``."""
+    remaining = target
+    for ml in move.move_line_ids.sorted("id"):
+        qty = min(ml.quantity, remaining)
+        if qty <= 1e-9:
+            ml.unlink()
+            continue
+        if qty < ml.quantity:
+            ml.quantity = qty
+        remaining -= qty
+
+
+def cancel_leftover(pickings, cancel):
+    left = pickings.filtered(lambda p: p.state not in ("done", "cancel") and p in cancel)
+    if left:
+        left.action_cancel()
+
+
+# ---------------------------------------------------------------- rencana A1 (usulan) & A2 (PO), deterministik
+def delivery_schedules():
+    Schedule = env["efn.delivery.schedule"].sudo()
+    result = {}
+    for sched in Schedule.search([("company_id", "=", company.id), ("active", "=", True)], order="id"):
+        result.setdefault(sched.warehouse_id.id, []).append(sched)
+    return result
+
+
+def plan_flow(products, allowed, codes, sales):
+    schedules = delivery_schedules()
+    props = []
+    for wh in outlets:
+        for sched in schedules.get(wh.id, []):
+            gpath = sched.product_group.parent_path if sched.product_group else ""
+            members = [
+                c
+                for c in codes
+                if allowed[(wh.id, c)] == "ok" and (products[c].categ_id.parent_path or "").startswith(gpath)
+            ]
+            if not members:
+                continue
+            for day in days_between(e2e_start, e2e_end + timedelta(days=1)):
+                if not sched._efn_runs_on(day):
+                    continue
+                nxt = sched._efn_next_day_after(day) or day + timedelta(days=7)
+                cover_end = min(nxt, e2e_end + timedelta(days=1))
+                rng = random.Random(f"{SEED}:g51:prop:{wh.code}:{sched.product_group.id or 0}:{day}")
+                lines = []
+                for code in members:
+                    need = sum(sales.get((wh.id, d, code), 0.0) for d in days_between(day, cover_end))
+                    if need <= 1e-9:
+                        continue
+                    is_kg = meta[code]["is_kg"]
+                    proposed = max(round_up(need * rng.uniform(1.0, 1.08), is_kg), 0.5 if is_kg else 1.0)
+                    approved, reason = proposed, False
+                    if rng.random() < 0.08:
+                        step = 0.5 if is_kg else 1.0
+                        delta = rng.choice((-1, 1, 2))
+                        approved = max(step, proposed + step * delta)
+                        reason = "rack_full" if delta < 0 else rng.choice(("local_promo", "event"))
+                    lines.append(
+                        {"code": code, "need": need, "proposed": proposed, "approved": approved, "reason": reason}
+                    )
+                if not lines:
+                    continue
+                short, backorder = {}, False
+                if rng.random() < SHORT_PROPOSAL_PCT:
+                    for ln in lines:
+                        if rng.random() < SHORT_LINE_PCT:
+                            short[ln["code"]] = round_down(
+                                ln["approved"] * rng.uniform(0.4, 0.85), meta[ln["code"]]["is_kg"]
+                            )
+                    backorder = bool(short) and rng.random() < BACKORDER_PCT
+                props.append(
+                    {
+                        "wh": wh,
+                        "sched": sched,
+                        "delivery": day,
+                        "ship_day": day - timedelta(days=sched.lead_days),
+                        "lines": lines,
+                        "short": short,
+                        "backorder": backorder,
+                    }
+                )
+    return props
+
+
+def plan_purchases(props):
+    """PO per (supplier, hari terima rencana): Σ qty disetujui yang dikirim DC setelahnya s.d. kunjungan berikutnya."""
+    need = {}
+    for prop in props:
+        for ln in prop["lines"]:
+            key = (ln["code"], prop["ship_day"])
+            need[key] = need.get(key, 0.0) + ln["approved"]
+    orders = {}
+    for (code, ship_day), qty in need.items():
+        sup = meta[code]["supplier"]
+        mask = SUPPLIER_WEEKDAYS.get(sup, 127)
+        receipt = ship_day - timedelta(days=1)
+        for _k in range(14):
+            if mask & (1 << receipt.weekday()):
+                break
+            receipt -= timedelta(days=1)
+        receipt = max(receipt, loop_start)
+        entry = orders.setdefault((sup, receipt), {"lines": {}, "min_ship": ship_day})
+        entry["lines"][code] = entry["lines"].get(code, 0.0) + qty
+        entry["min_ship"] = min(entry["min_ship"], ship_day)
+    result = []
+    for (sup, planned), entry in sorted(orders.items()):
+        rng = random.Random(f"{SEED}:g51:po:{sup}:{planned}")
+        late = rng.random() < PO_LATE_PCT and planned + timedelta(days=1) <= entry["min_ship"]
+        lines = {c: round_up(q * 1.03, meta[c]["is_kg"]) for c, q in sorted(entry["lines"].items())}
+        result.append(
+            {
+                "sup": sup,
+                "planned": planned,
+                "actual": planned + timedelta(days=1 if late else 0),
+                "late": late,
+                "lines": lines,
+            }
+        )
+    return result
+
+
+def dc_orderpoints(products, codes):
+    """Orderpoint DC per SKU E2E: pakai yang ada; selain itu 70% dibuat lewat helper efn_replenishment (terkelola,
+    trigger manual -> tidak memicu scheduler CE)."""
+    Orderpoint = env["stock.warehouse.orderpoint"].sudo().with_company(company)
+    result = {}
+    for code in codes:
+        product = products[code]
+        op = Orderpoint.search(
+            [
+                ("product_id", "=", product.id),
+                ("location_id", "=", dc.lot_stock_id.id),
+                ("company_id", "=", company.id),
+            ],
+            limit=1,
+        )
+        if not op and random.Random(f"{SEED}:g51:op:{code}").random() < DC_ORDERPOINT_PCT:
+            op = Orderpoint._efn_managed_orderpoint(dc, product)
+        result[code] = op
+    return result
+
+
+# ---------------------------------------------------------------- A2: PO supplier -> DC
+def do_purchases(day_pos, products, suppliers, dc_ops, counters):
+    PO = env["purchase.order"].sudo().with_company(company).with_context(tracking_disable=True, mail_create_nolog=True)
+    Lot = env["stock.lot"].sudo()
+    ML = env["stock.move.line"].sudo()
+    receipts, when, order_when = env["stock.picking"].sudo(), {}, {}
+    for po in day_pos:
+        partner = suppliers[po["sup"]]
+        origin = f"DEMO-SMD-PO-{partner.ref}-{po['planned']:%Y%m%d}"
+        if PO.search_count([("origin", "=", origin), ("company_id", "=", company.id)]):
+            continue
+        delay = max(KIND_SPEC[meta[c]["kind"]]["delay"] for c in po["lines"])
+        dt_order = local_dt(po["planned"] - timedelta(days=delay), 9)
+        dt_planned = local_dt(po["planned"], 10)
+        lines = []
+        for code, qty in po["lines"].items():
+            vals = {
+                "product_id": products[code].id,
+                "product_qty": qty,
+                "price_unit": meta[code]["cost"],
+                "date_planned": dt_planned,
+            }
+            if dc_ops.get(code):
+                vals["orderpoint_id"] = dc_ops[code].id
+            lines.append(Command.create(vals))
+        order = PO.create(
+            {
+                "partner_id": partner.id,
+                "company_id": company.id,
+                "picking_type_id": dc.in_type_id.id,
+                "origin": origin,
+                "date_order": dt_order,
+                "order_line": lines,
+            }
+        )
+        order.button_confirm()
+        if order.state == "to approve":
+            order.button_approve()
+        order.write({"date_order": dt_order, "date_approve": dt_order + timedelta(hours=1)})
+        counters["po"] += 1
+        counters["po_late"] += 1 if po["late"] else 0
+        actual_dt = local_dt(po["actual"], 10)
+        order_when[order.id] = actual_dt
+        for picking in order.picking_ids.filtered(lambda p: p.state not in ("done", "cancel")):
+            receipts |= picking
+            when[picking.id] = actual_dt
+    if not receipts:
+        return
+    receipts.action_assign()
+    for picking in receipts:
+        day = when[picking.id]
+        for move in picking.move_ids.filtered(lambda m: m.state not in ("done", "cancel")):
+            info = meta.get(move.product_id.default_code)
+            if not info:
+                continue
+            lot_name = f"{dc.code}-{(day + timedelta(hours=7)):%y%m%d}-{info['gidx']:04d}"
+            lot = Lot.search(
+                [("product_id", "=", move.product_id.id), ("name", "=", lot_name), ("company_id", "=", company.id)],
+                limit=1,
+            )
+            if not lot:
+                life = move.product_id.product_tmpl_id.expiration_time or info["life"]
+                lot = Lot.create(
+                    {
+                        "name": lot_name,
+                        "product_id": move.product_id.id,
+                        "company_id": company.id,
+                        "expiration_date": day + timedelta(hours=2, days=life),
+                    }
+                )
+            move.move_line_ids.unlink()
+            vals = {
+                "move_id": move.id,
+                "picking_id": picking.id,
+                "product_id": move.product_id.id,
+                "location_id": move.location_id.id,
+                "location_dest_id": move.location_dest_id.id,
+                "lot_id": lot.id,
+                "quantity": move.product_uom_qty,
+            }
+            if "product_uom_id" in ML._fields:
+                vals["product_uom_id"] = move.product_uom.id
+            ML.create(vals)
+    stamp = {}
+    for day in sorted({v.date() for v in when.values()}):
+        batch = receipts.filtered(lambda p, d=day: when[p.id].date() == d)
+        done = validate(batch, (when[batch[:1].id] + timedelta(hours=7)).date())
+        stores = done.move_ids.filtered(lambda m: m.state == "done").move_dest_ids.picking_id
+        stores.action_assign()
+        stored = validate(stores, (when[batch[:1].id] + timedelta(hours=7)).date())
+        for p in done:
+            stamp[p.id] = when[p.id]
+        for p in stored:
+            src = p.move_ids.move_orig_ids.picking_id[:1]
+            stamp[p.id] = when.get(src.id, when[batch[:1].id]) + timedelta(hours=2)
+    backdate_pickings(stamp)
+    # effective_date PO (compute dari date_done picking) ikut tanggal terima histori.
+    if "effective_date" in env["purchase.order"]._fields:
+        for oid, dt in order_when.items():
+            env.cr.execute("UPDATE purchase_order SET effective_date = %s WHERE id = %s", (dt, oid))
+        env.invalidate_all()
+
+
+# ---------------------------------------------------------------- A1: usulan disetujui -> rantai resupply CE
+def chain_legs(proposal):
+    """{'pick','ship','recv'}: recordset picking rantai usulan (picking_id = picking DC pertama, biasanya ship)."""
+    Picking = env["stock.picking"].sudo()
+    first = proposal.picking_id
+    if not first:
+        return {"pick": Picking, "ship": Picking, "recv": Picking}
+    moves = first.move_ids
+    if first.location_dest_id.usage == "transit":
+        ship_moves = moves
+    else:
+        ship_moves = moves.move_dest_ids.filtered(lambda m: m.location_dest_id.usage == "transit")
+    return {
+        "pick": ship_moves.move_orig_ids.picking_id,
+        "ship": ship_moves.picking_id,
+        "recv": ship_moves.move_dest_ids.picking_id,
+    }
+
+
+def run_legs(items, ship_when, recv_when, counters):
+    """items = [(proposal, prop)]. Proses pick -> ship -> receipt -> storage untuk satu gelombang."""
+    Picking = env["stock.picking"].sudo()
+    legs = {rec.id: chain_legs(rec) for rec, _p in items}
+    allp = {k: Picking.browse() for k in ("pick", "ship", "recv")}
+    cancel = Picking.browse()
+    for rec, prop in items:
+        for k in allp:
+            allp[k] |= legs[rec.id][k]
+        if not prop.get("backorder"):
+            cancel |= legs[rec.id]["pick"] | legs[rec.id]["ship"] | legs[rec.id]["recv"]
+    stamp = {}
+    allp["pick"].action_assign()
+    for rec, prop in items:
+        if not prop.get("short"):
+            continue
+        for move in legs[rec.id]["pick"].move_ids.filtered(lambda m: m.state not in ("done", "cancel")):
+            code = move.product_id.default_code
+            if code in prop["short"] and move.quantity > prop["short"][code]:
+                reduce_move(move, prop["short"][code])
+                counters["short_lines"] += 1
+    for leg in ("pick", "ship", "recv"):
+        pickings = allp[leg]
+        if leg != "pick":
+            pickings.action_assign()
+        # Satu button_validate per (leg, waktu) — batch lintas usulan; picking yang dibatalkan sisanya = ``cancel``.
+        by_when = {}
+        for rec, prop in items:
+            when = ship_when(prop, leg) if leg != "recv" else recv_when(prop, 0)
+            by_when[when] = by_when.get(when, Picking.browse()) | legs[rec.id][leg]
+        for when, batch in by_when.items():
+            validate(batch, (when + timedelta(hours=8)).date(), cancel & batch)
+            for p in batch:
+                stamp[p.id] = when
+        cancel_leftover(pickings, cancel)
+    recv_done = allp["recv"].filtered(lambda p: p.state == "done")
+    stores = recv_done.move_ids.filtered(lambda m: m.state == "done").move_dest_ids.picking_id.filtered(
+        lambda p: p.state not in ("done", "cancel")
+    )
+    stores.action_assign()
+    by_recv = {}
+    for rec, prop in items:
+        for p in legs[rec.id]["recv"]:
+            by_recv[p.id] = prop
+    store_when = {}
+    for store in stores:
+        prop = by_recv.get(store.move_ids.move_orig_ids.picking_id[:1].id)
+        if prop is None:
+            continue
+        when = recv_when(prop, 1)
+        store_when[when] = store_when.get(when, Picking.browse()) | store
+    for when, batch in store_when.items():
+        validate(batch, (when + timedelta(hours=8)).date())
+        for p in batch:
+            stamp[p.id] = when
+    backdate_pickings(stamp)
+
+
+def do_proposals(day_props, products, counters):
+    Proposal = (
+        env["efn.replenishment.proposal"]
+        .sudo()
+        .with_company(company)
+        .with_context(tracking_disable=True, mail_create_nolog=True, mail_notrack=True)
+    )
+    Line = env["efn.replenishment.proposal.line"].sudo()
+    heads = {}
+    for i, wh in enumerate(outlets, start=1):
+        heads[wh.id] = env.ref(f"{MODULE}.user_smd0{i}_store_head", raise_if_not_found=False) or admin
+    items = []
+    for prop in day_props:
+        sched, day, wh = prop["sched"], prop["delivery"], prop["wh"]
+        if Proposal.search_count([("schedule_id", "=", sched.id), ("delivery_date", "=", day)]):
+            counters["prop_skipped"] += 1
+            continue
+        try:
+            with env.cr.savepoint():
+                cutoff = sched._efn_cutoff_at(day)
+                rec = Proposal.create(
+                    {
+                        "company_id": company.id,
+                        "warehouse_id": wh.id,
+                        "supply_warehouse_id": dc.id,
+                        "schedule_id": sched.id,
+                        "delivery_date": day,
+                        "cutoff_at": cutoff,
+                        "state": "proposed",
+                        "note": f"{G51_TAG} usulan histori (disetujui seed)",
+                    }
+                )
+                Line.create(
+                    [
+                        {
+                            "proposal_id": rec.id,
+                            "product_id": products[ln["code"]].id,
+                            "forecast_qty": ln["need"],
+                            "qty_need": ln["need"],
+                            "on_hand": 0.0,
+                            "in_transit": 0.0,
+                            "qty_proposed": ln["proposed"],
+                            "qty_approved": ln["approved"],
+                            "reason_codes": "",
+                            "change_reason": ln["reason"],
+                        }
+                        for ln in prop["lines"]
+                    ]
+                )
+                picking = rec._efn_create_supply_document()
+                if not picking:
+                    raise ValueError("tidak ada picking DC dari action_replenish")
+                rec.write(
+                    {
+                        "state": "approved",
+                        "approved_by": heads[wh.id].id,
+                        "approved_at": cutoff - timedelta(hours=2),
+                        "picking_id": picking.id,
+                    }
+                )
+        except Exception as exc:
+            counters["prop_failed"] += 1
+            say(f"PERINGATAN usulan {wh.code} {day} {sched.name}: {type(exc).__name__}: {exc}")
+            continue
+        counters["proposals"] += 1
+        counters["lines"] += len(prop["lines"])
+        items.append((rec, prop))
+    if not items:
+        return
+
+    def ship_when(prop, leg):
+        hour = 18 if leg == "pick" else 20
+        return local_dt(prop["ship_day"], hour)
+
+    def recv_when(prop, step):
+        return local_dt(prop["delivery"], 6 + step, wh_offset(prop["wh"]))
+
+    run_legs(items, ship_when, recv_when, counters)
+
+
+def do_backorders(day, counters):
+    """Usulan backorder (tanggal kirim = kemarin): selesaikan sisa rantai hari ini (terlambat untuk ETL on_time)."""
+    Proposal = env["efn.replenishment.proposal"].sudo()
+    Picking = env["stock.picking"].sudo()
+    recs = Proposal.search(
+        [
+            ("company_id", "=", company.id),
+            ("delivery_date", "=", day - timedelta(days=1)),
+            ("state", "=", "approved"),
+            ("note", "=like", f"{G51_TAG}%"),
+        ]
+    )
+    stamp = {}
+    for rec in recs:
+        legs = chain_legs(rec)
+        chain = legs["pick"] | legs["ship"] | legs["recv"]
+        opened = (chain | Picking.search([("backorder_id", "in", chain.ids)])).filtered(
+            lambda p: p.state not in ("done", "cancel")
+        )
+        if not opened:
+            continue
+        counters["backorders"] += 1
+        offset = wh_offset(rec.warehouse_id)
+        groups = (
+            (
+                "pick",
+                opened.filtered(lambda p: p.location_dest_id.usage != "transit" and p.location_id.usage != "transit"),
+                local_dt(day, 8),
+            ),
+            ("ship", opened.filtered(lambda p: p.location_dest_id.usage == "transit"), local_dt(day, 9)),
+            ("recv", opened.filtered(lambda p: p.location_id.usage == "transit"), local_dt(day, 14, offset)),
+        )
+        for _leg, pickings, when in groups:
+            if not pickings:
+                continue
+            pickings.action_assign()
+            done = validate(pickings, day)
+            cancel_leftover(pickings, pickings)
+            for p in done:
+                stamp[p.id] = when
+        recv = Picking.search([("backorder_id", "in", legs["recv"].ids)]) | legs["recv"]
+        stores = recv.filtered(lambda p: p.state == "done").move_ids.move_dest_ids.picking_id.filtered(
+            lambda p: p.state not in ("done", "cancel")
+        )
+        if stores:
+            stores.action_assign()
+            for p in validate(stores, day):
+                stamp[p.id] = local_dt(day, 15, offset)
+    backdate_pickings(stamp)
+
+
+# ---------------------------------------------------------------- A7: keluar stok penjualan POS per outlet per hari
+def do_sales_out(day, sales, codes, products, allowed, counters):
+    Picking = env["stock.picking"].sudo().with_company(company).with_context(tracking_disable=True)
+    customers = env.ref("stock.stock_location_customers")
+    created = Picking.browse()
+    for wh in outlets:
+        origin = f"DEMO-SMD-SALE-{wh.code}-{day:%Y%m%d}"
+        if Picking.search_count([("origin", "=", origin), ("company_id", "=", company.id)]):
+            continue
+        items = [(c, sales[(wh.id, day, c)]) for c in codes if allowed[(wh.id, c)] == "ok" and (wh.id, day, c) in sales]
+        if not items:
+            continue
+        created |= Picking.create(
+            {
+                "picking_type_id": wh.pos_type_id.id,
+                "location_id": wh.lot_stock_id.id,
+                "location_dest_id": customers.id,
+                "origin": origin,
+                "company_id": company.id,
+                "move_ids": [
+                    Command.create(
+                        {
+                            "product_id": products[c].id,
+                            "product_uom_qty": q,
+                            "product_uom": products[c].uom_id.id,
+                            "location_id": wh.lot_stock_id.id,
+                            "location_dest_id": customers.id,
+                            "company_id": company.id,
+                        }
+                    )
+                    for c, q in items
+                ],
+            }
+        )
+        counters["sale_demand"] += sum(q for _c, q in items)
+    if not created:
+        return
+    created.action_confirm()
+    created.action_assign()  # FEFO (removal strategy kategori), dibatasi stok tersedia
+    done = validate(created, day)
+    cancel_leftover(created, created)  # tanpa stok sama sekali -> batal (tidak menggantung)
+    counters["sale_pickings"] += len(done)
+    counters["sale_moves"] += len(done.move_ids.filtered(lambda m: m.state == "done"))
+    counters["sale_qty"] += sum(done.move_ids.filtered(lambda m: m.state == "done").mapped("quantity"))
+    backdate_pickings({p.id: local_dt(day, 21, wh_offset(p.picking_type_id.warehouse_id)) for p in done})
+
+
+# ---------------------------------------------------------------- A3: scrap outlet
+def scrap_tags():
+    Tag = env["stock.scrap.reason.tag"].sudo()
+    tags = {}
+    for key, name in SCRAP_TAGS:
+        tag = Tag.search([("name", "=ilike", name)], limit=1) or Tag.create({"name": name})
+        tags[key] = tag
+    return tags
+
+
+def do_scraps(day, products, tags, counters):
+    Scrap = env["stock.scrap"].sudo().with_company(company)
+    Quant = env["stock.quant"].sudo()
+    if "origin" not in Scrap._fields:
+        abort("stock.scrap tanpa field origin (penanda idempoten A3)")
+    pids = [p.id for p in products.values()]
+    made = Scrap.browse()
+    when = {}
+    for wh in outlets:
+        rng = random.Random(f"{SEED}:g51:scrap:{wh.code}:{day}")
+        prefix = f"DEMO-SMD-SCRAP-{wh.code}-{day:%Y%m%d}-"
+        have = set(Scrap.search([("origin", "=like", f"{prefix}%"), ("company_id", "=", company.id)]).mapped("origin"))
+        quants = Quant.search(
+            [
+                ("location_id", "child_of", wh.lot_stock_id.id),
+                ("location_id.usage", "=", "internal"),
+                ("product_id", "in", pids),
+                ("lot_id", "!=", False),
+                ("quantity", ">", 0),
+            ]
+        )
+        avail = {q.id: q.quantity - q.reserved_quantity for q in quants}
+        ordered = sorted(quants, key=lambda q: (q.lot_id.expiration_date or datetime.max, q.id))
+        for n in range(1, rng.randint(1, 3) + 1):
+            origin = f"{prefix}{n}"
+            pick = rng.random()
+            hour = rng.randint(8, 20)
+            if origin in have:
+                continue
+            pool = [q for q in ordered if avail[q.id] > 0]
+            if not pool:
+                break
+            if pick < 0.5:
+                quant = pool[0]
+                exp = quant.lot_id.expiration_date
+                reason = (
+                    "expired" if exp and (exp + timedelta(hours=7)).date() <= day + timedelta(days=1) else "quality"
+                )
+            else:
+                quant = pool[rng.randrange(len(pool))]
+                reason = "damaged" if pick < 0.8 else "quality"
+            info = meta.get(quant.product_id.default_code)
+            want = round(rng.uniform(0.3, 1.5), 1) if info and info["is_kg"] else float(rng.randint(1, 3))
+            qty = min(want, avail[quant.id])
+            if qty <= 0:
+                continue
+            scrap = Scrap.create(
+                {
+                    "product_id": quant.product_id.id,
+                    "product_uom_id": quant.product_id.uom_id.id,
+                    "scrap_qty": qty,
+                    "location_id": quant.location_id.id,
+                    "lot_id": quant.lot_id.id,
+                    "company_id": company.id,
+                    "origin": origin,
+                    "scrap_reason_tag_ids": [Command.set(tags[reason].ids)],
+                }
+            )
+            scrap.with_context(force_period_date=day, efn_scrap_reason_optional=True).action_validate()
+            if scrap.state != "done":
+                say(f"PERINGATAN scrap {origin} tidak selesai (stok tidak cukup?)")
+                continue
+            avail[quant.id] -= qty
+            made |= scrap
+            when[scrap.id] = local_dt(day, hour, wh_offset(wh))
+            counters[f"scrap_{reason}"] += 1
+    if not made:
+        return
+    env.flush_all()
+    for sid, dt in when.items():
+        env.cr.execute("UPDATE stock_scrap SET date_done = %s WHERE id = %s", (dt, sid))
+        env.cr.execute("UPDATE stock_move SET date = %s WHERE scrap_id = %s AND state = 'done'", (dt, sid))
+        env.cr.execute(
+            "UPDATE stock_move_line SET date = %s WHERE move_id IN (SELECT id FROM stock_move WHERE scrap_id = %s)",
+            (dt, sid),
+        )
+    env.invalidate_all()
+
+
+# ---------------------------------------------------------------- tahap 13: loop harian
+def stage_g51_loop(products, suppliers, allowed):
+    parts = [p for p in ("flow", "a7", "a3") if p in PARTS]
+    codes = e2e_codes(allowed)
+    sales = load_sales(products, codes)
+    say(
+        f"G51 jendela {e2e_start}..{e2e_end} (loop dari {loop_start}); SKU E2E {len(codes)}; "
+        f"baris penjualan (outlet x hari x SKU) {len(sales)}"
+    )
+    if not sales and ("flow" in parts or "a7" in parts):
+        say(
+            "PERINGATAN G51: tidak ada penjualan histori di jendela -> jalankan tahap 11 dulu / cek SMD_SEED_HISTORY_END"
+        )
+    props = plan_flow(products, allowed, codes, sales) if "flow" in parts else []
+    purchases = plan_purchases(props) if props else []
+    props_by_day, po_by_day = {}, {}
+    for prop in props:
+        props_by_day.setdefault(prop["ship_day"], []).append(prop)
+    for po in purchases:
+        po_by_day.setdefault(po["actual"], []).append(po)
+    say(f"G51 rencana: usulan {len(props)}, baris {sum(len(p['lines']) for p in props)}, PO {len(purchases)}")
+    dc_ops = dc_orderpoints(products, codes) if "flow" in parts else {}
+    tags = scrap_tags() if "a3" in parts else {}
+    marks = {p: done_days(p) for p in parts}
+    counters = dict.fromkeys(
+        (
+            "po",
+            "po_late",
+            "proposals",
+            "lines",
+            "prop_skipped",
+            "prop_failed",
+            "short_lines",
+            "backorders",
+            "sale_pickings",
+            "sale_moves",
+            "sale_qty",
+            "sale_demand",
+            "scrap_expired",
+            "scrap_damaged",
+            "scrap_quality",
+        ),
+        0,
+    )
+    ICP = env["ir.config_parameter"].sudo()
+    expiry_flag = ICP.get_param("efn_expiry_monitor.enabled")
+    switched = (expiry_flag or "").strip().lower() in ("true", "1") and "flow" in parts
+    if switched:
+        # Cek sisa umur penerimaan outlet membandingkan ED lot dengan HARI INI (bukan tanggal histori) -> dimatikan
+        # sementara selama loop, dipulihkan di finally.
+        ICP.set_param("efn_expiry_monitor.enabled", "false")
+        env.cr.commit()
+        say("efn_expiry_monitor.enabled dimatikan sementara selama loop G51 (dipulihkan di akhir)")
+    started = monotonic()
+    try:
+        for day in days_between(loop_start, e2e_end + timedelta(days=1)):
+            worked = []
+            if "flow" in parts and day not in marks["flow"]:
+                do_purchases(po_by_day.get(day, []), products, suppliers, dc_ops, counters)
+                do_backorders(day, counters)
+                do_proposals(props_by_day.get(day, []), products, counters)
+                mark_done("flow", marks["flow"], day)
+                worked.append("flow")
+            if day >= e2e_start and "a7" in parts and day not in marks["a7"]:
+                do_sales_out(day, sales, codes, products, allowed, counters)
+                mark_done("a7", marks["a7"], day)
+                worked.append("a7")
+            if day >= e2e_start and "a3" in parts and day not in marks["a3"]:
+                do_scraps(day, products, tags, counters)
+                mark_done("a3", marks["a3"], day)
+                worked.append("a3")
+            env.cr.commit()
+            env.invalidate_all()
+            if worked:
+                say(
+                    f"G51 {day} [{','.join(worked)}] ({monotonic() - started:.0f} s): PO {counters['po']}, "
+                    f"usulan {counters['proposals']}, jual-keluar {counters['sale_pickings']}, "
+                    f"scrap {counters['scrap_expired'] + counters['scrap_damaged'] + counters['scrap_quality']}"
+                )
+    finally:
+        if switched:
+            env.cr.rollback()
+            ICP.set_param("efn_expiry_monitor.enabled", expiry_flag)
+            env.cr.commit()
+            say("efn_expiry_monitor.enabled dipulihkan")
+    fill = 100.0 * counters["sale_qty"] / counters["sale_demand"] if counters["sale_demand"] else 0.0
+    summary["g51_flow"] = (
+        f"PO baru {counters['po']} (terlambat {counters['po_late']}), usulan baru {counters['proposals']} "
+        f"(baris {counters['lines']}, gagal {counters['prop_failed']}, sudah ada {counters['prop_skipped']}), "
+        f"move kurang kirim {counters['short_lines']}, usulan backorder diproses {counters['backorders']}"
+    )
+    summary["g51_a7_keluar_jual"] = (
+        f"picking {counters['sale_pickings']}, move {counters['sale_moves']}, qty keluar/permintaan "
+        f"{counters['sale_qty']:.1f}/{counters['sale_demand']:.1f} ({fill:.1f}%; sisanya dibatasi stok)"
+    )
+    summary["g51_a3_scrap"] = (
+        f"kedaluwarsa {counters['scrap_expired']}, rusak {counters['scrap_damaged']}, kualitas {counters['scrap_quality']}"
+    )
+
+
+# ---------------------------------------------------------------- tahap 14: A4 pos.payment order histori
+def stage_payments():
+    Method = env["pos.payment.method"].sudo().with_company(company)
+    Journal = env["account.journal"].sudo().with_company(company)
+    configs = history_configs()
+    methods = []
+    for code, label, share in NONCASH_METHODS:
+        method = Method.search([("name", "=", label), ("company_id", "=", company.id)], limit=1)
+        if not method:
+            journal = Journal.search([("code", "=", code), ("company_id", "=", company.id)], limit=1)
+            if not journal:
+                journal = Journal.create(
+                    {"name": f"Bank {label}", "code": code, "type": "bank", "company_id": company.id}
+                )
+            method = Method.create({"name": label, "journal_id": journal.id, "company_id": company.id})
+        methods.append((method, share))
+    cash = {}
+    for wh in outlets:
+        config = configs.get(wh.id)
+        if not config:
+            continue
+        cash[config.id] = Method.search(
+            [("name", "=", f"Tunai {wh.code} (DEMO)"), ("company_id", "=", company.id)], limit=1
+        )
+        missing = [m for m, _s in methods if m not in config.payment_method_ids]
+        if missing:
+            try:
+                with env.cr.savepoint():
+                    config.with_context(bypass_payment_method_ids_forbidden_change=True).write(
+                        {"payment_method_ids": [Command.link(m.id) for m in missing]}
+                    )
+            except Exception as exc:
+                say(f"PERINGATAN metode non-tunai ke {config.name} gagal ({type(exc).__name__}: {exc})")
+    Order = env["pos.order"].sudo()
+    Payment = env["pos.payment"].sudo()
+    orders = Order.search_read(
+        [
+            ("company_id", "=", company.id),
+            ("pos_reference", "=like", f"{ORDER_REF_PREFIX}SMD%"),
+            ("state", "in", ("paid", "done")),
+        ],
+        ["pos_reference", "amount_total", "date_order", "config_id"],
+    )
+    paid = set()
+    for batch in chunks([o["id"] for o in orders], 5000):
+        paid.update(
+            r["pos_order_id"][0] for r in Payment.search_read([("pos_order_id", "in", batch)], ["pos_order_id"])
+        )
+    vals_list, per_method = [], {}
+    for o in orders:
+        if o["id"] in paid or not o["amount_total"] or not o["config_id"]:
+            continue
+        config_id = o["config_id"][0]
+        rng = random.Random(f"{SEED}:g51:pay:{o['pos_reference']}")
+        r, acc, method = rng.random(), 0.0, cash.get(config_id)
+        for m, share in methods:
+            acc += share
+            if r < acc:
+                method = m
+                break
+        if not method:
+            continue
+        vals_list.append(
+            {
+                "pos_order_id": o["id"],
+                "amount": o["amount_total"],
+                "payment_method_id": method.id,
+                "payment_date": o["date_order"],
+            }
+        )
+        per_method[method.name] = per_method.get(method.name, 0) + 1
+    created = 0
+    for batch in chunks(vals_list, 1000):
+        Payment.create(batch)
+        created += len(batch)
+        env.cr.commit()
+    summary["g51_a4_pos_payment"] = f"baru {created} (sudah ada {len(paid)}); per metode {per_method}"
+    say(f"pos.payment: baru {created}, order sudah berbayar {len(paid)}")
+
+
 # ---------------------------------------------------------------- eksekusi
 _started = monotonic()
 suppliers = run_stage("1 supplier", stage_suppliers)
 products = run_stage("2 produk", stage_products)
-run_stage("3 supplierinfo", stage_supplierinfo, products, suppliers)
-allowed = run_stage("4 assortment + jadwal supplier", stage_assortment, products, suppliers)
-run_stage("5 kalender + season", stage_calendar)
-outlet_lots = run_stage("6 stok awal", stage_stock, products, allowed)
-run_stage("7 markdown", stage_markdowns, outlet_lots)
-run_stage("8 member", stage_members)
-if DO_POS:
-    run_stage("9 pos.config", stage_pos)
-run_stage("10 verifikasi persona", stage_personas)
-if DO_HISTORY:
-    run_stage("11 histori penjualan (pos.order)", stage_history, products, allowed)
+if RUN_G48:
+    run_stage("3 supplierinfo", stage_supplierinfo, products, suppliers)
+    allowed = run_stage("4 assortment + jadwal supplier", stage_assortment, products, suppliers)
+    run_stage("5 kalender + season", stage_calendar)
+    outlet_lots = run_stage("6 stok awal", stage_stock, products, allowed)
+    run_stage("7 markdown", stage_markdowns, outlet_lots)
+    run_stage("8 member", stage_members)
+    if DO_POS:
+        run_stage("9 pos.config", stage_pos)
+    run_stage("10 verifikasi persona", stage_personas)
+    if DO_HISTORY:
+        run_stage("11 histori penjualan (pos.order)", stage_history, products, allowed)
+    else:
+        summary["histori"] = "dilewati (SMD_SEED_HISTORY=0)"
 else:
-    summary["histori"] = "dilewati (SMD_SEED_HISTORY=0)"
-run_stage("12 pindai near-expiry", stage_expiry_scan)
+    allowed = run_stage("4' matriks assortment (baca saja)", compute_allowance, products)
+if PARTS & {"flow", "a7", "a3"}:
+    run_stage("13 G51 loop harian (A2+A1 / A7 / A3)", stage_g51_loop, products, suppliers, allowed)
+if "a4" in PARTS:
+    run_stage("14 G51 pos.payment (A4)", stage_payments)
+if RUN_G48:
+    run_stage("12 pindai near-expiry", stage_expiry_scan)
 say(f"== RINGKASAN ({monotonic() - _started:.1f} s)")
 for _key, _value in summary.items():
     say(f"  {_key}: {_value}")

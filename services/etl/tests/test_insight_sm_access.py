@@ -32,7 +32,8 @@ CONTRACT: dict[str, tuple[str, str, str]] = {
     "v_sm_product_list": (
         "C",
         ALL,
-        "company_id product_id product_tmpl_id default_code product_name categ_id category categ_parent_path active",
+        "company_id product_id product_tmpl_id default_code product_name categ_id category categ_parent_path active "
+        "shelf_life_days",  # G51 §B2: kolom baru di AKHIR
     ),
     "v_sm_sales_daily": (
         "W",
@@ -196,7 +197,30 @@ CONTRACT: dict[str, tuple[str, str, str]] = {
     ),
     "v_sm_freshness": ("F", ALL, "mart freshness_class data_as_of source_as_of last_run_at last_status"),
     "v_sm_kpi_config": ("C", ALL, "company_id key value_num value_str is_default effective_since"),
+    # G51 (docs/design/G51_SMD_E2E_LEAD_SPEC.md §B2): nama, urutan kolom, kelas, persona persis kontrak lead.
+    "v_sm_payment_daily": (
+        "W",
+        "exec,store",
+        "day company_id warehouse_id outlet_type method_name method_type is_refund amount payments",
+    ),
+    "v_sm_product_sales_daily": (
+        "W",
+        "category,exec,store",
+        "day company_id warehouse_id outlet_type product_id categ_id qty_sold net_sales net_sales_incl_tax",
+    ),
+    "v_sm_forecast_daily": (
+        "W",
+        "category,dc,exec,store",
+        "company_id warehouse_id outlet_type product_id categ_id forecast_date yhat p10 p90 run_id generated_at",
+    ),
+    "v_sm_lot_stock": (
+        "W",
+        "category,exec,store",
+        "company_id warehouse_id outlet_type product_id categ_id lot_id lot_name expiration_date days_left quantity "
+        "value_cost",
+    ),
 }
+G51_VIEWS = ("v_sm_payment_daily", "v_sm_product_sales_daily", "v_sm_forecast_daily", "v_sm_lot_stock")
 
 INSIGHT_VIEW_RE = re.compile(
     r"CREATE OR REPLACE VIEW efn_insight\.(\w+) DEFINER = efn_insight_definer SQL SECURITY DEFINER AS\n"
@@ -268,7 +292,7 @@ def manifest() -> dict[str, tuple[str, str]]:
 def test_insight_sm_views_match_contract_exactly() -> None:
     views = insight_views()
     assert set(views) == set(CONTRACT)
-    assert ACCESS.count("CREATE OR REPLACE VIEW efn_insight.") == len(CONTRACT) == 29
+    assert ACCESS.count("CREATE OR REPLACE VIEW efn_insight.") == len(CONTRACT) == 33
     for name, (cols, source) in views.items():
         assert source == f"efn_dwh.{name}", name
         assert cols == CONTRACT[name][2].split(), (name, set(cols) ^ set(CONTRACT[name][2].split()))
@@ -404,7 +428,7 @@ def test_policy_predicate_clauses_exact() -> None:
     assert "F) printf '%s' \"$_shared\" ;;" in POLICY_SH
     assert "CREATE ROW POLICY OR REPLACE efn_insight_scope ON efn_insight.%s USING %s TO insight_reader;" in POLICY_SH
     assert "$CH --log_queries=0 --multiquery" in POLICY_SH  # SEC-191
-    assert '[ "$SM_POLICY_N" = "29" ]' in POLICY_SH
+    assert '[ "$SM_POLICY_N" = "33" ]' in POLICY_SH
     assert "SM_POLICY_DEFINE_ONLY" in POLICY_SH  # harness memuat fungsi saja
 
 
@@ -521,6 +545,58 @@ def test_neg8_company_zero_never_visible() -> None:
     zero = scope("0,11", "SMD", "0,22", "exec")
     assert not policy_allows("v_sm_sales_daily", zero, {"company_id": 0, "warehouse_id": 0})
     assert not policy_allows("v_sm_kpi_config", zero, {"company_id": 0, "warehouse_id": 0})
+
+
+def test_g51_views_policy_positive_and_negative() -> None:
+    row = {"company_id": 11, "warehouse_id": 22}
+    for view in G51_VIEWS:
+        assert policy_allows(view, STORE, row), view  # store melihat tokonya
+        assert not policy_allows(view, STORE, {"company_id": 11, "warehouse_id": 21}), view
+        assert not policy_allows(view, STORE, {"company_id": 0, "warehouse_id": 22}), view
+    marketing = scope("11", "SMD", "0,20,21,22", "marketing")
+    for view in G51_VIEWS:
+        assert not policy_allows(view, marketing, row), view  # marketing tidak membaca omzet/pembayaran/forecast
+    category = scope("11", "SMD", "0,20,21,22", "category")
+    assert not policy_allows("v_sm_payment_daily", category, row)  # pembayaran: hanya exec & store (§B2)
+    assert policy_allows("v_sm_product_sales_daily", category, row)
+    dc = scope("11", "SMD", "0,20,21,22", "dc")
+    assert policy_allows("v_sm_forecast_daily", dc, row) and not policy_allows("v_sm_product_sales_daily", dc, row)
+    assert not policy_allows("v_sm_lot_stock", dc, row) and policy_allows("v_sm_lot_stock", category, row)
+
+
+def test_g51_dwh_views_sources_and_guards() -> None:
+    pay = dwh_view_body("v_sm_payment_daily")
+    assert "efn_dwh.fact_pos_payment FINAL" in pay and "efn_dwh.dim_sm_warehouse" in pay
+    assert "card" not in pay and "partner" not in pay  # tanpa data kartu/pelanggan
+    sales = dwh_view_body("v_sm_product_sales_daily")
+    assert "efn_dwh.v_sm_sales_product_daily" in sales and "net_sales_incl_tax" in sales
+    fc = dwh_view_body("v_sm_forecast_daily")
+    # run terbaru menurut generated_at (bukan run_id) dan hanya run ok harian
+    assert "argMax(run_id, generated_at)" in fc and "state = 'ok' AND kind = 'daily'" in fc
+    lots = dwh_view_body("v_sm_lot_stock")
+    # snapshot selesai terakhir, semua lot berstok ber-kedaluwarsa (bukan hanya yang ber-alert)
+    assert "max(snapshot_ts) FROM efn_dwh.stock_snapshot_run" in lots and "s.quantity > 0" in lots
+    assert "isNotNull(s.expiration_date)" in lots and "fact_lot_expiry" not in lots
+    for body in (pay, sales, fc, lots):
+        assert "efn_esb" not in body and "legacy" not in body  # L-196
+
+
+@pytest.mark.parametrize("name", G51_VIEWS)
+def test_g51_aggregate_aliases_never_shadow_columns(name: str) -> None:
+    """ClickHouse 24.8: `sum(x) AS x` dipakai agregat lain -> ILLEGAL_AGGREGATION (prod-lokal 21 Nov). Alias agregat
+    G51 tidak boleh sama dengan nama kolom yang dirujuk di dalam agregat mana pun di view yang sama."""
+    body = dwh_view_body(name)
+    agg_re = r"(?:sum|countIf|count|max|argMax|min)\([^()]*(?:\([^()]*\))*[^()]*\)\)? AS (\w+)"
+    agg_aliases = set(re.findall(agg_re, body))
+    inside = set(re.findall(r"(?:sum|countIf|max|argMax|min)\(([^()]*)\)", body))
+    referenced = {tok.split(".")[-1] for expr in inside for tok in re.findall(r"[a-z_][\w.]*", expr)}
+    assert not agg_aliases & referenced, (name, agg_aliases & referenced)
+
+
+def test_product_list_carries_shelf_life_last() -> None:
+    assert output_columns("v_sm_product_list")[-1] == "shelf_life_days"
+    assert "ALTER TABLE efn_dwh.dim_product ADD COLUMN IF NOT EXISTS shelf_life_days UInt16 DEFAULT 0;" in INIT
+    assert "ALTER TABLE efn_dwh.agg_sm_stock_daily ADD COLUMN IF NOT EXISTS is_reconstructed UInt8 DEFAULT 0;" in INIT
 
 
 def test_scope_vectors_are_computable() -> None:

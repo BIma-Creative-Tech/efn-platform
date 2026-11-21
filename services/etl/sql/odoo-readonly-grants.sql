@@ -604,3 +604,14 @@ GRANT SELECT (id, company_id, state) ON public.sale_order TO efn_etl;
 \else
 \echo 'sale_loyalty belum terpasang: grant G47 redemption online dilewati'
 \endif
+
+-- ============================================================================================================
+-- Gelombang 51 (efn-data-ai-engineer, docs/design/G51_SMD_E2E_LEAD_SPEC.md §B2/§B4/§B6). Hanya kolom yang dibaca.
+-- (a) Umur simpan (dim_product.shelf_life_days, job `products`): product_template.expiration_time = modul product_expiry,
+--     modul yang sama dengan use_expiration_date di blok Gelombang 13 (b) -> tanpa syarat, seperti kolom itu.
+GRANT SELECT (expiration_time) ON public.product_template TO efn_etl;
+-- (b) Rekonstruksi stok harian SMD (sm_cycle `sm_stock_reconstruct`, ETL_SM_STOCK_RECONSTRUCT_DAYS > 0): TIDAK ada kolom
+--     baru. Membaca stock_move (product_id, product_uom, quantity, state, date, location_id, location_dest_id; blok G47
+--     (a)), stock_quant (location_id, product_id, quantity; blok G13 (c)), stock_location (id, usage, warehouse_id),
+--     stock_warehouse (id, company_id, active), res_company (efn_brand_code), product_product (standard_price),
+--     product_template (uom_id), uom_uom (factor) -- semuanya sudah di-grant di atas. owner_id (konsinyasi) tidak dibaca.

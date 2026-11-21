@@ -1338,3 +1338,54 @@ barang dua langkah sejak awal. Tidak ada biaya atau waktu tambahan, karena semua
 - **Belum terverifikasi:** semua perilaku runtime (tidak ada test yang saya jalankan); `stock.move.value` pada scrap SMD;
   cara baca `standard_price` jsonb; jenis picking di `proposal.picking_id`; aturan satu-sumber redemption online ↔ POS;
   vektor `eit2`/sig2.
+
+---
+
+# G51 — SMD end-to-end: kontrak §28.14 v21.0 + addendum ADR-041 §3.5 (2026-11-21)
+
+## Ringkasan (untuk manajemen)
+Spesifikasi lead G51 (SMD sebagai filter di halaman F&B Insight + data demo lengkap) dituangkan ke kontrak `docs/04`
+§28.14. Direksi bisa memilih SMD di halaman F&B tanpa login/kunci baru. Data demo dilengkapi hanya di DB demo, default
+production tidak berubah. Estimasi ±15–20 hari-engineer. Klien perlu memutuskan apakah total gabungan F&B + SMD
+ditampilkan, karena basis pajaknya berbeda (Q-SM46).
+
+## File diubah (worktree `efn-platform-g47`, tanpa kode, tanpa menyentuh spesifikasi lead)
+- `docs/04_SERVICE_CONTRACTS.md`: judul v21.0; §28.14 baru (28.14.1–28.14.16): filter SMD + ralat §26.9/§28.13.6, basis uang,
+  3 view + `shelf_life_days` + policy 32 + grant, Forecast, umur simpan, Distribusi, rekonstruksi stok, forecast as-of,
+  seed A1–A6, deploy `-V`, outlet online opsional, flag, selisih spesifikasi, L-219..L-233, Q-SM46..Q-SM47, risiko, estimasi.
+- `docs/decisions/ADR-041-insight-web-sso-odoo.md`: header tanggal, §3.5 addendum (opsi U1/U2/U3, rekomendasi U1), §7
+  pemicu tinjau ulang.
+
+## Selisih spesifikasi lead ↔ kontrak/kode (perlu keputusan lead; rinci di §28.14.12)
+1. §28.13.6 menyembunyikan menu F&B bila sesi tanpa kode ESB. B1 butuh menu itu untuk `exec` SMD saja, jadi diralat.
+2. Order POS histori seed G48 dibuat **tanpa stock move**. Rekonstruksi B6 di demo tidak turun karena penjualan, sehingga
+   GMROI demo bias. Opsi: terima dengan label, atau tambah tahap seed picking POS harian (±1,5–2 hari).
+3. `agg_sm_stock_daily` = RMT(`computed_at`): baris rekonstruksi bisa menimpa snapshot nyata. Wajib cek per siklus.
+   Saya mengusulkan kolom `is_reconstructed` (di luar spesifikasi, menunggu lead).
+4. As-of tidak bisa lewat RPC: ingest Odoo menolak tanggal < hari ini, dan close `ok` mengaktifkan run serta memicu usulan
+   replenishment. Jalur yang saya tetapkan: worker `--as-of --out` lalu muat lewat ORM seed (`is_active=False`, tanpa hook).
+   Selain itu `ETL_FORECAST_ACCURACY_WEEKS` default 2, jadi demo perlu 8.
+5. Basis omzet campuran (ESB tanpa PB1/SC vs SMD termasuk PPN) pada total & porsi PT; HPP % SMD wajib basis tanpa pajak.
+6. `v_sm_lot_expiry` hanya memuat lot yang punya alert, jadi "lot terdekat kedaluwarsa" tidak lengkap (Q-SM47).
+7. `v_sm_replenishment_line` dipakai B5 padahal L-218 menundanya. Ini pengecualian, bukan konflik.
+8. Tipe kolom view (UInt32/DateTime/Float64) ≠ tabel sumber (UInt64/DateTime64/Decimal), jadi perlu cast.
+9. Nama `v_sm_product_sales_daily` (baru) mirip `efn_dwh.v_sm_sales_product_daily` (internal G47).
+10. A5 sebagian besar sudah ada: tahap 2 seed G48 sudah mengisi `expiration_time` per kelompok.
+
+## Keputusan yang butuh tanda tangan klien
+- **Q-SM46** total gabungan F&B + SMD (default: tampil berlabel "basis campuran").
+- **Q-SM47** tabel umur simpan: lot ber-alert saja (default) atau semua lot.
+- Tetap terbuka: Q-SM29, Q-SM40 (bisnis), Q-SM41..43, Q-SM45. ADR-041 tetap Proposed.
+
+## Terverifikasi / belum terverifikasi
+- **Dibaca dari repo:** spesifikasi lead; `docs/04` §26.7–§26.12, §28.2, §28.13; `insight-sm-policy.sh` (29 view);
+  `insight-sm-access.sql` (grant definer); DDL `04-fase1-marts.sql` (`fact_pos_payment`), `15-g44-forecast.sql`,
+  `17-g47-insight-sm.sql` (`agg_sm_stock_daily`, `v_sm_product_list`, `v_sm_sales_product_daily`); `efn_demand_forecast`
+  (validasi ingest, `is_active`, autovacuum 35 hari, action); ETL `forecast.py` (aturan `generated_at < forecast_date`),
+  `config.py` (`ETL_FORECAST_ACCURACY_WEEKS`), `sm.py`/`sm_cycle.py` (outlet online opsional); `deploy.sh` +
+  runbook multi-env (`-V`); seed G48 + runbook.
+- **Diverifikasi di sumber primer (github.com/odoo/odoo 19.0, 21 Nov 2026):** `product.template.expiration_time`
+  Integer tersimpan (`product_expiry/models/product_product.py`).
+- **Belum terverifikasi:** semua runtime; worker `--as-of` (belum ada); backdate `stock.move.date` setelah `done` tanpa
+  efek valuasi; `stock.move.value` scrap demo; `standard_price` jsonb; konsinyasi (`owner_id`) di demo; estimasi ±15–20
+  hari = perkiraan architect, bukan dari builder.

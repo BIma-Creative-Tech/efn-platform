@@ -3,7 +3,6 @@
  * Filter global (spec §3.2). State = URL search params; server memvalidasi ulang (klien hanya untuk UX).
  * Perubahan diterapkan lewat tombol "Terapkan" (bukan tiap ketikan). Chip aktif dengan tombol hapus + Reset.
  */
-import Link from 'next/link';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { useEffect, useState, useTransition } from 'react';
 import { codeColor, codeName } from '@/lib/brands';
@@ -21,12 +20,17 @@ export interface FilterOptions {
 
 interface Props {
   options: FilterOptions;
+  /** Semua kode yang boleh dipilih: brand ESB sesi, ditambah `SMD` bila `smdAllowed` (G51 B1). */
   sessionCodes: string[];
-  /** PT supermarket sesi (lib/sm-personas.ts smFilterLinks): tautan ke dashboard SM, bukan filter ESB. */
-  smLinks?: { code: string; href: string }[];
+  /** Kode brand ESB sesi (SMD tidak termasuk). */
+  esbCodes: string[];
+  /** SMD adalah toggle sungguhan (sesi exec); false -> perilaku lama. */
+  smdAllowed?: boolean;
   defaults: { from: string; to: string };
   yesterday: string;
 }
+
+const sameSet = (a: readonly string[], b: readonly string[]): boolean => a.length === b.length && a.every((x) => b.includes(x));
 
 type Preset = '7' | '30' | '90' | 'mtd' | 'prev-month' | 'ytd' | 'custom';
 
@@ -54,11 +58,13 @@ function presetRange(p: Preset, yesterday: string): { from: string; to: string }
   }
 }
 
-function FilterForm({ options, sessionCodes, smLinks = [], defaults, yesterday }: Props): React.ReactNode {
+function FilterForm({ options, sessionCodes, smdAllowed = false, defaults, yesterday }: Props): React.ReactNode {
   const router = useRouter();
   const pathname = usePathname();
   const sp = useSearchParams();
   const [pending, start] = useTransition();
+  // Bawaan (pt kosong) = semua PT sesi, termasuk SMD untuk sesi exec (keputusan 21 Nov 2026, sama dengan brand lain).
+  const defaultCodes = sessionCodes;
 
   const urlFrom = sp.get('from') ?? defaults.from;
   const urlTo = sp.get('to') ?? defaults.to;
@@ -86,7 +92,8 @@ function FilterForm({ options, sessionCodes, smLinks = [], defaults, yesterday }
       p.set('from', next.from);
       p.set('to', next.to);
     }
-    if (next.pt.length > 0 && next.pt.length < sessionCodes.length) p.set('pt', [...next.pt].sort().join(','));
+    // Tanpa param = semua PT sesi (bawaan, termasuk SMD bila boleh). Subset apa pun ditulis eksplisit.
+    if (next.pt.length > 0 && !sameSet(next.pt, defaultCodes)) p.set('pt', [...next.pt].sort().join(','));
     if (next.branch.length > 0) p.set('branch', next.branch.join(','));
     for (const c of next.cat) p.append('cat', c);
     if (next.product.length > 0) p.set('product', next.product.join(','));
@@ -97,12 +104,13 @@ function FilterForm({ options, sessionCodes, smLinks = [], defaults, yesterday }
 
   const current = { from, to, pt, branch, cat, product };
   const hasDate = appliesTo(pathname, 'date');
-  const hasPt = appliesTo(pathname, 'pt');
-  const hasBranch = appliesTo(pathname, 'branch');
+  const hasPt = appliesTo(pathname, 'pt', smdAllowed);
+  const hasBranch = appliesTo(pathname, 'branch', smdAllowed);
   const hasCat = appliesTo(pathname, 'cat');
   const hasProduct = appliesTo(pathname, 'product');
 
-  const branchOptions = options.branches.filter((b) => pt.length === 0 || pt.includes(b.code));
+  // Tanpa PT dipilih = semua PT sesi (termasuk outlet SMD untuk sesi exec).
+  const branchOptions = options.branches.filter((b) => (pt.length === 0 ? defaultCodes.includes(b.code) : pt.includes(b.code)));
   const na = 'Tidak berlaku di halaman ini';
 
   // Chip aktif (dari URL, bukan draft).
@@ -189,14 +197,11 @@ function FilterForm({ options, sessionCodes, smLinks = [], defaults, yesterday }
               })}
             </div>
           )}
-          {smLinks.map((l) => (
-            <Link key={l.code} href={l.href} className="chip chip-toggle" title={`${codeName(l.code)}: buka dashboard supermarket`}>
-              <span className={`dot dot-${codeColor(l.code)}`} aria-hidden="true" />
-              {l.code}
-              <span aria-hidden="true"> &rarr;</span>
-              <span className="sr-only"> (buka dashboard supermarket)</span>
-            </Link>
-          ))}
+          {smdAllowed && (pt.length === 0 || pt.includes('SMD')) ? (
+            <p className="muted small" role="note">
+              SMD: omzet termasuk PPN; kartu khusus F&amp;B tidak memuat SMD.
+            </p>
+          ) : null}
         </fieldset>
 
         <MultiSelect label="Cabang" summaryNoun="cabang" options={branchOptions} selected={branch} onChange={setBranch} max={50} disabledReason={hasBranch ? undefined : na} />

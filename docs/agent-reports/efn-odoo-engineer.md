@@ -3122,3 +3122,51 @@ Tanpa shell: tour, ruff, dan format belum dijalankan; lead menjalankan di contai
 - Menambah `efn_expiry_monitor` ke DB tour ikut memasang `product_expiry`, `purchase_stock`, `efn_assortment`,
   `efn_region`, `efn_audit`: belum dicek apakah tour modul lain tetap hijau di DB itu (flag expiry default `false`).
 - Tidak dicakup: pindaian GS1 `(01)(10)`, batas `qty_cap` lewat `setQuantity`, override lokal kasir ber-grup, offline.
+
+# G51 — seed SMD end-to-end A1–A4 + A7 (21 Nov 2026) — BELUM DIJALANKAN
+
+Worktree `efn-platform-g47`, branch `feat/wave-51-smd-e2e`. Kontrak `docs/design/G51_SMD_E2E_LEAD_SPEC.md` bagian A +
+keputusan lead A7. Tanpa shell: skrip, ruff, run belum dijalankan. **Tidak ada modul Odoo yang diubah**, tidak ada
+dependency baru, hanya PT SMD.
+
+## File
+- `scripts/dev/seed_demo_supermarket.py`: header (tahap 13–14), switch `SMD_SEED_PARTS` (`all|g48|g51|flow,a7,a3,a4`),
+  `SMD_SEED_E2E_DAYS` (90), `SMD_SEED_E2E_SKUS` (30); blok G51 baru (rencana A1/A2, `do_purchases`, `do_proposals` +
+  `run_legs`, `do_backorders`, `do_sales_out` A7, `do_scraps` A3, `stage_g51_loop`, `stage_payments` A4); eksekusi
+  tahap 3–12 hanya bila G48 dipilih.
+- `docs/runbooks/demo-supermarket-seed.md` §7 baru (+ catatan di §6).
+
+## Keputusan
+- A1 memakai jalur modul `efn.replenishment.proposal._efn_create_supply_document()` (orderpoint outlet + `action_replenish`
+  CE → rute resupply DC → transit → Input → Stock). Usulan dibuat sudo langsung `approved` (approve UI menolak lewat
+  cut-off); bias log `outlet_approved` tidak dibuat (create_date hari ini akan menyesatkan deret waktu).
+- Qty usulan = penjualan POS histori outlet di rentang cakupan jadwal → A7 tertutup oleh A1 (stok tidak negatif; A7
+  **dibatasi stok tersedia**, sisanya dibatalkan — pilihan lead "cap").
+- Kurang kirim dipaksa di leg pick (reservasi dikurangi); backorder diputuskan per usulan (picking) karena opsi
+  backorder CE per picking; backorder diselesaikan H+1 setelah tanggal kirim agar ETL `on_time=0`.
+- PO direncanakan dari kebutuhan kirim DC (hari kunjungan supplier sebelum hari kirim), terlambat H+1 hanya bila
+  masih ≤ hari kirim pertama (tidak memicu kekurangan DC).
+- Orderpoint DC terkelola dibuat untuk 70% SKU E2E lewat `_efn_managed_orderpoint` (trigger manual) agar
+  `from_orderpoint` bermakna sebelum A6.
+- A5 tidak ditambah: `expiration_time` sudah diisi tahap 2; rentang tidak diubah (menggeser RNG tahap 6 → lot baru di
+  DB lama). Selisih dengan contoh spesifikasi dicatat di runbook.
+- Back-date: ORM untuk qty/quant/nilai, SQL UPDATE kolom tanggal saja; `force_period_date` untuk jurnal real-time.
+- `efn_expiry_monitor.enabled` dimatikan sementara selama loop (cek sisa umur memakai hari ini), dipulihkan di finally.
+- Penanda hari selesai per bagian di `ir.config_parameter` `efn_seed_smd.g51_done.<bagian>`; commit per hari.
+
+## Fakta Odoo 19.0 yang diandalkan (WebFetch source 19.0)
+`_search_picking_for_assignation` (tanpa `reference_ids` → picking baru), orderpoint tanpa `origins` tidak mengisi
+referensi; `button_validate` (`skip_backorder`, `picking_ids_not_to_backorder`), product_expiry `skip_expired`;
+stock_account 19 tanpa SVL, `stock_move.value` saat done, jurnal `force_period_date`; `stock.scrap.do_scrap`
+(`date_done = now`), `stock.scrap.reason.tag` tanpa data CE + nama unik; `pos.payment._check_payment_method_id`;
+`pos.config` `bypass_payment_method_ids_forbidden_change`; `stock.move` tanpa field `name`.
+
+## Belum diverifikasi
+- Seluruh run (runtime target < 15 menit **tidak terukur**; smoke `SMD_SEED_E2E_DAYS=14 SMD_SEED_E2E_SKUS=10` dulu).
+- Pembatalan sisa via `picking_ids_not_to_backorder` pada move ber-lot dan efeknya ke move tujuan berantai (ship/receipt
+  tetap menunggu → saya membatalkan sisa per leg); reservasi receipt outlet dari transit mengikuti lot ship.
+- `stock.move.line` dibuat manual pada receipt PO (`product_uom_id` dijaga `in _fields`); `price_unit`/`date_planned`
+  yang diberikan saat create PO tidak ditimpa compute; `button_confirm` tidak menimpa `date_order` sebelum `write`.
+- `stock.scrap.origin` dan `location_id` tersimpan seperti diberikan; `pos.order.config_id` tersimpan (search_read).
+- ETL: mart DC purchase tidak punya kolom tanggal terima → "10% terlambat" hanya terlihat di Odoo (`effective_date`).
+- Kategori dengan valuasi real-time (bila ada) → jurnal bertanggal histori; tidak dicek di DB demo.

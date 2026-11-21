@@ -9,6 +9,8 @@ I/O diinjeksi lewat protokol (diuji dengan fake di tests/test_sm.py). Setiap job
 - `sm_dc_fill_rate`       : hitung ulang jendela delivery_date >= hari ini - ETL_SM_FILL_RECALC_DAYS; hanya baris
                             berubah yang ditulis.
 - `sm_stock_agg`          : INSERT ... SELECT per hari snapshot baru (butuh ETL_ENABLE_STOCK); watermark = snapshot_ts.
+- `sm_stock_reconstruct`  : G51 B6, stok harian historis dari stock_move (ETL_SM_STOCK_RECONSTRUCT_DAYS > 0;
+                            efn_etl/sm_stock_hist.py), sekali per hari WIB.
 - `sm_expiry_agg`         : INSERT ... SELECT hari ini WIB (ETL_ENABLE_SM_EXPIRY).
 - `sm_campaign`           : kampanye berubah + kampanye dalam jendela atribusi -> fact_campaign_result +
                             fact_sm_segment_run (ETL_ENABLE_SM_CAMPAIGN). Sumber: Odoo + PG platform v_campaign_stats.
@@ -21,7 +23,7 @@ from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from typing import Any, Protocol
 
-from efn_etl import sm
+from efn_etl import sm, sm_stock_hist
 from efn_etl.heartbeat import Heartbeat, JobRun
 from efn_etl.runner import run_job
 from efn_etl.watermark import Cursor, cursor_after, initial_cursor, next_watermark, to_utc
@@ -278,6 +280,8 @@ class SmCycleConfig:
     overlap: timedelta
     batch_size: int
     max_pages: int
+    # G51 B6: ETL_SM_STOCK_RECONSTRUCT_DAYS (0 = mati). Sekali per hari WIB (sm_stock_hist.recon_due).
+    stock_reconstruct_days: int = 0
 
 
 def _guard(job: str, heartbeat: Heartbeat, action: Callable[[], tuple[int, int, datetime | None]]) -> bool:
@@ -342,6 +346,19 @@ def run_sm_cycle(
             return len(days), len(days), store.get(sm.JOB_STOCK_AGG)
 
         status[sm.JOB_STOCK_AGG] = _guard(sm.JOB_STOCK_AGG, heartbeat, stock)
+    if cfg.stock_reconstruct_days > 0:
+
+        def reconstruct() -> tuple[int, int, datetime | None]:
+            # Setelah sm_stock_agg: hari yang baru saja punya snapshot nyata dilewati (dan baris nyata selalu menang).
+            res = sm_stock_hist.run_sm_stock_reconstruct(
+                odoo, ch, sink, store, cfg.codes, current, cfg.stock_reconstruct_days
+            )
+            if res.negative:
+                log.warning("job=%s %d produk-hari stok negatif ditulis 0", recon_job, res.negative)
+            return res.rows, res.days, None
+
+        recon_job = sm_stock_hist.JOB_STOCK_RECONSTRUCT
+        status[recon_job] = _guard(recon_job, heartbeat, reconstruct)
     if cfg.expiry:
 
         def expiry() -> tuple[int, int, datetime | None]:

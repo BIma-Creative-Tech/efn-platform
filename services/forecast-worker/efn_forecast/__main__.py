@@ -5,6 +5,7 @@
     python -m efn_forecast run --company SMD --dry-run   # satu batch tanpa memanggil Odoo (hanya baca ClickHouse)
     python -m efn_forecast run --company SMD --once --kind weekly_minmax
     python -m efn_forecast seed-calendar --company SMD [--dry-run]
+    python -m efn_forecast run --company SMD --as-of 2026-09-28 --out /out/asof.json   # G51 A6, tanpa RPC
 
 Loop: FORECAST_ENABLED=false -> proses tetap hidup (idle, tanpa memanggil ClickHouse/Odoo, tanpa butuh secret) agar
 `restart: unless-stopped` tidak berputar. Batch gagal -> run_close failed, log, tunggu jadwal berikutnya (tidak
@@ -19,9 +20,11 @@ import os
 import signal
 import sys
 import threading
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
+from pathlib import Path
 from typing import Any
 
+from efn_forecast import asof
 from efn_forecast.config import ClickHouseSettings, OdooSettings, Params, company_code, forecast_enabled
 from efn_forecast.models import StatsforecastRunner
 from efn_forecast.odoo import OdooForecastClient, RequestsTransport
@@ -50,6 +53,27 @@ def batch(kind: str, company: str, dry_run: bool, env: dict[str, str]) -> RunRep
     odoo = None if dry_run else _odoo(company, env)
     runner = StatsforecastRunner(season_length=7)  # pola mingguan sisa setelah faktor hari-dalam-pekan
     return run_batch(kind, _source(env), odoo, company, params, runner)
+
+
+def batch_as_of(company: str, as_of: date, out: Path, env: dict[str, str]) -> RunReport:
+    """G51 A6: hitung batch daily as-of (tanpa RPC Odoo) lalu tulis payload ke `out` (efn_forecast/asof.py)."""
+    params = asof.as_of_params(Params.from_env(env))
+    rec = asof.RecordingOdoo()
+    runner = StatsforecastRunner(season_length=7)
+    report = run_batch(
+        "daily",
+        _source(env),
+        rec,
+        company,
+        params,
+        runner,
+        now=asof.as_of_now(as_of),
+        run_id=asof.as_of_run_id(company, as_of),
+    )
+    if report.status == "ok":
+        asof.write_document(out, asof.export_document(company, as_of, rec))
+        log.info("as-of %s: %d baris, %d chunk -> %s", as_of.isoformat(), report.lines, report.chunks, out.name)
+    return report
 
 
 def serve(company: str, env: dict[str, str], stop: threading.Event) -> int:
@@ -103,6 +127,10 @@ def main(argv: list[str] | None = None) -> int:
     run.add_argument("--once", action="store_true")
     run.add_argument("--dry-run", action="store_true")
     run.add_argument("--kind", choices=("daily", "weekly_minmax"), default="daily")
+    # G51 A6: histori akurasi demo. Hanya hitung + tulis file (tanpa RPC); dimuat ke Odoo oleh
+    # scripts/dev/load_forecast_asof.py. Tanpa --as-of perilaku tidak berubah.
+    run.add_argument("--as-of", dest="as_of", help="Senin YYYY-MM-DD: batch daily seolah Minggu sebelumnya 23:00 WIB")
+    run.add_argument("--out", help="file JSON keluaran mode --as-of")
     seed = sub.add_parser("seed-calendar", help="seed libur nasional/cuti bersama ke Odoo")
     seed.add_argument("--company", default=os.getenv("FORECAST_COMPANY", "SMD"))
     seed.add_argument("--dry-run", action="store_true")
@@ -119,6 +147,18 @@ def main(argv: list[str] | None = None) -> int:
         n = seed_calendar(None if args.dry_run else _odoo(company, env), company, (year, year + 1), params)
         log.info("seed kalender: %d entri (%s)", n, "dry-run" if args.dry_run else "terkirim")
         return 0
+
+    if args.as_of is not None or args.out is not None:
+        if not (args.as_of and args.out) or args.once or args.dry_run or args.kind != "daily":
+            log.error("--as-of wajib bersama --out, hanya kind daily, tanpa --once/--dry-run")
+            return 2
+        try:
+            as_of = asof.parse_as_of(args.as_of, datetime.now(UTC).astimezone(asof.WIB).date())
+        except ValueError as exc:
+            log.error("%s", exc)
+            return 2
+        report = batch_as_of(company, as_of, Path(args.out), env)
+        return 0 if report.status == "ok" else 1
 
     if args.dry_run or args.once:
         if not args.dry_run and not forecast_enabled(env):

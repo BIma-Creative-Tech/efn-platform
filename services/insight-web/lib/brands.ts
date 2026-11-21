@@ -25,6 +25,8 @@ const BRAND_INFO: Record<string, { name: string; color: SeriesColor }> = {
   bacha: { name: 'Bacha Coffee', color: 'c3' },
   imd: { name: 'Im Donut', color: 'c5' },
   cup: { name: 'Curry Up', color: 'c6' },
+  // G51: kunci seri SMD pada halaman F&B (bukan brand ESB; tidak ada di BRAND_KEYS).
+  smd: { name: 'Supermarket Demo', color: 'c7' },
 };
 
 export function codeName(code: string): string {

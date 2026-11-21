@@ -1999,6 +1999,10 @@ services:
       # efn_legacy_history + grant G46.
       ETL_ENABLE_FORECAST: ${ETL_ENABLE_FORECAST:-false}
       ETL_ENABLE_FORECAST_LEGACY: ${ETL_ENABLE_FORECAST_LEGACY:-false}
+      # G51 (A6): minggu akurasi forecast yang dihitung ulang (1..12); demo histori as-of 8 minggu = 8.
+      ETL_FORECAST_ACCURACY_WEEKS: ${ETL_FORECAST_ACCURACY_WEEKS:-2}
+      # Interval minimum hitung ulang akurasi (900..604800 s); demo boleh 900 sementara agar run as-of segera terhitung.
+      ETL_FORECAST_ACCURACY_INTERVAL_SECONDS: ${ETL_FORECAST_ACCURACY_INTERVAL_SECONDS:-86400}
       # G47 (docs/04 §28.13): mart Insight supermarket; butuh ETL_ENABLE_ODOO + grant G47 (stok: + ETL_ENABLE_STOCK).
       # EXPIRY/CAMPAIGN butuh ETL_ENABLE_SM; CAMPAIGN ditolak di production selama PROMO_CAMPAIGN_ENABLED != true.
       ETL_ENABLE_SM: ${ETL_ENABLE_SM:-false}
@@ -2008,6 +2012,8 @@ services:
       ETL_SM_FILL_RECALC_DAYS: ${ETL_SM_FILL_RECALC_DAYS:-14}
       ETL_SM_CAMPAIGN_ATTR_DAYS: ${ETL_SM_CAMPAIGN_ATTR_DAYS:-30}
       ETL_SM_STOCK_BACKFILL_DAYS: ${ETL_SM_STOCK_BACKFILL_DAYS:-90}
+      # G51 B6: rekonstruksi stok harian historis dari stock_move (0 = mati; demo 90; 0..400; butuh ETL_ENABLE_SM).
+      ETL_SM_STOCK_RECONSTRUCT_DAYS: ${ETL_SM_STOCK_RECONSTRUCT_DAYS:-0}
       PROMO_CAMPAIGN_ENABLED: ${PROMO_CAMPAIGN_ENABLED:-false}
       # G50 (docs/04 §28.6/§28.7, ADR-047 Proposed): behavior.event_raw (PG platform) -> efn_dwh.fact_visitor_event +
       # agregat anonim. Default MATI di semua env; production ditolak deploy-validate selama BEHAVIOR_TRACKING_ENABLED

@@ -9,7 +9,7 @@ import { odooOpenUrl } from '@/lib/config';
 import { fmtAge } from '@/lib/format';
 import { getConfig } from '@/lib/runtime';
 import { loadShellData } from '@/lib/shell-data';
-import { navGroups, smFilterLinks } from '@/lib/sm-personas';
+import { navGroups, smdAllowed } from '@/lib/sm-personas';
 import { freshnessStatus } from '@/lib/thresholds';
 
 export const dynamic = 'force-dynamic';
@@ -17,17 +17,19 @@ export const dynamic = 'force-dynamic';
 export const metadata: Metadata = { title: { default: 'EFN Insight', template: '%s - EFN Insight' } };
 
 /**
- * Cangkang halaman F&B (ESB). Sesi tanpa kode ESB (mis. kepala toko SMD) tidak memicu query ESB sama sekali: halaman
- * ESB mengalihkan ke beranda persona (lib/page-ctx.ts), layout hanya menampilkan cangkang kosong.
+ * Cangkang halaman F&B (ESB). Sesi tanpa kode ESB dan tanpa hak SMD (mis. kepala toko SMD) tidak memicu query ESB sama sekali:
+ * halaman ESB mengalihkan ke beranda persona (lib/page-ctx.ts), layout hanya menampilkan cangkang kosong.
+ * G51 B1 (docs/04 §28.14.1): sesi exec ber-SMD memakai filter Brand / PT dengan SMD sebagai toggle; tanpa PT F&B, SMD terpilih bawaan.
  */
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
   const session = await requireSession();
   const cfg = getConfig();
   const esbCodes = esbCodesOf(session.codes);
+  const smd = smdAllowed(session, cfg.smEnabled);
   const odoo = odooOpenUrl(cfg);
   const groups = navGroups(session, cfg.smEnabled);
 
-  if (esbCodes.length === 0) {
+  if (esbCodes.length === 0 && !smd) {
     return (
       <Shell session={session} groups={groups} odooUrl={odoo} roleLabel="Supermarket" footNote="Data: EFN Insight supermarket">
         {children}
@@ -35,9 +37,15 @@ export default async function AppLayout({ children }: { children: React.ReactNod
     );
   }
 
-  const shell = await loadShellData(session);
-  const status = freshnessStatus(shell.ageHours);
-  const roleLabel = session.roles.includes('all_brands') ? 'Semua brand' : esbCodes.map(codeName).join(', ');
+  const shell = await loadShellData(session, new Date(), smd);
+  const esbPresent = esbCodes.length > 0;
+  const status = esbPresent ? freshnessStatus(shell.ageHours) : 'good';
+  const roleLabel = !esbPresent
+    ? codeName('SMD')
+    : session.roles.includes('all_brands')
+      ? 'Semua brand'
+      : esbCodes.map(codeName).join(', ');
+  const sessionCodes: string[] = smd ? [...esbCodes, 'SMD'] : [...esbCodes];
 
   return (
     <Shell
@@ -45,14 +53,15 @@ export default async function AppLayout({ children }: { children: React.ReactNod
       groups={groups}
       odooUrl={odoo}
       roleLabel={roleLabel}
-      footNote="Data: ESB Core (arsip G41)"
-      headerSlot={<FreshnessBadge ageHours={shell.ageHours} rows={shell.freshness} />}
+      footNote={esbPresent ? 'Data: ESB Core (arsip G41)' + (smd ? '; supermarket: EFN Insight' : '') : 'Data: EFN Insight supermarket'}
+      headerSlot={esbPresent ? <FreshnessBadge ageHours={shell.ageHours} rows={shell.freshness} /> : undefined}
       belowHeader={
         <>
           <FilterBar
             options={shell.options}
-            sessionCodes={esbCodes}
-            smLinks={smFilterLinks(session, cfg.smEnabled)}
+            sessionCodes={sessionCodes}
+            esbCodes={esbCodes}
+            smdAllowed={smd}
             defaults={shell.defaults}
             yesterday={shell.yesterday}
           />

@@ -90,19 +90,24 @@ export function homePath(s: { codes: readonly string[]; roles: readonly string[]
 }
 
 /**
- * Chip PT supermarket di filter "Brand / PT" halaman F&B (sesi gabungan ESB + SM). Data SMD tidak ada di view ESB, jadi
- * chip ini tautan ke dashboard supermarket (Direksi bila persona itu ada, selain itu persona pertama), bukan filter ESB.
- * Kosong bila INSIGHT_SM_ENABLED mati atau sesi tanpa persona.
+ * G51 B1: SMD menjadi filter sungguhan di "Brand / PT" halaman F&B (tingkat PT) HANYA untuk sesi eis2 berpersona `exec` dengan kode SM
+ * dan INSIGHT_SM_ENABLED. Sesi SM tanpa exec tetap lewat sidebar Supermarket. Satu-satunya penentu; dipakai pageCtx (validasi `pt`
+ * di server), layout (chip + daftar cabang), dan halaman. Menggantikan chip tautan `smFilterLinks` (PR #133).
  */
-export function smFilterLinks(
-  s: { codes: readonly string[]; roles: readonly string[] },
+export function smdAllowed(
+  s: { v: 1 | 2; codes: readonly string[]; roles: readonly string[] },
   smEnabled: boolean,
-): { code: string; href: string }[] {
-  if (!smEnabled || !hasSmAccess(s)) return [];
-  const personas = sessionPersonas(s.roles);
-  const href = PERSONA_ROUTES[personas.includes('exec') ? 'exec' : personas[0]];
-  return smCodesOf(s.codes).map((code) => ({ code, href }));
+): boolean {
+  return s.v === 2 && execSmd(s, smEnabled);
 }
+
+/** Syarat inti (tanpa versi sesi; eis1 tidak pernah membawa kode SM): flag SM, persona exec, kode SM. */
+function execSmd(s: { codes: readonly string[]; roles: readonly string[] }, smEnabled: boolean): boolean {
+  return smEnabled && s.roles.includes('exec') && smCodesOf(s.codes).length > 0;
+}
+
+/** Halaman F&B yang mendukung SMD (docs/04 §28.14.1); sesi exec tanpa PT F&B hanya melihat menu ini. */
+export const SMD_NAV_HREFS: readonly string[] = ['/', '/sales', '/payments', '/distribution', '/forecast'];
 
 export interface NavGroup {
   title?: string;
@@ -114,7 +119,12 @@ export interface NavGroup {
  * INSIGHT_SM_ENABLED). Judul grup hanya muncul bila ada dua grup atau lebih dari satu persona (§2.1).
  */
 export function navGroups(s: { codes: readonly string[]; roles: readonly string[] }, smEnabled: boolean): NavGroup[] {
-  const esb = hasEsbAccess(s) ? NAV_ITEMS : [];
+  // docs/04 §28.14.1: menu F&B tampil bila ada PT F&B, ATAU sesi exec ber-SMD (hanya halaman yang mendukung SMD).
+  const esb: readonly NavItem[] = hasEsbAccess(s)
+    ? NAV_ITEMS
+    : execSmd(s, smEnabled)
+      ? NAV_ITEMS.filter((i) => SMD_NAV_HREFS.includes(i.href))
+      : [];
   const smItems: NavItem[] = smEnabled
     ? sessionPersonas(s.roles).map((p) => ({ href: PERSONA_ROUTES[p], label: NAV_LABEL[p].label, icon: NAV_LABEL[p].icon }))
     : [];

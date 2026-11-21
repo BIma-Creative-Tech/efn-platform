@@ -350,6 +350,7 @@ def main() -> None:
         overlap=timedelta(seconds=settings.overlap_seconds),
         batch_size=settings.batch_size,
         max_pages=settings.max_pages_per_run,
+        stock_reconstruct_days=settings.sm_stock_reconstruct_days,
     )
     if settings.sm_enabled and not settings.stock_enabled:
         log.warning("ETL_ENABLE_SM tanpa ETL_ENABLE_STOCK: sm_stock_agg tidak berjalan")

@@ -190,3 +190,147 @@ Forecast demo = **v2** (ETL → ClickHouse → forecast-worker).
 - Semua tanggal kalender adalah PLACEHOLDER (tanggal publik umum; 2027 perkiraan) dan wajib dicocokkan dengan SKB /
   sidang isbat sebelum dipakai di data nyata.
 - Bila `efn_pii` terpasang di DB demo, nomor HP member ikut terenkripsi (perilaku normal).
+- Catatan §3/§6 tentang "tanpa `pos.payment` / tanpa stock move" berlaku untuk tahap 1–12 saja. Tahap G51 (§7)
+  menambah `pos.payment` (A4) dan stock move histori 90 hari (A1/A2/A3/A7).
+
+## 7. G51 — data end-to-end 90 hari (A1–A4, A7)
+
+Kontrak: `docs/design/G51_SMD_E2E_LEAD_SPEC.md` bagian A (+ keputusan lead A7). Hanya PT SMD. A6 (histori forecast)
+= skrip terpisah agent data, tidak di sini. **A5 (umur simpan) tidak menambah tahap:** `product.template.expiration_time`
+sudah diisi tahap 2 per kelompok (sayur 5–7, buah 6–10, daging 3–4, ikan 2–3, bakery 3–4, dairy 14–21, frozen 180–365,
+kering 365–730, minuman 270–540, snack 180–300, personal/household 730–1095, alkohol 730–1460, impor 180–365 hari).
+Beberapa rentang lebih panjang dari contoh spesifikasi (sayur 3–5, bakery 2–3, frozen 90–180, kering 180–365); tidak
+diubah karena mengubah rentang menggeser aliran `random` tahap 6 sehingga run ulang di DB lama membuat lot baru
+(melanggar idempoten). Bila lead ingin rentang spesifikasi: ubah `KIND_BASE` dan buat ulang DB demo.
+
+### Cara menjalankan
+
+```bash
+# Hanya bagian G51 di DB demo yang sudah berisi tahap 1-12 (disarankan):
+docker exec -i -e SMD_SEED_PARTS=g51 efn-odoo-1 \
+  odoo shell -c /etc/odoo/odoo.conf -d efn_smd_demo --no-http < scripts/dev/seed_demo_supermarket.py
+# Smoke dulu (14 hari, 10 SKU) untuk mengukur waktu:
+docker exec -i -e SMD_SEED_PARTS=g51 -e SMD_SEED_E2E_DAYS=14 -e SMD_SEED_E2E_SKUS=10 efn-odoo-1 \
+  odoo shell -c /etc/odoo/odoo.conf -d efn_smd_demo --no-http < scripts/dev/seed_demo_supermarket.py
+```
+
+| Variabel | Default | Arti |
+|---|---|---|
+| `SMD_SEED_PARTS` | `all` | `all` = tahap 1–12 + G51; `g48` = tahap 1–12 saja; `g51` = G51 saja (tahap 1–2 tetap dipanggil untuk mencari supplier/produk, idempoten); atau daftar `flow,a7,a3,a4` |
+| `SMD_SEED_E2E_DAYS` | 90 | panjang jendela (7–120), berakhir di hari histori terakhir (≤ kemarin) |
+| `SMD_SEED_E2E_SKUS` | 30 | SKU terlaris yang dipasok DC (bukan DSD, lolos assortment) yang ikut alur A1/A2/A7; 0 = semua (lambat) |
+
+Urutan per hari (kronologis, commit per hari): **flow** (A2 terima PO → selesaikan backorder kemarin → A1 usulan hari
+kirim DC ini) → **a7** → **a3**. `a4` berjalan sekali setelah loop. Bagian `flow` sebaiknya selalu bersama `a7`:
+tanpa A7 stok outlet terus naik (order POS histori tidak mengurangi stok).
+
+### Apa yang dibuat
+
+| Bagian | Isi | Penanda idempoten |
+|---|---|---|
+| A2 `flow` | PO per (supplier, hari terima): Σ qty disetujui A1 yang dikirim DC sampai kunjungan supplier berikutnya (jadwal `SUPPLIER_WEEKDAYS`) × 1,03. `date_order` = terima − delay kategori, `date_planned` = hari terima 10:00 WIB, ±10% diterima H+1 (terlambat; `effective_date` & `date_done` = tanggal terima nyata). Penerimaan dua langkah DC (Input → Stock), lot baru `SMDDC-YYMMDD-NNNN` dengan ED = terima + `expiration_time`. Baris PO memakai orderpoint DC yang ada; bila belum ada, 70% SKU E2E diberi orderpoint DC terkelola (`_efn_managed_orderpoint`, trigger manual) → `from_orderpoint=1`. Supplier = partner perusahaan fiktif (`efn_etl.purchase_partner` → `dim_sm_supplier`) | `purchase.order.origin` `DEMO-SMD-PO-<ref>-<YYYYMMDD>` |
+| A1 `flow` | Per jadwal kirim aktif (`efn.delivery.schedule`, 44 demo) × tanggal kirim di jendela: `efn.replenishment.proposal` `approved` (catatan `[DEMO SUPERMARKET] G51`), baris = SKU E2E kategori jadwal dengan qty = penjualan POS histori outlet [tanggal kirim, kirim berikutnya) × 1,00–1,08 (8% baris diubah kepala toko + alasan). Dokumen pasok lewat `_efn_create_supply_document()` modul (orderpoint outlet + `action_replenish` CE): pick (DC Stock → Output) & ship (Output → transit) jam 18/20 WIB H−lead, receipt (transit → Input outlet) 06:00 lokal hari kirim, storage (Input → Stock) 07:00. ±18% usulan punya baris kurang kirim (35% baris di usulan itu, qty 40–85%) → ±6% baris; 40% usulan itu sisanya dikirim **H+1** (backorder, `on_time=0`), sisanya dibatalkan (`qty_shipped < qty_approved`) | `UNIQUE(schedule_id, delivery_date)` |
+| A7 `a7` | Per outlet per hari satu picking tipe POS outlet (`pos_type_id`) Stock → Partners/Customers, 21:00 lokal, origin `DEMO-SMD-SALE-<outlet>-<YYYYMMDD>`; move per SKU E2E = qty terjual hari itu dari baris order POS histori. Reservasi FEFO (removal strategy kategori). **Pilihan negatif: dibatasi stok tersedia** (qty tanpa stok dibatalkan, tidak pernah negatif); A1 memasok dari penjualan yang sama sehingga kekurangan hanya terjadi di hari pertama jendela dan setelah kurang kirim (stockout realistis). Ringkasan log mencetak % qty keluar vs permintaan | origin picking |
+| A3 `a3` | 1–3 `stock.scrap`/outlet/hari dari quant ber-lot outlet (semua SKU SMD), 50% lot ED terdekat (alasan **Kedaluwarsa** bila ED ≤ H+1, selain itu **Kualitas**), 30% acak **Rusak**, 20% acak **Kualitas**; qty 1–3 unit / 0,3–1,5 kg (≤ tersedia). Tag `stock.scrap.reason.tag` dicari per nama (dibuat bila belum ada). Nilai = `stock_move.value` (stock_account 19.0, HPP saat validasi). `date_done` + tanggal move di-back-date | `stock.scrap.origin` `DEMO-SMD-SCRAP-<outlet>-<YYYYMMDD>-<n>` |
+| A4 `a4` | Metode non-tunai bersama (jurnal bank `SMQR`/`SMDB`/`SMCR`: "QRIS (DEMO)", "Kartu Debit (DEMO)", "Kartu Kredit (DEMO)") ditautkan ke 5 `pos.config` demo (`bypass_payment_method_ids_forbidden_change`). Satu `pos.payment` per order histori DEMO tanpa pembayaran: tunai outlet 35%, QRIS 35%, debit 18%, kredit 12%; `amount` = `amount_total`, `payment_date` = `date_order`. Semua order histori (bukan hanya 90 hari) | order yang sudah punya `pos.payment` dilewati |
+
+Penanda hari selesai: `ir.config_parameter` `efn_seed_smd.g51_done.flow|a7|a3` (daftar tanggal). Hari yang sudah
+selesai dilewati; gagal di tengah hari → hari itu di-rollback, jalankan ulang. Menjalankan smoke 14 hari lalu 90 hari
+menambah hari-hari yang lebih awal belakangan (tidak kronologis; dapat diterima untuk demo, buat ulang DB bila ingin
+bersih). Selama loop, bila `efn_expiry_monitor.enabled=true` flag dimatikan sementara (cek sisa umur penerimaan
+membandingkan ED dengan **hari ini**, bukan tanggal histori) lalu dipulihkan di `finally`. Bila proses dibunuh paksa,
+periksa flag itu.
+
+Tanggal: validasi lewat ORM (qty, quant, nilai move), lalu kolom tanggal saja (`stock_picking.date_done/scheduled_date`,
+`stock_move.date`, `stock_move_line.date`, `stock_quant.in_date` lot yang tiba, `stock_scrap.date_done`,
+`purchase_order.effective_date`) di-UPDATE SQL ke tanggal histori. Jurnal stok real-time (bila kategori `real_time`)
+memakai `force_period_date` = tanggal histori; default kategori CE 19 periodik → hanya `stock_move.value`.
+
+### Perkiraan jumlah (default 90 hari, 30 SKU; belum diukur)
+
+Bergantung pada SKU E2E yang terpilih (urutan terlaris acak berbenih). Perkiraan kasar: usulan ±1.500–2.000 (jadwal
+harian Fresh/Dairy + 2–3×/minggu lainnya, hanya yang punya penjualan SKU E2E), baris ±4.000–8.000, picking A1 ±4 per
+usulan + backorder; PO ±500–700; A7 ±450 picking (5 outlet × 90 hari), move ±10.000; scrap ±900 (5 × 90 × rata-rata 2);
+`pos.payment` ±3.650 (satu per order histori). Angka nyata tercetak di ringkasan `g51_*`. Durasi **belum diukur**:
+jalankan smoke 14 hari × 10 SKU dulu dan ekstrapolasi; bila > 15 menit, turunkan `SMD_SEED_E2E_SKUS`.
+
+### Pemetaan ke mart (ETL)
+
+- `fact_dc_fill_rate` (`sql_fill_lines` + `SQL_FILL_MOVES`): usulan `approved`, `delivery_date` di jendela,
+  `picking_id` = picking ship (move DC pertama); ship = move done → transit (+ backorder ≤ 3); recv = move transit →
+  Input outlet (melintasi batas outlet); storage Input → Stock tidak dihitung.
+- `fact_dc_purchase_line` / `dim_sm_supplier`: PO DC `purchase`, `qty_received` penuh, `from_orderpoint` dari orderpoint
+  DC terkelola. Catatan: mart tidak punya kolom tanggal terima; keterlambatan hanya terlihat dari
+  `purchase_order.effective_date` / `date_done` picking di Odoo.
+- `fact_scrap` (`sm_scraps`): gudang = gudang lokasi asal scrap (zona outlet), alasan = tag terkecil, nilai =
+  Σ|`stock_move.value`|.
+- `fact_pos_payment`: `pos_payment` order `paid`, `payment_date`, metode & tipe.
+
+### Belum diverifikasi (G51)
+
+Skrip **belum pernah dijalankan** (agent penulis tanpa shell). Asumsi yang perlu dicek pada run pertama: rantai
+`action_replenish` menghasilkan satu set picking per usulan (tidak bergabung); `picking_ids_not_to_backorder` membatalkan
+sisa pada move ber-lot; reservasi receipt outlet dari transit mengikuti lot ship; pembuatan `stock.move.line` manual pada
+receipt PO (field `product_uom_id`); `stock.scrap.origin` ada di 19.0; `pos.order.config_id` tersimpan; runtime.
+
+## 8. A6 forecast history
+
+Pemilik: efn-data-ai-engineer (G51). Tujuan: `fact_forecast_accuracy` (WAPE/bias 8 minggu, halaman `/forecast`,
+kartu `/exec` & `/category`) terisi di DB demo. Odoo menolak baris forecast bertanggal lampau (`invalid_date`), jadi
+jalurnya dua langkah: **(1) forecast-worker asli menghitung run as-of tanpa RPC → file JSON; (2) skrip odoo-shell
+`scripts/dev/load_forecast_asof.py` memuatnya** sebagai run `ok`, `is_active = False` (run aktif & usulan replenishment
+tidak tersentuh; `_efn_on_run_closed_ok` tidak dipanggil). ETL lalu menyalin run (`fc_runs`, `fc_daily`) dan menghitung
+akurasi: forecast run `ok` terakhir yang `generated_at`-nya (WIB) sebelum tanggal proyeksi vs penjualan aktual.
+
+Arti `--as-of D` (wajib **Senin**, ≤ 400 hari lalu): batch `daily` seolah dijalankan **Minggu D−1 23:00 WIB**; histori
+ClickHouse hanya s.d. D−1, proyeksi D..D+27. `run_id` deterministik per (PT, D) → ekspor/muat ulang idempoten (run yang
+sudah ada dilewati). Tidak mengubah perilaku produksi (tanpa `--as-of` tidak ada yang berubah; tidak butuh
+`FORECAST_ENABLED`, tidak memanggil Odoo).
+
+Prasyarat: §4 langkah 1 (ETL forecast menyala, `v_fc_sales_daily` berisi histori SMD) dan image forecast-worker
+(overlay `docker-compose.forecast.yml`, secret ClickHouse `clickhouse_password_forecast`). Tidak butuh API key Odoo.
+
+```bash
+# (1) Hitung 8 run as-of: Senin 1..8 minggu sebelum Senin minggu ini (Git Bash; file berisi id/angka saja, jangan commit).
+mkdir -p var/forecast-asof
+THIS_MON=$(date -d "today - $(( $(date +%u) - 1 )) days" +%F)
+for k in 1 2 3 4 5 6 7 8; do
+  D=$(date -d "$THIS_MON - $((7 * k)) days" +%F)
+  MSYS_NO_PATHCONV=1 docker compose -f infra/compose/docker-compose.yml -f infra/compose/docker-compose.forecast.yml \
+    --profile data run --rm --no-deps \
+    -e FORECAST_MODELS=AutoETS -e FORECAST_CV_WINDOWS=1 -e FORECAST_BACKTEST_ENABLED=false \
+    -v "$(pwd -W)/var/forecast-asof:/out" \
+    forecast-worker python -m efn_forecast run --company SMD --as-of "$D" --out "/out/asof-SMD-$D.json"
+done
+ls -l var/forecast-asof   # 8 file asof-SMD-YYYY-MM-DD.json (±5-15 MB per file untuk 400 SKU x 6 gudang)
+
+# (2) Muat ke Odoo DB demo (skrip menolak jalan tanpa EFN_ASOF_CONFIRM=demo).
+docker cp var/forecast-asof efn-odoo-1:/tmp/forecast-asof
+docker exec -i -e EFN_ASOF_DIR=/tmp/forecast-asof -e EFN_ASOF_CONFIRM=demo efn-odoo-1 \
+  odoo shell -c /etc/odoo/odoo.conf -d efn_smd_demo --no-http < scripts/dev/load_forecast_asof.py
+# log: "[efn-asof] asof-SMD-...json: run <uuid> as_of ... -> N baris, 0 ditolak" lalu ringkasan
+
+# (3) ETL: akurasi 8 minggu + hitung ulang segera (kembalikan interval ke 86400 setelah demo siap).
+#     infra/compose/.env: ETL_ENABLE_FORECAST=true ETL_FORECAST_ACCURACY_WEEKS=8 ETL_FORECAST_ACCURACY_INTERVAL_SECONDS=900
+docker compose -f infra/compose/docker-compose.yml --profile data up -d --force-recreate etl
+```
+
+Cek ClickHouse (admin): `SELECT count(), min(generated_at), max(generated_at) FROM efn_dwh.dim_forecast_run FINAL
+WHERE company_id = <SMD> AND state = 'ok'` (≥ 9 run: 8 as-of + run harian nyata) lalu `SELECT week_start, sum(abs_error)
+/ sum(actual_qty) AS wape FROM efn_dwh.fact_forecast_accuracy FINAL GROUP BY week_start ORDER BY week_start` (8 minggu).
+`v_sm_forecast_daily` tetap memakai run **terbaru menurut generated_at** (run harian nyata), bukan run as-of.
+
+Catatan & batasan:
+- Sumber penjualan = data ClickHouse SAAT INI dibatasi s.d. D−1 (penjualan terlambat/koreksi setelah D ikut terbaca bila
+  bertanggal ≤ D−1 — wajar untuk demo). Master produk & kalender = kondisi sekarang (bukan snapshot historis).
+- Run as-of tanpa `efn.forecast.chunk` (chunk_total = jumlah chunk file); run tampil di Odoo sebagai run `ok` nonaktif
+  dengan `opened_at` = generated_at. Retensi Odoo menghapus barisnya 35 hari setelah dimuat (`closed_at`); salinan
+  ClickHouse tetap.
+- Jangan menghapus lalu memuat ulang run as-of setelah ETL menyalinnya: ETL tidak melihat penghapusan Odoo, sehingga
+  run lama tetap `ok` di `dim_forecast_run` (run_id Odoo baru = baris ganda dengan generated_at sama). Bila terpaksa,
+  muat ulang di DB demo baru.
+- Flag ETL G51 terkait (default mati): `ETL_SM_STOCK_RECONSTRUCT_DAYS=90` (histori stok GMROI dari stock move A1/A2/A3/A7,
+  butuh `ETL_ENABLE_SM=true`), lihat `services/etl/efn_etl/sm_stock_hist.py`.
+- **Belum diverifikasi** (penulis tanpa shell): perintah di atas belum pernah dijalankan; izin tulis bind mount untuk
+  user 65534 di Docker Desktop; durasi (±80 s per run untuk satu outlet dengan AutoETS CV 1 → perkirakan ±8-10 menit per
+  run untuk 5 outlet + DC).

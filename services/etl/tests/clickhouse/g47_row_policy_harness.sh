@@ -44,7 +44,9 @@ CREATE TABLE ${DB}.sales (company_id UInt32, warehouse_id UInt32) ENGINE = Memor
 CREATE TABLE ${DB}.margin (company_id UInt32, warehouse_id UInt32) ENGINE = Memory;
 CREATE TABLE ${DB}.kpi (company_id UInt32, warehouse_id UInt32) ENGINE = Memory;
 CREATE TABLE ${DB}.fresh (mart String) ENGINE = Memory;
+CREATE TABLE ${DB}.payment (company_id UInt32, warehouse_id UInt32) ENGINE = Memory;
 INSERT INTO ${DB}.sales VALUES (11, 21), (11, 22), (11, 0), (0, 0), (12, 22);
+INSERT INTO ${DB}.payment VALUES (11, 21), (11, 22), (12, 22);
 INSERT INTO ${DB}.margin VALUES (11, 22), (11, 21);
 INSERT INTO ${DB}.kpi VALUES (11, 999), (0, 0);
 INSERT INTO ${DB}.fresh VALUES ('stock');
@@ -59,11 +61,17 @@ P_SALES="$(sm_policy_predicate "$KEY" W category,dc,exec,store)"
 P_MARGIN="$(sm_policy_predicate "$KEY" W category,exec)"
 P_KPI="$(sm_policy_predicate "$KEY" C category,dc,exec,marketing,store)"
 P_FRESH="$(sm_policy_predicate "$KEY" F category,dc,exec,marketing,store)"
+# G51: kelas & persona v_sm_payment_daily diambil dari manifest produksi (SM_POLICY_VIEWS), bukan disalin.
+PAY_CLS="$(printf '%s\n' "$SM_POLICY_VIEWS" | awk '$1 == "v_sm_payment_daily" { print $2 }')"
+PAY_PERS="$(printf '%s\n' "$SM_POLICY_VIEWS" | awk '$1 == "v_sm_payment_daily" { print $3 }')"
+[ -n "$PAY_CLS" ] && [ -n "$PAY_PERS" ] || { echo "v_sm_payment_daily tidak ada di SM_POLICY_VIEWS" >&2; exit 1; }
+P_PAY="$(sm_policy_predicate "$KEY" "$PAY_CLS" "$PAY_PERS")"
 $CH --log_queries=0 --multiquery <<EOF
 CREATE ROW POLICY efn_insight_scope ON ${DB}.sales USING ${P_SALES} TO g47_rp_reader;
 CREATE ROW POLICY efn_insight_scope ON ${DB}.margin USING ${P_MARGIN} TO g47_rp_reader;
 CREATE ROW POLICY efn_insight_scope ON ${DB}.kpi USING ${P_KPI} TO g47_rp_reader;
 CREATE ROW POLICY efn_insight_scope ON ${DB}.fresh USING ${P_FRESH} TO g47_rp_reader;
+CREATE ROW POLICY efn_insight_scope ON ${DB}.payment USING ${P_PAY} TO g47_rp_reader;
 EOF
 
 sig2() {
@@ -97,6 +105,11 @@ expect "positif store melihat tokonya (wh 22)" "$(q sales "$STORE")" 1
 expect "positif exec melihat wh 0/21/22 PT 11" "$(q sales "$EXEC")" 3
 expect "positif kelas C (kpi) tanpa cek warehouse" "$(q kpi "$STORE")" 1
 expect "positif kelas F (freshness)" "$(q fresh "$STORE")" 1
+# G51: v_sm_payment_daily (W, exec/store) -> store melihat tokonya saja; persona category tidak melihat apa pun.
+expect "positif G51 payment: store wh 22" "$(q payment "$STORE")" 1
+expect "positif G51 payment: exec wh 21/22 PT 11" "$(q payment "$EXEC")" 2
+S_CAT="$(sig2 11 SMD 0,20,21,22 category '')"
+expect "G51 payment: persona category ditolak" "$(q payment "$(scope 11 SMD 0,20,21,22 category '' "$S_CAT")")" 0
 # (1) wids=22 tidak melihat 21 maupun 0
 expect "(1) store wids=22: hanya wh 22 dari 3 baris PT 11 (tanpa wh 21 & 0)" "$(q sales "$STORE")" 1
 # (2) persona store -> 0 baris di view biaya

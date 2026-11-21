@@ -308,6 +308,124 @@ FROM ${V}campaign_result
 WHERE ${CO} AND warehouse_id = 0 AND date_to >= {from:Date} AND date_from <= {to:Date}
 ORDER BY date_from DESC, campaign_id DESC
 LIMIT 100`),
+
+  // ---------- G51 B1: SMD di halaman F&B (/, /sales, /payments); persona exec saja; omzet SMD termasuk PPN ----------
+  sm_fb_daily: q(`SELECT day, toFloat64(sum(net_sales_incl_tax)) AS rev_sum, toUInt64(sum(orders)) AS orders_sum
+FROM ${V}outlet_daily
+WHERE ${SCOPE} AND (${D_CUR} OR ${D_PREV})
+GROUP BY day
+ORDER BY day
+LIMIT 800`),
+  sm_fb_by_outlet: q(`SELECT warehouse_id, toFloat64(sum(net_sales_incl_tax)) AS rev_cur, toUInt64(sum(orders)) AS orders_cur
+FROM ${V}outlet_daily
+WHERE ${SCOPE} AND ${D_CUR}
+GROUP BY warehouse_id
+LIMIT 300`),
+  sm_fb_sales_kpi: q(`SELECT toFloat64(abs(sumIf(gross_sales, ${D_CUR}))) AS gross_cur, toFloat64(abs(sumIf(gross_sales, ${D_PREV}))) AS gross_prev,
+  toFloat64(abs(sumIf(discounts, ${D_CUR}))) AS disc_cur, toFloat64(abs(sumIf(discounts, ${D_PREV}))) AS disc_prev,
+  toFloat64(sumIf(qty_sold, ${D_CUR})) AS qty_cur, toFloat64(sumIf(qty_sold, ${D_PREV})) AS qty_prev
+FROM ${V}sales_daily
+WHERE ${SCOPE} AND (${D_CUR} OR ${D_PREV})`),
+  sm_fb_weekday: q(`SELECT toDayOfWeek(day) AS dow, toFloat64(sum(net_sales_incl_tax)) AS rev_sum, toUInt64(uniqExact(day)) AS days_n
+FROM ${V}sales_daily
+WHERE ${SCOPE} AND ${D_CUR}
+GROUP BY dow
+ORDER BY dow
+LIMIT 7`),
+  sm_fb_heat: q(`SELECT toMonday(day) AS week_key, toDayOfWeek(day) AS dow, toFloat64(sum(net_sales_incl_tax)) AS rev_sum
+FROM ${V}sales_daily
+WHERE ${SCOPE} AND ${D_CUR}
+GROUP BY week_key, dow
+ORDER BY week_key, dow
+LIMIT 500`),
+  sm_fb_by_category: q(`SELECT categ_id, any(category) AS category_name, toFloat64(sum(net_sales_incl_tax)) AS rev_sum, toFloat64(sum(qty_sold)) AS qty_sum
+FROM ${V}sales_daily
+WHERE ${SCOPE} AND ${D_CUR}
+GROUP BY categ_id
+ORDER BY rev_sum DESC
+LIMIT 100`),
+  sm_fb_top_products: q(`SELECT product_id, toFloat64(sum(net_sales_incl_tax)) AS rev_sum, toFloat64(sum(qty_sold)) AS qty_sum
+FROM ${V}product_sales_daily
+WHERE ${SCOPE} AND ${CATF} AND ${D_CUR}
+GROUP BY product_id
+ORDER BY rev_sum DESC
+LIMIT 10`),
+  // Pembayaran SMD = uang diterima bersih (docs/04 §28.14.3: `amount` sudah memuat baris kembalian; retur ikut menetralkan), tanpa filter is_refund.
+  sm_fb_pay_sums: q(`SELECT toFloat64(sumIf(amount, ${D_CUR})) AS amount_cur, toFloat64(sumIf(amount, ${D_PREV})) AS amount_prev,
+  toUInt64(sumIf(payments, ${D_CUR})) AS count_cur, toUInt64(sumIf(payments, ${D_PREV})) AS count_prev
+FROM ${V}payment_daily
+WHERE ${SCOPE} AND (${D_CUR} OR ${D_PREV})`),
+  sm_fb_pay_matrix: q(`SELECT warehouse_id, method_name, method_type, toFloat64(sum(amount)) AS amount_sum, toUInt64(sum(payments)) AS pay_n
+FROM ${V}payment_daily
+WHERE ${SCOPE} AND ${D_CUR}
+GROUP BY warehouse_id, method_name, method_type
+ORDER BY amount_sum DESC
+LIMIT 2000`),
+  sm_fb_pay_trend: q(`SELECT day, method_type, toFloat64(sum(amount)) AS amount_sum, toUInt64(sum(payments)) AS pay_n
+FROM ${V}payment_daily
+WHERE ${SCOPE} AND ${D_CUR}
+GROUP BY day, method_type
+ORDER BY day
+LIMIT 5000`),
+
+  // ---------- G51 B3: forecast SMD (/forecast). Mingguan + per outlet memakai sm_ex_wape_weekly / sm_ex_wape_outlets ----------
+  sm_fc_by_cat: q(`SELECT categ_id, toFloat64(sum(abs_error)) AS abs_sum, toFloat64(sum(actual_qty)) AS actual_sum, toFloat64(sum(forecast_qty)) AS fc_sum,
+  toUInt64(uniqExact(product_id)) AS sku_n
+FROM ${V}forecast_accuracy_weekly
+WHERE ${SCOPE} AND ${CATF} AND week_start BETWEEN {from:Date} AND {to:Date}
+GROUP BY categ_id
+LIMIT 500`),
+  // Jumlah p10/p90 per SKU melebar dibanding kuantil total sebenarnya (kuantil tidak aditif): pita ditampilkan sebagai batas konservatif.
+  sm_fc_next: q(`SELECT forecast_date, toFloat64(sum(yhat)) AS yhat_sum, toFloat64(sum(p10)) AS p10_sum, toFloat64(sum(p90)) AS p90_sum, max(generated_at) AS gen_at
+FROM ${V}forecast_daily
+WHERE ${SCOPE} AND ${CATF} AND forecast_date BETWEEN {today:Date} AND {until:Date}
+GROUP BY forecast_date
+ORDER BY forecast_date
+LIMIT 60`),
+
+  // ---------- G51 B4: umur simpan & sisa umur lot (/category, /store) ----------
+  // Semua lot berstok (v_sm_lot_stock, keputusan lead 21 Nov), bukan hanya lot beralert; lot terdekat kedaluwarsa per produk x outlet.
+  sm_shelf_lots: q(`SELECT product_id, warehouse_id, min(days_left) AS days_min, argMin(lot_name, days_left) AS lot_nearest,
+  argMin(expiration_date, days_left) AS exp_nearest, argMin(quantity, days_left) AS qty_nearest, argMin(value_cost, days_left) AS value_nearest,
+  toUInt64(count()) AS lots_n, toFloat64(sum(quantity)) AS qty_total
+FROM ${V}lot_stock
+WHERE ${SCOPE} AND ${CATF} AND quantity > 0
+GROUP BY product_id, warehouse_id
+ORDER BY days_min ASC, value_nearest DESC
+LIMIT 300`),
+  sm_shelf_products: q(`SELECT product_id, any(shelf_life_days) AS shelf_days, any(category) AS category_name, any(product_name) AS name_text
+FROM ${V}product_list
+WHERE ${CO} AND product_id IN {ids:Array(UInt32)}
+GROUP BY product_id
+LIMIT 300`),
+
+  // ---------- G51 B5: distribusi DC -> outlet SMD (/distribution). Fill rate memakai sm_dc_fill_sums / sm_dc_fill_daily / sm_dc_fill_outlets ----------
+  sm_dist_late_outlets: q(`SELECT warehouse_id, toUInt64(uniqExactIf(proposal_id, on_time = 0)) AS late_n, toUInt64(uniqExact(proposal_id)) AS deliveries_n
+FROM ${V}dc_fill_rate
+WHERE ${SCOPE} AND qty_approved > 0 AND ${FD_CUR}
+GROUP BY warehouse_id
+LIMIT 300`),
+  sm_dist_short_products: q(`SELECT product_id, toFloat64(sum(greatest(qty_approved - qty_basis, 0))) AS short_sum, toFloat64(sum(qty_approved)) AS approved_sum,
+  toUInt64(countIf(qty_basis < qty_approved)) AS short_lines
+FROM ${V}dc_fill_rate
+WHERE ${SCOPE} AND qty_approved > 0 AND ${FD_CUR}
+GROUP BY product_id
+HAVING short_sum > 0
+ORDER BY short_sum DESC
+LIMIT 10`),
+  sm_dist_proposals: q(`SELECT state, toUInt64(count()) AS proposals_n, toFloat64(sum(qty_proposed_total)) AS proposed_sum, toFloat64(sum(qty_approved_total)) AS approved_sum,
+  toUInt64(sum(lines_excluded)) AS excluded_n, toUInt64(sum(lines_changed)) AS changed_n
+FROM ${V}replenishment
+WHERE ${SCOPE} AND ${FD_CUR}
+GROUP BY state
+ORDER BY proposals_n DESC
+LIMIT 10`),
+  sm_dist_reduced_products: q(`SELECT product_id, toUInt64(countIf(excluded = 1)) AS excluded_n, toFloat64(sum(qty_proposed)) AS proposed_sum, toFloat64(sum(qty_approved)) AS approved_sum
+FROM ${V}replenishment_line
+WHERE ${SCOPE} AND ${FD_CUR} AND (excluded = 1 OR qty_approved < qty_proposed)
+GROUP BY product_id
+ORDER BY excluded_n DESC, proposed_sum DESC
+LIMIT 10`),
 } satisfies Record<string, SmQueryDef>;
 
 export type SmQueryName = keyof typeof SM_QUERIES;

@@ -56,7 +56,11 @@ python -m efn_forecast run --company SMD                       # loop terjadwal 
 python -m efn_forecast run --company SMD --dry-run             # satu batch, tanpa Odoo (hanya baca ClickHouse)
 python -m efn_forecast run --company SMD --once [--kind weekly_minmax]   # butuh FORECAST_ENABLED=true
 python -m efn_forecast seed-calendar --company SMD [--dry-run]
+python -m efn_forecast run --company SMD --as-of 2026-09-28 --out /out/asof.json   # G51 A6: hitung saja, tanpa RPC
 ```
+`--as-of` (G51 A6, hanya demo): batch daily seolah Minggu sebelumnya 23:00 WIB, payload tervalidasi ditulis ke file
+lalu dimuat oleh `scripts/dev/load_forecast_asof.py` (odoo shell, run `ok` nonaktif, tanpa usulan replenishment).
+Runbook: `docs/runbooks/demo-supermarket-seed.md` §8. Tanpa `--as-of` perilaku tidak berubah.
 
 ## Konfigurasi (env; secret hanya lewat `*_FILE`)
 | Env | Default |

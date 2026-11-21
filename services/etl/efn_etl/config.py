@@ -208,6 +208,9 @@ class Settings:
     sm_fill_recalc_days: int = 14
     sm_campaign_attr_days: int = 30
     sm_stock_backfill_days: int = 90
+    # G51 B6 (spesifikasi lead §B6): rekonstruksi stok harian historis dari stock_move (efn_etl/sm_stock_hist.py).
+    # 0 = mati (default, production); demo 90. Butuh ETL_ENABLE_SM.
+    sm_stock_reconstruct_days: int = 0
 
     @property
     def amqp_user(self) -> str:
@@ -329,6 +332,9 @@ class Settings:
         if sm_campaign and is_production(e) and _str(e, "PROMO_CAMPAIGN_ENABLED", "false") != "true":
             # Pola L-180: hasil kampanye hanya dimuat bila kampanye promo memang aktif di production.
             raise RuntimeError("ETL_ENABLE_SM_CAMPAIGN ditolak di production selama PROMO_CAMPAIGN_ENABLED != true")
+        sm_reconstruct_days = _int_range(e, "ETL_SM_STOCK_RECONSTRUCT_DAYS", 0, 0, 400)
+        if sm_reconstruct_days and not sm_enabled:
+            raise RuntimeError("ETL_SM_STOCK_RECONSTRUCT_DAYS > 0 membutuhkan ETL_ENABLE_SM=true")
         return cls(
             platform_pg=platform,
             odoo_pg=odoo,
@@ -410,4 +416,5 @@ class Settings:
             sm_fill_recalc_days=_int_range(e, "ETL_SM_FILL_RECALC_DAYS", 14, 1, 60),
             sm_campaign_attr_days=_int_range(e, "ETL_SM_CAMPAIGN_ATTR_DAYS", 30, 1, 365),
             sm_stock_backfill_days=_int_range(e, "ETL_SM_STOCK_BACKFILL_DAYS", 90, 1, 400),
+            sm_stock_reconstruct_days=sm_reconstruct_days,
         )

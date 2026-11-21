@@ -14,6 +14,8 @@ const ROW_POLICY_VIEWS = [
   'replenishment_line', 'replenishment_bias_weekly', 'dc_fill_rate', 'dc_purchase', 'lot_expiry', 'expiry_daily', 'markdown',
   'price_index', 'price_coverage', 'price_signal', 'visitor_funnel_daily', 'search_terms', 'segment_daily', 'campaign_result',
   'freshness', 'kpi_config',
+  // G51 (docs/04 §28.14.3): tiga view baru + v_sm_lot_stock (semua lot berstok, keputusan lead 21 Nov)
+  'payment_daily', 'product_sales_daily', 'forecast_daily', 'lot_stock',
 ];
 
 describe('katalog query supermarket (docs/04 §28.13.9)', () => {
@@ -43,7 +45,7 @@ describe('katalog query supermarket (docs/04 §28.13.9)', () => {
       return;
     }
     expect(sql).toContain('company_id IN {cids:Array(UInt32)}');
-    const warehouseBased = !['sm_categories', 'sm_kpi_config', 'sm_product_names'].includes(n);
+    const warehouseBased = !['sm_categories', 'sm_kpi_config', 'sm_product_names', 'sm_shelf_products'].includes(n);
     if (warehouseBased) {
       expect(/warehouse_id IN \{(wh|whs|whz):Array\(UInt32\)\}|warehouse_id = 0/.test(sql)).toBe(true);
     }
@@ -72,6 +74,37 @@ describe('katalog query supermarket (docs/04 §28.13.9)', () => {
     expect(SM_QUERIES.sm_ex_trend.sql).toContain('net_sales_incl_tax');
     expect(SM_QUERIES.sm_ex_margin.sql).not.toContain('incl_tax');
     expect(SM_QUERIES.sm_sales_net.sql).not.toContain('incl_tax');
+  });
+
+  it('G51: omzet SMD di halaman F&B memakai kolom termasuk PPN; HPP dari view margin tanpa PPN', () => {
+    expect(SM_QUERIES.sm_fb_daily.sql).toContain('net_sales_incl_tax');
+    expect(SM_QUERIES.sm_fb_weekday.sql).toContain('net_sales_incl_tax');
+    expect(SM_QUERIES.sm_fb_by_category.sql).toContain('net_sales_incl_tax');
+    expect(SM_QUERIES.sm_fb_top_products.sql).toContain('net_sales_incl_tax');
+    expect(SM_QUERIES.sm_fb_top_products.sql).not.toMatch(/cogs/);
+  });
+
+  it('G51: query halaman F&B tidak memakai parameter filter ESB (pt/branch string) dan hanya parameter bertipe SM', () => {
+    const g51 = names.filter((n) => /^sm_(fb|fc|shelf|dist)_/.test(n));
+    expect(g51.length).toBe(18);
+    for (const n of g51) {
+      expect(SM_QUERIES[n].sql).not.toMatch(/\{(pt|branch|product|sort):/);
+      for (const p of SM_QUERIES[n].params) expect(Object.keys(SM_PARAM_TYPES)).toContain(p);
+    }
+  });
+
+  it('G51 B4: umur simpan membaca v_sm_lot_stock dan shelf_life_days dari v_sm_product_list', () => {
+    expect(SM_QUERIES.sm_shelf_lots.sql).toContain('efn_insight.v_sm_lot_stock');
+    expect(SM_QUERIES.sm_shelf_lots.sql).toContain('quantity > 0');
+    expect(SM_QUERIES.sm_shelf_products.sql).toContain('shelf_life_days');
+    expect(SM_QUERIES.sm_shelf_products.params).toContain('ids');
+  });
+
+  it('G51 B3: forecast 14 hari difilter tanggal [today, until] dan kolom pita p10/p90', () => {
+    const sql = SM_QUERIES.sm_fc_next.sql;
+    expect(sql).toContain('forecast_date BETWEEN {today:Date} AND {until:Date}');
+    expect(sql).toContain('p10');
+    expect(sql).toContain('p90');
   });
 
   it('k-anonim literal di query sinyal sama dengan K_ANON', () => {

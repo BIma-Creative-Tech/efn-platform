@@ -14,7 +14,16 @@ export const PAGE_FILTERS: Record<string, readonly FilterKey[]> = {
   '/forecast': [],
 };
 
-export function appliesTo(pathname: string, key: FilterKey): boolean {
+/**
+ * Filter tambahan yang aktif hanya bila SMD boleh dipilih (sesi exec, G51): /forecast ESB masih "segera" (tanpa filter), tetapi
+ * forecast SMD memakai Brand / PT dan Cabang.
+ */
+export const SMD_ONLY_FILTERS: Record<string, readonly FilterKey[]> = {
+  '/forecast': ['pt', 'branch'],
+};
+
+export function appliesTo(pathname: string, key: FilterKey, smdAllowed = false): boolean {
+  if (smdAllowed && (SMD_ONLY_FILTERS[pathname] ?? []).includes(key)) return true;
   return (PAGE_FILTERS[pathname] ?? PAGE_FILTERS['/']).includes(key);
 }
 

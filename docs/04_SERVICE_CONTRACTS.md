@@ -1,5 +1,5 @@
 
-# KONTRAK ANTAR-SERVICE (v20.5 — 21 Nov 2026, G47 review: L-216 store + marketing/dc, sesi Insight 2 jam L-217, kartu fase 2 L-218; v20.4 — 21 Nov 2026, G47 §28.13: koreksi fit-gap C-1..C-9 diserap dari kode (L-204..L-215), keputusan pemilik proyek 21 Nov: `kpi_admin` tanpa SoD kode, penerimaan outlet SMD dua langkah; v20.3 — 20 Nov 2026, G47 §28.13 Insight supermarket per persona: token `eit2`/`eis2` (`wids`, persona, `cats`), `SQL_efn_sig2`, row policy outlet + persona, mart `fact_replenishment`/`fact_dc_fill_rate`/`fact_dc_purchase_line`/`agg_sm_stock_daily`/`fact_lot_expiry`/`fact_campaign_result`, view `efn_insight.v_sm_*`, pemetaan `outlet_code` (Q-SM37), konfigurasi KPI per PT `efn.insight.sm.kpi` → `dim_sm_kpi_config`, Omzet termasuk PPN, L-186..L-203, Q-SM40..Q-SM45 — kontrak, belum dibangun; v20.2 dipakai PR #117 G50; v20.0 — 18 Nov 2026, Supermarket §28: forecast API worker→Odoo, usulan replenishment DC, assortment, event perilaku `POST /v1/events`, queue `behavior.event`/`promo.campaign.requested`/`notify.restock`/`notify.price_alert`/`notify.email`/`notify.wa_unofficial`, wishlist/notify-me/price alert, flag (ADR-044..048 Proposed, belum dibangun; §27 + L-127..L-143 dicadangkan G43); v18.0 — 18 Nov 2026, G42 §26 Insight web + SSO Odoo (token eit1 HMAC sekali pakai via POST form, cookie eis1, row policy `efn_insight_scope`, ADR-041 Proposed); v17.0 — 17 Nov 2026, G41 §25 ESB Core → datamart ClickHouse (esb-extract GET-only per brand, ADR-040 Proposed); v16.2 — 1 Nov 2026, G39 §24 asisten analisis "Analisis bertahap" (text2sql POST /v1/analyze: rencana ≤3 query → eksekusi per PT → ringkasan AI); v16.1 — 1 Nov 2026, G38 §23 Text-to-SQL "Tanya Data" (Odoo → text2sql → 9router/Ollama → ClickHouse per PT); v16.0 — 1 Nov 2026, G37 §22 gateway LLM 9router + fallback Ollama untuk OCR tahap 2 (K25-01, ADR-037); v15.1 — 31 Okt 2026, G33 §20.11 notifikasi reward MGM + layar referral Super-App; v15.0 — 30 Okt 2026, G32 §21 mart & dashboard waste/yield (K25-08); v14.1 — 30 Okt 2026, G31b §20.10 dasar MGM per baris (`excluded_categ_ids`); v14.0 — 30 Okt 2026, G31 §20 engine MGM: referral, akrual, settle, clawback; v13.0 — 29 Okt 2026, G30 §19 kebijakan MGM per PT (K25-10); v11.0 — 25 Okt 2026, G26 §17 pesanan online wajib lunas: VA, e-wallet, transfer + bukti, kiosk; v10.1 — 24 Okt 2026, G24 §16 entitas WTZ Wetzel's Pretzels; v10.0 — 21 Okt 2026, G23 §15 reservasi meja & pre-order berjadwal; v9.1 — 19 Okt 2026, G22 §14 sinkron r15 K1–K3 + L-82; v9.0 — 19 Okt 2026, G22 §14; v8.0 — G21 §13; v7.0 — G20 §12; v6.0 — G19 §11; v5.1 — 10 Okt 2026, privasi G18 L-21; v5.0 — 9 Okt 2026; §8 v3.x, §9 v4.x Fase 1, §10 v5.0 Fase 3 penjualan online; **§27 G43 v19.1** migrasi ESB → Odoo + arsip histori `efn_legacy_history`, ADR-042 Accepted)
+# KONTRAK ANTAR-SERVICE (v21.0 — 21 Nov 2026, G51 §28.14 SMD end-to-end: SMD sebagai filter halaman F&B Insight untuk persona `exec` (cabang `sm:<id>`, omzet termasuk PPN, basis campuran berlabel), view `v_sm_payment_daily`/`v_sm_product_sales_daily`/`v_sm_forecast_daily` + `v_sm_product_list.shelf_life_days`, policy SM 32, rekonstruksi stok `ETL_SM_STOCK_RECONSTRUCT_DAYS` (default 0), histori forecast as-of demo, seed A1–A6 demo saja, deploy `--renew-anon-volumes`, outlet online opsional, L-219..L-233, Q-SM46..Q-SM47 — kontrak, belum dibangun; v20.5 — 21 Nov 2026, G47 review: L-216 store + marketing/dc, sesi Insight 2 jam L-217, kartu fase 2 L-218; v20.4 — 21 Nov 2026, G47 §28.13: koreksi fit-gap C-1..C-9 diserap dari kode (L-204..L-215), keputusan pemilik proyek 21 Nov: `kpi_admin` tanpa SoD kode, penerimaan outlet SMD dua langkah; v20.3 — 20 Nov 2026, G47 §28.13 Insight supermarket per persona: token `eit2`/`eis2` (`wids`, persona, `cats`), `SQL_efn_sig2`, row policy outlet + persona, mart `fact_replenishment`/`fact_dc_fill_rate`/`fact_dc_purchase_line`/`agg_sm_stock_daily`/`fact_lot_expiry`/`fact_campaign_result`, view `efn_insight.v_sm_*`, pemetaan `outlet_code` (Q-SM37), konfigurasi KPI per PT `efn.insight.sm.kpi` → `dim_sm_kpi_config`, Omzet termasuk PPN, L-186..L-203, Q-SM40..Q-SM45 — kontrak, belum dibangun; v20.2 dipakai PR #117 G50; v20.0 — 18 Nov 2026, Supermarket §28: forecast API worker→Odoo, usulan replenishment DC, assortment, event perilaku `POST /v1/events`, queue `behavior.event`/`promo.campaign.requested`/`notify.restock`/`notify.price_alert`/`notify.email`/`notify.wa_unofficial`, wishlist/notify-me/price alert, flag (ADR-044..048 Proposed, belum dibangun; §27 + L-127..L-143 dicadangkan G43); v18.0 — 18 Nov 2026, G42 §26 Insight web + SSO Odoo (token eit1 HMAC sekali pakai via POST form, cookie eis1, row policy `efn_insight_scope`, ADR-041 Proposed); v17.0 — 17 Nov 2026, G41 §25 ESB Core → datamart ClickHouse (esb-extract GET-only per brand, ADR-040 Proposed); v16.2 — 1 Nov 2026, G39 §24 asisten analisis "Analisis bertahap" (text2sql POST /v1/analyze: rencana ≤3 query → eksekusi per PT → ringkasan AI); v16.1 — 1 Nov 2026, G38 §23 Text-to-SQL "Tanya Data" (Odoo → text2sql → 9router/Ollama → ClickHouse per PT); v16.0 — 1 Nov 2026, G37 §22 gateway LLM 9router + fallback Ollama untuk OCR tahap 2 (K25-01, ADR-037); v15.1 — 31 Okt 2026, G33 §20.11 notifikasi reward MGM + layar referral Super-App; v15.0 — 30 Okt 2026, G32 §21 mart & dashboard waste/yield (K25-08); v14.1 — 30 Okt 2026, G31b §20.10 dasar MGM per baris (`excluded_categ_ids`); v14.0 — 30 Okt 2026, G31 §20 engine MGM: referral, akrual, settle, clawback; v13.0 — 29 Okt 2026, G30 §19 kebijakan MGM per PT (K25-10); v11.0 — 25 Okt 2026, G26 §17 pesanan online wajib lunas: VA, e-wallet, transfer + bukti, kiosk; v10.1 — 24 Okt 2026, G24 §16 entitas WTZ Wetzel's Pretzels; v10.0 — 21 Okt 2026, G23 §15 reservasi meja & pre-order berjadwal; v9.1 — 19 Okt 2026, G22 §14 sinkron r15 K1–K3 + L-82; v9.0 — 19 Okt 2026, G22 §14; v8.0 — G21 §13; v7.0 — G20 §12; v6.0 — G19 §11; v5.1 — 10 Okt 2026, privasi G18 L-21; v5.0 — 9 Okt 2026; §8 v3.x, §9 v4.x Fase 1, §10 v5.0 Fase 3 penjualan online; **§27 G43 v19.1** migrasi ESB → Odoo + arsip histori `efn_legacy_history`, ADR-042 Accepted)
 
 Status: **Draft untuk Fase 0 / PoC**. Mengikuti rekomendasi ADR yang masih `Proposed`. Semua service (Odoo, BFF, Next.js, worker) wajib memakai nama, path, dan payload di dokumen ini. Perubahan kontrak = ubah dokumen ini dulu.
 
@@ -5083,3 +5083,293 @@ runtime belum).
 | QA + security | test kontrak lintas sisi (vektor), UAT persona, review row policy | 3 | efn-qa-engineer, efn-security-reviewer |
 | Konfigurasi KPI (L-200) | model `efn.insight.sm.kpi` + registri + audit + seed (Odoo ±1); `dim_sm_kpi_config`, view menghitung definisi, `qty_received` (ETL/CH ±1); baca `v_sm_kpi_config` + test parity JSON (web ±0,5) | +2–2,5 | odoo-engineer, data-ai, frontend |
 | **Total** | | **±31,5–40** (±27–35,5 tanpa bagian #114/#117) | |
+
+### 28.14 G51 — SMD end-to-end: data demo lengkap + SMD sebagai filter di halaman F&B Insight (v21.0, 21 Nov 2026; ADR-041 §3.5, Proposed)
+
+> **Ringkasan manajemen.** Direksi kini bisa memilih **SMD** di halaman Insight yang sama dengan brand F&B (Ringkasan,
+> Penjualan, Pembayaran, Distribusi, Forecast), tidak lagi pindah ke menu terpisah. Halaman khusus F&B (produksi CK,
+> menu/resep, kualitas data ESB) menulis "Tidak berlaku untuk SMD". Omzet SMD tetap **termasuk PPN**, sedangkan omzet F&B
+> dari ESB tanpa pajak; total gabungan wajib diberi label "basis campuran". Data demo SMD dilengkapi (transfer DC, PO,
+> susut, pembayaran, umur simpan, histori forecast 8 minggu) **hanya di DB demo** dan tidak mengubah default production.
+> Estimasi architect: **±15–20 hari-engineer** (±1,5–2 minggu kalender dengan 3 builder paralel). Keputusan yang perlu
+> klien: tampilan total gabungan F&B + SMD (Q-SM46).
+
+Dasar: spesifikasi lead `docs/design/G51_SMD_E2E_LEAD_SPEC.md` (keputusan pemilik proyek 21 Nov 2026: "lengkapi data end
+to end"; default pertanyaan 1–4 diterima). **Nama view, kolom, route, dan flag di spesifikasi lead mengikat**; bagian ini
+menambah aturan yang belum tertulis di sana dan mencatat selisih dengan §26/§28.13. Bila bertentangan, spesifikasi lead
+menang untuk nama; bagian ini menang untuk aturan cakupan, keamanan, dan batas data demo. Status: **kontrak, belum
+dibangun.** Penomoran: keputusan **L-219..L-233**, pertanyaan klien **Q-SM46..Q-SM47**.
+
+#### 28.14.1 SMD sebagai filter di halaman F&B (B1) — meralat §26.8, §26.9, §28.13.6
+
+**Siapa.** Chip **SMD** di filter "Brand / PT" adalah toggle filter (menggantikan chip tautan PR #133) **hanya** untuk
+sesi `eis2` yang memenuhi ketiga syarat: `INSIGHT_SM_ENABLED=true`, `"exec" ∈ roles`, dan `codes ∩ SM_CODES ≠ ∅`.
+Sesi SM tanpa `exec` tetap memakai sidebar Supermarket. Untuk sesi itu `SMD` dibuang dari `pt` di halaman F&B (aturan §26.9
+"di luar sesi dibuang" diperluas: di luar sesi **atau** tanpa `exec`), dan chip SMD tidak ditampilkan.
+
+**Menu F&B.** §28.13.6 menyebut "sesi tanpa kode ESB → menu F&B disembunyikan". Diralat: menu F&B tampil bila
+`codes ∩ ESB_CODES ≠ ∅` **atau** sesi memenuhi syarat chip SMD di atas. Direksi PT SMD tanpa PT F&B melihat halaman F&B
+yang mendukung SMD dengan SMD terpilih default.
+
+**Halaman.**
+
+| Halaman (path) | SMD | Sumber SMD (view `efn_insight`) | Catatan |
+|---|---|---|---|
+| Ringkasan (`/`) | didukung | `v_sm_outlet_daily`, `v_sm_sales_daily`, `v_sm_margin_daily` (HPP %) | lihat §28.14.2 untuk HPP % |
+| Penjualan (`/sales`) | didukung | `v_sm_sales_daily`, `v_sm_product_sales_daily` | `sales_channel_split` (takeaway/dine-in) tidak berlaku untuk SMD |
+| Pembayaran (`/payments`) | didukung | `v_sm_payment_daily` | MDR SMD "—" (tidak ada konfigurasi MDR SMD di mart) |
+| Distribusi (`/distribution`) | didukung | `v_sm_dc_fill_rate`, `v_sm_replenishment`, `v_sm_replenishment_line` | §28.14.6 |
+| Forecast (`/forecast`) | didukung | `v_sm_forecast_accuracy_weekly`, `v_sm_forecast_daily` | ESB tetap "segera" |
+| Produksi vs penjualan (`/flow`), kartu menu/BOM/FIN, Kualitas data ESB (`/data-quality`) | **tidak berlaku** | — | hanya SMD dipilih → "Tidak berlaku untuk SMD"; campuran → kartu memuat brand ESB saja + catatan "SMD tidak termasuk" |
+
+**Filter cabang (meralat §26.9 baris `branch`).** Format `<prefix>:<id>`, prefix ∈ `{pb, wtz, bacha, imd, cup, sm}`.
+`sm:<warehouse_id>` berlaku bila: `warehouse_id` UInt32 > 0, ada di `wids` sesi, dan baris `v_sm_warehouse_list`-nya
+`outlet_type = 'outlet'` (DC tidak muncul sebagai cabang; di `/distribution` DC tampil sebagai asal kirim). Batas 50 nilai
+berlaku untuk gabungan ESB + SM. Nilai `sm:*` yang tidak sah dibuang (default, bukan error). Daftar cabang menampilkan
+outlet SMD dengan kode PT `SMD` (sumber `v_sm_warehouse_list`). Filter `cat`/`product` F&B (string ESB) **tidak** diterapkan
+ke query SM; untuk SMD halaman F&B memakai semua kategori (filter kategori SM tetap di halaman SM, §28.13.11).
+
+**Loader (L-222).**
+1. Query ESB dikirim bila `pt ∩ ESB_CODES ≠ ∅`, dengan scope v1 (§26.7) dan `codes` = `codes ∩ ESB_CODES`.
+2. Query SM (`chQuerySm`) dikirim bila `SMD ∈ pt` dan sesi memenuhi syarat chip, dengan setting sig2 sesi **apa adanya**
+   (§28.13.6; tidak ada sig2 baru per halaman). Lapis 1: `company_id IN {cids}` dan `warehouse_id IN {wh}`, `wh` = cabang
+   `sm:*` terpilih, atau semua `wids` tanpa 0 bila tidak ada.
+3. Hasil digabung **per kode PT** di server insight-web. Baris SMD diberi `company_code = 'SMD'` dari `v_sm_warehouse_list`,
+   bukan dari input.
+4. Satu sisi gagal/timeout → kartu tetap tampil dengan sisi yang berhasil dan catatan "data SMD/F&B tidak tersedia", bukan
+   error halaman (pola semaphore §26.7).
+5. Ekspor CSV kartu campuran: kolom `company_code` + kolom basis (`incl_tax` 1/0) per baris; aturan C3 (§26.13) dan k-anonim
+   tetap.
+
+#### 28.14.2 Basis uang di halaman F&B (L-223)
+
+| Angka | ESB (F&B) | SMD | Aturan gabungan |
+|---|---|---|---|
+| Omzet | `net` ESB (tanpa PB1/SC, §25.6) | `net_sales_incl_tax` (**termasuk PPN**, L-202) | per-PT: label basis di setiap baris/legenda; total gabungan berlabel "Total (basis campuran: F&B tanpa pajak, SMD termasuk PPN)" sampai Q-SM46 dijawab |
+| HPP % | `cogs / net` | `cogs / net_sales` dari `v_sm_margin_daily` (**tanpa PPN**) | tidak pernah `cogs / net_sales_incl_tax`; HPP % gabungan = Σ cogs / Σ omzet **tanpa pajak** kedua sisi |
+| Transaksi, rata-rata/transaksi | struk ESB | `orders`, `avg_basket_incl_tax` (`v_sm_outlet_daily`) | rata-rata gabungan tidak dihitung (basis beda); tampil per PT |
+| Porsi PT (`exec_pt_share`) | `net` | `net_sales_incl_tax` | label basis campuran; Q-SM46 |
+| Pembayaran | nominal ESB | `amount` (`v_sm_payment_daily`, nominal dibayar, termasuk PPN) | sebasis (uang diterima) |
+
+#### 28.14.3 View ClickHouse baru dan perubahan (B2, L-224, L-225)
+
+Pola §28.13.9: `efn_dwh.v_sm_*` INVOKER dibungkus `efn_insight.v_sm_*` `SQL SECURITY DEFINER`, kolom eksplisit, inner join
+`dim_sm_warehouse` (data F&B tidak pernah masuk). Kolom **persis** spesifikasi lead:
+
+| View (kelas, `<PERS>`) | Kolom (urutan tetap) | Sumber & semantik |
+|---|---|---|
+| `v_sm_payment_daily` (W; exec, store) | `day Date, company_id UInt32, warehouse_id UInt32, outlet_type String, method_name String, method_type String, is_refund UInt8, amount Float64, payments UInt64` | `fact_pos_payment` ⋈ `dim_outlet` (store → warehouse) ⋈ `dim_sm_warehouse`. `day` = `toDate(payment_date)` (kolom sudah Asia/Jakarta). `amount` = Σ `amount` **termasuk** baris kembalian (`is_change`, bernilai negatif) = uang diterima bersih. `payments` = `countIf(is_change = 0)`. Metode Poin EFN (`is_loyalty_points`) tampil sebagai metode biasa. Tanpa data kartu/referensi (sudah di mart) |
+| `v_sm_product_sales_daily` (W; category, exec, store) | `day Date, company_id UInt32, warehouse_id UInt32, outlet_type String, product_id UInt32, categ_id UInt32, qty_sold Float64, net_sales Float64, net_sales_incl_tax Float64` | `efn_dwh.v_sm_sales_product_daily` (internal G47, nama mirip, **jangan tertukar**). Semua `line_kind` per `product_id` sehingga Σ = `v_sm_sales_daily`; UI "top produk" menyaring `qty_sold > 0`. **Tanpa `cogs`** (store boleh membaca view ini; L-193) |
+| `v_sm_forecast_daily` (W; category, dc, exec, store) | `company_id UInt32, warehouse_id UInt32, outlet_type String, product_id UInt32, categ_id UInt32, forecast_date Date, yhat Float64, p10 Float64, p90 Float64, run_id UInt32, generated_at DateTime` | `fact_forecast_daily` ⋈ `dim_forecast_run`. Run = per company, `state = 'ok'`, `kind = 'daily'`, `argMax` `generated_at` (bukan `is_active` Odoo, yang tidak ada di mart). `run_id` = `toUInt32` id Odoo, `generated_at` = `toDateTime(…, 'UTC')`. View tidak menyaring tanggal; halaman menyaring `[hari ini WIB, +13]` |
+
+- **`v_sm_product_list`**: kolom **`shelf_life_days UInt16`** di akhir (setelah `active`). Sumber: kolom baru
+  `dim_product.shelf_life_days UInt16 DEFAULT 0` (ALTER `ADD COLUMN IF NOT EXISTS`), diisi job produk yang ada dari
+  `product_template.expiration_time` bila `use_expiration_date` dan nilainya > 0, selain itu 0; dibatasi 0..65535. Kolom
+  dibaca hanya bila terlihat di `information_schema.columns` (`product_expiry` terpasang dan di-grant; pola L-211), agar DB
+  F&B tanpa `product_expiry` tidak gagal. Field CE: `product.template.expiration_time` Integer tersimpan, modul
+  `product_expiry` [V source 19.0, 21 Nov 2026]. Backfill: reset watermark job produk (pola §28.13.8 baris `dim_product`).
+- **Jumlah policy SM = 32** (29 + 3). Konstanta di `insight-sm-policy.sh` dan `test_insight_sm_access.py` diubah bersama;
+  `clickhouse-init.sh` gagal bila tidak cocok (fail closed, §28.13.7).
+- **Grant definer baru** (`insight-sm-access.sql`, per objek): `efn_dwh.fact_pos_payment`, `efn_dwh.fact_forecast_daily`,
+  `efn_dwh.dim_forecast_run`, serta tiga view `efn_dwh` baru. Tanpa grant wildcard.
+- **Grant ETL Odoo baru** hanya kolom yang dibaca: `product_template.expiration_time` (blok bersyarat `\if`), dan kolom
+  untuk rekonstruksi stok §28.14.7 bila belum ada di blok G47.
+- Test negatif §28.13.7 diperluas: (9) `personas=category` mendapat 0 baris di `v_sm_payment_daily`; (10) `personas=store`
+  dengan `wids=22` tidak melihat warehouse 21 di ketiga view baru; (11) `v_sm_product_sales_daily` tidak punya kolom biaya.
+
+#### 28.14.4 Halaman Forecast (B3, L-226)
+- Untuk SMD: forecast vs aktual per minggu 8 minggu (`v_sm_forecast_accuracy_weekly`), WAPE = Σ`abs_error` / Σ`actual_qty`
+  dan bias = (Σ`forecast_qty` − Σ`actual_qty`) / Σ`actual_qty` per outlet dan per kategori (agregasi ulang dari jumlah
+  mentah, bukan rata-rata persen); forecast 14 hari (`v_sm_forecast_daily`, pita p10–p90); ambang warna `thr.wape.*`,
+  `thr.bias.*` (§28.13.8c).
+- Tautan "usulan min/max di Odoo" = **daftar** `efn.demand.forecast` lewat action
+  `efn_demand_forecast.efn_demand_forecast_action` (ada di repo, `views/efn_demand_forecast_views.xml`). Ini **satu entri
+  allowlist baru** di `lib/odoo-links.ts` (§28.13.11, L-213); tanpa id di URL.
+- Kartu yang sama di `/exec` dan `/category` memakai query yang sama. Tanpa run `ok` → "Belum ada forecast", bukan nol.
+
+#### 28.14.5 Umur simpan & sisa umur lot (B4, L-227)
+Tabel di halaman Kategori dan Toko: produk, kategori, `shelf_life_days` (0 → "tidak dikelola"), lot terdekat kedaluwarsa
+per outlet (`v_sm_lot_expiry`: `lot_name`, `expiration_date`, `days_left`, `qty`, `value_cost`), cakupan persona dan row policy
+sama dengan `v_sm_lot_expiry` (store hanya tokonya; nilai HPP boleh, L-203). **Batasan:** `v_sm_lot_expiry` hanya memuat lot
+yang **punya alert** (`near|markdown|expired`, state `open|actioned`). Lot di luar ambang alert tidak terlihat; produk itu
+tampil dengan umur simpan saja dan teks "tidak ada lot dalam ambang pantau" (Q-SM47). Butuh `ETL_ENABLE_SM_EXPIRY=true` dan
+`efn_expiry_monitor.enabled=true` di Odoo.
+
+#### 28.14.6 Distribusi SMD (B5, L-228)
+`/distribution` dengan SMD: fill rate DC → outlet (qty dan baris, `fill.basis`/`fill.level` §28.13.8c), keterlambatan
+(`on_time` dengan `fill.grace_days`), top produk kurang kirim (Σ `qty_approved − qty_basis` > 0 dari `v_sm_dc_fill_rate`),
+per outlet, plus status usulan (`v_sm_replenishment`, `v_sm_replenishment_line`). Ini memberi konsumen UI untuk
+`v_sm_replenishment_line`, yang di L-218 ditunda ke fase 2; L-218 tetap untuk kartu/view lain. Halaman F&B
+`dist_ck_delivery`/`dist_transfer` (ESB, FIN) tidak berlaku untuk SMD.
+
+#### 28.14.7 Rekonstruksi histori stok untuk GMROI (B6, L-229)
+
+**Flag** `ETL_SM_STOCK_RECONSTRUCT_DAYS` (ETL, int 0..400; di luar rentang → 0). **Default 0 = mati, production 0.**
+Demo/prod-lokal: 90. Butuh `ETL_ENABLE_SM=true`.
+
+**Algoritme.** Untuk setiap PT `ETL_SM_COMPANIES`, setiap hari `d` dalam `[hari ini WIB − N, hari ini WIB − 1]`:
+1. Lewati hari `d` bila ada **snapshot nyata** untuk PT itu (baris `agg_sm_stock_daily` dengan `day = d` yang berasal dari
+   snapshot, atau `stock_snapshot_run` selesai untuk `d`). Pengecekan dilakukan **tiap siklus** sebelum menulis.
+2. `qty(d, wh, product)` = quant saat ini (sumber yang sama dengan job snapshot) − Σ move `done` masuk ke lokasi internal
+   warehouse dengan tanggal WIB > `d` + Σ move `done` keluar dari lokasi internal warehouse dengan tanggal WIB > `d`
+   (`stock_move.date`, kolom `location_id`/`location_dest_id`, `stock_location.usage = 'internal'` dan `warehouse_id`;
+   move internal di dalam warehouse yang sama tidak dihitung). Qty dikonversi ke UoM produk (rumus L-208).
+3. `stock_value_cost` = qty × `standard_price` PT **saat ini** (bukan HPP historis).
+4. Tulis ke `agg_sm_stock_daily` hanya kunci yang belum ada.
+
+**Tidak pernah menimpa snapshot nyata.** Tabel `agg_sm_stock_daily` adalah `ReplacingMergeTree(computed_at)`: baris
+rekonstruksi yang ditulis belakangan **akan** mengalahkan baris snapshot dengan kunci sama. Karena itu langkah 1 wajib,
+dan architect mengusulkan kolom penanda **`is_reconstructed UInt8 DEFAULT 0`** (ALTER `ADD COLUMN IF NOT EXISTS`). Kolom ini
+dipakai oleh `v_sm_freshness` (`source_as_of` mengabaikan baris rekonstruksi) dan label "perkiraan" di kartu GMROI. Ini
+**tambahan di luar spesifikasi lead dan menunggu persetujuan lead.** Tanpa kolom itu, baris rekonstruksi diberi
+`snapshot_ts` = `d` 23:59:59 WIB dan view tidak bisa membedakannya.
+
+**Kolom yang tidak bisa direkonstruksi** (diisi tetap): `free_qty` = `on_hand_qty`; `min_qty`/`max_qty`/`tracked` = orderpoint
+**saat ini** (riwayat orderpoint tidak disimpan CE); `sold_28d`/`qty_sold_28d` dari `fact_sales_line`; bucket umur
+(`value_age_*`), sisa umur lot (`value_exp_*`), dan `value_no_lot` = 0. Kartu yang membaca bucket (DC-1 "stok > N hari",
+DC-4) memakai hari dengan snapshot nyata saja.
+
+**Keterbatasan (wajib di tombol "i" GMROI saat ada baris rekonstruksi):** (a) **lot**: tidak per lot, tanpa umur/kedaluwarsa;
+(b) **konsinyasi**: stok milik pihak lain (`owner_id`) tidak dibedakan; DSD tanpa move ke DC tidak ada; (c) **revaluasi**:
+nilai memakai biaya standar hari ini, perubahan harga beli lampau tidak terlihat; (d) koreksi stok (inventory adjustment)
+tercatat sebagai move sehingga ikut, tetapi move yang dibatalkan/dihapus tidak; (e) **data demo**: order POS histori seed
+dibuat tanpa stock move (`docs/runbooks/demo-supermarket-seed.md` §3), jadi penjualan histori **tidak** mengurangi stok
+rekonstruksi (lihat selisih #2 di §28.14.12).
+
+**PostgreSQL tetap sumber kebenaran.** Rekonstruksi adalah turunan ETL dari replica (ADR-003), bisa dihapus dan dihitung
+ulang. Tidak ada tulis ke Odoo dan tidak ada tulis langsung API → ClickHouse.
+
+#### 28.14.8 Histori forecast as-of untuk demo (A6, L-230)
+
+Tujuan: `fact_forecast_accuracy` terisi 8 minggu di DB demo. **Default production tidak berubah**: validasi ingest Odoo
+(`date` ∈ [hari ini, hari ini + horizon], §28.2), hook `_efn_on_run_closed_ok` (memicu usulan replenishment), default
+worker, dan `ETL_FORECAST_ACCURACY_WEEKS` (default 2) tetap.
+
+Fakta yang membatasi (dibaca dari kode): ingest RPC menolak tanggal sebelum hari ini; `efn_forecast_run_close(ok)` menjadikan
+run **aktif** dan memicu usulan; akurasi ETL memakai run `ok` `daily` terakhir dengan `toDate(generated_at, WIB) <
+forecast_date`. Jadi run as-of lewat RPC biasa tidak mungkin tanpa mengubah perilaku production.
+
+**Jalur yang dipakai:**
+1. **Hitung** dengan engine worker sungguhan lewat opsi CLI baru `python -m efn_forecast run --company SMD --as-of
+   YYYY-MM-DD --out <file.json>` (tanpa env default; tidak menulis ke Odoo bila `--as-of` dipakai). `as_of` = **Minggu**;
+   data penjualan/stok hanya ≤ `as_of` (parameter `runner` yang sudah ada).
+2. **Muat** ke Odoo DB demo oleh seed (`odoo shell`, ORM): `efn.forecast.run` `state = 'ok'`, `kind = 'daily'`,
+   **`is_active = False`**, `generated_at` = `as_of` 23:00 WIB, `closed_at` = waktu seed, `model_version` berakhiran
+   **`+asof`**. `efn.forecast.daily` = baris file. Hook `_efn_on_run_closed_ok` **tidak** dipanggil, dan run aktif tidak
+   disentuh. Bila worker belum mendukung `--as-of`, seed boleh memakai generator setara (rata-rata 56 hari ≤ `as_of` ×
+   faktor hari) asalkan `model_version` = `seed-baseline+asof` dan dicatat di runbook.
+3. **ETL** apa adanya (`dim_forecast_run`, `fact_forecast_daily` via cursor `write_date`). Env demo
+   `ETL_FORECAST_ACCURACY_WEEKS=8`.
+
+`closed_at` = waktu seed (bukan `as_of`) agar autovacuum Odoo (`efn_forecast.daily_retention_days`, 35 hari) tidak
+menghapus baris sebelum ETL menyalinnya. Setelah 35 hari baris run non-aktif hilang di Odoo tetapi tetap di
+`fact_forecast_daily` (perilaku yang sudah ada untuk semua run non-aktif, bukan baru di G51).
+
+#### 28.14.9 Seed data demo (A1–A6, L-231)
+
+| Aturan | Isi |
+|---|---|
+| Lingkup | DB demo saja (`efn_smd_demo` atau prod-lokal gladi), **hanya** company `efn_brand_code = 'SMD'`. Skrip berhenti (`SEED ABORT`, exit 2) bila `APP_ENV=production`, DB tidak memuat xmlid demo `efn_setup_supermarket`, atau company SMD tidak ada |
+| Jalur tulis | Odoo ORM lewat `odoo shell` (pola tahap 1–11). **Tidak** ada SQL langsung ke tabel Odoo, **tidak pernah** menulis ClickHouse; mart terisi lewat ETL |
+| Independen | Tidak membaca/menulis modul atau data brand F&B/ESB (`efn_legacy_history`, `efn_esb`, `map_esb_odoo`) |
+| Idempoten | Penanda per tahap: catatan `[DEMO SUPERMARKET]` + `origin`/`ref` berprefiks `DEMO-G51-<tahap>-` (mis. `DEMO-G51-A1-SMD03-20260901`); run ulang melewati yang sudah ada |
+| Tanggal | Move/picking/scrap dibuat lalu `date`/`date_done` di-backdate ke hari skenario (WIB), sebelum ETL pertama membacanya |
+| A1 | Transfer SMDDC → outlet 90 hari dari usulan `approved` (`proposal.picking_id` terisi); ±5–8% baris kurang kirim, sebagian dengan backorder. Rantai dua langkah outlet (L-207) dihormati |
+| A2 | PO supplier → DC 90 hari, `purchase` + diterima; ±10% `date_planned` terlewati; `orderpoint_id` diisi bila ada orderpoint terkelola |
+| A3 | `stock.scrap` outlet ±1–3/outlet/hari, tag `stock.scrap.reason.tag` CE (kedaluwarsa, rusak, kualitas); nilai dari valuasi CE (L-211) |
+| A4 | `pos.payment` untuk order sintetis yang belum punya pembayaran (tunai, QRIS, debit, kredit), Σ = `amount_paid`, `payment_date` = `date_order`; sesi tetap `closed` tanpa jurnal |
+| A5 | `expiration_time` per kategori bila belum terisi. Catatan: tahap 2 seed G48 **sudah** mengisi umur simpan per kelompok; A5 = verifikasi + isi yang kosong, tidak menimpa |
+| A6 | §28.14.8 |
+
+#### 28.14.10 Deploy dan pemetaan outlet online (L-232, L-233)
+- **Volume anonim addons Odoo.** Image Odoo resmi mendeklarasikan `VOLUME /mnt/extra-addons`; `docker compose up` mewarisi
+  volume anonim container lama saat recreate, sehingga image baru menjalankan addon lama sementara DB sudah di-upgrade.
+  Setiap `up` setelah build image Odoo **wajib** `--renew-anon-volumes` (`-V`); `scripts/deploy.sh` sudah memakainya
+  (gladi `efn-prod` 21 Nov 2026, `docs/runbooks/multi-env-local.md` §5.2). Data persisten di volume bernama `odoo-data`
+  tidak terpengaruh.
+- **`efn_online_order` tidak wajib untuk SM.** Job `sm_dims_online_outlet` (`dim_online_outlet`, §28.13.8a) **opsional**:
+  dijalankan hanya bila `efn_online_outlet` dan `efn_online_channel` terlihat oleh `efn_etl` (ada dan di-grant, blok grant
+  bersyarat). Bila tidak ada, mart SM lain tetap jalan dan semua event perilaku dipetakan ke `warehouse_id = 0` (tingkat
+  PT). Meralat baris `dim_online_outlet` di tabel §28.13.8 (job `sm_dims` → `sm_dims_online_outlet`, opsional).
+
+#### 28.14.11 Flag & env baru
+| Flag / env | Lokasi | Default | Production | Demo / prod-lokal |
+|---|---|---|---|---|
+| `ETL_SM_STOCK_RECONSTRUCT_DAYS` | ETL | `0` | `0` | `90` |
+| `ETL_FORECAST_ACCURACY_WEEKS` (ada, G44) | ETL | `2` | `2` | `8` |
+| `--as-of`, `--out` (CLI, bukan env) | forecast-worker | tidak ada | tidak dipakai | dipakai seed A6 |
+| `INSIGHT_SM_ENABLED` (ada) | Odoo + insight-web | `false` | §28.13.12 | `true` |
+
+Tidak ada secret baru. `deploy-validate`: `ETL_SM_STOCK_RECONSTRUCT_DAYS` integer 0..400, wajib `0` bila `APP_ENV=production`
+(usulan; devsecops).
+
+#### 28.14.12 Selisih spesifikasi lead ↔ kontrak yang ada (untuk efn-lead)
+1. **Menu F&B untuk sesi SM saja**: §28.13.6 menyembunyikan menu F&B bila tidak ada kode ESB; B1 butuh sebaliknya untuk
+   `exec`. Diralat di §28.14.1.
+2. **Rekonstruksi stok vs data demo**: order POS histori seed tanpa stock move, jadi B6 di demo tidak menurunkan stok
+   karena penjualan; GMROI demo memakai penyebut yang terlalu tinggi. Pilihan lead: (a) terima dengan label (Rp0, default);
+   (b) tambah tahap seed yang membuat picking POS agregat harian 90 hari (±1,5–2 hari-engineer; quant saat ini ikut turun).
+3. **Penanda baris rekonstruksi** (`is_reconstructed`) tidak ada di spesifikasi; tanpa itu kesegaran dan label "perkiraan"
+   tidak bisa dibedakan (§28.14.7).
+4. **As-of tidak bisa lewat RPC** tanpa mengubah validasi Odoo dan hook usulan; spesifikasi menyebut "worker sungguhan bila
+   mendukung". Jalur §28.14.8 = hitung di worker + muat ORM seed.
+5. **Basis omzet campuran** di total halaman F&B (ESB tanpa pajak, SMD termasuk PPN): spesifikasi hanya meminta label kartu.
+   Aturan total & porsi PT di §28.14.2, Q-SM46.
+6. **Lot terdekat kedaluwarsa** hanya untuk lot ber-alert (§28.14.5).
+7. **`v_sm_replenishment_line`** mendapat konsumen UI padahal L-218 menundanya; bukan konflik, hanya pengecualian.
+8. Tipe kolom view baru (`run_id UInt32`, `generated_at DateTime`, `Float64`) berbeda dari tabel sumber (`UInt64`,
+   `DateTime64(6)`, `Decimal`); view melakukan cast. Spesifikasi lead dipatuhi.
+9. Nama `v_sm_product_sales_daily` (baru, `efn_insight`) vs `v_sm_sales_product_daily` (internal `efn_dwh`, G47): rawan
+   tertukar; keduanya dipertahankan.
+
+#### 28.14.13 Keputusan (L-219..L-233)
+| # | Keputusan |
+|---|---|
+| L-219 | SMD = toggle filter di halaman F&B hanya untuk sesi `eis2` dengan `exec` + kode SM + `INSIGHT_SM_ENABLED`; sesi SM tanpa `exec` tetap lewat sidebar Supermarket dan `SMD` dibuang dari `pt`. Menu F&B tampil untuk sesi yang memenuhi syarat chip walau tanpa kode ESB (meralat §28.13.6). |
+| L-220 | Halaman yang mendukung SMD: `/`, `/sales`, `/payments`, `/distribution`, `/forecast`. `/flow`, kartu menu/BOM/FIN, dan Kualitas data ESB: "Tidak berlaku untuk SMD" bila hanya SMD; campuran → hanya brand ESB + catatan. |
+| L-221 | Nilai cabang SMD = `sm:<warehouse_id>` (⊆ `wids` tanpa 0, `outlet_type='outlet'`), prefix `sm` ditambahkan ke §26.9; batas 50 untuk gabungan. |
+| L-222 | Loader: query ESB (scope v1) + query SM (`chQuerySm`, sig2 sesi apa adanya) digabung per kode PT di server; kode PT SMD dari view; satu sisi gagal = kartu parsial berlabel. |
+| L-223 | Omzet SMD di halaman F&B termasuk PPN (L-202) dengan label; HPP % SMD dari basis tanpa PPN; total/porsi gabungan berlabel "basis campuran" sampai Q-SM46. |
+| L-224 | View baru `v_sm_payment_daily`, `v_sm_product_sales_daily`, `v_sm_forecast_daily` (kolom, kelas W, persona sesuai spesifikasi lead); jumlah policy SM 32; grant definer per objek `fact_pos_payment`, `fact_forecast_daily`, `dim_forecast_run`; `v_sm_product_sales_daily` tanpa kolom biaya. |
+| L-225 | `v_sm_product_list.shelf_life_days UInt16` (kolom terakhir) dari `dim_product.shelf_life_days` = `expiration_time` bila `use_expiration_date` dan > 0, selain itu 0; dibaca bersyarat kolom terlihat. |
+| L-226 | Forecast SMD: akurasi 8 minggu + forecast 14 hari dari run `ok` `daily` terbaru per company (`argMax generated_at`); tautan daftar `efn.demand.forecast` = entri allowlist baru. |
+| L-227 | Tabel umur simpan memakai `v_sm_lot_expiry` + `shelf_life_days`; lot tanpa alert tidak terlihat (Q-SM47). |
+| L-228 | Distribusi SMD dari `v_sm_dc_fill_rate`, `v_sm_replenishment`, `v_sm_replenishment_line`; pengecualian L-218 untuk view terakhir. |
+| L-229 | `ETL_SM_STOCK_RECONSTRUCT_DAYS` (default/production 0, demo 90): rekonstruksi stok harian dari `stock_move` mundur dari quant saat ini, nilai `standard_price` saat ini, ke `agg_sm_stock_daily`; tidak pernah menimpa hari dengan snapshot nyata (cek tiap siklus); keterbatasan lot/konsinyasi/revaluasi wajib tampil; usulan kolom `is_reconstructed` menunggu lead. |
+| L-230 | Histori forecast as-of demo = hitung worker (`--as-of`, `--out`) + muat ORM seed (`is_active=False`, `generated_at` = Minggu 23:00 WIB, `model_version` `+asof`, tanpa hook usulan); validasi Odoo, default worker, dan `ETL_FORECAST_ACCURACY_WEEKS=2` production tidak berubah. |
+| L-231 | Seed A1–A6: DB demo, PT SMD saja, ORM `odoo shell`, tanpa SQL langsung ke Odoo, tidak pernah menulis ClickHouse, idempoten (`DEMO-G51-*`), abort di production. |
+| L-232 | `up` Odoo setelah build image wajib `--renew-anon-volumes` (volume anonim `/mnt/extra-addons`); sudah di `scripts/deploy.sh`. |
+| L-233 | `efn_online_order` tidak wajib untuk SM: job `sm_dims_online_outlet` opsional (deteksi tabel terlihat); tanpa itu event → `warehouse_id = 0`. |
+
+#### 28.14.14 Pertanyaan klien baru
+- **Q-SM46** (Pemilik/Finance) Di halaman F&B, perlukah **total gabungan** omzet F&B + SMD? Basisnya berbeda (F&B tanpa
+  PB1/SC, SMD termasuk PPN), sehingga total dan porsi PT tidak sebanding. Default: total tampil berlabel "basis campuran".
+  Alternatif: (a) tanpa total gabungan, hanya per PT (Rp0, ±0,5 hari); (b) SMD ditampilkan tanpa PPN **khusus** di halaman
+  F&B (±0,5 hari, tetapi angka SMD beda dengan dashboard SM).
+- **Q-SM47** (Ops/Category) Tabel umur simpan cukup menampilkan lot yang sudah masuk ambang pantau (alert), atau perlu semua
+  lot? Semua lot butuh mart lot baru dari snapshot (±2 hari-engineer + review volume). Default: lot ber-alert saja.
+
+#### 28.14.15 Risiko & belum terverifikasi
+| Risiko | Mitigasi |
+|---|---|
+| R-T22 (lanjutan) Angka gabungan F&B + SMD disalahartikan (basis pajak beda) | label basis wajib, HPP % selalu tanpa pajak, Q-SM46 |
+| R-T22 (lanjutan) GMROI dari stok rekonstruksi dianggap akurat | default mati di production, label "perkiraan" + keterbatasan, tidak menimpa snapshot nyata |
+| R-S22 (lanjutan) Query SM di halaman F&B membuka outlet/persona di luar sesi | tetap sig2 sesi + row policy kelas W + persona allowlist; test negatif (9)–(11) |
+| R-T06 Data demo tercampur production | seed abort di production, penanda `DEMO-G51-*`, DB demo terpisah |
+
+**Belum terverifikasi:** semua perilaku runtime (tidak ada kode G51 yang dibaca selain kode G44/G47/G48 yang ada); kemampuan
+worker menerima `--as-of` (belum ada di kode, `runner.py` sudah memisahkan `as_of`); backdate `stock.move.date` setelah
+`done` lewat ORM tanpa efek samping valuasi; nilai `stock.move.value` scrap demo; cara baca `standard_price` jsonb per company
+(sama dengan §28.13.15); konsinyasi (`owner_id`) di DB demo. **Terverifikasi** di source Odoo 19.0 (21 Nov 2026):
+`product.template.expiration_time` Integer tersimpan (`product_expiry/models/product_product.py`).
+
+#### 28.14.16 Estimasi (architect)
+| Komponen | Hari-engineer | Pemilik |
+|---|---|---|
+| Seed A1–A5 + runbook | 3–4 | efn-odoo-engineer (pemeriksaan efn-odoo-functional untuk rantai DC & scrap) |
+| A6: worker `--as-of`/`--out` + muat ORM | 1,5–2 | efn-data-ai-engineer + efn-odoo-engineer |
+| ETL: `shelf_life_days`, rekonstruksi stok + test | 2,5–3,5 | efn-data-ai-engineer |
+| ClickHouse: 3 view + kolom + grant + policy 32 + harness | 1–1,5 | efn-data-ai-engineer + efn-devsecops-engineer |
+| insight-web: chip SMD, loader gabungan, 5 halaman, forecast, umur simpan, distribusi, label basis + Vitest | 5–6,5 | efn-frontend-engineer (+ efn-uiux-designer) |
+| QA + security | 1,5–2 | efn-qa-engineer, efn-security-reviewer |
+| **Total** | **±15–20** | |
