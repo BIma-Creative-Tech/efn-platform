@@ -193,6 +193,23 @@ Tampilan status: `StatusPill` = ikon (centang / segitiga seru / silang-lingkaran
 
 ## 3. Layout
 
+> **Revisi 21 Nov 2026 (review pemilik proyek; menang atas butir bertentangan di §3.1-§3.2 di bawah)** - dibangun di `services/insight-web`:
+> - **Sidebar 3 grup yang bisa dilipat** (Ringkasan: Ikhtisar/Penjualan/Pembayaran; Food & Beverage: Produksi vs Penjualan/Distribusi CK/Kualitas Data ESB;
+>   Supermarket: Eksekutif/Toko/DC/Kategori/Marketing/Forecast) dan **bisa diciutkan jadi rail ikon** (preferensi di `localStorage`, `aria-expanded`, tooltip `title`
+>   saat ciut). Tidak ada lagi pil "segera" di menu. Tautan Glosarium di footer sidebar. Visibilitas grup/menu = aturan sesi (`navGroups`), tidak dilonggarkan.
+> - **Filter langsung berlaku** (tanpa tombol Terapkan): chip brand dan preset tanggal seketika; tanggal kustom dan pilihan ganda di-debounce. Toolbar satu baris:
+>   tombol rentang tanggal (popover preset + kustom), segmented brand dengan "Semua" eksplisit, dropdown Cabang/Kategori/Produk **hanya bila berlaku** (kontrol
+>   nonaktif tidak lagi ditampilkan berderet), baris chip filter aktif. Halaman tanpa rentang tanggal (Kualitas Data, Forecast, Toko) menampilkan
+>   "Rentang tanggal tidak berlaku: ...". Rentang dibawa ke semua halaman termasuk Supermarket.
+> - **Cabang non-penjualan** (HEAD OFFICE, gudang, damage; `is_store = 0 AND is_ck = 0`) tidak muncul di opsi Cabang dan peringkat per cabang; di Distribusi
+>   digabung sebagai "Non-toko (HO/gudang/damage)".
+> - **Rekonsiliasi alur CK**: label "Hanya produk jadi (FIN)", tile Produksi toko, kartu "Kiriman CK per kelompok barang" (FIN/WIP/bahan baku/kemasan/supplies, qty
+>   per satuan), kolom Keterangan "kirim melebihi produksi".
+> - **Cakupan data**: banner per halaman bila rentang melebihi data tersedia; delta periode lalu "n/a" bila periode tidak tercakup.
+> - **Tabel**: kotak pencarian, dropdown filter kolom kategori/status, "n dari N baris"; **kolom Keterangan** untuk setiap status (alasan dengan angka).
+> - **Legend grafik** berupa chip HTML (swatch + penanda bentuk + total/nilai terakhir, toggle seri, `aria-pressed`); legend bawaan ECharts dimatikan.
+> - **Istilah**: glosarium (`/glosarium`) dan ikon "i" (popover bisa dibuka keyboard/sentuh) di label KPI, judul kartu, header kolom.
+
 ### 3.1 Shell
 
 ```

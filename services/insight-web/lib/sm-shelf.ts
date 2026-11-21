@@ -65,6 +65,15 @@ export function shelfStatus(r: Pick<ShelfRow, 'daysLeft' | 'shelfDays'>): { stat
   return { status: 'good', label: 'Aman' };
 }
 
+/** Alasan status sisa umur (kolom Keterangan): angka sisa hari terhadap batas 25% umur simpan atau 3 hari. */
+export function shelfReason(r: Pick<ShelfRow, 'daysLeft' | 'shelfDays'>): string {
+  if (r.daysLeft < 0) return `Lot terdekat sudah lewat tanggal kedaluwarsa ${Math.abs(r.daysLeft)} hari.`;
+  const limit = r.shelfDays > 0 ? Math.max(1, Math.round(r.shelfDays * 0.25)) : 3;
+  const basis = r.shelfDays > 0 ? `25% umur simpan ${r.shelfDays} hari` : 'batas 3 hari (umur simpan produk tidak dikelola)';
+  if (r.daysLeft <= limit) return `Sisa umur ${r.daysLeft} hari <= ${limit} hari (${basis}): segera dijual atau diberi markdown.`;
+  return `Sisa umur ${r.daysLeft} hari > ${limit} hari (${basis}).`;
+}
+
 /** "tidak dikelola" untuk 0, selain itu "14 hari". */
 export const fmtShelfLife = (days: number): string => (days > 0 ? `${days} hari` : 'tidak dikelola');
 

@@ -40,6 +40,29 @@ describe('katalog query', () => {
     }
   });
 
+  it('query baru review 21 Nov 2026 terdaftar (pergerakan, cakupan, kategori produk)', () => {
+    for (const n of ['mov_by_group', 'mov_by_category', 'mov_ck_product', 'esb_coverage', 'product_categories']) expect(names).toContain(n);
+    expect(QUERIES.mov_by_group.sql).toContain('v_esb_movement_daily');
+    expect(QUERIES.mov_ck_product.sql).toContain('v_esb_movement_daily');
+    expect(QUERIES.esb_coverage.sql).toContain('v_esb_coverage');
+    // qty tidak boleh dijumlah lintas uom: selalu dikelompokkan per uom.
+    expect(QUERIES.mov_by_group.sql).toMatch(/GROUP BY origin_kind, dest_kind, item_group, uom/);
+    expect(QUERIES.mov_by_category.sql).toMatch(/GROUP BY origin_kind, item_group, category, uom/);
+    // Bahan baku/kemasan dikirim gudang, bukan CK: kartu tidak boleh memfilter asal = CK saja.
+    expect(QUERIES.mov_by_group.sql).not.toContain("origin_kind = 'ck'");
+    expect(QUERIES.mov_by_category.sql).not.toContain("origin_kind = 'ck'");
+  });
+
+  it('cabang non-penjualan (HO/gudang/damage) dikeluarkan dari opsi filter dan peringkat per cabang', () => {
+    expect(QUERIES.list_branches.sql).toContain('is_store = 1 OR is_ck = 1');
+    for (const n of ['exec_branch_rank', 'flow_by_branch', 'flow_outliers', 'pay_by_branch'] as const) {
+      expect(QUERIES[n].sql, n).toContain('FROM efn_insight.v_esb_branch_list WHERE is_store = 1 OR is_ck = 1');
+    }
+    // Pembayaran: branch_id 0 (branchCode tak dikenal) tetap tampil; transfer ke non-toko digabung, bukan dibuang.
+    expect(QUERIES.pay_by_branch.sql).toContain('branch_id = 0 OR');
+    expect(QUERIES.dist_transfer.sql).toContain("'Non-toko (HO/gudang/damage)'");
+  });
+
   it('KPI transaksi memakai v_esb_sales_branch_daily (Q-INS2)', () => {
     expect(QUERIES.exec_kpi.sql).toContain('v_esb_sales_branch_daily');
     expect(QUERIES.exec_trend_daily.sql).toContain('v_esb_sales_branch_daily');

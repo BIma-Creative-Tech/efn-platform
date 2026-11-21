@@ -21,9 +21,20 @@ import { MARTS, martOff } from '@/lib/sm-freshness';
 import { fmtPctOrNa, fmtStampWib } from '@/lib/sm-format';
 import { biasStatus, wapeBias, wapeStatus } from '@/lib/sm-kpi';
 import { parseChDateTime, toNum } from '@/lib/sm-parse';
+import { joinNotes } from '@/lib/flow-notes';
+import type { SmThresholds } from '@/lib/sm-thresholds';
+import { biasReason, wapeReason } from '@/lib/status-reasons';
 
 export const dynamic = 'force-dynamic';
 export const metadata: Metadata = { title: 'Forecast' };
+
+/** Keterangan status WAPE (+ bias bila bukan Baik) untuk satu baris jumlah mentah (abs_sum, actual_sum, fc_sum). */
+function wapeNote(r: Record<string, unknown>, t: SmThresholds): string {
+  const wb = wapeBias(toNum(r.abs_sum), toNum(r.actual_sum), toNum(r.fc_sum));
+  const ws = wapeStatus(wb.wape, t);
+  const bs = biasStatus(wb.bias, t);
+  return joinNotes(wapeReason(wb.wape, ws, t), bs === 'warn' || bs === 'bad' ? biasReason(wb.bias, bs, t) : null);
+}
 
 const fmtBias = (b: number | null): string => (b === null ? 'n/a' : `${b > 0 ? '+' : ''}${fmtPct(b)} (${b > 0 ? 'kelebihan' : b < 0 ? 'kekurangan' : 'pas'})`);
 
@@ -61,11 +72,12 @@ export default async function ForecastPage({ searchParams }: { searchParams: Sea
       <FilterNotice adjusted={adjusted} />
 
       {mode !== 'only-smd' ? (
-        <section className="card" aria-label="Forecast brand F&B">
-          <p className="card-title">Brand F&amp;B (ESB)</p>
-          <p>Segera hadir (G44): prakiraan penjualan dan kebutuhan produksi per cabang dan produk, dengan rentang ketidakpastian.</p>
+        <div>
+          <p className="muted small" role="note">
+            Forecast brand F&amp;B (ESB) belum tersedia dan sedang disiapkan (G44): prakiraan penjualan dan kebutuhan produksi per cabang dan produk.
+          </p>
           {mode === 'mixed' ? <MixedScopeNote /> : null}
-        </section>
+        </div>
       ) : null}
 
       {!smdOn && sel.allowed ? (
@@ -168,6 +180,7 @@ export default async function ForecastPage({ searchParams }: { searchParams: Sea
                       { header: 'WAPE', align: 'right', cell: (r) => fmtPctOrNa(wapeBias(toNum(r.abs_sum), toNum(r.actual_sum), toNum(r.fc_sum)).wape) },
                       { header: 'Bias', align: 'right', cell: (r) => fmtBias(wapeBias(toNum(r.abs_sum), toNum(r.actual_sum), toNum(r.fc_sum)).bias) },
                       { header: 'Status WAPE', cell: (r) => <StatusPill status={wapeStatus(wapeBias(toNum(r.abs_sum), toNum(r.actual_sum), toNum(r.fc_sum)).wape, base.t)} /> },
+                      { header: 'Keterangan', cell: (r) => wapeNote(r, base.t), text: (r) => wapeNote(r, base.t) },
                       { header: 'SKU dievaluasi', align: 'right', cell: (r) => fmtQty(toNum(r.sku_n)) },
                     ]}
                   />
@@ -188,6 +201,7 @@ export default async function ForecastPage({ searchParams }: { searchParams: Sea
                       { header: 'WAPE', align: 'right', cell: (r) => fmtPctOrNa(wapeBias(toNum(r.abs_sum), toNum(r.actual_sum), toNum(r.fc_sum)).wape) },
                       { header: 'Bias', align: 'right', cell: (r) => fmtBias(wapeBias(toNum(r.abs_sum), toNum(r.actual_sum), toNum(r.fc_sum)).bias) },
                       { header: 'Status WAPE', cell: (r) => <StatusPill status={wapeStatus(wapeBias(toNum(r.abs_sum), toNum(r.actual_sum), toNum(r.fc_sum)).wape, base.t)} /> },
+                      { header: 'Keterangan', cell: (r) => wapeNote(r, base.t), text: (r) => wapeNote(r, base.t) },
                       { header: 'SKU dievaluasi', align: 'right', cell: (r) => fmtQty(toNum(r.sku_n)) },
                     ]}
                   />

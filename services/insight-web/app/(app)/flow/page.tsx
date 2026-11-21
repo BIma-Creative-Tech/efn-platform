@@ -1,17 +1,20 @@
 import type { Metadata } from 'next';
 import { Block } from '@/components/blocks';
 import { ChartCard } from '@/components/ChartCard';
+import { CkMovementCard, type GroupRow } from '@/components/CkMovementCard';
+import { CoverageNotice } from '@/components/CoverageNotice';
 import { DataTable, type TableRow } from '@/components/DataTable';
 import { FilterNotice } from '@/components/FilterNotice';
 import { MixedScopeNote, NotApplicableSmd } from '@/components/SmdNotice';
 import { InfoTip, KpiRow, KpiTile, PageHeader, Section } from '@/components/ui';
 import { summarize, type ChartSpec, type ColorToken } from '@/lib/chart-spec';
+import { comparable, deltaGuards } from '@/lib/coverage';
 import { fmtDayShort, fmtRange } from '@/lib/format';
-import { num, numOrNull, run, settle, TABLE_LOADERS } from '@/lib/loaders';
+import { loadCoverage, num, numOrNull, run, settle, TABLE_LOADERS } from '@/lib/loaders';
 import { pageCtx, type SearchParams } from '@/lib/page-ctx';
 import { TABLES } from '@/lib/table-defs';
 import { sellThroughStatus, STATUS_LABEL, T, type Status } from '@/lib/thresholds';
-import { pctDelta, pctOf, ppDelta } from '@/lib/vm';
+import { pctOf } from '@/lib/vm';
 
 export const dynamic = 'force-dynamic';
 export const metadata: Metadata = { title: 'Produksi vs Penjualan' };
@@ -42,7 +45,7 @@ export default async function FlowPage({ searchParams }: { searchParams: SearchP
     );
   }
 
-  const [sumR, brR, dailyR, weeklyR, outR, prodR, detailR] = await Promise.all([
+  const [sumR, brR, dailyR, weeklyR, outR, prodR, detailR, cov, groupR, catR] = await Promise.all([
     settle(run<Summary>('flow_summary', ctx)),
     settle(run<BranchRow>('flow_by_branch', ctx)),
     settle(run<TrendRow>('flow_daily_trend', ctx, { weekly: 0 })),
@@ -50,7 +53,12 @@ export default async function FlowPage({ searchParams }: { searchParams: SearchP
     settle(TABLE_LOADERS['flow-outliers'](ctx)),
     settle(TABLE_LOADERS['flow-products'](ctx)),
     single ? settle(run<{ day: string; ck_prod: number; ck_out: number; received: number; sold: number }>('flow_product_daily', ctx, { product_key: single })) : Promise.resolve(null),
+    loadCoverage(ctx),
+    settle(run<GroupRow>('mov_by_group', ctx)),
+    settle(TABLE_LOADERS['mov-category'](ctx)),
   ]);
+  // Sell-through membandingkan produksi/kirim dengan penjualan: periode lalu hanya bermakna bila produksi, pengiriman, dan penjualan FIN ada di data.
+  const { pctDelta, ppDelta } = deltaGuards(comparable(cov, ['production', 'delivery', 'fin_sold'], ctx.filters, ctx.prev));
 
   const trendSpec = (id: string, tab: string, rows: TrendRow[]): ChartSpec => {
     const cats = rows.map((r) => fmtDayShort(String(r.period)));
@@ -75,7 +83,12 @@ export default async function FlowPage({ searchParams }: { searchParams: SearchP
       <FilterNotice adjusted={adjusted} />
       {sel.smd ? <MixedScopeNote /> : null}
       <p className="notice">Berdasarkan arus barang, bukan stok: sell-through periode pendek dapat melebihi 100% atau menyesatkan karena stok awal/akhir toko tidak tersedia.</p>
-      <p className="muted small">Periode: {fmtRange(from, to)}. Hanya produk FIN (satuan EA).</p>
+      <CoverageNotice rows={cov} entities={['production', 'delivery', 'fin_sold']} range={{ from, to }} />
+      <p className="muted small">
+        Periode: {fmtRange(from, to)}. <strong>Hanya produk jadi (FIN, satuan EA)</strong>. CK juga mengirim barang setengah jadi (WIP); bahan baku, kemasan,
+        dan supplies dikirim gudang. Lihat kartu &ldquo;Kiriman barang per asal dan kelompok&rdquo; di bawah. Kiriman FIN yang lebih besar dari produksi berasal dari stok CK sebelum periode (stok awal tidak
+        tercatat di ESB).
+      </p>
 
       <Section title="Indikator utama" id="kpi">
         <Block result={sumR} title="Indikator utama">
@@ -86,8 +99,9 @@ export default async function FlowPage({ searchParams }: { searchParams: SearchP
             const stPrev = pctOf(num(s.sold_prev), num(s.supply_prev));
             return (
               <KpiRow>
-                <KpiTile label="Produksi CK" value={num(s.ck_prod_cur)} fmt="num" delta={{ value: pctDelta(num(s.ck_prod_cur), num(s.ck_prod_prev)), kind: 'pct', goodWhen: 'neutral' }} info="Jumlah (EA) hasil produksi Central Kitchen." />
-                <KpiTile label="Dikirim CK" value={num(s.ck_out_cur)} fmt="num" delta={{ value: pctDelta(num(s.ck_out_cur), num(s.ck_out_prev)), kind: 'pct', goodWhen: 'neutral' }} />
+                <KpiTile label="Produksi CK (hanya FIN)" value={num(s.ck_prod_cur)} fmt="num" delta={{ value: pctDelta(num(s.ck_prod_cur), num(s.ck_prod_prev)), kind: 'pct', goodWhen: 'neutral' }} info="Jumlah (EA) hasil produksi produk jadi (FIN) di Central Kitchen." />
+                <KpiTile label="Dikirim CK (hanya FIN)" value={num(s.ck_out_cur)} fmt="num" delta={{ value: pctDelta(num(s.ck_out_cur), num(s.ck_out_prev)), kind: 'pct', goodWhen: 'neutral' }} info="Hanya produk jadi (FIN). Bahan baku, WIP, kemasan, dan supplies yang dikirim CK tidak dihitung di sini." />
+                <KpiTile label="Produksi toko (dari WIP/bahan baku)" value={num(s.store_prod_cur)} fmt="num" info="Produk jadi (FINS/FINK) yang dibuat toko sendiri dari WIP kiriman CK dan bahan baku kiriman gudang. Ikut pasokan toko pada sell-through." />
                 <KpiTile label="Diterima toko" value={num(s.received_cur)} fmt="num" delta={{ value: pctDelta(num(s.received_cur), num(s.received_prev)), kind: 'pct', goodWhen: 'neutral' }} info="Diterima dari CK dan sumber lain." />
                 <KpiTile label="Terjual" value={num(s.sold_cur)} fmt="num" delta={{ value: pctDelta(num(s.sold_cur), num(s.sold_prev)), kind: 'pct', goodWhen: 'up' }} />
                 <KpiTile
@@ -211,6 +225,8 @@ export default async function FlowPage({ searchParams }: { searchParams: SearchP
           )}
         </Block>
       </Section>
+
+      <CkMovementCard groupR={groupR} catR={catR} />
     </>
   );
 }

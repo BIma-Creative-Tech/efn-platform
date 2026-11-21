@@ -12,6 +12,10 @@ export interface ColumnDef {
   sortable?: boolean;
   /** Sel menjadi tombol yang menambah filter `param` = nilai kolom `valueKey`. */
   drill?: { param: 'branch' | 'cat' | 'product'; valueKey: string };
+  /** Kolom teks panjang (Keterangan): boleh membungkus baris dan tidak ikut sortir. */
+  wrap?: boolean;
+  /** Tampilkan dropdown filter nilai untuk kolom ini (kategori/status). Kolom `fmt: 'status'` otomatis. */
+  filterable?: boolean;
 }
 
 export interface TableDef {
@@ -30,6 +34,7 @@ export const TABLE_NAMES = [
   'pay-branches',
   'dist-matrix',
   'dist-gap',
+  'mov-category',
   'dq-freshness',
   'dq-alias',
   'dq-no-sales',
@@ -51,7 +56,7 @@ export const TABLES: Record<TableName, TableDef> = {
     filename: 'peringkat-cabang',
     columns: [
       { key: 'branch_label', header: 'Cabang', align: L, drill: { param: 'branch', valueKey: 'branch_key' } },
-      { key: 'company_code', header: 'PT', align: L },
+      { key: 'company_code', header: 'PT', align: L, filterable: true },
       { key: 'net_sales', header: 'Penjualan bersih', fmt: 'idr', align: R },
       { key: 'trx', header: 'Transaksi', fmt: 'int', align: R },
       { key: 'avg_trx', header: 'Rata-rata per transaksi', fmt: 'idr', align: R },
@@ -64,11 +69,13 @@ export const TABLES: Record<TableName, TableDef> = {
     columns: [
       { key: 'branch_label', header: 'Cabang', align: L, drill: { param: 'branch', valueKey: 'branch_key' } },
       { key: 'product_label', header: 'Produk', align: L, drill: { param: 'product', valueKey: 'product_key' } },
+      { key: 'category', header: 'Kategori produk', align: L, filterable: true },
       { key: 'received', header: 'Diterima (bersih transfer)', fmt: 'num', align: R },
       { key: 'store_prod_qty', header: 'Produksi toko', fmt: 'num', align: R },
       { key: 'sold_qty', header: 'Terjual', fmt: 'num', align: R },
       { key: 'sell_through_pct', header: 'Sell-through', fmt: 'pct', align: R },
       { key: 'status', header: 'Status', fmt: 'status', align: L },
+      { key: 'reason', header: 'Keterangan', align: L, wrap: true, sortable: false },
     ],
   },
   'flow-products': {
@@ -76,6 +83,7 @@ export const TABLES: Record<TableName, TableDef> = {
     filename: 'arus-barang-produk',
     columns: [
       { key: 'product_label', header: 'Produk', align: L, drill: { param: 'product', valueKey: 'product_key' } },
+      { key: 'category', header: 'Kategori produk', align: L, filterable: true },
       { key: 'ck_prod_qty', header: 'Produksi CK', fmt: 'num', align: R },
       { key: 'ck_out_qty', header: 'Dikirim CK', fmt: 'num', align: R },
       { key: 'received', header: 'Diterima toko', fmt: 'num', align: R },
@@ -83,6 +91,7 @@ export const TABLES: Record<TableName, TableDef> = {
       { key: 'sold_qty', header: 'Terjual', fmt: 'num', align: R },
       { key: 'sell_through_pct', header: 'Sell-through', fmt: 'pct', align: R },
       { key: 'status', header: 'Status', fmt: 'status', align: L },
+      { key: 'reason', header: 'Keterangan', align: L, wrap: true, sortable: false },
     ],
   },
   'top-menu': {
@@ -90,8 +99,8 @@ export const TABLES: Record<TableName, TableDef> = {
     filename: 'menu',
     columns: [
       { key: 'menu_label', header: 'Menu', align: L },
-      { key: 'category', header: 'Kategori', align: L, drill: { param: 'cat', valueKey: 'category' } },
-      { key: 'brand_name', header: 'Brand', align: L },
+      { key: 'category', header: 'Kategori', align: L, filterable: true, drill: { param: 'cat', valueKey: 'category' } },
+      { key: 'brand_name', header: 'Brand', align: L, filterable: true },
       { key: 'net_sales', header: 'Penjualan bersih', fmt: 'idr', align: R },
       { key: 'qty_sold', header: 'Qty', fmt: 'num', align: R },
       { key: 'margin_pct', header: 'Margin kotor %', fmt: 'pct', align: R },
@@ -102,7 +111,7 @@ export const TABLES: Record<TableName, TableDef> = {
     filename: 'bauran-kategori-cabang',
     columns: [
       { key: 'branch_label', header: 'Cabang', align: L, drill: { param: 'branch', valueKey: 'branch_key' } },
-      { key: 'menu_category', header: 'Kategori', align: L },
+      { key: 'menu_category', header: 'Kategori', align: L, filterable: true },
       { key: 'net_sales', header: 'Penjualan bersih', fmt: 'idr', align: R },
       { key: 'share_pct', header: 'Porsi', fmt: 'pct', align: R },
     ],
@@ -111,7 +120,7 @@ export const TABLES: Record<TableName, TableDef> = {
     caption: 'Metode pembayaran dan MDR',
     filename: 'metode-pembayaran',
     columns: [
-      { key: 'payment_type', header: 'Tipe', align: L },
+      { key: 'payment_type', header: 'Tipe', align: L, filterable: true },
       { key: 'method', header: 'Metode', align: L },
       { key: 'cnt', header: 'Jumlah', fmt: 'int', align: R },
       { key: 'amount_total', header: 'Nilai', fmt: 'idr', align: R },
@@ -141,18 +150,35 @@ export const TABLES: Record<TableName, TableDef> = {
       { key: 'st_in_qty', header: 'Transfer masuk', fmt: 'num', align: R },
       { key: 'st_out_qty', header: 'Transfer keluar', fmt: 'num', align: R },
       { key: 'st_net', header: 'Neto transfer', fmt: 'num', align: R },
+      { key: 'note', header: 'Keterangan', align: L, wrap: true, sortable: false },
     ],
   },
   'dist-gap': {
-    caption: 'Selisih kirim CK vs terima toko per produk-hari',
+    caption: 'Selisih kirim CK vs terima toko per produk-hari (hanya produk jadi FIN)',
     filename: 'selisih-kirim-terima',
     columns: [
       { key: 'day', header: 'Tanggal', fmt: 'date', align: L },
       { key: 'product_label', header: 'Produk', align: L, drill: { param: 'product', valueKey: 'product_key' } },
+      { key: 'category', header: 'Kategori produk', align: L, filterable: true },
+      { key: 'ck_prod_qty', header: 'Produksi CK', fmt: 'num', align: R },
       { key: 'ck_out_qty', header: 'Dikirim CK', fmt: 'num', align: R },
       { key: 'in_ck_qty', header: 'Diterima dari CK', fmt: 'num', align: R },
       { key: 'gap', header: 'Selisih', fmt: 'num', align: R },
       { key: 'status', header: 'Status', fmt: 'status', align: L },
+      { key: 'reason', header: 'Keterangan', align: L, wrap: true, sortable: false },
+    ],
+  },
+  'mov-category': {
+    caption: 'Kiriman barang per asal, kategori ESB, dan kelompok barang',
+    filename: 'kiriman-kategori',
+    columns: [
+      { key: 'origin_kind', header: 'Asal', align: L, filterable: true },
+      { key: 'item_group', header: 'Kelompok barang', align: L, filterable: true },
+      { key: 'category', header: 'Kategori ESB', align: L, filterable: true },
+      { key: 'uom', header: 'Satuan', align: L, filterable: true },
+      { key: 'qty_sum', header: 'Qty (per satuan)', fmt: 'num', align: R },
+      { key: 'skus', header: 'SKU', fmt: 'int', align: R },
+      { key: 'lines_n', header: 'Baris', fmt: 'int', align: R },
     ],
   },
   'dq-freshness': {
@@ -164,6 +190,7 @@ export const TABLES: Record<TableName, TableDef> = {
       { key: 'age_hours', header: 'Umur (jam)', fmt: 'num', align: R },
       { key: 'last_day', header: 'Hari terakhir', fmt: 'date', align: L },
       { key: 'status', header: 'Status', fmt: 'status', align: L },
+      { key: 'reason', header: 'Keterangan', align: L, wrap: true, sortable: false },
     ],
   },
   'dq-alias': {

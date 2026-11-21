@@ -91,21 +91,27 @@ function scalar(v: TipParam['value']): number | null {
 export interface BuildOpts {
   animate: boolean;
   decal: boolean;
+  /** Nama seri yang disembunyikan lewat legend HTML (components/ChartCard.tsx). */
+  hidden?: readonly string[];
 }
 
 export function buildOption(spec: ChartSpec, t: ThemeColors, o: BuildOpts): EChartsCoreOption {
   const tipFmt: ValueFmt = spec.fmt;
   const axisFmt: ValueFmt = spec.axisFmt ?? (spec.fmt === 'idr' ? 'idr-short' : spec.fmt);
-  const showLegend = spec.series.length > 3;
+  // Legend bawaan ECharts dimatikan (tampil); komponennya tetap ada agar seri bisa disembunyikan/ditampilkan (sumbu
+  // menyesuaikan diri) lewat `selected`. Legend yang terlihat = chip HTML di ChartCard.
+  const hidden = new Set(o.hidden ?? []);
   const base = {
     aria: { enabled: true, decal: { show: o.decal } },
     animation: o.animate,
     animationDuration: 300,
     animationEasing: 'cubicOut',
     textStyle: { fontFamily: t.font, color: t.text },
-    legend: showLegend
-      ? { type: 'plain', top: 0, left: 0, textStyle: { color: t.text }, inactiveColor: t.muted, icon: 'roundRect' }
-      : { show: false },
+    legend: {
+      show: false,
+      data: spec.series.map((s) => s.name),
+      selected: Object.fromEntries(spec.series.map((s) => [s.name, !hidden.has(s.name)])),
+    },
   };
 
   if (spec.kind === 'heat') return heatOption(spec, t, axisFmt, base);
@@ -181,7 +187,7 @@ export function buildOption(spec: ChartSpec, t: ThemeColors, o: BuildOpts): ECha
     grid: {
       left: 8,
       right: horizontal ? 72 : 24,
-      top: showLegend ? 36 : 16,
+      top: 16,
       bottom: 8,
       containLabel: true,
     },

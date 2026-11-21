@@ -2,6 +2,7 @@
  * Cangkang bersama (sidebar + topbar) untuk grup rute F&B (`(app)`) dan supermarket (`(sm)`). Tidak ada komponen per
  * persona: perbedaan = grup navigasi, chip peran, dan slot header (R-T14).
  */
+import Link from 'next/link';
 import type { ReactNode } from 'react';
 import type { Session } from '@/lib/session';
 import type { NavGroup } from '@/lib/sm-personas';
@@ -41,8 +42,12 @@ export function Shell({
           </div>
           <NavLinks groups={groups} />
           <div className="sidebar-foot">
+            <Link href="/glosarium" className="nav-link" title="Glosarium istilah">
+              <Icon name="book" />
+              <span>Glosarium</span>
+            </Link>
             {odooUrl ? (
-              <a href={odooUrl} className="nav-link">
+              <a href={odooUrl} className="nav-link" title="Kembali ke Odoo">
                 <Icon name="home" />
                 <span>Kembali ke Odoo</span>
               </a>

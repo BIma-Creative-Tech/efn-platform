@@ -4,7 +4,7 @@
  * halaman (lapis kedua), dan layout.
  */
 import { esbCodesOf, isPersona, personasOf, smCodesOf, type Persona } from './claims';
-import { NAV_ITEMS, type NavItem } from './page-filters';
+import { FNB_ITEMS, NAV, SUMMARY_ITEMS, type NavItem } from './page-filters';
 
 export const PERSONA_ROUTES: Readonly<Record<Persona, string>> = {
   store: '/store',
@@ -26,11 +26,11 @@ export const PERSONA_LABEL: Readonly<Record<Persona, string>> = {
 };
 
 const NAV_LABEL: Readonly<Record<Persona, { label: string; icon: string }>> = {
-  store: { label: 'Toko saya', icon: 'store' },
-  dc: { label: 'Distribution Center', icon: 'truck' },
+  store: { label: 'Toko', icon: 'store' },
+  dc: { label: 'DC', icon: 'truck' },
   category: { label: 'Kategori', icon: 'grid' },
   marketing: { label: 'Marketing', icon: 'megaphone' },
-  exec: { label: 'Direksi', icon: 'briefcase' },
+  exec: { label: 'Eksekutif', icon: 'briefcase' },
 };
 
 /** Rute persona yang dicocokkan persis atau sebagai awalan segmen (`/store`, `/store/...`). */
@@ -110,32 +110,40 @@ function execSmd(s: { codes: readonly string[]; roles: readonly string[] }, smEn
 export const SMD_NAV_HREFS: readonly string[] = ['/', '/sales', '/payments', '/distribution', '/forecast'];
 
 export interface NavGroup {
-  title?: string;
+  /** Kunci stabil (dipakai untuk menyimpan status lipat di localStorage). */
+  id: 'summary' | 'fnb' | 'sm';
+  title: string;
   items: readonly NavItem[];
 }
 
+/** Urutan menu persona di grup Supermarket (keputusan pemilik proyek 21 Nov 2026): Eksekutif, Toko, DC, Kategori, Marketing. */
+const SM_ORDER: readonly Persona[] = ['exec', 'store', 'dc', 'category', 'marketing'];
+
 /**
- * Sidebar: grup F&B (halaman ESB; hanya bila ada kode ESB) dan grup Supermarket (persona ∈ roles; hanya bila
- * INSIGHT_SM_ENABLED). Judul grup hanya muncul bila ada dua grup atau lebih dari satu persona (§2.1).
+ * Sidebar tiga grup yang bisa dilipat (keputusan pemilik proyek 21 Nov 2026, Usulan A):
+ *  - Ringkasan (F&B + Supermarket): Ikhtisar, Penjualan, Pembayaran. Tampil bila ada PT F&B ATAU sesi exec ber-SMD.
+ *  - Food & Beverage: Produksi vs Penjualan, Distribusi CK, Kualitas Data ESB. Hanya bila ada kode ESB; sesi exec ber-SMD
+ *    tanpa PT F&B hanya mendapat Distribusi (isinya bagian DC supermarket, docs/04 §28.14.1).
+ *  - Supermarket: menu persona (∈ roles; hanya bila INSIGHT_SM_ENABLED) + Forecast (hanya exec ber-SMD).
+ * Aturan visibilitas = aturan sesi yang ada; grup kosong disembunyikan.
  */
 export function navGroups(s: { codes: readonly string[]; roles: readonly string[] }, smEnabled: boolean): NavGroup[] {
-  // docs/04 §28.14.1: menu F&B tampil bila ada PT F&B, ATAU sesi exec ber-SMD (hanya halaman yang mendukung SMD).
-  const esb: readonly NavItem[] = hasEsbAccess(s)
-    ? NAV_ITEMS
-    : execSmd(s, smEnabled)
-      ? NAV_ITEMS.filter((i) => SMD_NAV_HREFS.includes(i.href))
-      : [];
-  const smItems: NavItem[] = smEnabled
-    ? sessionPersonas(s.roles).map((p) => ({ href: PERSONA_ROUTES[p], label: NAV_LABEL[p].label, icon: NAV_LABEL[p].icon }))
-    : [];
+  const esb = hasEsbAccess(s);
+  const smd = execSmd(s, smEnabled);
   const groups: NavGroup[] = [];
-  const both = esb.length > 0 && smItems.length > 0;
-  if (smItems.length > 0 && !both) {
-    groups.push({ title: smItems.length > 1 ? 'Supermarket' : undefined, items: smItems });
-    return groups;
-  }
-  if (esb.length > 0) groups.push({ title: both ? 'Food & Beverage' : undefined, items: esb });
-  if (smItems.length > 0) groups.push({ title: 'Supermarket', items: smItems });
+
+  const summary: readonly NavItem[] = esb || smd ? SUMMARY_ITEMS : [];
+  if (summary.length > 0) groups.push({ id: 'summary', title: 'Ringkasan', items: summary });
+
+  const fnb: NavItem[] = esb ? [...FNB_ITEMS] : smd ? [{ ...NAV.distribution, label: 'Distribusi CK / DC' }] : [];
+  if (fnb.length > 0) groups.push({ id: 'fnb', title: 'Food & Beverage', items: fnb });
+
+  const have = new Set(sessionPersonas(s.roles));
+  const smItems: NavItem[] = smEnabled
+    ? SM_ORDER.filter((p) => have.has(p)).map((p) => ({ href: PERSONA_ROUTES[p], label: NAV_LABEL[p].label, icon: NAV_LABEL[p].icon }))
+    : [];
+  if (smd) smItems.push(NAV.forecast);
+  if (smItems.length > 0) groups.push({ id: 'sm', title: 'Supermarket', items: smItems });
   return groups;
 }
 

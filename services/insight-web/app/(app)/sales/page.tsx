@@ -10,7 +10,9 @@ import { KpiRow, KpiTile, PageHeader, Section } from '@/components/ui';
 import { brandName } from '@/lib/brands';
 import { summarize, type ChartSpec, type ColorToken } from '@/lib/chart-spec';
 import { fmtDayShort, fmtIdr, fmtRange, fmtQty, WEEKDAYS } from '@/lib/format';
-import { num, topMenuRow, type Result } from '@/lib/loaders';
+import { CoverageNotice } from '@/components/CoverageNotice';
+import { comparable, deltaGuards } from '@/lib/coverage';
+import { loadCoverage, num, topMenuRow, type Result } from '@/lib/loaders';
 import { pageCtx, type SearchParams } from '@/lib/page-ctx';
 import { loadEsbTable, loadSmdProductNames, runEsb, runSm } from '@/lib/smd-data';
 import {
@@ -32,7 +34,7 @@ import {
 import { toNum } from '@/lib/sm-parse';
 import { TABLES } from '@/lib/table-defs';
 import { discountStatus, marginStatus, T } from '@/lib/thresholds';
-import { pctDelta, pctOf, ppDelta, withOther } from '@/lib/vm';
+import { pctOf, withOther } from '@/lib/vm';
 
 export const dynamic = 'force-dynamic';
 export const metadata: Metadata = { title: 'Penjualan & Menu' };
@@ -75,7 +77,7 @@ export default async function SalesPage({ searchParams }: { searchParams: Search
   const excluded = smdExcludedNote(sel, ctx.filters, 'cat');
   const sm = (n: Parameters<typeof runSm>[0]) => (smdOn ? runSm(n, ctx, sel) : Promise.resolve(null));
 
-  const [kpiR, dowR, heatR, catR, chanR, menuR, mixR, smDaily, smKpi, smMargin, smDow, smHeat, smCat, smTop] = await Promise.all([
+  const [kpiR, dowR, heatR, catR, chanR, menuR, mixR, smDaily, smKpi, smMargin, smDow, smHeat, smCat, smTop, cov] = await Promise.all([
     runEsb<Kpi>(esbOn, 'sales_kpi', ctx),
     runEsb<{ dow: number; avg_net: number; days: number }>(esbOn, 'sales_by_weekday', ctx),
     runEsb<{ week: string; dow: number; net: number }>(esbOn, 'sales_weekday_heatmap', ctx),
@@ -90,7 +92,10 @@ export default async function SalesPage({ searchParams }: { searchParams: Search
     sm('sm_fb_heat'),
     sm('sm_fb_by_category'),
     sm('sm_fb_top_products'),
+    esbOn ? loadCoverage(ctx) : Promise.resolve(null),
   ]);
+  // Delta = n/a bila periode ini/lalu belum seluruhnya ada di data penjualan ESB (cakupan ESB menentukan juga mode campuran).
+  const { pctDelta, ppDelta } = deltaGuards(comparable(cov, ['sales'], ctx.filters, ctx.prev));
   const prodNames = smTop && smTop.ok ? await loadSmdProductNames(ctx, sel, smTop.data.map((r) => toNum(r.product_id))) : new Map<number, string>();
 
   const asRaw = (r: Result<RawRows> | null): Result<RawRows> | null => r;
@@ -145,6 +150,7 @@ export default async function SalesPage({ searchParams }: { searchParams: Search
     <>
       <PageHeader title="Penjualan & Menu" question="Menu apa dan hari apa yang menghasilkan penjualan, dan bagaimana bauran takeaway vs dine-in?" />
       <FilterNotice adjusted={adjusted} />
+      <CoverageNotice rows={cov} entities={['sales']} range={{ from, to }} />
       <p className="muted small">Periode: {fmtRange(from, to)}. Tidak ada data per jam.</p>
       {excluded ? <p className="notice" role="status">{excluded}</p> : null}
       {smdOn ? <SmdBasisNote mixed={mixed} /> : null}

@@ -1,5 +1,6 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
+import { DateNotice } from '@/components/DateNotice';
 import { CutoffCountdown } from '@/components/sm/CutoffCountdown';
 import { CriticalRows, ExpiryRows } from '@/components/sm/ExpiryRows';
 import { ActionLink, SmCardAuto } from '@/components/sm/SmCard';
@@ -15,9 +16,10 @@ import { loadStore } from '@/lib/sm-data';
 import { smPage, type SmSearchParams } from '@/lib/sm-page';
 import { cfgStr } from '@/lib/sm-thresholds';
 import { pickProposals } from '@/lib/sm-vm';
+import { cutoffReason, wasteReason } from '@/lib/status-reasons';
 
 export const dynamic = 'force-dynamic';
-export const metadata: Metadata = { title: 'Toko saya' };
+export const metadata: Metadata = { title: 'Toko' };
 
 const SHOWN = 3;
 
@@ -46,6 +48,7 @@ export default async function StorePage({ searchParams }: { searchParams: SmSear
           </>
         }
       />
+      <DateNotice path="/store" />
       {outlets.length > 1 && outlets.length <= 5 ? (
         <nav aria-label="Pilih outlet" className="tabs-links">
           <Link href="/store" className="btn" aria-current={ctx.filters.wh.length === 0 ? 'true' : undefined}>
@@ -106,6 +109,7 @@ export default async function StorePage({ searchParams }: { searchParams: SmSear
                 <p>
                   {primary.lineCount} baris · {primary.linesChanged} baris berubah dari sistem
                 </p>
+                <p className="muted small">Keterangan status: {cutoffReason(info, primary.state, t.cutoffUrgentMin)}</p>
                 <ActionLink label="Buka usulan di Odoo" href={url} big />
                 <p className="muted small">Status per {fmtStampWib(base.freshness.get(MARTS.replenishment)?.dataAsOf ?? now, now)}. Cek di Odoo sebelum bertindak.</p>
                 {others.length > 0 ? (
@@ -116,7 +120,8 @@ export default async function StorePage({ searchParams }: { searchParams: SmSear
                         <li key={o.proposalId}>
                           {fmtDeliveryDate(o.deliveryDate)}
                           {o.cutoffAt ? `, batas ${fmtClockWib(o.cutoffAt)}` : ''} ·{' '}
-                          <StatusPill status={cutoffInfo(o.state, o.cutoffAt, now, t, stale).status} label={cutoffInfo(o.state, o.cutoffAt, now, t, stale).label} />
+                          <StatusPill status={cutoffInfo(o.state, o.cutoffAt, now, t, stale).status} label={cutoffInfo(o.state, o.cutoffAt, now, t, stale).label} />{' '}
+                          <span className="muted small">{cutoffReason(cutoffInfo(o.state, o.cutoffAt, now, t, stale), o.state, t.cutoffUrgentMin)}</span>
                         </li>
                       ))}
                     </ul>
@@ -234,6 +239,7 @@ export default async function StorePage({ searchParams }: { searchParams: SmSear
                     <>
                       <strong>{fmtPct(w.pctCur)}</strong> {wasteBasis === 'sales_excl_tax' ? 'dari omzet tanpa PPN' : 'dari HPP terjual'}{' '}
                       <StatusPill status={status} /> <DeltaBadge value={delta} kind="pp" goodWhen="down" compareLabel="minggu lalu" />
+                      <span className="muted small"> Keterangan: {wasteReason(w.pctCur, status, t)}</span>
                     </>
                   ) : (
                     <span className="muted small">Persentase tidak tersedia untuk peran ini.</span>
