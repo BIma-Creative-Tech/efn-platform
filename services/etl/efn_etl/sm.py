@@ -260,7 +260,7 @@ LIMIT %(limit)s
 
 KPI_COLUMNS: Final = ("company_id", "key", "value_num", "value_str", "active", "write_date")
 SQL_KPI_EXISTING: Final = """
-SELECT company_id, toString(key) AS key, argMax(active, write_date) AS active, max(write_date) AS write_date
+SELECT company_id, toString(key) AS key, argMax(active, write_date) AS active, max(write_date) AS last_write_date
 FROM efn_dwh.dim_sm_kpi_config
 GROUP BY company_id, key
 """

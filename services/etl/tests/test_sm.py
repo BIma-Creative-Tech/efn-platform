@@ -847,3 +847,9 @@ def test_online_outlet_job_runs_when_tables_visible() -> None:
     res = sm_cycle.run_sm_online_outlets(_outlet_src(2), sink, store, ("SMD",), timedelta(minutes=5), 100, 5)
     assert res is not None and res.rows == 1
     assert sink.inserts[0][0] == "dim_online_outlet"
+
+
+def test_kpi_existing_alias_does_not_shadow_column() -> None:
+    # ClickHouse: alias `max(write_date) AS write_date` membayangi kolom di argMax(active, write_date) -> ILLEGAL_AGGREGATION
+    # (ditemukan di stack prod-lokal 21 Nov 2026).
+    assert "AS write_date" not in sm.SQL_KPI_EXISTING and "max(write_date) AS last_write_date" in sm.SQL_KPI_EXISTING
