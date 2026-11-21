@@ -39,6 +39,33 @@ Branch `fix/insight-review`. ADR-040 & ADR-041 (Proposed), K25-02. Tidak ada Bas
 - Apakah ada kiriman lintas PT nyata (Bacha BCF ↔ BCR) — menentukan apakah keputusan PT asal cukup.
 - Apakah semua cabang `scope_key` sales/fin_sold ada di `dim_esb_branch` (yang tidak ada tidak dihitung di coverage).
 
+### Lanjutan: kategori menu kosong 94% (21 Nov 2026)
+
+Akar (diverifikasi lead di efn-prod): 664 dari 740 `menu_code` terjual tidak ada di `dim_esb_menu` karena
+`/menu/browse` tidak memuatnya; baris `report/sales-menu-cogs` membawa `menuCategory`/`menuCategoryDetail`.
+
+**File**
+- `services/esb-extract/efn_esb/transform.py`: `sales_menu_version(day)`, `transform_sales_menus(rows, brand,
+  company_code, day)` (murni; filter salesType Sales/kosong + `menuCategory` terisi, lalu `transform_menus`).
+- `services/esb-extract/efn_esb/extract.py`: `extract_sales` menambah tabel `dim_esb_menu` ke `SliceResult` (PT default
+  brand = sama dengan baris master).
+- Test: `tests/test_transform.py` (filter kategori kosong/spasi/tanpa kunci, salesType non-Sales, tanpa kode; urutan
+  versi), `tests/test_runner.py` (slice sales Bacha: dim ber-PT BCF, versi awal hari, urutan tulis sebelum checkpoint).
+- `services/esb-extract/README.md` (bagian Alur & idempotensi).
+
+**Pilihan versi.** `dim_esb_menu` = `ReplacingMergeTree(_version)`, tidak bisa "isi hanya bila belum ada". Baris sales
+memakai `_version` = 00:00 UTC hari penjualan: run master setelah hari itu selalu menang (browse sumber utama), hari
+penjualan lebih baru menang atas yang lama, backfill mundur tidak menimpa. Jendela sementara: sales hari D yang ditarik
+sebelum run master pertama setelah D 00:00 UTC bisa menang atas browse untuk kode yang ada di keduanya sampai run master
+berikutnya (isi sales = kategori terisi, jadi tidak pernah mengosongkan). Kode yang ada di browse dengan kategori kosong
+tetap kosong (browse menang) — tidak diubah.
+Backfill sekali jalan (bukan file init) = SQL di laporan ke lead; `_version` = `toDateTime64(hari terakhir, 3, 'UTC')`
+sehingga konsisten dengan jalur kode.
+
+**Belum terverifikasi:** pytest/ruff belum dijalankan; SQL backfill belum dijalankan (memori ARRAY JOIN atas ±11,8 rb
+payload — jalankan per brand bila perlu); asumsi `menuCode` di payload bertipe string JSON (angka -> '' di
+`JSONExtractString`, baris itu terlewat).
+
 ## Gelombang 51 — SMD end-to-end: view Insight B2/B4, histori stok B6, histori forecast A6 (21 Nov 2026)
 
 Kontrak: `docs/design/G51_SMD_E2E_LEAD_SPEC.md` + keputusan lead G51 (is_reconstructed & versi aman, jalur A6
@@ -1861,3 +1888,8 @@ lock ada (sengaja, fail closed).
 - File `services/segment-worker/efn_segment/http.py` bernama sama dengan modul stdlib `http`; aman karena hanya diimpor
   absolut sebagai `efn_segment.http`, tetapi lead boleh mengganti nama menjadi `transport.py` (agent tidak bisa
   menghapus file).
+
+**Verifikasi lead (21 Nov 2026):** pytest esb-extract lulus, ruff 0.16.10 bersih (satu reformat `transform.py`). Backfill
+`dim_esb_menu` dari `raw_doc` dijalankan di efn-prod dengan dua koreksi atas SQL draf: tanpa `FINAL` pada `raw_doc` (gagal dengan
+`ARRAY JOIN`; duplikat diredam `argMax(..., doc_date)`), dan alias kolom dalam dibedakan dari alias agregat (galat
+`ILLEGAL_AGGREGATION`). Hasil: +1.004 kode, kategori kosong di `v_esb_sales_daily` (22 Okt–20 Nov) 94% -> 0%.

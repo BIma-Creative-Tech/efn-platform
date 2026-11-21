@@ -44,6 +44,14 @@ baris yang dihapus/void di ESB, dan slice yang gagal di tengah tidak terlihat. T
 - Nama produk tanpa kode (resep, transfer) → alias (`upper`, NFKC, spasi, `YOGHURT→YOGURT`) → `NAME:<alias>` bila tak
   terpetakan; `v_esb_flow_daily` me-resolve ulang lewat `dim_esb_product_alias` saat query.
 - Rasio BATCH→EA: satu GET detail simple-manufacturing per BOM baru, disimpan `efn_esb.bom_ratio`.
+- `dim_esb_menu` punya dua penulis (21 Nov 2026): slice `master` (`/menu/browse`, `_version` = waktu run) dan slice
+  `sales` (`transform_sales_menus`: baris `sales-menu-cogs` dengan `menuCategory` terisi, PT default brand). Alasan:
+  `/menu/browse` tidak memuat sebagian kode yang terjual (mis. kode terlaris), sehingga kategori menu Insight kosong.
+  Baris dari sales memakai `_version` = **awal hari penjualan 00:00 UTC** (`sales_menu_version`), bukan versi slice:
+  run master mana pun setelah hari itu menang atas baris sales (browse = sumber utama), dan antar-hari penjualan hari
+  terbaru menang (backfill mundur tidak menimpa). Baris tanpa kategori tidak pernah ditulis dari jalur sales. Sisa:
+  kode yang ADA di browse dengan kategori kosong tetap kosong (browse menang); `rows` checkpoint sales kini termasuk
+  baris menu.
 - Semantik `v_esb_flow_daily` = prototipe `aggregate.py` (L-116); `production_result` selalu `ck_prod`, `simple_mfg`
   `ck_prod`/`store_prod` menurut `dim_esb_branch.is_ck` (asumsi: production-result hanya di CK/CKWH).
 

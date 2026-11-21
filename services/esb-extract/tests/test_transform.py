@@ -237,6 +237,42 @@ def test_master_dims() -> None:
     assert t.alias_rows({"FIN ROTI": "FIN001", "": "X"}, "pb", "PB", V) == [["pb", "PB", "FIN ROTI", "FIN001", V]]
 
 
+def test_sales_menus_only_rows_with_category() -> None:
+    rows = [
+        {"salesNum": "S1", "salesType": "Sales", "menuCode": "TB9001", "menuName": "Teh Sintetis T",
+         "menuCategory": "Minuman", "menuCategoryDetail": "Teh"},
+        # tanpa kategori -> tidak ditulis (kategori tidak pernah ditimpa string kosong)
+        {"salesNum": "S1", "salesType": "Sales", "menuCode": "M2", "menuName": "Roti", "menuCategory": ""},
+        {"salesNum": "S2", "salesType": "Sales", "menuCode": "M3", "menuName": "Donat", "menuCategory": "  "},
+        {"salesNum": "S3", "salesType": "Sales", "menuCode": "M4", "menuName": "Kue"},
+        # bukan Sales -> diabaikan (sama dengan transform_sales_lines)
+        {"salesNum": "S4", "salesType": "Void", "menuCode": "M5", "menuName": "Kopi", "menuCategory": "Minuman"},
+        # tanpa kode -> diabaikan
+        {"salesNum": "S5", "salesType": "Sales", "menuCode": "", "menuName": "X", "menuCategory": "Minuman"},
+        # salesType kosong diterima, detail kategori boleh kosong
+        {"salesNum": "S6", "menuCode": "M6", "menuName": "Air", "menuCategory": "Minuman"},
+    ]  # fmt: skip
+    menus = t.transform_sales_menus(rows, "pb", "PB", DAY)
+    v_day = datetime(2026, 11, 16, tzinfo=UTC)
+    assert menus == [
+        ["pb", "PB", "TB9001", "Teh Sintetis T", "Minuman", "Teh", 1, v_day],
+        ["pb", "PB", "M6", "Air", "Minuman", "", 0, v_day],
+    ]
+    assert all(len(row) == len(t.DIM_MENU_COLUMNS) for row in menus)
+
+
+def test_sales_menu_version_loses_to_master_and_newer_day_wins() -> None:
+    # dim_esb_menu = ReplacingMergeTree(_version): versi terbesar menang.
+    v_sales = t.sales_menu_version(DAY)
+    assert v_sales == datetime(2026, 11, 16, 0, 0, tzinfo=UTC)
+    master_after_day = datetime(2026, 11, 16, 0, 0, 0, 1000, tzinfo=UTC)  # run master mana pun setelah hari D
+    assert master_after_day > v_sales and V > v_sales  # browse menang atas baris penjualan hari D
+    assert t.sales_menu_version(date(2026, 11, 17)) > v_sales  # hari penjualan lebih baru menang
+    assert t.sales_menu_version(date(2026, 11, 1)) < v_sales  # backfill mundur tidak menimpa data lebih baru
+    rows = [{"salesNum": "S1", "menuCode": "M1", "menuName": "Lama", "menuCategory": "Roti"}]
+    assert t.transform_sales_menus(rows, "pb", "PB", DAY)[0][-1] == v_sales
+
+
 def test_every_row_width_matches_columns() -> None:
     assert set(t.MART_TABLES) == {
         "dim_esb_branch", "dim_esb_product", "dim_esb_menu", "dim_esb_product_alias", "dim_esb_supplier",

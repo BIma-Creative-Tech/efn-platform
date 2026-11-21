@@ -349,6 +349,23 @@ def test_company_override_per_branch_for_bacha() -> None:
     assert cafe.tables["fact_esb_sales_line"][0][1] == "BCF"
 
 
+def test_sales_slice_supplements_menu_master_with_category_only() -> None:
+    bacha = BrandConfig("bacha", "user-sintetis", "pw-sintetis", "BCF", frozenset(), frozenset(), {12: "BCR"})
+    with_cat = {**SALES_ROW, "salesNum": "S2", "menuCode": "TB9001", "menuName": "Teh Sintetis",
+                "menuCategory": "Minuman", "menuCategoryDetail": "Teh"}  # fmt: skip
+    esb = FakeEsb({"/report/sales-menu-cogs": {"count": 2, "data": [SALES_ROW, with_cat]}})
+    result = run_slice(BrandRuntime(bacha), SliceTask(DAY, "sales", "12"), V, esb.get)
+    # SALES_ROW tanpa menuCategory -> tidak masuk dim; PT dim = PT default brand (bukan override cabang BCR);
+    # versi = awal hari penjualan (kalah dari run master berikutnya), bukan versi slice V.
+    assert result.tables["dim_esb_menu"] == [
+        ["bacha", "BCF", "TB9001", "Teh Sintetis", "Minuman", "Teh", 0, datetime(2026, 11, 16, tzinfo=UTC)]
+    ]
+    assert len(result.tables["fact_esb_sales_line"]) == 2 and result.rows == 3
+    store = FakeStore()
+    write_slice(store, "bacha", result, V)
+    assert store.tables() == ["raw_doc", "fact_esb_sales_line", "dim_esb_menu", "extract_checkpoint"]
+
+
 def test_backfill_window_closing_mid_run_across_midnight_stops_scheduling() -> None:
     stamps = iter(
         [

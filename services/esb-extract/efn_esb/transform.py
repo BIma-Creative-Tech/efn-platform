@@ -7,7 +7,7 @@ Setiap baris berakhir dengan `_version` (versi slice, DateTime64(3) UTC). Kolom 
 from collections import defaultdict
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import UTC, date, datetime, time
 from decimal import Decimal
 from typing import Any
 
@@ -190,6 +190,28 @@ def transform_menus(
             version,
         ]
     return list(out.values())
+
+
+def sales_menu_version(day: date) -> datetime:
+    """Versi baris dim_esb_menu dari penjualan = awal hari penjualan (00:00 UTC), BUKAN versi slice.
+
+    dim_esb_menu = ReplacingMergeTree(_version): versi terbesar menang. Slice master (`/menu/browse`) memakai waktu run,
+    jadi run master mana pun setelah hari D selalu mengalahkan baris penjualan hari D (browse = sumber utama), sedangkan
+    antar-baris penjualan hari terbaru menang (backfill mundur tidak menimpa nama/kategori yang lebih baru).
+    """
+    return datetime.combine(day, time.min, tzinfo=UTC)
+
+
+def transform_sales_menus(
+    rows: Iterable[Mapping[str, Any]], brand: str, company_code: str, day: date
+) -> list[list[Any]]:
+    """Baris `/report/sales-menu-cogs` -> dim_esb_menu untuk menu yang tidak dimuat `/menu/browse` (mis. kode terlaris
+    yang hilang dari browse). Hanya baris salesType Sales (atau kosong) dengan `menuCategory` terisi: baris tanpa
+    kategori tidak pernah ditulis, sehingga kategori tidak pernah ditimpa string kosong dari jalur ini.
+    `company_code` = PT default brand (sama dengan baris master; PT bukan bagian kunci dim_esb_menu).
+    """
+    usable = [row for row in rows if text(row.get("salesType"), 32) in ("", "Sales") and text(row.get("menuCategory"))]
+    return transform_menus(usable, brand, company_code, sales_menu_version(day))
 
 
 def transform_suppliers(
