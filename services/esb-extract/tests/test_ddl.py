@@ -78,6 +78,21 @@ def test_flow_view_semantics_documented() -> None:
     assert "x.source = 'simple_mfg' AND ckp.is_ck = 0" in flow
 
 
+def test_review_ddl_views_only_and_flow_stays_fin() -> None:
+    # 19-insight-review.sql (21 Nov 2026): hanya view baru, tanpa tabel/ubah skema; v_esb_flow_daily tetap FIN-only
+    # (semantik L-116 tidak berubah) -- pergerakan non-FIN dibaca dari v_esb_movement_daily.
+    review = (ROOT / "infra" / "clickhouse" / "init" / "19-insight-review.sql").read_text(encoding="utf-8")
+    code = re.sub(r"--[^\n]*", "", review)
+    assert set(re.findall(r"CREATE OR REPLACE VIEW (efn_\w+\.\w+) AS", code)) == {
+        "efn_dwh.v_esb_movement_daily",
+        "efn_dwh.v_esb_coverage",
+    }
+    assert not re.search(r"\b(CREATE TABLE|DROP|TRUNCATE|ALTER|INSERT)\b", code)
+    assert "efn_esb.raw_doc" not in code and "efn_esb.bom_ratio" not in code
+    flow = DDL.split("CREATE OR REPLACE VIEW efn_dwh.v_esb_flow_daily AS", 1)[1].split(";", 1)[0]
+    assert flow.count("WHERE is_fin = 1 AND") == 5  # produksi, delivery x2, transfer x2
+
+
 def granted(role: str, privileges: str) -> set[str]:
     return set(re.findall(rf"GRANT {privileges} ON (efn_\w+\.\w+) TO {role};", ACCESS))
 

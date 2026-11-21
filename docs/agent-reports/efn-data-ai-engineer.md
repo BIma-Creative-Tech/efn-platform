@@ -5,6 +5,40 @@ ADR terkait (semua `Proposed`): ADR-003, ADR-006, ADR-007, ADR-008, ADR-010, ADR
 
 **Tidak ada yang dijalankan.** Mesin penulis tidak punya Python; semua kode, test, dan SQL belum pernah dieksekusi. Validasi pertama terjadi di CI / oleh QA.
 
+## Review Insight — rekonsiliasi alur CK & cakupan data (21 Nov 2026)
+
+Branch `fix/insight-review`. ADR-040 & ADR-041 (Proposed), K25-02. Tidak ada Bash: **tidak ada yang dijalankan**
+(pytest, ruff, ClickHouse) — lead menerapkan dan menguji.
+
+**File**
+- baru `infra/clickhouse/init/19-insight-review.sql`: `efn_dwh.v_esb_movement_daily`, `efn_dwh.v_esb_coverage`.
+- `infra/clickhouse/access/insight-access.sql`: grant definer 2 view + `efn_insight.v_esb_movement_daily`,
+  `efn_insight.v_esb_coverage` (DEFINER `efn_insight_definer`, SQL SECURITY DEFINER, kolom eksplisit).
+- `infra/clickhouse/clickhouse-init.sh`: 2 view masuk loop row policy `efn_insight_scope` (tanpa ini pagar fail-closed
+  mencabut grant `efn_insight.*` dan init gagal).
+- test: `services/esb-extract/tests/test_insight_access.py` (kontrak kolom persis, aturan item_group + negatif prefix
+  'N', filter checkpoint, uom di kunci agregasi, coverage fail-closed, grant = penutupan rekursif, policy loop),
+  `services/esb-extract/tests/test_ddl.py` (19 hanya view; flow tetap FIN-only).
+- docs: `docs/design/insight-web-queries.md` §2 (+§3.5 catatan), `docs/04_SERVICE_CONTRACTS.md` §26.7.
+
+**Keputusan/asumsi**
+- `company_code` movement = PT cabang **asal** (fallback PT baris fakta), satu baris per pergerakan. Tidak diduplikasi
+  ke PT tujuan (jumlah benar untuk user multi-PT). Akibat: user yang hanya ber-scope PT tujuan (mis. toko BCR menerima
+  dari CK BCF, bila ada) tidak melihat kiriman itu di view ini; sisi terima tetap ada di `v_esb_flow_daily`.
+- `item_group`: is_fin baris fakta dulu, lalu prefix kode ATAU kategori ESB (WIP → wip; RMT/IDF/'Inventory - Food &
+  Beverage'/'Import Ingredient' → raw; PAM/'Packaging Material' → packaging; SU*/UNI/'Supplies'/'Uniform' → supplies).
+  "N" pada catatan Packaging ditafsirkan sebagai **satuan**, bukan prefix (prefix 'N' akan menangkap kode lain).
+- Production tidak memakai alias `NAME:` (kode selalu kode ESB di production/delivery), jadi tanpa join alias.
+- Coverage: entitas `'*'` diperluas ke semua PT brand (pola `v_esb_data_quality_pt`), entitas per toko (sales,
+  fin_sold) ke PT cabang; `status = 'done'` (records.py menulis 'done'); `days` = hari unik dengan ≥1 slice selesai.
+
+**Belum terverifikasi**
+- DDL belum pernah dijalankan di ClickHouse (sintaks `CAST(x, 'String')`, tipe keluaran LowCardinality vs String,
+  performa join dim × fakta production ±ratusan ribu baris).
+- pytest/ruff belum dijalankan.
+- Apakah ada kiriman lintas PT nyata (Bacha BCF ↔ BCR) — menentukan apakah keputusan PT asal cukup.
+- Apakah semua cabang `scope_key` sales/fin_sold ada di `dim_esb_branch` (yang tidak ada tidak dihitung di coverage).
+
 ## Gelombang 51 — SMD end-to-end: view Insight B2/B4, histori stok B6, histori forecast A6 (21 Nov 2026)
 
 Kontrak: `docs/design/G51_SMD_E2E_LEAD_SPEC.md` + keputusan lead G51 (is_reconstructed & versi aman, jalur A6
