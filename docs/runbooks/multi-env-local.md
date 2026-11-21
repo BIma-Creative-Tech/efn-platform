@@ -128,8 +128,20 @@ for f in infra/postgres/init/[0-9][0-9]-*.sql; do n=$(basename "$f"); [ "${n%%-*
 ```bash
 $DC --profile core run --rm --no-deps odoo odoo -d efn_odoo -i base --stop-after-init --without-demo=all
 $DC --profile core run --rm --no-deps odoo odoo -d efn_odoo --stop-after-init --without-demo=all -i <daftar modul efn_*>
-$DC --profile core up -d odoo odoo-tls odoo-ws-tls odoo-rpc-gateway
+$DC --profile core up -d --renew-anon-volumes odoo odoo-tls odoo-ws-tls odoo-rpc-gateway
 ```
+
+Pelajaran gladi 21 Nov 2026 (upgrade G47 di `efn-prod`):
+
+- **Setelah build image Odoo baru, `up` wajib `--renew-anon-volumes` (`-V`).** Image Odoo resmi mendeklarasikan
+  `VOLUME /mnt/extra-addons`; compose mewariskan anonymous volume container lama saat recreate, jadi container baru
+  tetap menjalankan addon lama. Sementara itu `run --rm ... -u` (container baru) sudah meng-upgrade DB, sehingga kode
+  dan skema tidak cocok (gejala: method/route modul baru tidak ada, mis. `_efn_insight_sm_scope`). Cek:
+  `docker inspect efn-prod-odoo-1 --format '{{range .Mounts}}{{.Name}} {{.Destination}}{{"\n"}}{{end}}'`.
+  `scripts/deploy.sh` sudah memakai flag ini. Data persisten di volume bernama `odoo-data`, tidak terpengaruh.
+- **Folder `secrets/` worktree lama:** secret baru di `scripts/secrets.list` yang belum ada dibuat Docker sebagai
+  **direktori kosong** saat `up` (gejala `clickhouse-init`: `cat: read error: Is a directory`). Hapus direktori kosong
+  itu lalu jalankan `bash scripts/gen-secrets.sh` (idempoten) sebelum `up`.
 
 Pelajaran gladi 20 Nov 2026:
 
