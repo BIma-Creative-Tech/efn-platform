@@ -217,7 +217,7 @@ tanpa pajak; halaman `/flow`, menu/BOM/FIN, dan Kualitas data ESB "Tidak berlaku
 **Risiko terkait.** R-T22 (angka gabungan disalahartikan), R-S22 (query SM di halaman F&B membuka outlet di luar sesi:
 dimitigasi sig2 sesi + row policy kelas W + test negatif baru), R-T06.
 
-**Pertanyaan terbuka.** Q-SM46 (total gabungan & basis), Q-SM47 (lot di luar ambang alert di tabel umur simpan),
+**Pertanyaan terbuka.** Q-SM46 (total gabungan & basis), Q-SM47 terjawab 21 Nov 2026 (semua lot ditampilkan);
 Q-INS-S9 tetap (exec membuka halaman persona lain).
 
 ## 4. Konsekuensi

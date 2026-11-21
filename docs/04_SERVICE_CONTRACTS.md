@@ -5189,11 +5189,9 @@ Pola §28.13.9: `efn_dwh.v_sm_*` INVOKER dibungkus `efn_insight.v_sm_*` `SQL SEC
 
 #### 28.14.5 Umur simpan & sisa umur lot (B4, L-227)
 Tabel di halaman Kategori dan Toko: produk, kategori, `shelf_life_days` (0 → "tidak dikelola"), lot terdekat kedaluwarsa
-per outlet (`v_sm_lot_expiry`: `lot_name`, `expiration_date`, `days_left`, `qty`, `value_cost`), cakupan persona dan row policy
-sama dengan `v_sm_lot_expiry` (store hanya tokonya; nilai HPP boleh, L-203). **Batasan:** `v_sm_lot_expiry` hanya memuat lot
-yang **punya alert** (`near|markdown|expired`, state `open|actioned`). Lot di luar ambang alert tidak terlihat; produk itu
-tampil dengan umur simpan saja dan teks "tidak ada lot dalam ambang pantau" (Q-SM47). Butuh `ETL_ENABLE_SM_EXPIRY=true` dan
-`efn_expiry_monitor.enabled=true` di Odoo.
+per outlet dari **`v_sm_lot_stock`** (semua lot berstok ber-ED, snapshot terbaru: `lot_name`, `expiration_date`, `days_left`,
+`qty`, `value_cost`), persona category/exec/store (store hanya tokonya; nilai HPP boleh, L-203). **Semua lot** ditampilkan,
+bukan hanya lot ber-alert: dikonfirmasi pemilik proyek 21 Nov 2026 (Q-SM47 terjawab). Halaman Toko tidak memuat lot DC.
 
 #### 28.14.6 Distribusi SMD (B5, L-228)
 `/distribution` dengan SMD: fill rate DC → outlet (qty dan baris, `fill.basis`/`fill.level` §28.13.8c), keterlambatan
@@ -5333,7 +5331,7 @@ Tidak ada secret baru. `deploy-validate`: `ETL_SM_STOCK_RECONSTRUCT_DAYS` intege
 | L-224 | View baru `v_sm_payment_daily`, `v_sm_product_sales_daily`, `v_sm_forecast_daily` (kolom, kelas W, persona sesuai spesifikasi lead); jumlah policy SM 33 (+ `v_sm_lot_stock`: snapshot nyata terbaru, semua lot ber-ED, persona category/exec/store; menjawab Q-SM47 = semua lot); grant definer per objek `fact_pos_payment`, `fact_forecast_daily`, `dim_forecast_run`; `v_sm_product_sales_daily` tanpa kolom biaya. |
 | L-225 | `v_sm_product_list.shelf_life_days UInt16` (kolom terakhir) dari `dim_product.shelf_life_days` = `expiration_time` bila `use_expiration_date` dan > 0, selain itu 0; dibaca bersyarat kolom terlihat. |
 | L-226 | Forecast SMD: akurasi 8 minggu + forecast 14 hari dari run `ok` `daily` terbaru per company (`argMax generated_at`); tautan daftar `efn.demand.forecast` = entri allowlist baru. |
-| L-227 | Tabel umur simpan memakai `v_sm_lot_expiry` + `shelf_life_days`; lot tanpa alert tidak terlihat (Q-SM47). |
+| L-227 | Tabel umur simpan memakai `v_sm_lot_stock` (semua lot berstok) + `shelf_life_days`; Q-SM47 terjawab 21 Nov 2026: semua lot. |
 | L-228 | Distribusi SMD dari `v_sm_dc_fill_rate`, `v_sm_replenishment`, `v_sm_replenishment_line`; pengecualian L-218 untuk view terakhir. |
 | L-229 | `ETL_SM_STOCK_RECONSTRUCT_DAYS` (default/production 0, demo 90): rekonstruksi stok harian dari `stock_move` mundur dari quant saat ini, nilai `standard_price` saat ini, ke `agg_sm_stock_daily`; tidak pernah menimpa hari dengan snapshot nyata (cek tiap siklus); keterbatasan lot/konsinyasi/revaluasi wajib tampil; usulan kolom `is_reconstructed` menunggu lead. |
 | L-230 | Histori forecast as-of demo = hitung worker (`--as-of`, `--out`) + muat ORM seed (`is_active=False`, `generated_at` = Minggu 23:00 WIB, `model_version` `+asof`, tanpa hook usulan); validasi Odoo, default worker, dan `ETL_FORECAST_ACCURACY_WEEKS=2` production tidak berubah. |
@@ -5348,8 +5346,7 @@ Tidak ada secret baru. `deploy-validate`: `ETL_SM_STOCK_RECONSTRUCT_DAYS` intege
   PB1/SC, SMD termasuk PPN), sehingga total dan porsi PT tidak sebanding. Default: total tampil berlabel "basis campuran".
   Alternatif: (a) tanpa total gabungan, hanya per PT (Rp0, ±0,5 hari); (b) SMD ditampilkan tanpa PPN **khusus** di halaman
   F&B (±0,5 hari, tetapi angka SMD beda dengan dashboard SM).
-- **Q-SM47** (Ops/Category) Tabel umur simpan cukup menampilkan lot yang sudah masuk ambang pantau (alert), atau perlu semua
-  lot? Semua lot butuh mart lot baru dari snapshot (±2 hari-engineer + review volume). Default: lot ber-alert saja.
+- **Q-SM47** — **TERJAWAB 21 Nov 2026 (pemilik proyek): tampilkan semua lot.** Dibangun lewat `v_sm_lot_stock` (L-224).
 
 #### 28.14.15 Risiko & belum terverifikasi
 | Risiko | Mitigasi |
