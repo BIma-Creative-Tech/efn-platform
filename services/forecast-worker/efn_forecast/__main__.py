@@ -51,7 +51,8 @@ def _odoo(company: str, env: dict[str, str]) -> OdooForecastClient:
 def batch(kind: str, company: str, dry_run: bool, env: dict[str, str]) -> RunReport:
     params = Params.from_env(env)
     odoo = None if dry_run else _odoo(company, env)
-    runner = StatsforecastRunner(season_length=7)  # pola mingguan sisa setelah faktor hari-dalam-pekan
+    # season 7 = pola mingguan sisa setelah faktor hari-dalam-pekan
+    runner = StatsforecastRunner(season_length=7, ets_model=params.ets_model)
     return run_batch(kind, _source(env), odoo, company, params, runner)
 
 

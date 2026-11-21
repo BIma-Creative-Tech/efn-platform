@@ -66,10 +66,12 @@ services:
       # <= 500 baris per panggilan (§28.2; gateway menolak body > 512 KiB)
       FORECAST_CHUNK_SIZE: ${FORECAST_CHUNK_SIZE:-500}
       # G46b: proses paralel per gudang (1..32); tiap proses memegang data gudangnya sendiri -> naikkan FORECAST_CPUS
-      # dan FORECAST_MEMORY_LIMIT bersamaan. FORECAST_MODELS (default AutoETS) menentukan beban per seri;
-      # AutoARIMA ~13x lebih lambat dengan akurasi setara pada uji histori SMD 24 bulan.
+      # dan FORECAST_MEMORY_LIMIT bersamaan. FORECAST_MODELS (default AutoETS) menentukan beban per seri.
+      # G46c (data nyata PB 1 tahun): AutoETS ZNZ 0,02 dtk/seri; AutoARIMA (setelan cepat) 0,74 dtk/seri dan tidak
+      # lebih akurat. FORECAST_ETS_MODEL=ZZZ = ruang model lama (8x lebih lambat).
       FORECAST_JOBS: ${FORECAST_JOBS:-1}
       FORECAST_MODELS: ${FORECAST_MODELS:-AutoETS}
+      FORECAST_ETS_MODEL: ${FORECAST_ETS_MODEL:-ZNZ}
       # Odoo /json/2 HANYA lewat filter (bukan odoo:8443 langsung; odoo-tls tidak mengizinkan CN forecast-worker).
       # Nama host = SAN sertifikat gateway; antar-mesin tetap nama ini (extra_hosts/WireGuard, runbook §7).
       ODOO_RPC_URL: https://odoo-rpc-gateway:8443

@@ -48,6 +48,7 @@ class PipelineConfig:
     factor_min_count: int = 3
     censor_lookback_days: int = 14
     level_days: int = 28
+    short_level_days: int = 14  # level seri pendek/gagal = rata-rata N hari terakhir seri sendiri (_category_mean)
     jobs: int = 1  # G46b: proses paralel per gudang (FORECAST_JOBS); 1 = di proses yang sama
     inactive_days: int = 28  # G46b: tanpa jual (dan tanpa hari OOS) >= N hari terakhir -> ramalan 0; 0 = mati
 
@@ -154,13 +155,18 @@ def _censor_mask(n: int, snap_days: set[int], on_hand: Mapping[int, float], look
 
 
 def truncate(panel: Panel, end: date) -> Panel:
+    """Potong panel ke `end`. Seri tanpa jual sampai `end` dibuang: di run nyata seri itu belum ada (G46c, backtest PB:
+    320 produk yang baru terjual di masa holdout mendapat level median kategori dan menaikkan WAPE seri pendek
+    1,29 -> 1,58). Backtest menilainya sebagai ramalan 0."""
     k = (end - panel.start).days + 1
     if k <= 0:
         raise ValueError("histori terlalu pendek untuk dipotong")
     return Panel(
         start=panel.start,
         end=end,
-        series=tuple(replace(s, y=s.y[:k], censored=s.censored[:k]) for s in panel.series),
+        series=tuple(
+            replace(s, y=s.y[:k], censored=s.censored[:k]) for s in panel.series if float(np.sum(s.y[:k])) > 0
+        ),
     )
 
 
@@ -345,34 +351,36 @@ def _category_mean(
     cfg: PipelineConfig,
     h: int,
 ) -> list[SeriesForecast]:
-    """Rata-rata per SKU kategori di gudang (fallback rata-rata gudang), dicampur level seri sendiri sebanding panjang
-    histori (bobot n / min_history_days)."""
+    """Seri ber-histori (pendek / model gagal): level = rata-rata penjualan MENTAH `short_level_days` hari valid
+    terakhir sejak jual pertama (hari tersensor OOS dilewati), tanpa faktor kalender. Seri tanpa jual (SKU baru
+    ber-stok): median level per SKU kategori di gudang (fallback gudang) x faktor kalender.
+
+    Backtest data nyata PB histori 1 tahun (21 Nov 2026, holdout 28 hari, seri pendek ±11 % volume): campuran lama
+    (bobot n/56 seri sendiri + median kategori, x faktor) WAPE 1,04 / bias 1,21 (as_of 16 Nov) dan 1,56 / 1,25
+    (as_of 15 Apr); rata-rata 14 hari mentah 0,81 / 1,04 dan 1,29 / 1,15. Jendela 7 & 28 hari lebih buruk dari 14;
+    level yang sama x faktor kalender kategori 0,97 dan 1,60 (faktor agregat tidak cocok untuk SKU yang baru mulai)."""
     by_cat: dict[str, list[tuple[float, float]]] = defaultdict(list)
     for s, level, sigma in done:
         by_cat[s.category].append((level, sigma))
     everything = [v for vals in by_cat.values() for v in vals]
     out: list[SeriesForecast] = []
-    for s, history, mult_f, _failed in pending:
+    for s, _history, mult_f, _failed in pending:
         pool = by_cat.get(s.category) or everything
         # G46b: median (bukan mean) -> tidak ditarik menu terlaris; backtest PB: category_mean 2,0x di atas aktual.
         cat_level = float(np.median([v[0] for v in pool])) if pool else 0.0
         cat_sigma = float(np.median([v[1] for v in pool])) if pool else 0.0
-        m = int(history.shape[0])
-        if not pool and m > 0:
-            # G46 (uji E2E data nyata PB 19 Nov 2026): tanpa seri pembanding di gudang (outlet baru / PT yang baru
-            # dimigrasi dengan histori pendek) penyusutan ke level 0 memotong ramalan menjadi m/56 (7 hari -> 1/8).
-            # Pakai level seri sendiri tanpa penyusutan.
-            level = float(np.mean(history[-cfg.level_days :]))
-            sigma = float(np.std(history)) if m > 1 else 0.0
-        elif m >= 7:
-            w = min(1.0, m / max(cfg.min_history_days, 1))
-            level = w * float(np.mean(history[-cfg.level_days :])) + (1 - w) * cat_level
-            sigma = float(np.std(history))
+        nz = np.flatnonzero(s.y > 0)
+        first = int(nz[0]) if nz.size else s.y.shape[0]
+        recent = s.y[first:][~s.censored[first:]].astype(float)[-cfg.short_level_days :]
+        if recent.size:
+            level = float(np.mean(recent))
+            sigma = float(np.std(recent)) if recent.shape[0] > 1 else 0.0
+            mult = np.ones(h)
         else:
-            level, sigma = cat_level, cat_sigma
+            level, sigma, mult = cat_level, cat_sigma, mult_f
         if sigma <= 0 and level > 0:
             sigma = math.sqrt(level)  # Poisson kasar bila tidak ada variasi teramati
-        out.append(_finish(s, np.full(h, max(level, 0.0)), np.full(h, sigma), mult_f, "category_mean"))
+        out.append(_finish(s, np.full(h, max(level, 0.0)), np.full(h, sigma), mult, "category_mean"))
     return out
 
 
@@ -456,22 +464,21 @@ def backtest(
     train = truncate(panel, panel.end - timedelta(days=days))
     result = forecast_panel(train, entries, cal_cfg, replace(cfg, horizon_days=days), runner)
     k = train.n
-    actual_by_key = {(s.warehouse_id, s.product_id): s for s in panel.series}
+    yhat_by_key = {(f.warehouse_id, f.product_id): f.yhat for f in result.forecasts}
+    zero = np.zeros(days)
     err = err_mean = err_naive = total = 0.0
-    for f in result.forecasts:
-        s = actual_by_key[(f.warehouse_id, f.product_id)]
+    for s in panel.series:  # seri tanpa histori latih (dibuang truncate) = ramalan 0, aktualnya tetap dihitung
+        yhat = yhat_by_key.get((s.warehouse_id, s.product_id), zero)
         actual = s.y[k : k + days].astype(float)
         valid = ~s.censored[k : k + days]
         hist = s.y[:k].astype(float)
         mean56 = np.full(days, float(np.mean(hist[-56:])) if hist.size else 0.0)
         naive = np.resize(hist[-7:], days) if hist.size >= 7 else mean56
         total += float(np.sum(actual[valid]))
-        err += float(np.sum(np.abs(f.yhat[valid] - actual[valid])))
+        err += float(np.sum(np.abs(yhat[valid] - actual[valid])))
         err_mean += float(np.sum(np.abs(mean56[valid] - actual[valid])))
         err_naive += float(np.sum(np.abs(naive[valid] - actual[valid])))
-    return BacktestResult(
-        days, len(result.forecasts), _wape(err, total), _wape(err_mean, total), _wape(err_naive, total)
-    )
+    return BacktestResult(days, len(panel.series), _wape(err, total), _wape(err_mean, total), _wape(err_naive, total))
 
 
 # ---------------------------------------------------------------- min/max (keluaran 1)
