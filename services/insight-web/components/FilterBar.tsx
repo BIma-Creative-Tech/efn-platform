@@ -3,6 +3,7 @@
  * Filter global (spec §3.2). State = URL search params; server memvalidasi ulang (klien hanya untuk UX).
  * Perubahan diterapkan lewat tombol "Terapkan" (bukan tiap ketikan). Chip aktif dengan tombol hapus + Reset.
  */
+import Link from 'next/link';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { useEffect, useState, useTransition } from 'react';
 import { codeColor, codeName } from '@/lib/brands';
@@ -21,6 +22,8 @@ export interface FilterOptions {
 interface Props {
   options: FilterOptions;
   sessionCodes: string[];
+  /** PT supermarket sesi (lib/sm-personas.ts smFilterLinks): tautan ke dashboard SM, bukan filter ESB. */
+  smLinks?: { code: string; href: string }[];
   defaults: { from: string; to: string };
   yesterday: string;
 }
@@ -51,7 +54,7 @@ function presetRange(p: Preset, yesterday: string): { from: string; to: string }
   }
 }
 
-function FilterForm({ options, sessionCodes, defaults, yesterday }: Props): React.ReactNode {
+function FilterForm({ options, sessionCodes, smLinks = [], defaults, yesterday }: Props): React.ReactNode {
   const router = useRouter();
   const pathname = usePathname();
   const sp = useSearchParams();
@@ -186,6 +189,14 @@ function FilterForm({ options, sessionCodes, defaults, yesterday }: Props): Reac
               })}
             </div>
           )}
+          {smLinks.map((l) => (
+            <Link key={l.code} href={l.href} className="chip chip-toggle" title={`${codeName(l.code)}: buka dashboard supermarket`}>
+              <span className={`dot dot-${codeColor(l.code)}`} aria-hidden="true" />
+              {l.code}
+              <span aria-hidden="true"> &rarr;</span>
+              <span className="sr-only"> (buka dashboard supermarket)</span>
+            </Link>
+          ))}
         </fieldset>
 
         <MultiSelect label="Cabang" summaryNoun="cabang" options={branchOptions} selected={branch} onChange={setBranch} max={50} disabledReason={hasBranch ? undefined : na} />

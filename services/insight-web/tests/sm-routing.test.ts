@@ -9,7 +9,7 @@ import { NextRequest } from 'next/server';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { proxy } from '@/proxy';
 import { SESSION_COOKIE, createSessionValue } from '@/lib/session';
-import { DENIAL_PATH, hasEsbAccess, homePath, navGroups, personaChip, personaOfPath, sessionPersonas, smRouteDenial } from '@/lib/sm-personas';
+import { DENIAL_PATH, hasEsbAccess, homePath, navGroups, personaChip, personaOfPath, sessionPersonas, smFilterLinks, smRouteDenial } from '@/lib/sm-personas';
 import { verifySsoTokenV2, type SsoPayloadV2 } from '@/lib/token';
 import { IAT, KEY, TOKEN_A, TOKEN_B, TOKEN_C } from './helpers-v2';
 
@@ -176,5 +176,17 @@ describe('proxy: gerbang persona (eis2)', () => {
       expect(rewriteOf(res), p).toBeNull();
       expect(res.headers.get('x-middleware-next'), p).toBe('1');
     }
+  });
+});
+
+describe('smFilterLinks (chip SMD di filter Brand / PT halaman F&B)', () => {
+  it('sesi gabungan ESB + SM -> SMD ke Direksi bila persona exec ada, selain itu persona pertama', () => {
+    expect(smFilterLinks({ codes: ['PB', 'SMD'], roles: ['all_brands', 'store', 'exec', 'user'] }, true)).toEqual([{ code: 'SMD', href: '/exec' }]);
+    expect(smFilterLinks({ codes: ['PB', 'SMD'], roles: ['marketing', 'category', 'user'] }, true)).toEqual([{ code: 'SMD', href: '/category' }]);
+  });
+  it('kosong bila SM mati, tanpa persona, atau tanpa kode SM', () => {
+    expect(smFilterLinks({ codes: ['PB', 'SMD'], roles: ['exec', 'user'] }, false)).toEqual([]);
+    expect(smFilterLinks({ codes: ['PB', 'SMD'], roles: ['user'] }, true)).toEqual([]);
+    expect(smFilterLinks({ codes: ['PB'], roles: ['exec', 'user'] }, true)).toEqual([]);
   });
 });
