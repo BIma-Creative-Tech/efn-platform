@@ -19,12 +19,12 @@
     "@fontsource-variable/fraunces": "^5.3.0",
     "@fontsource-variable/geist": "^5.3.0",
     "@fontsource-variable/geist-mono": "^5.3.0",
-    "altcha": "^3.3.0",
-    "framer-motion": "^14.4.0",
-    "next": "^16.4.1",
+    "altcha": "^3.6.0",
+    "framer-motion": "^14.14.0",
+    "next": "^16.4.6",
     "qrcode-generator": "2.0.4",
-    "react": "^19.0.0",
-    "react-dom": "^19.0.0",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
     "server-only": "^0.0.1"
   },
   "devDependencies": {
@@ -32,8 +32,8 @@
     "@types/react": "^19.0.2",
     "@types/react-dom": "^19.0.2",
     "eslint": "^9.17.0",
-    "eslint-config-next": "^16.4.1",
+    "eslint-config-next": "^16.4.6",
     "typescript": "^5.7.2",
-    "vitest": "^5.0.3"
+    "vitest": "^5.1.0"
   }
 }
