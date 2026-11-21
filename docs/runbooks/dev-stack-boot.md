@@ -17,6 +17,25 @@ password ("memuat karakter di luar ...") dan redis-entrypoint gagal ("harus alfa
 `for f in $(grep -l $'\r' secrets/*.txt); do tr -d '\r' < "$f" > "$f.t" && mv "$f.t" "$f"; done; bash scripts/derive-secrets.sh secrets`,
 lalu buat ulang volume dev (`down -v`), karena role Postgres dibuat saat init.
 
+### 1a. Percayai sertifikat edge dev di browser (sekali per mesin, ulangi tiap sertifikat dibuat ulang)
+
+`https://*.efn.local:9443` memakai sertifikat edge dev self-signed (`secrets/dev_edge_crt.txt`, 90 hari, terpisah
+dari CA internal). Tanpa diimpor ke trust store, halaman masih bisa dibuka lewat "Proceed anyway", tetapi browser
+**menolak service worker** POS Odoo (`SecurityError: Failed to register a ServiceWorker ... An SSL certificate error
+occurred`), sehingga mode offline POS tidak jalan.
+
+```powershell
+# Windows (Chrome/Edge), tanpa admin; dari root repo
+certutil -user -addstore Root secrets\dev_edge_crt.txt
+# cek: certutil -user -store Root | findstr /i "efn.local"
+```
+
+Tutup browser sepenuhnya lalu buka lagi; cek DevTools → Application → Service Workers. Firefox memakai store sendiri
+(impor lewat Settings → Certificates, atau `security.enterprise_roots.enabled=true`). Saat sertifikat dibuat ulang,
+hapus yang lama dulu: `certutil -user -delstore Root <sha1>` (sha1: `openssl x509 -in secrets/dev_edge_crt.txt
+-noout -fingerprint -sha1`, tanpa titik dua). Risiko terbatas: `CA:FALSE`, SAN hanya `efn.local`/`*.efn.local`.
+**Dev saja** — jangan impor sertifikat apa pun dari env lain dengan cara ini.
+
 ## 2. Build & up
 
 ```bash
