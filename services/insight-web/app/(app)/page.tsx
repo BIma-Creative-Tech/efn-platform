@@ -9,7 +9,7 @@ import { EmptyState, KpiRow, KpiTile, PageHeader, Section, StatusPill } from '@/
 import { codeColor, codeName } from '@/lib/brands';
 import { summarize, type ChartSpec } from '@/lib/chart-spec';
 import { eachDay } from '@/lib/dates';
-import { fmtDayShort, fmtRange } from '@/lib/format';
+import { fmtDayShort, fmtIdrShort, fmtRange } from '@/lib/format';
 import { num, type Result, type Row } from '@/lib/loaders';
 import { pageCtx, type SearchParams } from '@/lib/page-ctx';
 import { loadEsbTable, loadSmdNames, runEsb, runSm } from '@/lib/smd-data';
@@ -22,12 +22,23 @@ import {
   mergeBranchRank,
   mergePtShare,
   mergeSides,
+  ptShareSubtotals,
+  segBadgeClass,
+  segmentFooter,
+  segmentTrendSeries,
+  segParts,
   smdActive,
   smdBranchRows,
   smdParts,
   smdTrendRows,
   sumParts,
+  tagSegment,
+  withSegmentColumn,
+  SEG_FB,
+  SEG_NAME_SM_SERIES,
+  SEG_SM,
   SMD_BASIS,
+  type MRow,
 } from '@/lib/smd-merge';
 import { TABLES } from '@/lib/table-defs';
 import { freshnessStatus, sellThroughStatus, type Status } from '@/lib/thresholds';
@@ -95,14 +106,32 @@ export default async function SummaryPage({ searchParams }: { searchParams: Sear
   // ---- tren harian: baris ESB + baris seri SMD (brand `smd`)
   const trendSides = mergeSides(esbOn, trendR, smdOn, smDaily as Result<Record<string, unknown>[]> | null);
   const trendRows: DailyRow[] = [...(trendSides.esb ?? []), ...(trendSides.smd ? smdTrendRows(trendSides.smd) : [])];
+  const numRows = (rs: readonly DailyRow[]): DailyRow[] => rs.map((r) => ({ ...r, net: num(r.net), trx: num(r.trx) }));
+  const fbTrendRows = numRows(trendSides.esb ?? []);
+  const smTrendRows = trendSides.smd ? numRows(smdTrendRows(trendSides.smd)) : [];
+  const fbBrandCount = new Set(fbTrendRows.map((r) => r.brand)).size;
 
   // Rata-rata per transaksi gabungan tidak dihitung bila basis campuran (docs/04 §28.14.2): tab "avg" hanya untuk satu basis.
   const metrics: readonly ('net' | 'trx' | 'avg')[] = mixed ? ['net', 'trx'] : ['net', 'trx', 'avg'];
   const trendSpecs = (data: DailyRow[]): ChartSpec[] =>
     metrics.map((m) => {
-      const t = trendSeries(data.map((r) => ({ ...r, net: num(r.net), trx: num(r.trx) })), from, to, m);
+      const t = trendSeries(numRows(data), from, to, m);
       const cats = t.days.map(fmtDayShort);
       const fmt = m === 'trx' ? 'int' : 'idr';
+      const sumFmt = m === 'trx' ? 'int' : 'idr-short';
+      const sumTitle = m === 'net' ? 'Penjualan harian' : m === 'trx' ? 'Transaksi harian' : 'Rata-rata per transaksi harian';
+      let series = t.series;
+      let summary = summarize(sumTitle, cats, t.series[0].data, sumFmt, m !== 'avg');
+      if (mixed && m !== 'avg') {
+        // Mode campuran: seri per brand F&B + seri "Supermarket (SMD)" (c7, dari brand `smd`) + "Subtotal F&B" bila brand F&B > 1.
+        const fb = segmentTrendSeries(fbTrendRows, from, to, m, `Subtotal ${SEG_FB}`, 'accent');
+        const sm = segmentTrendSeries(smTrendRows, from, to, m, SEG_NAME_SM_SERIES, 'c7');
+        if (fbBrandCount > 1) series = [...t.series.slice(0, -1), fb, ...t.series.slice(-1)];
+        const segSummaries: string[] = [];
+        if (fbTrendRows.length > 0) segSummaries.push(summarize(`${sumTitle} ${SEG_FB}`, cats, fb.data, sumFmt, true));
+        if (smTrendRows.length > 0) segSummaries.push(summarize(`${sumTitle} ${SEG_SM}`, cats, sm.data, sumFmt, true));
+        if (segSummaries.length > 0) summary = segSummaries.join('. ');
+      }
       return {
         id: m,
         tabLabel: m === 'net' ? (mixed ? 'Penjualan (basis campuran)' : smdOn ? 'Omzet' : 'Penjualan bersih') : m === 'trx' ? 'Transaksi' : 'Rata-rata per transaksi',
@@ -110,14 +139,8 @@ export default async function SummaryPage({ searchParams }: { searchParams: Sear
         fmt,
         axisFmt: m === 'trx' ? 'int' : 'idr-short',
         categories: cats,
-        series: t.series,
-        summary: summarize(
-          m === 'net' ? 'Penjualan harian' : m === 'trx' ? 'Transaksi harian' : 'Rata-rata per transaksi harian',
-          cats,
-          t.series[0].data,
-          m === 'trx' ? 'int' : 'idr-short',
-          m !== 'avg',
-        ),
+        series,
+        summary,
       } satisfies ChartSpec;
     });
 
@@ -129,10 +152,25 @@ export default async function SummaryPage({ searchParams }: { searchParams: Sear
 
   // ---- peringkat cabang: ESB + outlet SMD
   const rankSides = mergeSides(esbOn, rankR, smdOn, smdOn ? allOk([smOutlet, smMargin].map((r) => r as Result<Record<string, unknown>[]>)) : null);
-  const rankRows: Row[] = mergeBranchRank(
-    rankSides.esb ?? [],
-    rankSides.smd ? smdBranchRows(rankSides.smd[0], rankSides.smd[1], names?.wh ?? new Map<number, string>()) : [],
-  );
+  const rankEsb: MRow[] = rankSides.esb ?? [];
+  const rankSmd: MRow[] = rankSides.smd ? smdBranchRows(rankSides.smd[0], rankSides.smd[1], names?.wh ?? new Map<number, string>()) : [];
+  const rankRows: Row[] = mixed ? mergeBranchRank(tagSegment(rankEsb, 'fb'), tagSegment(rankSmd, 'sm')) : mergeBranchRank(rankEsb, rankSmd);
+
+  // KPI per segmen (dipakai tile KPI dan footer tabel cabang)
+  const kpiE = esbParts(kpiSides.esb?.[0]);
+  const kpiS = kpiSides.smd ? smdParts(kpiSides.smd[0], from, kpiSides.smd[1][0], kpiSides.smd[2][0]) : ZERO_PARTS;
+  const rankFooter: MRow[] = mixed
+    ? segmentFooter(rankEsb, rankSmd, {
+        labelKey: 'branch_label',
+        sumKeys: ['net_sales', 'trx'],
+        totalLabel: 'Total gabungan (basis campuran)',
+        derive: (kind, sums) => ({
+          // Rata-rata per transaksi gabungan tidak dihitung (basis campuran); HPP% dari agregat KPI per segmen.
+          avg_trx: kind === 'total' ? null : ratio(Number(sums.net_sales ?? 0), Number(sums.trx ?? 0)),
+          hpp_pct: hppPct(kind === 'fb' ? kpiE : kind === 'sm' ? kpiS : sumParts(kpiE, kpiS)).cur,
+        }),
+      })
+    : [];
 
   // ---- kontribusi PT
   const shareSides = showShare && shareR ? mergeSides(esbOn, shareR, smdOn, smdOn ? (smDaily as Result<Record<string, unknown>[]>) : null) : null;
@@ -142,6 +180,7 @@ export default async function SummaryPage({ searchParams }: { searchParams: Sear
         shareSides.smd ? kpiSmdRev(shareSides.smd, from) : null,
       )
     : [];
+  const ptSub = ptShareSubtotals(shareRows);
 
   // "Perlu perhatian" (khusus F&B)
   const attention: { key: string; status: Status; text: string; href: string }[] = [];
@@ -177,8 +216,8 @@ export default async function SummaryPage({ searchParams }: { searchParams: Sear
         ) : (
           (() => {
             const k = kpiSides.esb?.[0];
-            const e = esbParts(k);
-            const s = kpiSides.smd ? smdParts(kpiSides.smd[0], from, kpiSides.smd[1][0], kpiSides.smd[2][0]) : ZERO_PARTS;
+            const e = kpiE;
+            const s = kpiS;
             const p = sumParts(e, s);
             if (!k && p.rev === 0 && p.revPrev === 0 && p.trx === 0) {
               return <EmptyState title="Tidak ada penjualan pada periode ini" reason="Filter mungkin terlalu sempit, atau data belum masuk." />;
@@ -202,6 +241,7 @@ export default async function SummaryPage({ searchParams }: { searchParams: Sear
                   fmt="idr-short"
                   delta={{ value: pctDelta(p.rev, p.revPrev), kind: 'pct', goodWhen: 'up' }}
                   spark={dailyNet}
+                  parts={mixed ? segParts(e.rev, s.rev, { fmt: 'idr-short', smNote: SMD_BASIS }) : undefined}
                   note={mixed ? 'F&B tanpa pajak, SMD termasuk PPN' : !esbOn ? SMD_BASIS : 'Sebelum PB1/service'}
                   info={
                     mixed
@@ -215,6 +255,7 @@ export default async function SummaryPage({ searchParams }: { searchParams: Sear
                   label="Transaksi"
                   value={p.trx}
                   fmt="int"
+                  parts={mixed ? segParts(e.trx, s.trx) : undefined}
                   delta={{ value: pctDelta(p.trx, p.trxPrev), kind: 'pct', goodWhen: 'up' }}
                   info={mixed ? 'Struk unik F&B ditambah order POS SMD.' : 'Jumlah struk unik per cabang per hari.'}
                 />
@@ -235,6 +276,7 @@ export default async function SummaryPage({ searchParams }: { searchParams: Sear
                   label="HPP terhadap penjualan bersih"
                   value={hpp.cur}
                   fmt="pct"
+                  parts={mixed ? segParts(hppPct(e).cur, hppPct(s).cur, { fmt: 'pct' }) : undefined}
                   delta={{ value: ppDelta(hpp.cur, hpp.prev), kind: 'pp', goodWhen: 'down' }}
                   note={smdOn ? 'Penyebut tanpa pajak' : undefined}
                   info="Total HPP dibagi penjualan bersih tanpa pajak (SMD: tanpa PPN)."
@@ -296,16 +338,45 @@ export default async function SummaryPage({ searchParams }: { searchParams: Sear
                     kind: 'barH',
                     fmt: 'idr',
                     axisFmt: 'idr-short',
-                    categories: shareRows.map((r) => (r.company_code === 'SMD' ? `${codeName('SMD')} (${SMD_BASIS})` : codeName(r.company_code))),
+                    categories: shareRows.map((r) =>
+                      r.company_code === 'SMD' ? `${codeName('SMD')} - ${mixed ? `${SEG_SM}, ` : ''}${SMD_BASIS}` : codeName(r.company_code),
+                    ),
                     series: [{ name: mixed ? 'Penjualan (basis campuran)' : 'Penjualan bersih', data: shareRows.map((r) => num(r.net)), color: 'c1', itemColors: shareRows.map((r) => codeColor(r.company_code)) }],
                     summary: summarize('Penjualan per PT', shareRows.map((r) => codeName(r.company_code)), shareRows.map((r) => num(r.net)), 'idr-short', true),
                   },
                 ]}
               />
               {mixed ? (
-                <p className="muted small" role="note">
-                  Basis campuran: F&amp;B tanpa PB1/service charge, SMD termasuk PPN.
-                </p>
+                <>
+                  <p className="muted small" role="note">
+                    Basis campuran: F&amp;B tanpa PB1/service charge, SMD termasuk PPN.
+                  </p>
+                  <table className="table table-compact">
+                    <caption className="sr-only">Subtotal kontribusi PT per segmen</caption>
+                    <thead>
+                      <tr>
+                        <th scope="col">Segmen</th>
+                        <th scope="col" className="num">
+                          Penjualan
+                        </th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr>
+                        <th scope="row">
+                          <span className={segBadgeClass(SEG_FB)}>{SEG_FB}</span> Subtotal {SEG_FB}
+                        </th>
+                        <td className="num">{fmtIdrShort(ptSub.fb)}</td>
+                      </tr>
+                      <tr>
+                        <th scope="row">
+                          <span className={segBadgeClass(SEG_SM)}>{SEG_SM}</span> Subtotal {SEG_SM} ({SMD_BASIS})
+                        </th>
+                        <td className="num">{fmtIdrShort(ptSub.sm)}</td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </>
               ) : null}
             </div>
           )
@@ -343,8 +414,9 @@ export default async function SummaryPage({ searchParams }: { searchParams: Sear
             <SideNote note={rankSides.note} />
             <DataTable
               caption={TABLES['branch-rank'].caption}
-              columns={TABLES['branch-rank'].columns}
+              columns={mixed ? withSegmentColumn(TABLES['branch-rank'].columns) : TABLES['branch-rank'].columns}
               rows={rankRows as TableRow[]}
+              footerRows={mixed ? (rankFooter as TableRow[]) : undefined}
               csvName={smdOn ? undefined : 'branch-rank'}
               defaultSort={{ key: 'net_sales', dir: 'desc' }}
             />

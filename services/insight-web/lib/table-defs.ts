@@ -2,7 +2,7 @@
  * Definisi tabel (kolom) yang dipakai bersama oleh DataTable (halaman) dan ekspor CSV (route handler),
  * sehingga isi CSV = isi tabel dengan filter & cakupan yang sama. Murni dan dapat diserialisasi.
  */
-export type CellFmt = 'text' | 'idr' | 'idr-short' | 'int' | 'num' | 'pct' | 'date' | 'status';
+export type CellFmt = 'text' | 'idr' | 'idr-short' | 'int' | 'num' | 'pct' | 'date' | 'status' | 'segment';
 
 export interface ColumnDef {
   key: string;

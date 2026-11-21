@@ -8,7 +8,7 @@ import { MixedScopeNote, NotApplicableSmd, SideNote, SmdBasisNote } from '@/comp
 import { SmTable } from '@/components/sm/SmTable';
 import { KpiRow, KpiTile, PageHeader, Section } from '@/components/ui';
 import { brandName } from '@/lib/brands';
-import { summarize, type ChartSpec } from '@/lib/chart-spec';
+import { summarize, type ChartSpec, type ColorToken } from '@/lib/chart-spec';
 import { fmtDayShort, fmtIdr, fmtRange, fmtQty, WEEKDAYS } from '@/lib/format';
 import { num, topMenuRow, type Result } from '@/lib/loaders';
 import { pageCtx, type SearchParams } from '@/lib/page-ctx';
@@ -23,6 +23,7 @@ import {
   mergeHeat,
   mergeSides,
   mergeWeekday,
+  segParts,
   smdActive,
   smdExcludedNote,
   smdSalesSums,
@@ -101,6 +102,7 @@ export default async function SalesPage({ searchParams }: { searchParams: Search
   const catSpecs = (rows: CatRow[], smdRows: RawRows): ChartSpec[] => {
     const all = mergeCategories(rows, smdRows);
     const drillSet = new Set(all.filter((i) => i.drillable).map((i) => i.label));
+    const segOf = new Map(all.map((i) => [i.label, i.segment]));
     const byMetric = (m: 'net' | 'qty'): ChartSpec => {
       const sorted = [...all].sort((a, b) => (m === 'net' ? b.net - a.net : b.qty - a.qty));
       const items = withOther(sorted.map((r) => ({ label: r.label, value: m === 'net' ? r.net : r.qty })), 8);
@@ -113,7 +115,15 @@ export default async function SalesPage({ searchParams }: { searchParams: Search
         fmt: m === 'net' ? 'idr' : 'num',
         axisFmt: m === 'net' ? 'idr-short' : 'num',
         categories: cats,
-        series: [{ name: m === 'net' ? (mixed ? 'Penjualan (basis campuran)' : 'Penjualan bersih') : 'Qty', data: vals, color: 'c1' }],
+        series: [
+          {
+            name: m === 'net' ? (mixed ? 'Penjualan (basis campuran)' : 'Penjualan bersih') : 'Qty',
+            data: vals,
+            color: 'c1',
+            // Mode campuran: batang Supermarket memakai warna c7 (label tetap berawalan "SMD:"); "Lainnya" = netral.
+            ...(mixed ? { itemColors: cats.map((c): ColorToken => (c === 'Lainnya' ? 'muted' : segOf.get(c) === 'sm' ? 'c7' : 'c1')) } : {}),
+          },
+        ],
         drill: { param: 'cat', values: cats.map((c) => (drillSet.has(c) ? c : '')), label: 'kategori' },
         summary: summarize('Bauran kategori', cats, vals, m === 'net' ? 'idr-short' : 'num', true),
       };
@@ -161,6 +171,7 @@ export default async function SalesPage({ searchParams }: { searchParams: Search
                   value={p.net}
                   fmt="idr-short"
                   note={mixed ? 'F&B tanpa pajak, SMD termasuk PPN' : !esbOn ? SMD_BASIS : 'Sebelum PB1/service'}
+                  parts={mixed ? segParts(e.net, s.net, { fmt: 'idr-short', smNote: SMD_BASIS }) : undefined}
                   delta={{ value: pctDelta(p.net, p.netPrev), kind: 'pct', goodWhen: 'up' }}
                 />
                 <KpiTile
@@ -168,12 +179,13 @@ export default async function SalesPage({ searchParams }: { searchParams: Search
                   value={p.disc}
                   fmt="idr-short"
                   status={discountStatus(dPct)}
+                  parts={mixed ? segParts(e.disc, s.disc, { fmt: 'idr-short' }) : undefined}
                   note={dPct === null ? undefined : `${dPct.toFixed(1).replace('.', ',')}% dari penjualan kotor`}
                   delta={{ value: pctDelta(p.disc, p.discPrev), kind: 'pct', goodWhen: 'neutral' }}
                   info={`Peringatan bila diskon > ${T.discountWarnPct}% dari penjualan kotor (ambang konfigurasi).`}
                 />
-                <KpiTile label="Qty terjual" value={p.qty} fmt="num" note={mixed ? 'Satuan campuran (porsi F&B + unit SMD)' : undefined} delta={{ value: pctDelta(p.qty, p.qtyPrev), kind: 'pct', goodWhen: 'up' }} />
-                <KpiTile label="Margin kotor" value={mC} fmt="pct" status={marginStatus(mC)} delta={{ value: ppDelta(mC, mP), kind: 'pp', goodWhen: 'up' }} info="(Penjualan bersih tanpa pajak - HPP) / penjualan bersih tanpa pajak, di kedua sisi." />
+                <KpiTile label="Qty terjual" value={p.qty} fmt="num" note={mixed ? 'Satuan campuran (porsi F&B + unit SMD)' : undefined} parts={mixed ? segParts(e.qty, s.qty, { fmt: 'num', fbNote: 'porsi', smNote: 'unit' }) : undefined} delta={{ value: pctDelta(p.qty, p.qtyPrev), kind: 'pct', goodWhen: 'up' }} />
+                <KpiTile label="Margin kotor" value={mC} fmt="pct" status={marginStatus(mC)} parts={mixed ? segParts(pctOf(e.gm, e.base), pctOf(s.gm, s.base), { fmt: 'pct' }) : undefined} delta={{ value: ppDelta(mC, mP), kind: 'pp', goodWhen: 'up' }} info="(Penjualan bersih tanpa pajak - HPP) / penjualan bersih tanpa pajak, di kedua sisi." />
               </KpiRow>
             );
           })()

@@ -2,8 +2,16 @@
  * Logika penggabungan ESB + SMD untuk halaman F&B (G51 B1) dan helper halaman (B3-B5). Murni, tanpa ClickHouse.
  */
 import { describe, expect, it } from 'vitest';
+import { brandName, codeColor } from '@/lib/brands';
 import type { PtSelection } from '@/lib/filters';
 import {
+  ptShareSubtotals,
+  segBadgeClass,
+  segmentFooter,
+  segmentTrendSeries,
+  segParts,
+  tagSegment,
+  withSegmentColumn,
   addSales,
   allOk,
   esbOnlyMode,
@@ -108,7 +116,7 @@ describe('KPI Ringkasan: gabungan per PT (SMD termasuk PPN, HPP tanpa pajak)', (
 });
 
 describe('tren: seri per brand termasuk SMD', () => {
-  it('smdTrendRows -> satu garis "Supermarket Demo" bersama brand ESB', () => {
+  it('smdTrendRows -> satu garis "Supermarket (SMD)" (c7) bersama brand ESB', () => {
     const rows = [
       { sales_date: '2026-11-01', brand: 'pb', net: 10, trx: 1 },
       { sales_date: '2026-11-02', brand: 'pb', net: 20, trx: 2 },
@@ -118,8 +126,89 @@ describe('tren: seri per brand termasuk SMD', () => {
       ]),
     ];
     const t = trendSeries(rows, '2026-11-01', '2026-11-02', 'net');
-    expect(t.series.map((s) => s.name)).toEqual(['Paris Baguette', 'Supermarket Demo', 'Periode lalu (total)']);
+    expect(t.series.map((s) => s.name)).toEqual(['Paris Baguette', 'Supermarket (SMD)', 'Periode lalu (total)']);
     expect(t.series[1].data).toEqual([30, 40]);
+    expect(t.series[1].color).toBe('c7');
+  });
+
+  it('segmentTrendSeries: subtotal F&B menjumlah semua brand ESB, nama & warna ditimpa', () => {
+    const fb = [
+      { sales_date: '2026-11-01', brand: 'pb', net: 10, trx: 1 },
+      { sales_date: '2026-11-01', brand: 'wtz', net: 5, trx: 2 },
+      { sales_date: '2026-11-02', brand: 'pb', net: 20, trx: 2 },
+    ];
+    const s = segmentTrendSeries(fb, '2026-11-01', '2026-11-02', 'net', 'Subtotal F&B', 'accent');
+    expect(s.name).toBe('Subtotal F&B');
+    expect(s.color).toBe('accent');
+    expect(s.data).toEqual([15, 20]);
+    expect(segmentTrendSeries(fb, '2026-11-01', '2026-11-02', 'trx', 'x', 'c7').data).toEqual([3, 2]);
+  });
+});
+
+describe('segmen: total + subtotal (Q-SM46)', () => {
+  it('tagSegment & withSegmentColumn: teks "F&B"/"Supermarket", kolom Segmen setelah kolom pertama', () => {
+    expect(tagSegment([{ a: 1 }], 'fb')[0].segment).toBe('F&B');
+    expect(tagSegment([{ a: 1 }], 'sm')[0].segment).toBe('Supermarket');
+    const cols = withSegmentColumn([{ key: 'a', header: 'A' }, { key: 'b', header: 'B' }]);
+    expect(cols.map((c) => c.key)).toEqual(['a', 'segment', 'b']);
+    expect(cols[1]).toMatchObject({ header: 'Segmen', fmt: 'segment' });
+    expect(segBadgeClass('Supermarket')).toBe('seg-badge seg-badge--sm');
+    expect(segBadgeClass('F&B')).toBe('seg-badge');
+  });
+
+  it('segmentFooter: subtotal per segmen + total; angka string numerik dijumlah; semua-null tetap null', () => {
+    const esb = [
+      { n: 'a', amt: 100, cnt: '2', mdr: 3 },
+      { n: 'b', amt: '50', cnt: 1, mdr: 1 },
+    ];
+    const smd = [{ n: 'c', amt: 20, cnt: 4, mdr: null }];
+    const f = segmentFooter(esb, smd, {
+      labelKey: 'n',
+      sumKeys: ['amt', 'cnt', 'mdr'],
+      totalLabel: 'Total',
+      derive: (kind, s) => ({ avg: kind === 'total' ? null : Number(s.amt) / Number(s.cnt) }),
+    });
+    expect(f.map((r) => r.n)).toEqual(['Subtotal F&B', 'Subtotal Supermarket', 'Total']);
+    expect(f[0]).toMatchObject({ segment: 'F&B', amt: 150, cnt: 3, mdr: 4, avg: 50 });
+    expect(f[1]).toMatchObject({ segment: 'Supermarket', amt: 20, cnt: 4, mdr: null, avg: 5 });
+    expect(f[2]).toMatchObject({ segment: null, amt: 170, cnt: 7, mdr: 4, avg: null });
+  });
+
+  it('segmentFooter: segmen kosong dilewati; total hanya bila kedua segmen ada', () => {
+    const spec = { labelKey: 'n', sumKeys: ['v'], totalLabel: 'Total' };
+    expect(segmentFooter([{ v: 1 }], [], spec).map((r) => r.n)).toEqual(['Subtotal F&B']);
+    expect(segmentFooter([], [{ v: 1 }], spec).map((r) => r.n)).toEqual(['Subtotal Supermarket']);
+    expect(segmentFooter([], [], spec)).toEqual([]);
+    expect(segmentFooter([{ v: 1 }], [{ v: 2 }], { labelKey: 'n', sumKeys: ['v'] }).map((r) => r.n)).toEqual(['Subtotal F&B', 'Subtotal Supermarket']);
+  });
+
+  it('segParts: F&B lalu Supermarket; catatan & fmt hanya bila diberikan', () => {
+    expect(segParts(9, 2, { fmt: 'idr-short', smNote: 'termasuk PPN' })).toEqual([
+      { label: 'F&B', value: 9, fmt: 'idr-short' },
+      { label: 'Supermarket', value: 2, fmt: 'idr-short', note: 'termasuk PPN' },
+    ]);
+    expect(segParts(null, 1)).toEqual([{ label: 'F&B', value: null }, { label: 'Supermarket', value: 1 }]);
+  });
+
+  it('HPP% per segmen memakai penyebut tanpa pajak masing-masing', () => {
+    const e = esbParts({ net_cur: 1000, net_prev: 0, trx_cur: 1, trx_prev: 0, cogs_cur: 300, cogs_prev: 0 });
+    const s = smdParts([{ day: '2026-11-02', rev_sum: 2200, orders_sum: 2 }], '2026-11-01', { net_cur: 2000, net_prev: 0 }, { cogs_cur: 1000, cogs_prev: 0 });
+    const parts = segParts(hppPct(e).cur, hppPct(s).cur, { fmt: 'pct' });
+    expect(parts[0].value).toBeCloseTo(30);
+    expect(parts[1].value).toBeCloseTo(50); // 1000 / 2000 (tanpa PPN), bukan / 2200
+  });
+
+  it('ptShareSubtotals memisahkan SMD dari PT F&B', () => {
+    expect(ptShareSubtotals([{ company_code: 'PB', net: 5 }, { company_code: 'WTZ', net: 3 }, { company_code: 'SMD', net: 7 }])).toEqual({ fb: 8, sm: 7 });
+    expect(ptShareSubtotals([])).toEqual({ fb: 0, sm: 0 });
+  });
+
+  it('mergeCategories menandai segmen; warna kode SMD = c7, ESB bukan c7', () => {
+    const c = mergeCategories([{ category: 'Roti', net_sales: 1, qty_sold: 1, margin_pct: null }], [{ categ_id: 1, category_name: 'Susu', rev_sum: 1, qty_sum: 1 }]);
+    expect(c.map((i) => i.segment)).toEqual(['fb', 'sm']);
+    expect(codeColor('SMD')).toBe('c7');
+    expect(['PB', 'WTZ', 'BCF', 'BCR', 'IMD', 'CUP'].map(codeColor)).not.toContain('c7');
+    expect(brandName('smd')).toBe('Supermarket (SMD)');
   });
 });
 

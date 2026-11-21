@@ -7,6 +7,7 @@ import { useMemo, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { useDrill } from '@/lib/client-nav';
 import { fmtDate, fmtIdr, fmtIdrShort, fmtInt, fmtPct, fmtQty } from '@/lib/format';
+import { segBadgeClass } from '@/lib/smd-merge';
 import type { ColumnDef, TableName } from '@/lib/table-defs';
 import type { Status } from '@/lib/thresholds';
 import { EmptyState, StatusPill } from './ui';
@@ -34,6 +35,14 @@ function formatCell(col: ColumnDef, v: CellValue): string {
   }
 }
 
+/** Sel non-interaktif (footer) dan sel segmen; segmen = lencana teks (tidak hanya warna). */
+function cellContent(col: ColumnDef, v: CellValue): React.ReactNode {
+  if (col.fmt === 'segment') {
+    return typeof v === 'string' && v !== '' ? <span className={segBadgeClass(v)}>{v}</span> : '-';
+  }
+  return formatCell(col, v);
+}
+
 function cmp(a: CellValue, b: CellValue): number {
   if (a === null && b === null) return 0;
   if (a === null) return 1; // null selalu di akhir
@@ -52,6 +61,7 @@ export function DataTable({
   quickFilter,
   emptyTitle = 'Tidak ada data pada periode ini.',
   stickyFirstCol = true,
+  footerRows,
 }: {
   caption: string;
   columns: ColumnDef[];
@@ -63,6 +73,8 @@ export function DataTable({
   quickFilter?: { label: string; statuses: Status[] };
   emptyTitle?: string;
   stickyFirstCol?: boolean;
+  /** Baris subtotal/total: selalu tampil di <tfoot>, tidak ikut sortir/paginasi, tidak ikut CSV. */
+  footerRows?: TableRow[];
 }): React.ReactNode {
   const sp = useSearchParams();
   const drill = useDrill();
@@ -159,7 +171,7 @@ export function DataTable({
                             {formatCell(c, v)}
                           </button>
                         ) : (
-                          formatCell(c, v)
+                          cellContent(c, v)
                         );
                       return ci === 0 ? (
                         <th key={c.key} scope="row" className={c.align === 'right' ? 'num' : undefined}>
@@ -174,6 +186,26 @@ export function DataTable({
                   </tr>
                 ))}
               </tbody>
+              {footerRows && footerRows.length > 0 ? (
+                <tfoot>
+                  {footerRows.map((r, ri) => (
+                    <tr key={`f-${ri}`} className="row-subtotal">
+                      {columns.map((c, ci) => {
+                        const content = cellContent(c, r[c.key] ?? null);
+                        return ci === 0 ? (
+                          <th key={c.key} scope="row" className={c.align === 'right' ? 'num' : undefined}>
+                            {content}
+                          </th>
+                        ) : (
+                          <td key={c.key} className={c.align === 'right' ? 'num' : undefined}>
+                            {content}
+                          </td>
+                        );
+                      })}
+                    </tr>
+                  ))}
+                </tfoot>
+              ) : null}
             </table>
           </div>
           {pages > 1 ? (

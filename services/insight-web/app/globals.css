@@ -807,6 +807,55 @@ body[data-busy] main {
   color: var(--text-muted);
   width: 100%;
 }
+/* G51 (Q-SM46 total + subtotal): rincian KPI per segmen & lencana segmen. Hanya token yang ada di kedua tema;
+   pasangan teks --text di atas --info-soft / --surface-2 sudah dites >= 4,5 (tests/config-contrast.test.ts). */
+.kpi-parts {
+  list-style: none;
+  margin: 4px 0 0;
+  padding: 6px 0 0;
+  width: 100%;
+  border-top: 1px solid var(--border);
+  display: grid;
+  gap: 2px;
+  font-size: 12px;
+}
+.kpi-parts li {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+}
+.kpi-part-label {
+  color: var(--text-muted);
+}
+.kpi-part-value {
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+.kpi-part-note {
+  color: var(--text-muted);
+}
+.seg-badge {
+  display: inline-block;
+  padding: 1px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--info);
+  background: var(--info-soft);
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.5;
+  white-space: nowrap;
+}
+.seg-badge--sm {
+  border-color: var(--c7);
+  background: var(--surface-2);
+}
+.row-subtotal th,
+.row-subtotal td {
+  font-weight: 600;
+  background: var(--surface-2);
+  border-top: 1px solid var(--border);
+}
 .spark {
   color: var(--accent);
   width: 100%;

@@ -8,7 +8,10 @@
 import { codeName } from './brands';
 import type { PtSelection } from './filters';
 import { toNum, type Raw } from './sm-parse';
-import { pctOf, type DailyRow } from './vm';
+import type { ChartSeries, ColorToken } from './chart-spec';
+import type { ValueFmt } from './format';
+import type { ColumnDef } from './table-defs';
+import { pctOf, trendSeries, type DailyRow } from './vm';
 
 export type Cell = string | number | boolean | null;
 export type MRow = Record<string, Cell>;
@@ -96,7 +99,116 @@ export function allOk<T>(rs: readonly Res<T>[]): Res<T[]> {
   return { ok: true, data };
 }
 
-export const MIXED_BASIS_NOTE = 'Total gabungan berbasis campuran: brand F&B tanpa PB1/service charge, SMD termasuk PPN. Nilai per brand tidak terpengaruh.';
+export const MIXED_BASIS_NOTE =
+  'Total gabungan berbasis campuran: brand F&B tanpa PB1/service charge, SMD termasuk PPN. Nilai per brand tidak terpengaruh. Subtotal per segmen (F&B dan Supermarket) ditampilkan terpisah di bawah total.';
+
+// ---------------------------------------------------------------- segmen (total + subtotal, keputusan pemilik 21 Nov 2026, Q-SM46)
+
+export type SegKind = 'fb' | 'sm';
+export const SEG_FB = 'F&B';
+export const SEG_SM = 'Supermarket';
+export const SEG_NAME_SM_SERIES = 'Supermarket (SMD)';
+export const segLabel = (k: SegKind): string => (k === 'fb' ? SEG_FB : SEG_SM);
+/** Kelas CSS lencana segmen (globals.css `.seg-badge`); teks selalu ada, warna hanya penegas. */
+export const segBadgeClass = (label: string): string => (label === SEG_SM ? 'seg-badge seg-badge--sm' : 'seg-badge');
+
+/** Tambah kolom teks `segment` pada tiap baris (hanya dipakai pada mode campuran). */
+export function tagSegment(rows: readonly MRow[], kind: SegKind): MRow[] {
+  return rows.map((r) => ({ ...r, segment: segLabel(kind) }));
+}
+
+/** Sisipkan kolom "Segmen" tepat setelah kolom pertama; tidak mengubah array masukan. */
+export function withSegmentColumn(columns: readonly ColumnDef[]): ColumnDef[] {
+  const seg: ColumnDef = { key: 'segment', header: 'Segmen', fmt: 'segment', align: 'left' };
+  return [...columns.slice(0, 1), seg, ...columns.slice(1)];
+}
+
+/** Penjumlahan kolom: null bila tidak ada satu pun nilai numerik (mis. MDR SMD = n/a, bukan 0). */
+function sumKey(rows: readonly MRow[], key: string): number | null {
+  let any = false;
+  let s = 0;
+  for (const r of rows) {
+    const v = r[key];
+    // Baris ESB dari ClickHouse bisa membawa angka sebagai string numerik.
+    const n = typeof v === 'number' ? v : typeof v === 'string' && v.trim() !== '' ? Number(v) : Number.NaN;
+    if (Number.isFinite(n)) {
+      any = true;
+      s += n;
+    }
+  }
+  return any ? s : null;
+}
+
+export interface FooterSpec {
+  /** Kolom label baris (kolom pertama tabel). */
+  labelKey: string;
+  /** Kolom numerik yang dijumlahkan. */
+  sumKeys: readonly string[];
+  /** Kolom turunan (rasio, rata-rata) dihitung dari jumlah; kind 'total' = gabungan. */
+  derive?: (kind: SegKind | 'total', sums: MRow) => MRow;
+  /** Label baris total gabungan; undefined = tanpa baris total. */
+  totalLabel?: string;
+}
+
+/**
+ * Baris footer tabel campuran: "Subtotal F&B", "Subtotal Supermarket", lalu total gabungan (bila kedua segmen ada).
+ * Segmen tanpa baris dilewati. Baris footer tidak ikut disortir/dipaginasi (DataTable `footerRows`).
+ */
+export function segmentFooter(esb: readonly MRow[], smd: readonly MRow[], spec: FooterSpec): MRow[] {
+  const build = (rows: readonly MRow[], kind: SegKind | 'total', label: string, segment: string | null): MRow => {
+    const sums: MRow = {};
+    for (const k of spec.sumKeys) sums[k] = sumKey(rows, k);
+    return { [spec.labelKey]: label, segment, ...sums, ...(spec.derive ? spec.derive(kind, sums) : {}) };
+  };
+  const out: MRow[] = [];
+  if (esb.length > 0) out.push(build(esb, 'fb', `Subtotal ${SEG_FB}`, SEG_FB));
+  if (smd.length > 0) out.push(build(smd, 'sm', `Subtotal ${SEG_SM}`, SEG_SM));
+  if (spec.totalLabel && esb.length > 0 && smd.length > 0) out.push(build([...esb, ...smd], 'total', spec.totalLabel, null));
+  return out;
+}
+
+export interface KpiPart {
+  label: string;
+  value: number | null;
+  fmt?: ValueFmt;
+  note?: string;
+}
+
+/** Rincian "F&B" / "Supermarket" di bawah nilai KPI (mode campuran). `smNote` mis. "termasuk PPN". */
+export function segParts(fb: number | null, sm: number | null, o: { fmt?: ValueFmt; fbNote?: string; smNote?: string } = {}): KpiPart[] {
+  const mk = (label: string, value: number | null, note?: string): KpiPart => {
+    const p: KpiPart = { label, value };
+    if (o.fmt) p.fmt = o.fmt;
+    if (note) p.note = note;
+    return p;
+  };
+  return [mk(SEG_FB, fb, o.fbNote), mk(SEG_SM, sm, o.smNote)];
+}
+
+/** Subtotal kontribusi PT per segmen (baris `company_code === 'SMD'` = Supermarket). */
+export function ptShareSubtotals(rows: readonly { company_code: string; net: number }[]): { fb: number; sm: number } {
+  let fb = 0;
+  let sm = 0;
+  for (const r of rows) {
+    if (r.company_code === 'SMD') sm += r.net;
+    else fb += r.net;
+  }
+  return { fb, sm };
+}
+
+/**
+ * Satu seri tren dari sekumpulan baris harian (subtotal segmen). `rows` dianggap satu kelompok; nama & warna ditimpa.
+ * Metrik 'avg' tidak dipakai pada mode campuran.
+ */
+export function segmentTrendSeries(rows: readonly DailyRow[], from: string, to: string, metric: 'net' | 'trx' | 'avg', name: string, color: ColorToken): ChartSeries {
+  const t = trendSeries(
+    rows.map((r) => ({ ...r, brand: '_segment' })),
+    from,
+    to,
+    metric,
+  );
+  return { ...t.series[0], name, color };
+}
 
 // ---------------------------------------------------------------- KPI Ringkasan
 
@@ -328,6 +440,8 @@ export interface CatItem {
   margin: number | null;
   /** Hanya kategori menu ESB yang bisa dijadikan filter `cat`. */
   drillable: boolean;
+  /** Segmen asal (warna batang: F&B c1, Supermarket c7). */
+  segment: SegKind;
 }
 
 export function mergeCategories(
@@ -340,10 +454,11 @@ export function mergeCategories(
     qty: toNum(r.qty_sold),
     margin: r.margin_pct === null ? null : toNum(r.margin_pct),
     drillable: r.category !== '',
+    segment: 'fb',
   }));
   for (const r of smd) {
     const name = typeof r.category_name === 'string' && r.category_name !== '' ? r.category_name : `Kategori #${toNum(r.categ_id)}`;
-    items.push({ label: `SMD: ${name}`, net: toNum(r.rev_sum), qty: toNum(r.qty_sum), margin: null, drillable: false });
+    items.push({ label: `SMD: ${name}`, net: toNum(r.rev_sum), qty: toNum(r.qty_sum), margin: null, drillable: false, segment: 'sm' });
   }
   return items;
 }

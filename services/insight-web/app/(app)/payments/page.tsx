@@ -6,13 +6,27 @@ import { FilterNotice } from '@/components/FilterNotice';
 import { SideNote } from '@/components/SmdNotice';
 import { KpiRow, KpiTile, PageHeader, Section } from '@/components/ui';
 import type { SeriesColor } from '@/lib/brands';
-import { summarize, type ChartSeries, type ChartSpec } from '@/lib/chart-spec';
+import { summarize, type ChartSeries, type ChartSpec, type ColorToken } from '@/lib/chart-spec';
 import { eachDay } from '@/lib/dates';
 import { fmtDayShort, fmtRange } from '@/lib/format';
 import { num, type Result } from '@/lib/loaders';
 import { pageCtx, type SearchParams } from '@/lib/page-ctx';
 import { loadEsbTable, loadSmdNames, runEsb, runSm } from '@/lib/smd-data';
-import { mergeSides, smdActive, smdPayBranchRows, smdPayMethodRows, smdPayTrendRows, type PayTrendRow } from '@/lib/smd-merge';
+import {
+  mergeSides,
+  segmentFooter,
+  segParts,
+  smdActive,
+  smdPayBranchRows,
+  smdPayMethodRows,
+  smdPayTrendRows,
+  tagSegment,
+  withSegmentColumn,
+  SEG_SM,
+  SMD_BASIS,
+  type MRow,
+  type PayTrendRow,
+} from '@/lib/smd-merge';
 import { toNum } from '@/lib/sm-parse';
 import { TABLES } from '@/lib/table-defs';
 import { T } from '@/lib/thresholds';
@@ -51,8 +65,34 @@ export default async function PaymentsPage({ searchParams }: { searchParams: Sea
   const trendSides = mergeSides(esbOn, trendR, smdOn, asRaw(smTrend));
   const branchSides = mergeSides(esbOn, branchR, smdOn, asRaw(smMatrix));
 
-  const methodRows = [...(methodSides.esb ?? []), ...(methodSides.smd ? smdPayMethodRows(methodSides.smd) : [])];
-  const branchRows = [...(branchSides.esb ?? []), ...(branchSides.smd ? smdPayBranchRows(branchSides.smd, names?.wh ?? new Map<number, string>()) : [])];
+  const methodEsb: MRow[] = methodSides.esb ?? [];
+  const methodSmd: MRow[] = methodSides.smd ? smdPayMethodRows(methodSides.smd) : [];
+  const branchEsb: MRow[] = branchSides.esb ?? [];
+  const branchSmd: MRow[] = branchSides.smd ? smdPayBranchRows(branchSides.smd, names?.wh ?? new Map<number, string>()) : [];
+  // Mode campuran: tiap baris diberi kolom Segmen (teks), plus baris subtotal F&B / Supermarket di footer tabel.
+  const methodRows: MRow[] = mixed ? [...tagSegment(methodEsb, 'fb'), ...tagSegment(methodSmd, 'sm')] : [...methodEsb, ...methodSmd];
+  const branchRows: MRow[] = mixed ? [...tagSegment(branchEsb, 'fb'), ...tagSegment(branchSmd, 'sm')] : [...branchEsb, ...branchSmd];
+  const methodFooter: MRow[] = mixed
+    ? segmentFooter(methodEsb, methodSmd, {
+        labelKey: 'payment_type',
+        sumKeys: ['cnt', 'amount_total', 'mdr_total'],
+        totalLabel: 'Total gabungan',
+        derive: (kind, sums) => {
+          const amt = Number(sums.amount_total ?? 0);
+          const cnt = Number(sums.cnt ?? 0);
+          const mdr = sums.mdr_total;
+          return {
+            method: null,
+            avg_amount: cnt > 0 ? amt / cnt : null,
+            // MDR hanya F&B: persentase hanya bermakna untuk subtotal F&B.
+            mdr_pct: kind === 'fb' && typeof mdr === 'number' ? pctOf(mdr, amt) : null,
+          };
+        },
+      })
+    : [];
+  const branchFooter: MRow[] = mixed
+    ? segmentFooter(branchEsb, branchSmd, { labelKey: 'branch_name', sumKeys: ['amount', 'mdr'], totalLabel: 'Total gabungan' })
+    : [];
   const trendRows: PayTrendRow[] = [...(trendSides.esb ?? []), ...(trendSides.smd ? smdPayTrendRows(trendSides.smd) : [])];
 
   const trendSpecs = (rows: PayTrendRow[]): ChartSpec[] => {
@@ -130,8 +170,8 @@ export default async function PaymentsPage({ searchParams }: { searchParams: Sea
             const d = ppDelta(mC, mP);
             return (
               <KpiRow>
-                <KpiTile label="Total pembayaran" value={amtC} fmt="idr-short" note={mixed ? 'F&B + SMD (uang diterima)' : undefined} delta={{ value: pctDelta(amtC, amtP), kind: 'pct', goodWhen: 'up' }} />
-                <KpiTile label="Jumlah pembayaran" value={cntC} fmt="int" delta={{ value: pctDelta(cntC, cntP), kind: 'pct', goodWhen: 'up' }} />
+                <KpiTile label="Total pembayaran" value={amtC} fmt="idr-short" note={mixed ? 'F&B + SMD (uang diterima)' : undefined} parts={mixed ? segParts(num(k?.amount_cur), toNum(s?.amount_cur), { fmt: 'idr-short', smNote: SMD_BASIS }) : undefined} delta={{ value: pctDelta(amtC, amtP), kind: 'pct', goodWhen: 'up' }} />
+                <KpiTile label="Jumlah pembayaran" value={cntC} fmt="int" parts={mixed ? segParts(num(k?.count_cur), toNum(s?.count_cur)) : undefined} delta={{ value: pctDelta(cntC, cntP), kind: 'pct', goodWhen: 'up' }} />
                 <KpiTile label="Total MDR" value={k ? num(k.mdr_cur) : null} fmt="idr-short" note={smdOn ? 'Hanya brand F&B' : undefined} delta={{ value: k ? pctDelta(num(k.mdr_cur), num(k.mdr_prev)) : null, kind: 'pct', goodWhen: 'down' }} />
                 <KpiTile
                   label="MDR efektif"
@@ -160,10 +200,13 @@ export default async function PaymentsPage({ searchParams }: { searchParams: Sea
             );
             const cats = items.map((i) => i.label);
             const vals = items.map((i) => i.value);
+            // Mode campuran: batang Supermarket = c7, F&B = c1, "Lainnya" = netral (label tetap memuat "SMD - ...").
+            const segOf = new Map(ranked.map((r) => [`${String(r.method)} (${String(r.payment_type)})`, r.segment]));
+            const itemColors: ColorToken[] = cats.map((c) => (c === 'Lainnya' ? 'muted' : segOf.get(c) === SEG_SM ? 'c7' : 'c1'));
             return (
               <ChartCard
                 title="Bauran metode pembayaran"
-                specs={[{ id: 'm', kind: 'barH', fmt: 'idr', axisFmt: 'idr-short', categories: cats, series: [{ name: 'Nilai pembayaran', data: vals, color: 'c1' }], summary: summarize('Nilai pembayaran per metode', cats, vals, 'idr-short', true) }]}
+                specs={[{ id: 'm', kind: 'barH', fmt: 'idr', axisFmt: 'idr-short', categories: cats, series: [{ name: 'Nilai pembayaran', data: vals, color: 'c1', ...(mixed ? { itemColors } : {}) }], summary: summarize('Nilai pembayaran per metode', cats, vals, 'idr-short', true) }]}
               />
             );
           })()
@@ -183,8 +226,9 @@ export default async function PaymentsPage({ searchParams }: { searchParams: Sea
             <SideNote note={methodSides.note} />
             <DataTable
               caption={TABLES['pay-methods'].caption}
-              columns={TABLES['pay-methods'].columns}
+              columns={mixed ? withSegmentColumn(TABLES['pay-methods'].columns) : TABLES['pay-methods'].columns}
               rows={methodRows as TableRow[]}
+              footerRows={mixed ? (methodFooter as TableRow[]) : undefined}
               csvName={smdOn ? undefined : 'pay-methods'}
               defaultSort={{ key: 'amount_total', dir: 'desc' }}
             />
@@ -200,8 +244,9 @@ export default async function PaymentsPage({ searchParams }: { searchParams: Sea
             <SideNote note={branchSides.note} />
             <DataTable
               caption={TABLES['pay-branches'].caption}
-              columns={TABLES['pay-branches'].columns}
+              columns={mixed ? withSegmentColumn(TABLES['pay-branches'].columns) : TABLES['pay-branches'].columns}
               rows={branchRows as TableRow[]}
+              footerRows={mixed ? (branchFooter as TableRow[]) : undefined}
               csvName={smdOn ? undefined : 'pay-branches'}
               defaultSort={{ key: 'amount', dir: 'desc' }}
             />
