@@ -1858,6 +1858,8 @@ def do_purchases(day_pos, products, suppliers, dc_ops, counters):
             when[picking.id] = actual_dt
     if not receipts:
         return
+    for picking in receipts:
+        date_open_moves(picking, when[picking.id])
     assign_open(receipts)
     for picking in receipts:
         day = when[picking.id]
@@ -1898,6 +1900,7 @@ def do_purchases(day_pos, products, suppliers, dc_ops, counters):
         batch = receipts.filtered(lambda p, d=day: when[p.id].date() == d)
         done = validate(batch, (when[batch[:1].id] + timedelta(hours=7)).date())
         stores = done.move_ids.filtered(lambda m: m.state == "done").move_dest_ids.picking_id
+        date_open_moves(stores, when[batch[:1].id])
         assign_open(stores)
         stored = validate(stores, (when[batch[:1].id] + timedelta(hours=7)).date())
         for p in done:
@@ -1943,6 +1946,15 @@ def assign_open(pickings):
     return open_
 
 
+def date_open_moves(pickings, when):
+    """Tanggal historis di move terbuka SEBELUM reservasi: product_expiry 19.0 (stock_move.py) mereservasi dengan
+    ``with_expiration=self.date``; tanpa ini lot segar (umur 2-7 hari) dianggap kedaluwarsa terhadap HARI INI dan
+    picking DC -> outlet Fresh/Dairy batal seluruhnya (temuan gladi prod lokal G51: fill rate 42,6%)."""
+    moves = pickings.move_ids.filtered(lambda m: m.state not in ("done", "cancel"))
+    if moves:
+        moves.write({"date": when})
+
+
 def run_legs(items, ship_when, recv_when, counters):
     """items = [(proposal, prop)]. Proses pick -> ship -> receipt -> storage untuk satu gelombang."""
     Picking = env["stock.picking"].sudo()
@@ -1955,6 +1967,8 @@ def run_legs(items, ship_when, recv_when, counters):
         if not prop.get("backorder"):
             cancel |= legs[rec.id]["pick"] | legs[rec.id]["ship"] | legs[rec.id]["recv"]
     stamp = {}
+    for rec, prop in items:
+        date_open_moves(legs[rec.id]["pick"], ship_when(prop, "pick"))
     assign_open(allp["pick"])
     for rec, prop in items:
         if not prop.get("short"):
@@ -1967,6 +1981,8 @@ def run_legs(items, ship_when, recv_when, counters):
     for leg in ("pick", "ship", "recv"):
         pickings = allp[leg]
         if leg != "pick":
+            for rec, prop in items:
+                date_open_moves(legs[rec.id][leg], ship_when(prop, leg) if leg != "recv" else recv_when(prop, 0))
             assign_open(pickings)
         # Satu button_validate per (leg, waktu) — batch lintas usulan; picking yang dibatalkan sisanya = ``cancel``.
         by_when = {}
@@ -1982,7 +1998,6 @@ def run_legs(items, ship_when, recv_when, counters):
     stores = recv_done.move_ids.filtered(lambda m: m.state == "done").move_dest_ids.picking_id.filtered(
         lambda p: p.state not in ("done", "cancel")
     )
-    assign_open(stores)
     by_recv = {}
     for rec, prop in items:
         for p in legs[rec.id]["recv"]:
@@ -1994,6 +2009,9 @@ def run_legs(items, ship_when, recv_when, counters):
             continue
         when = recv_when(prop, 1)
         store_when[when] = store_when.get(when, Picking.browse()) | store
+    for when, batch in store_when.items():
+        date_open_moves(batch, when)
+    assign_open(stores)
     for when, batch in store_when.items():
         validate(batch, (when + timedelta(hours=8)).date())
         for p in batch:
@@ -2116,6 +2134,7 @@ def do_backorders(day, counters):
         for _leg, pickings, when in groups:
             if not pickings:
                 continue
+            date_open_moves(pickings, when)
             assign_open(pickings)
             done = validate(pickings, day)
             cancel_leftover(pickings, pickings)
@@ -2126,6 +2145,7 @@ def do_backorders(day, counters):
             lambda p: p.state not in ("done", "cancel")
         )
         if stores:
+            date_open_moves(stores, local_dt(day, 15, offset))
             assign_open(stores)
             for p in validate(stores, day):
                 stamp[p.id] = local_dt(day, 15, offset)
@@ -2138,12 +2158,24 @@ def do_sales_out(day, sales, codes, products, allowed, counters):
     customers = env.ref("stock.stock_location_customers")
     created = Picking.browse()
     for wh in outlets:
-        origin = f"DEMO-SMD-SALE-{wh.code}-{day:%Y%m%d}"
-        if Picking.search_count([("origin", "=", origin), ("company_id", "=", company.id)]):
+        # Top-up idempoten: keluar stok = permintaan hari itu dikurangi yang SUDAH keluar (picking selesai berawalan
+        # origin hari itu). Run ulang setelah pasokan bertambah (mis. perbaikan reservasi lot segar) melengkapi sisa;
+        # run ulang tanpa perubahan tidak membuat apa pun.
+        base = f"DEMO-SMD-SALE-{wh.code}-{day:%Y%m%d}"
+        prior = Picking.search([("origin", "=like", f"{base}%"), ("company_id", "=", company.id)])
+        out = {}
+        for m in prior.move_ids.filtered(lambda m: m.state == "done"):
+            out[m.product_id.default_code] = out.get(m.product_id.default_code, 0.0) + m.quantity
+        items = []
+        for c in codes:
+            if allowed[(wh.id, c)] != "ok" or (wh.id, day, c) not in sales:
+                continue
+            rest = round(sales[(wh.id, day, c)] - out.get(c, 0.0), 3)
+            if rest > 0.001:
+                items.append((c, rest))
+        if not items or len(prior) >= 3:  # maksimal 2 top-up per outlet per hari
             continue
-        items = [(c, sales[(wh.id, day, c)]) for c in codes if allowed[(wh.id, c)] == "ok" and (wh.id, day, c) in sales]
-        if not items:
-            continue
+        origin = base if not prior else f"{base}-T{len(prior)}"
         created |= Picking.create(
             {
                 "picking_type_id": wh.pos_type_id.id,
@@ -2170,6 +2202,8 @@ def do_sales_out(day, sales, codes, products, allowed, counters):
     if not created:
         return
     created.action_confirm()
+    for p in created:
+        date_open_moves(p, local_dt(day, 21, wh_offset(p.picking_type_id.warehouse_id)))
     assign_open(created)  # FEFO (removal strategy kategori), dibatasi stok tersedia
     done = validate(created, day)
     cancel_leftover(created, created)  # tanpa stok sama sekali -> batal (tidak menggantung)
