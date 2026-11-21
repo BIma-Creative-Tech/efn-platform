@@ -31,10 +31,13 @@ censoring OOS (tidak ada snapshot stok Odoo sebelum cutover).
   library/Odoo; override: entri manual `lebaran_window`, env `FORECAST_LEBARAN_DATES`.
 - **Censoring OOS**: stok akhir hari ≤ 0 (snapshot ada, SKU ber-stok dalam 14 hari sebelumnya) → hari itu bukan
   permintaan nol (diimputasi rata-rata 28 hari).
-- **Per seri** (setelah dibagi faktor): `regular` → AutoETS/AutoARIMA (statsforecast) dipilih rolling-origin CV
-  4 × 7 hari (MAE); hari nol > 60 % → CrostonOptimized (CV² < 0,49) / ADIDA (lumpy); histori < 56 hari atau SKU baru →
-  `category_mean` (rata-rata per SKU kategori di gudang, dicampur level seri sendiri berbobot n/56). Model gagal →
-  `category_mean` + dihitung `failed_series`.
+- **Per seri** (setelah dibagi faktor): `regular` → AutoETS (default ruang model `ZNZ` = tanpa tren,
+  `FORECAST_ETS_MODEL`) / AutoARIMA (orde kecil + approximation, 182 hari terakhir) dipilih rolling-origin CV
+  4 × 7 hari (MAE) bila kandidat > 1; hari nol > 60 % → CrostonOptimized (CV² < 0,49) / ADIDA (lumpy); histori < 56
+  hari → `category_mean` = rata-rata penjualan mentah 14 hari valid terakhir seri sendiri (tanpa faktor kalender);
+  SKU baru tanpa jual → median level kategori di gudang × faktor. Model gagal → level seri sendiri + `failed_series`.
+- **Backtest** (holdout `FORECAST_BACKTEST_DAYS`): SKU yang belum terjual sampai titik potong tidak diramal (seperti
+  run nyata) dan dinilai sebagai ramalan 0; aktualnya tetap masuk penyebut WAPE (G46c).
 - p10/p90 = yhat ∓ 1,2816·sigma (dipotong di 0); sigma dari interval 80 % statsforecast atau residual CV / std 56 hari.
 - **DC** (`FORECAST_DC_CODES`, default `SMDDC`) = permintaan langsung DC + Σ ramalan outlet per produk (hanya bila tepat
   satu DC di PT).
@@ -66,7 +69,8 @@ python -m efn_forecast seed-calendar --company SMD [--dry-run]
 | `FORECAST_HORIZON_DAYS`, `FORECAST_CHUNK_SIZE` | `28` (7..60), `500` (1..500) |
 | `FORECAST_HISTORY_DAYS`, `FORECAST_STOCK_DAYS`, `FORECAST_FIT_DAYS` | `800`, `400`, `365` |
 | `FORECAST_MODELS`, `FORECAST_CV_WINDOWS`, `FORECAST_MIN_HISTORY_DAYS`, `FORECAST_INTERMITTENT_ZERO_RATIO` | `AutoETS` (pilihan `AutoETS,AutoARIMA`), `4`, `56`, `0.6` |
-| `FORECAST_JOBS` | `1` (1..32): proses paralel per gudang (G46b, `spawn`; hasil identik dengan 1). Log `forecast gudang i/N` per gudang. Uji PB 112 hari: `AutoETS,AutoARIMA` + CV 4 + backtest = jam-an di 1 core; untuk run cepat `FORECAST_MODELS=AutoETS` (tanpa CV) |
+| `FORECAST_ETS_MODEL` | `ZNZ` (galat `A/M/Z`, tren `N/A/Z`, musim `N/A/M/Z`); `ZZZ` = ruang model lama. Benchmark data nyata PB 1 tahun (G46c): ZNZ 8x lebih cepat dari ZZZ, WAPE setara/lebih baik |
+| `FORECAST_JOBS` | `1` (1..32): proses paralel per gudang (G46b, `spawn`; hasil identik dengan 1). Log `forecast gudang i/N` per gudang. Default `AutoETS` tanpa CV; `AutoETS,AutoARIMA` + CV 4 = 4-5 fit per kandidat per seri (lihat angka G46c di bawah) |
 | `FORECAST_INACTIVE_DAYS` | `28` (0..365; 0 = mati): seri tanpa jual dan tanpa hari OOS selama N hari terakhir → ramalan 0 (`inactive`), **tidak dikirim** ke Odoo (tanpa usulan forecast/min-max), tetap dihitung di backtest (L-168). Level `category_mean` = median seri pembanding |
 | `FORECAST_PAYDAY_TAIL_DAYS`, `FORECAST_PAYDAY_HEAD_DAYS`, `FORECAST_WEEKEND_DAYS` | `7`, `7`, `5,6` (0=Senin) — **samakan dengan parameter Odoo per company** |
 | `FORECAST_LEBARAN_DATES`, `FORECAST_FACTOR_SHRINK_DAYS` | kosong, `5` |
@@ -97,6 +101,21 @@ pip install -r requirements-dev.txt
 pytest                 # termasuk backtest statsforecast (marker slow; JIT numba pertama kali puluhan detik)
 pytest -m "not slow"   # tanpa statsforecast
 ```
+
+## Backtest data nyata (G46c, 21 Nov 2026)
+Histori sales 1 tahun satu brand F&B (±7.200 seri gudang × produk), holdout 28 hari, `pipeline.backtest` (metrik yang
+dikirim ke Odoo). Angka hanya agregat; data klien tidak ada di repo.
+
+| Holdout | Konfigurasi | Waktu forecast (1 proses kecuali disebut) | WAPE | mean56 | naive |
+|---|---|---|---|---|---|
+| Okt–Nov | lama (ETS `ZZZ`, seri pendek campuran kategori) | 413 s | 0,581 | 0,665 | 0,586 |
+| Okt–Nov | baru (ETS `ZNZ`, level 14 hari seri sendiri) | 61 s (22 s dengan 4 jobs) | 0,551 | 0,665 | 0,586 |
+| Okt–Nov | baru + `FORECAST_MODELS=AutoETS,AutoARIMA` (CV 4) | 2.000 s dengan 4 jobs | 0,545 | 0,665 | 0,586 |
+| Mar–Apr (memuat Lebaran) | lama | 167 s | 0,774 | 0,644 | 0,781 |
+| Mar–Apr (memuat Lebaran) | baru | 36 s | 0,694 | 0,644 | 0,781 |
+
+AutoARIMA dengan setelan lama tidak selesai dalam 5,5 jam (1 proses). Holdout Lebaran masih kalah dari mean56 karena
+histori belum memuat Lebaran sebelumnya: faktor Lebaran tidak bisa diestimasi (butuh histori ≥ 1 Lebaran, mis. 24 bulan).
 
 ## Belum
 - **Tuning**: bobot penyusutan faktor, ambang intermiten, kandidat model, AutoARIMA dengan regressor eksogen (ADR §3.3
