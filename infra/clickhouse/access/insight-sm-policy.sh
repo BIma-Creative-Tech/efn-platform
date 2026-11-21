@@ -17,7 +17,7 @@
 # Harness uji perilaku (ClickHouse 24.8, 8 test negatif §28.13.7): services/etl/tests/clickhouse/g47_row_policy_harness.sh
 # (memakai SM_POLICY_DEFINE_ONLY=1 untuk hanya memuat fungsi predikat).
 
-# Daftar view SM: <view> <kelas W|C|F> <persona dipisah koma, urut naik>.
+# Daftar view SM: <view> <kelas W|C|F> <persona dipisah koma, urut naik>. G51 (spesifikasi lead §B2/§B4): +4 view terakhir.
 SM_POLICY_VIEWS="
 v_sm_warehouse_list W category,dc,exec,marketing,store
 v_sm_product_list C category,dc,exec,marketing,store
@@ -48,6 +48,10 @@ v_sm_segment_daily W exec,marketing
 v_sm_campaign_result W exec,marketing
 v_sm_freshness F category,dc,exec,marketing,store
 v_sm_kpi_config C category,dc,exec,marketing,store
+v_sm_payment_daily W exec,store
+v_sm_product_sales_daily W category,exec,store
+v_sm_forecast_daily W category,dc,exec,store
+v_sm_lot_stock W category,exec,store
 "
 
 sm_persona_array() {
@@ -105,7 +109,7 @@ if [ "${SM_POLICY_DEFINE_ONLY:-0}" != "1" ]; then
         "$sm_v" "$sm_pred"
     done)" || { echo "clickhouse-init: gagal menyusun row policy view SM (G47)" >&2; exit 1; }
   SM_POLICY_N="$(printf '%s\n' "$SM_POLICY_SQL" | grep -c '^CREATE ROW POLICY')"
-  [ "$SM_POLICY_N" = "29" ] || { echo "clickhouse-init: jumlah policy SM ${SM_POLICY_N} != 29" >&2; exit 1; }
+  [ "$SM_POLICY_N" = "33" ] || { echo "clickhouse-init: jumlah policy SM ${SM_POLICY_N} != 33" >&2; exit 1; }
   printf '%s\n' "$SM_POLICY_SQL" | $CH --log_queries=0 --multiquery
   unset SM_POLICY_SQL SM_POLICY_N
   echo "clickhouse-init: row policy efn_insight_scope view SM (G47) diterapkan"

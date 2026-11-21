@@ -5,6 +5,77 @@ ADR terkait (semua `Proposed`): ADR-003, ADR-006, ADR-007, ADR-008, ADR-010, ADR
 
 **Tidak ada yang dijalankan.** Mesin penulis tidak punya Python; semua kode, test, dan SQL belum pernah dieksekusi. Validasi pertama terjadi di CI / oleh QA.
 
+## Gelombang 51 — SMD end-to-end: view Insight B2/B4, histori stok B6, histori forecast A6 (21 Nov 2026)
+
+Kontrak: `docs/design/G51_SMD_E2E_LEAD_SPEC.md` + keputusan lead G51 (is_reconstructed & versi aman, jalur A6
+`--as-of/--out` + loader odoo-shell, view ke-4 `v_sm_lot_stock`, policy 33). ADR-003/ADR-041/ADR-046 (Proposed).
+**Tidak ada yang dijalankan** (tanpa shell): pytest, ruff, ClickHouse 24.8, harness, worker, loader belum pernah
+dieksekusi.
+
+### File
+- CH: `infra/clickhouse/init/17-g47-insight-sm.sql` (ALTER `dim_product.shelf_life_days UInt16 DEFAULT 0`,
+  `v_sm_product_list` + kolom akhir), **baru** `infra/clickhouse/init/18-g51-insight-sm.sql` (ALTER
+  `agg_sm_stock_daily.is_reconstructed UInt8 DEFAULT 0`; view `efn_dwh.v_sm_payment_daily`, `v_sm_product_sales_daily`,
+  `v_sm_forecast_daily`, `v_sm_lot_stock`), `infra/clickhouse/access/insight-sm-access.sql` (grant definer + 4 view
+  DEFINER), `infra/clickhouse/access/insight-sm-policy.sh` (4 baris, kunci 33).
+- ETL: `services/etl/efn_etl/pos.py` (`shelf_life_days`), **baru** `services/etl/efn_etl/sm_stock_hist.py`,
+  `sm_cycle.py` (job `sm_stock_reconstruct`), `config.py` (`ETL_SM_STOCK_RECONSTRUCT_DAYS` 0..400, butuh SM),
+  `__main__.py`, `sql/odoo-readonly-grants.sql` (blok G51: `product_template.expiration_time`), `README.md`.
+- Compose: `infra/compose/docker-compose.yml` (etl: `ETL_SM_STOCK_RECONSTRUCT_DAYS:-0`, `ETL_FORECAST_ACCURACY_WEEKS:-2`,
+  `ETL_FORECAST_ACCURACY_INTERVAL_SECONDS:-86400` — dua terakhir sebelumnya tidak diteruskan), `infra/compose/.env.example`.
+- Worker: **baru** `services/forecast-worker/efn_forecast/asof.py`, `__main__.py` (`--as-of`, `--out`), `runner.py`
+  (`run_batch(run_id=None)`), `README.md`. Loader **baru** `scripts/dev/load_forecast_asof.py`. Runbook
+  `docs/runbooks/demo-supermarket-seed.md` §8 "A6 forecast history" (hanya bagian itu).
+- Test: `services/etl/tests/test_insight_sm_access.py`, `test_g47_cross_service.py` (29→33), `test_sm_ddl.py`,
+  **baru** `test_sm_stock_hist.py`, harness `tests/clickhouse/g47_row_policy_harness.sh` (tabel `payment`, persona dari
+  manifest produksi), **baru** `services/forecast-worker/tests/test_asof.py`.
+
+### Kolom view efn_insight (urutan = implementasi)
+- `v_sm_payment_daily` (W; exec, store): day Date, company_id UInt32, warehouse_id UInt32, outlet_type String,
+  method_name String, method_type String, is_refund UInt8, amount Float64 (Σ termasuk baris kembalian negatif = bersih),
+  payments UInt64 (baris non-kembalian). Sumber fact_pos_payment FINAL ⋈ dim_outlet (pos.config.warehouse_id).
+- `v_sm_product_sales_daily` (W; category, exec, store): day, company_id, warehouse_id, outlet_type, product_id UInt32,
+  categ_id UInt32, qty_sold Float64, net_sales Float64 (tanpa PPN), net_sales_incl_tax Float64. Sumber
+  v_sm_sales_product_daily (fact_sales_line `sales_fact_pos`), dijumlah ulang per warehouse.
+- `v_sm_forecast_daily` (W; category, dc, exec, store): company_id, warehouse_id, outlet_type, product_id, categ_id,
+  forecast_date Date, yhat/p10/p90 Float64, run_id UInt32, generated_at DateTime('UTC'). Run `ok` kind daily terbaru per
+  PT **menurut generated_at** (run as-of tidak pernah menjadi terbaru). Seluruh horizon (28 hari); aplikasi memfilter 14.
+- `v_sm_lot_stock` (W; category, exec, store): company_id, warehouse_id, outlet_type, product_id, categ_id, lot_id UInt32,
+  lot_name String, expiration_date Date (WIB), days_left Int32 (vs hari ini WIB), quantity Float64, value_cost Float64.
+  Snapshot selesai terakhir, lot_id ≠ 0, ber-expiration_date, qty > 0, warehouse SM.
+- `v_sm_product_list` + `shelf_life_days UInt16` di akhir (0 bila `use_expiration_date` mati).
+
+### Temuan / keputusan
+- `fact_pos_payment` 0 baris SMD **bukan** karena filter PT: job `pos_payments` tidak memfilter company (hanya order
+  `paid|done`); penyebabnya order histori seed tanpa `pos.payment` (diatasi A4). store_id→warehouse lewat `dim_outlet`.
+- B6 versi: baris rekonstruksi `computed_at = 2000-01-01 UTC`, baris nyata `now64(6)` → nyata selalu menang di RMT apa pun
+  urutannya; hari dengan `stock_snapshot_run` tidak ditulis; hari ini tidak pernah direkonstruksi. Diuji (simulasi RMT).
+- A6: Odoo `_efn_validate_line` menolak tanggal < hari ini server, jadi worker tidak bisa mengirim run lampau lewat API;
+  jalur = `--as-of` (hitung, RecordingOdoo, payload tervalidasi kontrak) → file → loader ORM (validator Odoo dipakai ulang
+  relatif tanggal batch, `is_active=False`, tanpa `_efn_on_run_closed_ok`). run_id deterministik → idempoten.
+
+### Perintah untuk lead
+- Test: `docker run ... pytest services/etl/tests services/forecast-worker/tests` + `ruff check` (pola CI).
+- Harness: `services/etl/tests/clickhouse/g47_row_policy_harness.sh` (cara di header file; uji G51 baru = payment).
+- A6: runbook §8 (loop 8 Senin → `docker cp` → loader → ETL dengan `ETL_FORECAST_ACCURACY_WEEKS=8`,
+  `ETL_FORECAST_ACCURACY_INTERVAL_SECONDS=900` sementara).
+- B6 demo: `.env` `ETL_ENABLE_SM=true ETL_SM_STOCK_RECONSTRUCT_DAYS=90` (setelah seed A1/A2/A3/A7), recreate etl.
+- Shelf life: seed A5 menaikkan write_date template → job `products` menyalin otomatis; DB lama: reset watermark
+  `products` (README G47).
+
+### Belum diverifikasi / asumsi
+- Semua SQL ClickHouse belum dijalankan di 24.8 (alias kualifikasi `toFloat64(f.yhat) AS yhat` mengikuti pola yang sudah
+  jalan di view G47/G44; agregat memakai alias berbeda). `toDateTime(DateTime64, 'UTC')` untuk generated_at.
+- `stock_move.date` diasumsikan ber-index (Odoo `index=True`); tidak menambah index. Hari move = `date + 7 jam` (WIB tetap).
+- Rekonstruksi: konversi UoM `quantity * mu.factor / pu.factor` (pola SQL_FILL_MOVES, belum diverifikasi arah faktor
+  UoM 19.0); quant & move dibaca dalam satu statement per warehouse; volume (±6 gudang × 400 SKU × 90 hari ≈ 216 rb baris)
+  ditulis sekali per hari WIB.
+- Loader A6: field `opened_at/closed_at/state/is_active` ditulis lewat ORM sudo (readonly hanya UI); `_efn_scope`
+  dipanggil dengan env shell; `metric_*` lain default. Ukuran file ±5–15 MB; izin tulis bind mount user 65534.
+- `generated_at` as-of = Minggu 23:00 WIB (lead), cron default 23:30; akurasi memakai `toDate(generated_at WIB) < tanggal`.
+- Freshness: mart pembayaran/forecast_daily/lot_stock tidak ditambah ke `v_sm_freshness` (di luar lingkup; bisa memakai
+  mart `sales`/`forecast_accuracy`/`stock`).
+
 ## Gelombang 47 — EFN Insight supermarket per persona, sisi data (21 Nov 2026)
 
 Kontrak: `docs/04` §28.13 v20.3 (L-186..L-203) + fit-gap `docs/fit-gap/G47_INSIGHT_SM.md` C-1..C-7 (menang untuk detail

@@ -1,15 +1,33 @@
 import type { Metadata } from 'next';
-import { Block } from '@/components/blocks';
+import { ErrorCard } from '@/components/blocks';
 import { ChartCard } from '@/components/ChartCard';
 import { DataTable, type TableRow } from '@/components/DataTable';
 import { FilterNotice } from '@/components/FilterNotice';
+import { SideNote } from '@/components/SmdNotice';
 import { KpiRow, KpiTile, PageHeader, Section } from '@/components/ui';
 import type { SeriesColor } from '@/lib/brands';
-import { summarize, type ChartSeries, type ChartSpec } from '@/lib/chart-spec';
+import { summarize, type ChartSeries, type ChartSpec, type ColorToken } from '@/lib/chart-spec';
 import { eachDay } from '@/lib/dates';
 import { fmtDayShort, fmtRange } from '@/lib/format';
-import { num, run, settle, TABLE_LOADERS } from '@/lib/loaders';
+import { num, type Result } from '@/lib/loaders';
 import { pageCtx, type SearchParams } from '@/lib/page-ctx';
+import { loadEsbTable, loadSmdNames, runEsb, runSm } from '@/lib/smd-data';
+import {
+  mergeSides,
+  segmentFooter,
+  segParts,
+  smdActive,
+  smdPayBranchRows,
+  smdPayMethodRows,
+  smdPayTrendRows,
+  tagSegment,
+  withSegmentColumn,
+  SEG_SM,
+  SMD_BASIS,
+  type MRow,
+  type PayTrendRow,
+} from '@/lib/smd-merge';
+import { toNum } from '@/lib/sm-parse';
 import { TABLES } from '@/lib/table-defs';
 import { T } from '@/lib/thresholds';
 import { pctDelta, pctOf, ppDelta, withOther } from '@/lib/vm';
@@ -18,22 +36,66 @@ export const dynamic = 'force-dynamic';
 export const metadata: Metadata = { title: 'Pembayaran' };
 
 interface Kpi { amount_cur: number; amount_prev: number; count_cur: number; count_prev: number; mdr_cur: number; mdr_prev: number }
-interface TrendRow { sales_date: string; payment_type: string; amount: number; payment_count: number }
+type RawRows = Record<string, unknown>[];
 
 const COLORS: SeriesColor[] = ['c1', 'c2', 'c3', 'c4', 'c5', 'c6'];
 
 export default async function PaymentsPage({ searchParams }: { searchParams: SearchParams }) {
-  const { ctx, adjusted } = await pageCtx(searchParams);
+  const { ctx, adjusted, sel } = await pageCtx(searchParams);
   const { from, to } = ctx.filters;
+  const esbOn = sel.esb;
+  const smdOn = smdActive(sel, ctx.filters, null);
+  const mixed = esbOn && smdOn;
+  const sm = (n: Parameters<typeof runSm>[0]) => (smdOn ? runSm(n, ctx, sel) : Promise.resolve(null));
 
-  const [kpiR, methodR, trendR, branchR] = await Promise.all([
-    settle(run<Kpi>('pay_kpi', ctx)),
-    settle(TABLE_LOADERS['pay-methods'](ctx)),
-    settle(run<TrendRow>('pay_trend', ctx)),
-    settle(TABLE_LOADERS['pay-branches'](ctx)),
+  const [kpiR, methodR, trendR, branchR, smSums, smMatrix, smTrend, names] = await Promise.all([
+    runEsb<Kpi>(esbOn, 'pay_kpi', ctx),
+    loadEsbTable(esbOn, 'pay-methods', ctx),
+    runEsb<PayTrendRow>(esbOn, 'pay_trend', ctx),
+    loadEsbTable(esbOn, 'pay-branches', ctx),
+    sm('sm_fb_pay_sums'),
+    sm('sm_fb_pay_matrix'),
+    sm('sm_fb_pay_trend'),
+    smdOn ? loadSmdNames(ctx, sel) : Promise.resolve(null),
   ]);
 
-  const trendSpecs = (rows: TrendRow[]): ChartSpec[] => {
+  const asRaw = (r: Result<RawRows> | null): Result<RawRows> | null => r;
+  const kpiSides = mergeSides(esbOn, kpiR, smdOn, asRaw(smSums));
+  const methodSides = mergeSides(esbOn, methodR, smdOn, asRaw(smMatrix));
+  const trendSides = mergeSides(esbOn, trendR, smdOn, asRaw(smTrend));
+  const branchSides = mergeSides(esbOn, branchR, smdOn, asRaw(smMatrix));
+
+  const methodEsb: MRow[] = methodSides.esb ?? [];
+  const methodSmd: MRow[] = methodSides.smd ? smdPayMethodRows(methodSides.smd) : [];
+  const branchEsb: MRow[] = branchSides.esb ?? [];
+  const branchSmd: MRow[] = branchSides.smd ? smdPayBranchRows(branchSides.smd, names?.wh ?? new Map<number, string>()) : [];
+  // Mode campuran: tiap baris diberi kolom Segmen (teks), plus baris subtotal F&B / Supermarket di footer tabel.
+  const methodRows: MRow[] = mixed ? [...tagSegment(methodEsb, 'fb'), ...tagSegment(methodSmd, 'sm')] : [...methodEsb, ...methodSmd];
+  const branchRows: MRow[] = mixed ? [...tagSegment(branchEsb, 'fb'), ...tagSegment(branchSmd, 'sm')] : [...branchEsb, ...branchSmd];
+  const methodFooter: MRow[] = mixed
+    ? segmentFooter(methodEsb, methodSmd, {
+        labelKey: 'payment_type',
+        sumKeys: ['cnt', 'amount_total', 'mdr_total'],
+        totalLabel: 'Total gabungan',
+        derive: (kind, sums) => {
+          const amt = Number(sums.amount_total ?? 0);
+          const cnt = Number(sums.cnt ?? 0);
+          const mdr = sums.mdr_total;
+          return {
+            method: null,
+            avg_amount: cnt > 0 ? amt / cnt : null,
+            // MDR hanya F&B: persentase hanya bermakna untuk subtotal F&B.
+            mdr_pct: kind === 'fb' && typeof mdr === 'number' ? pctOf(mdr, amt) : null,
+          };
+        },
+      })
+    : [];
+  const branchFooter: MRow[] = mixed
+    ? segmentFooter(branchEsb, branchSmd, { labelKey: 'branch_name', sumKeys: ['amount', 'mdr'], totalLabel: 'Total gabungan' })
+    : [];
+  const trendRows: PayTrendRow[] = [...(trendSides.esb ?? []), ...(trendSides.smd ? smdPayTrendRows(trendSides.smd) : [])];
+
+  const trendSpecs = (rows: PayTrendRow[]): ChartSpec[] => {
     const days = eachDay(from, to);
     const cats = days.map(fmtDayShort);
     const totals = new Map<string, number>();
@@ -42,7 +104,7 @@ export default async function PaymentsPage({ searchParams }: { searchParams: Sea
     const top = ranked.slice(0, 5);
     const bucket = (t: string): string => (top.includes(t) ? t : 'Lainnya');
     const types = ranked.length > 5 ? [...top, 'Lainnya'] : top;
-    const grid = (pick: (r: TrendRow) => number): Map<string, number[]> => {
+    const grid = (pick: (r: PayTrendRow) => number): Map<string, number[]> => {
       const m = new Map<string, number[]>(types.map((t) => [t, Array<number>(days.length).fill(0)]));
       for (const r of rows) {
         const i = days.indexOf(r.sales_date);
@@ -82,83 +144,114 @@ export default async function PaymentsPage({ searchParams }: { searchParams: Sea
     <>
       <PageHeader title="Pembayaran" question="Pelanggan membayar dengan apa, dan berapa biaya (MDR) yang kita tanggung?" />
       <FilterNotice adjusted={adjusted} />
-      <p className="muted small">Periode: {fmtRange(from, to)}. Nilai pembayaran tidak sama dengan penjualan bersih (pembayaran sudah termasuk PB1/service).</p>
+      <p className="muted small">Periode: {fmtRange(from, to)}. Nilai pembayaran tidak sama dengan penjualan bersih (pembayaran sudah termasuk PB1/service; SMD termasuk PPN).</p>
+      {smdOn ? (
+        <p className="notice" role="note">
+          SMD ikut dihitung: nominal uang diterima bersih (termasuk PPN, retur dan kembalian sudah diperhitungkan). Pembayaran sebasis dengan brand F&amp;B. MDR hanya untuk brand F&amp;B; SMD tidak punya data MDR (n/a).
+        </p>
+      ) : null}
+      <SideNote note={kpiSides.note} />
 
       <Section title="Indikator utama" id="kpi">
-        <Block result={kpiR} title="Indikator utama">
-          {(rows) => {
-            const k = rows[0];
-            if (!k) return <p>Tidak ada pembayaran pada periode ini.</p>;
-            const mC = pctOf(num(k.mdr_cur), num(k.amount_cur));
-            const mP = pctOf(num(k.mdr_prev), num(k.amount_prev));
+        {kpiSides.fail ? (
+          <ErrorCard title="Indikator utama" refId={kpiSides.fail.ref} reason={kpiSides.fail.reason} />
+        ) : (
+          (() => {
+            const k = kpiSides.esb?.[0];
+            const s = kpiSides.smd?.[0];
+            if (!k && !s) return <p>Tidak ada pembayaran pada periode ini.</p>;
+            const amtC = num(k?.amount_cur) + toNum(s?.amount_cur);
+            const amtP = num(k?.amount_prev) + toNum(s?.amount_prev);
+            const cntC = num(k?.count_cur) + toNum(s?.count_cur);
+            const cntP = num(k?.count_prev) + toNum(s?.count_prev);
+            // MDR hanya brand F&B: penyebut = pembayaran F&B saja (SMD tidak punya MDR).
+            const mC = k ? pctOf(num(k.mdr_cur), num(k.amount_cur)) : null;
+            const mP = k ? pctOf(num(k.mdr_prev), num(k.amount_prev)) : null;
             const d = ppDelta(mC, mP);
             return (
               <KpiRow>
-                <KpiTile label="Total pembayaran" value={num(k.amount_cur)} fmt="idr-short" delta={{ value: pctDelta(num(k.amount_cur), num(k.amount_prev)), kind: 'pct', goodWhen: 'up' }} />
-                <KpiTile label="Jumlah pembayaran" value={num(k.count_cur)} fmt="int" delta={{ value: pctDelta(num(k.count_cur), num(k.count_prev)), kind: 'pct', goodWhen: 'up' }} />
-                <KpiTile label="Total MDR" value={num(k.mdr_cur)} fmt="idr-short" delta={{ value: pctDelta(num(k.mdr_cur), num(k.mdr_prev)), kind: 'pct', goodWhen: 'down' }} />
+                <KpiTile label="Total pembayaran" value={amtC} fmt="idr-short" note={mixed ? 'F&B + SMD (uang diterima)' : undefined} parts={mixed ? segParts(num(k?.amount_cur), toNum(s?.amount_cur), { fmt: 'idr-short', smNote: SMD_BASIS }) : undefined} delta={{ value: pctDelta(amtC, amtP), kind: 'pct', goodWhen: 'up' }} />
+                <KpiTile label="Jumlah pembayaran" value={cntC} fmt="int" parts={mixed ? segParts(num(k?.count_cur), toNum(s?.count_cur)) : undefined} delta={{ value: pctDelta(cntC, cntP), kind: 'pct', goodWhen: 'up' }} />
+                <KpiTile label="Total MDR" value={k ? num(k.mdr_cur) : null} fmt="idr-short" note={smdOn ? 'Hanya brand F&B' : undefined} delta={{ value: k ? pctDelta(num(k.mdr_cur), num(k.mdr_prev)) : null, kind: 'pct', goodWhen: 'down' }} />
                 <KpiTile
                   label="MDR efektif"
                   value={mC}
                   fmt="pct"
                   status={d !== null && d > T.mdrWarnPp ? 'warn' : 'neutral'}
+                  note={smdOn ? 'Hanya brand F&B' : undefined}
                   delta={{ value: d, kind: 'pp', goodWhen: 'down' }}
                   info={`MDR dibagi total pembayaran. Peringatan bila naik lebih dari ${T.mdrWarnPp} poin persentase.`}
                 />
               </KpiRow>
             );
-          }}
-        </Block>
+          })()
+        )}
       </Section>
 
       <div className="grid-2">
-        <Block result={methodR} title="Bauran metode">
-          {(rows) => {
+        {methodSides.fail ? (
+          <ErrorCard title="Bauran metode" refId={methodSides.fail.ref} reason={methodSides.fail.reason} />
+        ) : (
+          (() => {
+            const ranked = [...methodRows].sort((a, b) => num(b.amount_total) - num(a.amount_total));
             const items = withOther(
-              rows.map((r) => ({ label: `${String(r.method)} (${String(r.payment_type)})`, value: num(r.amount_total) })),
+              ranked.map((r) => ({ label: `${String(r.method)} (${String(r.payment_type)})`, value: num(r.amount_total) })),
               8,
             );
             const cats = items.map((i) => i.label);
             const vals = items.map((i) => i.value);
+            // Mode campuran: batang Supermarket = c7, F&B = c1, "Lainnya" = netral (label tetap memuat "SMD - ...").
+            const segOf = new Map(ranked.map((r) => [`${String(r.method)} (${String(r.payment_type)})`, r.segment]));
+            const itemColors: ColorToken[] = cats.map((c) => (c === 'Lainnya' ? 'muted' : segOf.get(c) === SEG_SM ? 'c7' : 'c1'));
             return (
               <ChartCard
                 title="Bauran metode pembayaran"
-                specs={[{ id: 'm', kind: 'barH', fmt: 'idr', axisFmt: 'idr-short', categories: cats, series: [{ name: 'Nilai pembayaran', data: vals, color: 'c1' }], summary: summarize('Nilai pembayaran per metode', cats, vals, 'idr-short', true) }]}
+                specs={[{ id: 'm', kind: 'barH', fmt: 'idr', axisFmt: 'idr-short', categories: cats, series: [{ name: 'Nilai pembayaran', data: vals, color: 'c1', ...(mixed ? { itemColors } : {}) }], summary: summarize('Nilai pembayaran per metode', cats, vals, 'idr-short', true) }]}
               />
             );
-          }}
-        </Block>
-        <Block result={trendR} title="Tren per tipe">
-          {(rows) => <ChartCard title="Tren per tipe pembayaran" subtitle="Area bertumpuk harian" specs={trendSpecs(rows)} />}
-        </Block>
+          })()
+        )}
+        {trendSides.fail ? (
+          <ErrorCard title="Tren per tipe" refId={trendSides.fail.ref} reason={trendSides.fail.reason} />
+        ) : (
+          <ChartCard title="Tren per tipe pembayaran" subtitle="Area bertumpuk harian" specs={trendSpecs(trendRows)} />
+        )}
       </div>
 
       <Section title="MDR per metode" id="mdr">
-        <Block result={methodR} title="MDR per metode">
-          {(rows) => (
+        {methodSides.fail ? (
+          <ErrorCard title="MDR per metode" refId={methodSides.fail.ref} reason={methodSides.fail.reason} />
+        ) : (
+          <>
+            <SideNote note={methodSides.note} />
             <DataTable
               caption={TABLES['pay-methods'].caption}
-              columns={TABLES['pay-methods'].columns}
-              rows={rows as TableRow[]}
-              csvName="pay-methods"
+              columns={mixed ? withSegmentColumn(TABLES['pay-methods'].columns) : TABLES['pay-methods'].columns}
+              rows={methodRows as TableRow[]}
+              footerRows={mixed ? (methodFooter as TableRow[]) : undefined}
+              csvName={smdOn ? undefined : 'pay-methods'}
               defaultSort={{ key: 'amount_total', dir: 'desc' }}
             />
-          )}
-        </Block>
+          </>
+        )}
       </Section>
 
       <Section title="Per cabang" id="branch">
-        <Block result={branchR} title="Per cabang">
-          {(rows) => (
+        {branchSides.fail ? (
+          <ErrorCard title="Per cabang" refId={branchSides.fail.ref} reason={branchSides.fail.reason} />
+        ) : (
+          <>
+            <SideNote note={branchSides.note} />
             <DataTable
               caption={TABLES['pay-branches'].caption}
-              columns={TABLES['pay-branches'].columns}
-              rows={rows as TableRow[]}
-              csvName="pay-branches"
+              columns={mixed ? withSegmentColumn(TABLES['pay-branches'].columns) : TABLES['pay-branches'].columns}
+              rows={branchRows as TableRow[]}
+              footerRows={mixed ? (branchFooter as TableRow[]) : undefined}
+              csvName={smdOn ? undefined : 'pay-branches'}
               defaultSort={{ key: 'amount', dir: 'desc' }}
             />
-          )}
-        </Block>
+          </>
+        )}
       </Section>
     </>
   );

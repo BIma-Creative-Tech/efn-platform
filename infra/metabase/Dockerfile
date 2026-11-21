@@ -17,7 +17,8 @@ FROM metabase/metabase:v0.58.41@sha256:fa9f428c457e3818c1e94e33267729570e5ce6406
 # (tidak `apk upgrade` penuh: JRE/libc tetap dari upstream yang diuji Metabase). Bump tag Metabase berikutnya: hapus
 # paket dari baris ini bila base sudah memuat versi perbaikan (v0.58.38 sudah memuat curl 8.23.0).
 # G41 (PR #90, Trivy): + musl/musl-utils 1.2.6-r3 (CVE-2026-107891).
-RUN apk add --no-cache --upgrade libexpat brotli-libs curl libcurl musl musl-utils
+# G51 (PR #134, Trivy): + libfontenc 1.1.10-r0 (CVE-2026-109908).
+RUN apk add --no-cache --upgrade libexpat brotli-libs curl libcurl musl musl-utils libfontenc
 
 # G16b (efn-devsecops-engineer): enkripsi at rest detail koneksi di DB aplikasi `metabase`. Wrapper membaca Docker
 # secret metabase_encryption_key -> MB_ENCRYPTION_SECRET_KEY (fail-closed) lalu exec /app/run_metabase.sh resmi

@@ -313,12 +313,26 @@ Kode: `efn_etl/behavior.py`. DDL: `infra/clickhouse/init/16-g50-behavior.sql`. G
   (+`ETL_ENABLE_SM_CAMPAIGN`) `sm_campaign`.
 - Env baru (semua default aman): `ETL_ENABLE_SM` (false; butuh `ETL_ENABLE_ODOO`), `ETL_SM_COMPANIES` (`SMD`, ⊆ SM_CODES),
   `ETL_ENABLE_SM_EXPIRY` (false), `ETL_ENABLE_SM_CAMPAIGN` (false; production butuh `PROMO_CAMPAIGN_ENABLED=true`, L-180),
-  `ETL_SM_FILL_RECALC_DAYS` (14, 1..60), `ETL_SM_CAMPAIGN_ATTR_DAYS` (30, 1..365), `ETL_SM_STOCK_BACKFILL_DAYS` (90, 1..400).
+  `ETL_SM_FILL_RECALC_DAYS` (14, 1..120), `ETL_SM_CAMPAIGN_ATTR_DAYS` (30, 1..365), `ETL_SM_STOCK_BACKFILL_DAYS` (90, 1..400).
 - Grant: blok "Gelombang 47" di `sql/odoo-readonly-grants.sql` (bersyarat per modul) + view `efn_etl.purchase_partner`.
 - Backfill kategori produk (`dim_product.categ_id/categ_parent_path`): reset watermark job `products` sekali setelah
   deploy (admin ClickHouse): `INSERT INTO efn_dwh.etl_watermark (job, watermark, rows_loaded, updated_at) VALUES
   ('products', '1970-01-01 00:00:00', 0, now64(6))`.
 - Uji perilaku row policy: `tests/clickhouse/g47_row_policy_harness.sh` (ClickHouse 24.8, dijalankan manual).
+
+## G51: SMD end-to-end (docs/design/G51_SMD_E2E_LEAD_SPEC.md §B2/§B4/§B6/§A6)
+
+- View baru (efn_dwh `infra/clickhouse/init/18-g51-insight-sm.sql`, efn_insight DEFINER + policy W): `v_sm_payment_daily`
+  (exec, store), `v_sm_product_sales_daily` (category, exec, store), `v_sm_forecast_daily` (category, dc, exec, store;
+  run `ok` terbaru per PT menurut generated_at), `v_sm_lot_stock` (category, exec, store; semua lot berstok snapshot
+  terakhir). `v_sm_product_list` + `shelf_life_days` (job `products`, `product_template.expiration_time`). 33 policy SM.
+- `sm_stock_reconstruct` (`efn_etl/sm_stock_hist.py`, `ETL_SM_STOCK_RECONSTRUCT_DAYS` 0..400, default 0 = mati, butuh
+  `ETL_ENABLE_SM`): stok harian historis dari stock_move mundur dari quant sekarang, HPP sekarang, umur FIFO, hanya hari
+  tanpa snapshot nyata, `is_reconstructed = 1`, `computed_at = 2000-01-01` (baris nyata selalu menang). Keterbatasan di
+  docstring modul (lot, reservasi, konsinyasi, revaluasi).
+- Env compose baru: `ETL_SM_STOCK_RECONSTRUCT_DAYS`, `ETL_FORECAST_ACCURACY_WEEKS`, `ETL_FORECAST_ACCURACY_INTERVAL_SECONDS`
+  (sebelumnya tidak diteruskan compose). Histori akurasi demo (A6): runbook `docs/runbooks/demo-supermarket-seed.md` §8.
+- Grant: blok "Gelombang 51" (`product_template.expiration_time`; rekonstruksi memakai kolom yang sudah di-grant).
 
 ## Test
 

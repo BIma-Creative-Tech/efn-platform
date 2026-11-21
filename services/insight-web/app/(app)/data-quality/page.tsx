@@ -2,6 +2,7 @@ import type { Metadata } from 'next';
 import { Block } from '@/components/blocks';
 import { DataTable, type TableRow } from '@/components/DataTable';
 import { FilterNotice } from '@/components/FilterNotice';
+import { MixedScopeNote, NotApplicableSmd } from '@/components/SmdNotice';
 import { EmptyState, PageHeader, Section, StatusPill } from '@/components/ui';
 import { settle, TABLE_LOADERS, type Result, type Row } from '@/lib/loaders';
 import { pageCtx, type SearchParams } from '@/lib/page-ctx';
@@ -41,7 +42,18 @@ function Findings({ name, result }: { name: TableName; result: Result<Row[]> }) 
 }
 
 export default async function DataQualityPage({ searchParams }: { searchParams: SearchParams }) {
-  const { ctx, adjusted } = await pageCtx(searchParams);
+  const { ctx, adjusted, sel } = await pageCtx(searchParams);
+
+  // G51 B1: kualitas data ESB. Hanya SMD dipilih -> tanpa query ESB; campuran -> brand ESB saja + catatan.
+  if (!sel.esb) {
+    return (
+      <>
+        <PageHeader title="Kualitas Data" question="Apakah angka yang saya lihat bisa dipercaya?" />
+        <FilterNotice adjusted={adjusted} />
+        <NotApplicableSmd reason="Pemeriksaan ini khusus ekstraksi data ESB (brand F&B). Kesegaran data supermarket ada di lencana 'Data' pada halaman Supermarket." />
+      </>
+    );
+  }
 
   const [fresh, run, alias, nonEa, noSales] = await Promise.all([
     settle(TABLE_LOADERS['dq-freshness'](ctx)),
@@ -63,6 +75,7 @@ export default async function DataQualityPage({ searchParams }: { searchParams: 
     <>
       <PageHeader title="Kualitas Data" question="Apakah angka yang saya lihat bisa dipercaya?" />
       <FilterNotice adjusted={adjusted} />
+      {sel.smd ? <MixedScopeNote /> : null}
       <p className="muted small">Jendela pemeriksaan tetap (30 hari / kemarin / terakhir); filter tanggal dan cabang tidak berlaku di halaman ini.</p>
 
       <Section title="Papan status" id="board">

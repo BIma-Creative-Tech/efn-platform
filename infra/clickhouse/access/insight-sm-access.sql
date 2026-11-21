@@ -73,6 +73,14 @@ GRANT SELECT ON efn_dwh.v_sm_search_terms TO efn_insight_definer;
 GRANT SELECT ON efn_dwh.v_sm_segment_daily TO efn_insight_definer;
 GRANT SELECT ON efn_dwh.v_sm_campaign_result TO efn_insight_definer;
 GRANT SELECT ON efn_dwh.v_sm_freshness TO efn_insight_definer;
+-- G51 (docs/design/G51_SMD_E2E_LEAD_SPEC.md §B2; view efn_dwh di init/18-g51-insight-sm.sql).
+GRANT SELECT ON efn_dwh.fact_pos_payment TO efn_insight_definer;
+GRANT SELECT ON efn_dwh.fact_forecast_daily TO efn_insight_definer;
+GRANT SELECT ON efn_dwh.dim_forecast_run TO efn_insight_definer;
+GRANT SELECT ON efn_dwh.v_sm_payment_daily TO efn_insight_definer;
+GRANT SELECT ON efn_dwh.v_sm_product_sales_daily TO efn_insight_definer;
+GRANT SELECT ON efn_dwh.v_sm_forecast_daily TO efn_insight_definer;
+GRANT SELECT ON efn_dwh.v_sm_lot_stock TO efn_insight_definer;
 
 -- ============================================================== View efn_insight.v_sm_* (tabel §28.13.9)
 CREATE OR REPLACE VIEW efn_insight.v_sm_warehouse_list DEFINER = efn_insight_definer SQL SECURITY DEFINER AS
@@ -80,7 +88,8 @@ SELECT company_id, company_code, warehouse_id, warehouse_code, warehouse_name, o
 FROM efn_dwh.v_sm_warehouse_list;
 
 CREATE OR REPLACE VIEW efn_insight.v_sm_product_list DEFINER = efn_insight_definer SQL SECURITY DEFINER AS
-SELECT company_id, product_id, product_tmpl_id, default_code, product_name, categ_id, category, categ_parent_path, active
+SELECT company_id, product_id, product_tmpl_id, default_code, product_name, categ_id, category, categ_parent_path, active,
+       shelf_life_days
 FROM efn_dwh.v_sm_product_list;
 
 CREATE OR REPLACE VIEW efn_insight.v_sm_sales_daily DEFINER = efn_insight_definer SQL SECURITY DEFINER AS
@@ -214,3 +223,21 @@ FROM efn_dwh.v_sm_freshness;
 CREATE OR REPLACE VIEW efn_insight.v_sm_kpi_config DEFINER = efn_insight_definer SQL SECURITY DEFINER AS
 SELECT company_id, key, value_num, value_str, is_default, effective_since
 FROM efn_dwh.v_sm_kpi_config;
+
+-- ============================================================== G51 (spesifikasi lead G51 §B2, urutan kolom tetap)
+CREATE OR REPLACE VIEW efn_insight.v_sm_payment_daily DEFINER = efn_insight_definer SQL SECURITY DEFINER AS
+SELECT day, company_id, warehouse_id, outlet_type, method_name, method_type, is_refund, amount, payments
+FROM efn_dwh.v_sm_payment_daily;
+
+CREATE OR REPLACE VIEW efn_insight.v_sm_product_sales_daily DEFINER = efn_insight_definer SQL SECURITY DEFINER AS
+SELECT day, company_id, warehouse_id, outlet_type, product_id, categ_id, qty_sold, net_sales, net_sales_incl_tax
+FROM efn_dwh.v_sm_product_sales_daily;
+
+CREATE OR REPLACE VIEW efn_insight.v_sm_forecast_daily DEFINER = efn_insight_definer SQL SECURITY DEFINER AS
+SELECT company_id, warehouse_id, outlet_type, product_id, categ_id, forecast_date, yhat, p10, p90, run_id, generated_at
+FROM efn_dwh.v_sm_forecast_daily;
+
+CREATE OR REPLACE VIEW efn_insight.v_sm_lot_stock DEFINER = efn_insight_definer SQL SECURITY DEFINER AS
+SELECT company_id, warehouse_id, outlet_type, product_id, categ_id, lot_id, lot_name, expiration_date, days_left,
+       quantity, value_cost
+FROM efn_dwh.v_sm_lot_stock;

@@ -20,6 +20,8 @@ export const ACTIONS = {
   'product.product': 'stock.stock_product_normal_action',
   'stock.warehouse.orderpoint': 'stock.action_orderpoint_replenish',
   'stock.scrap': 'stock.action_stock_scrap',
+  // G51 B3 (docs/04 §28.14.4): daftar usulan min/max forecast; hanya daftar, tanpa id.
+  'efn.demand.forecast': 'efn_demand_forecast.efn_demand_forecast_action',
 } as const;
 export type OdooLinkModel = keyof typeof ACTIONS;
 export const ODOO_LINK_MODELS = Object.keys(ACTIONS) as OdooLinkModel[];

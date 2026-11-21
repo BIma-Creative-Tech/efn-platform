@@ -214,12 +214,14 @@ def run_batch(
     now: datetime | None = None,
     lib: Callable[[Iterable[int]], list[CalendarEntry]] = lib_entries,
     clock: Callable[[], float] = time.monotonic,
+    run_id: str | None = None,
 ) -> RunReport:
-    """Satu batch. `odoo=None` = dry-run (tidak ada panggilan Odoo, hanya hitung + validasi + log ringkasan)."""
+    """Satu batch. `odoo=None` = dry-run (tidak ada panggilan Odoo, hanya hitung + validasi + log ringkasan).
+    `run_id` hanya diisi mode as-of G51 (deterministik, efn_forecast/asof.py); default = UUIDv4 acak."""
     if kind not in KINDS:
         raise ValueError("kind harus daily|weekly_minmax")
     now = now or datetime.now(UTC)
-    run_id = str(uuid.uuid4())
+    run_id = run_id or str(uuid.uuid4())
     started = clock()
     opened = False
     comp: Computation | None = None

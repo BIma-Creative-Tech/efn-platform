@@ -4,6 +4,7 @@ import { EXPIRY_PILL, markdownText } from '@/components/sm/ExpiryRows';
 import { ActionLink, SmCardAuto, SmKpiTile } from '@/components/sm/SmCard';
 import { SmFilterForm } from '@/components/sm/SmFilterForm';
 import { SmFreshnessBadge } from '@/components/sm/SmFreshnessBadge';
+import { ShelfLifeTable } from '@/components/sm/ShelfLifeTable';
 import { SmTable } from '@/components/sm/SmTable';
 import { KpiRow, PageHeader, StatusPill } from '@/components/ui';
 import { fmtDate, fmtIdr, fmtIdrShort, fmtInt, fmtPct, fmtQty } from '@/lib/format';
@@ -191,6 +192,23 @@ export default async function CategoryPage({ searchParams }: { searchParams: SmS
                 />
               </>
             )}
+          </SmCardAuto>
+        </div>
+
+        <div className="wide">
+          <SmCardAuto
+            id="cm7"
+            title="Umur simpan & sisa umur lot"
+            mart={MARTS.stock}
+            base={base}
+            now={now}
+            result={data.shelf}
+            hasRows={(d) => d.length > 0}
+            zeroMeans="no-data"
+            texts={{ zero: 'Tidak ada lot berstok.', off: 'Data stok belum tersedia.', noData: 'Belum ada lot berstok pada kategori dan outlet ini.' }}
+            wide
+          >
+            {(rows) => <ShelfLifeTable rows={rows} whNames={base.whNames} showOutlet />}
           </SmCardAuto>
         </div>
 

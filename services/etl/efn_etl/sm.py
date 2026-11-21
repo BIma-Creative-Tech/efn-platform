@@ -53,6 +53,7 @@ JOB_MARKDOWN: Final = "sm_expiry_markdown"
 JOB_EXPIRY_AGG: Final = "sm_expiry_agg"
 JOB_CAMPAIGN: Final = "sm_campaign"
 JOB_SCRAPS: Final = "sm_scraps"
+JOB_SCRAP_REASONS: Final = "sm_scrap_reasons"
 
 Q2: Final = Decimal("0.01")
 Q3: Final = Decimal("0.001")
@@ -189,6 +190,14 @@ def transform_warehouse(row: dict[str, Any]) -> list[Any]:
 # ---------------------------------------------------------------- efn_online_outlet -> dim_online_outlet
 _OUTLET_VERSION = "GREATEST(o.write_date, ch.write_date)"
 
+# efn_online_outlet/efn_online_channel milik efn_online_order (F&B online). Supermarket tidak boleh bergantung padanya:
+# job `sm_dims_online_outlet` hanya jalan bila kedua tabel terlihat oleh efn_etl (ada + di-grant; information_schema
+# hanya menampilkan tabel yang punya hak akses). Dideteksi tiap siklus di sm_cycle.run_sm_online_outlets.
+SQL_ONLINE_OUTLET_VISIBLE: Final = """
+SELECT count(*) AS n FROM information_schema.tables
+WHERE table_schema = 'public' AND table_name IN ('efn_online_outlet', 'efn_online_channel')
+"""
+
 
 def _sql_online_outlets(codes: Sequence[str]) -> str:
     v = _OUTLET_VERSION
@@ -252,7 +261,7 @@ LIMIT %(limit)s
 
 KPI_COLUMNS: Final = ("company_id", "key", "value_num", "value_str", "active", "write_date")
 SQL_KPI_EXISTING: Final = """
-SELECT company_id, toString(key) AS key, argMax(active, write_date) AS active, max(write_date) AS write_date
+SELECT company_id, toString(key) AS key, argMax(active, write_date) AS active, max(write_date) AS last_write_date
 FROM efn_dwh.dim_sm_kpi_config
 GROUP BY company_id, key
 """
@@ -706,6 +715,14 @@ def sm_scrap_job(codes: Sequence[str], has_efn_warehouse: bool, has_efn_value: b
     return Job(JOB_SCRAPS, "odoo", sql, "fact_scrap", SCRAP_COLUMNS, transform_scrap)
 
 
+def sm_scrap_reason_job() -> Job:
+    """Job `sm_scrap_reasons` (QA G51): nama alasan scrap -> dim_scrap_reason. Tanpa ini v_sm_waste_daily menampilkan
+    "Tanpa alasan" untuk SMD bila ETL_ENABLE_WASTE (job G32 `waste_reasons`) mati. Tag tidak punya company_id."""
+    from efn_etl.waste import REASON_COLUMNS, SQL_REASONS, transform_reason
+
+    return Job(JOB_SCRAP_REASONS, "odoo", SQL_REASONS, "dim_scrap_reason", REASON_COLUMNS, transform_reason)
+
+
 # ---------------------------------------------------------------- daftar job runner
 def sm_jobs(codes: Sequence[str] = DEFAULT_SM_COMPANIES, expiry: bool = False) -> tuple[Job, ...]:
     """Job incremental G47 (`ETL_ENABLE_SM`; `expiry` = `ETL_ENABLE_SM_EXPIRY`). Job khusus ada di sm_cycle.py."""
@@ -717,14 +734,6 @@ def sm_jobs(codes: Sequence[str] = DEFAULT_SM_COMPANIES, expiry: bool = False) -
             "dim_sm_warehouse",
             WAREHOUSE_COLUMNS,
             transform_warehouse,
-        ),
-        Job(
-            JOB_DIMS_OUTLET,
-            "odoo",
-            _sql_online_outlets(codes),
-            "dim_online_outlet",
-            ONLINE_OUTLET_COLUMNS,
-            transform_online_outlet,
         ),
         Job(
             JOB_REPLENISHMENT,
@@ -745,6 +754,18 @@ def sm_jobs(codes: Sequence[str] = DEFAULT_SM_COMPANIES, expiry: bool = False) -
             Job(JOB_MARKDOWN, "odoo", _sql_markdown(codes), "fact_lot_markdown", MARKDOWN_COLUMNS, transform_markdown)
         )
     return tuple(jobs)
+
+
+def sm_online_outlet_job(codes: Sequence[str]) -> Job:
+    """Job opsional `sm_dims_online_outlet` (bukan bagian sm_jobs; lihat SQL_ONLINE_OUTLET_VISIBLE)."""
+    return Job(
+        JOB_DIMS_OUTLET,
+        "odoo",
+        _sql_online_outlets(codes),
+        "dim_online_outlet",
+        ONLINE_OUTLET_COLUMNS,
+        transform_online_outlet,
+    )
 
 
 # ---------------------------------------------------------------- fill rate DC (fit-gap C-3)

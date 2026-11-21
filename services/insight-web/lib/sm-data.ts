@@ -40,6 +40,7 @@ import {
   type Raw,
 } from './sm-parse';
 import type { WarehouseInfo } from './sm-personas';
+import { buildShelfRows, shelfProductIds, type ShelfRow } from './sm-shelf';
 import {
   buildOosHeat,
   buildOutletRows,
@@ -187,8 +188,20 @@ function both<A, B, U>(a: Result<A>, b: Result<B>, fn: (x: A, y: B) => U): Resul
 
 const first = (rows: Raw[]): Raw | undefined => rows[0];
 
+// ---------------------------------------------------------------- Umur simpan (G51 B4)
+/** Lot terdekat kedaluwarsa per produk x outlet (v_sm_lot_stock) + master produk (shelf_life_days). Dua query berurutan. */
+async function loadShelf(ctx: SmCtx, outletsOnly = false): Promise<Result<ShelfRow[]>> {
+  const lots = await q(outletsOnly ? 'sm_st_shelf_lots' : 'sm_shelf_lots', ctx);
+  if (!lots.ok) return lots;
+  const ids = shelfProductIds(lots.data);
+  // Master produk gagal -> baris tetap tampil dengan nama "Produk #id" dan umur simpan "tidak dikelola" (bukan galat kartu).
+  const prods = ids.length > 0 ? await q('sm_shelf_products', ctx, { ids }) : ({ ok: true, data: [] } as Result<Raw[]>);
+  return { ok: true, data: buildShelfRows(lots.data, prods.ok ? prods.data : []) };
+}
+
 // ---------------------------------------------------------------- Kepala toko
 export interface StoreData {
+  shelf: Result<ShelfRow[]>;
   proposals: Result<ProposalRow[]>;
   expiry: Result<{ lots: ExpiryLot[]; delta: ReturnType<typeof expiryDelta> }>;
   critical: Result<CriticalRow[]>;
@@ -196,7 +209,7 @@ export interface StoreData {
 }
 
 export async function loadStore(ctx: SmCtx): Promise<StoreData> {
-  const [prop, exp, trend, crit, sums, reasons, net] = await Promise.all([
+  const [prop, exp, trend, crit, sums, reasons, net, shelf] = await Promise.all([
     q('sm_st_proposals', ctx),
     q('sm_st_expiry', ctx),
     q('sm_st_expiry_trend', ctx, { prev_from: ctx.yesterday, to: ctx.today }),
@@ -204,9 +217,11 @@ export async function loadStore(ctx: SmCtx): Promise<StoreData> {
     q('sm_waste_sums', ctx),
     q('sm_waste_reasons', ctx),
     q('sm_sales_net', ctx),
+    loadShelf(ctx, true),
   ]);
   const basis = cfgStr(ctx.base.config, 'waste.basis');
   return {
+    shelf,
     proposals: map(prop, parseProposals),
     expiry: both(exp, trend, (e, t) => ({ lots: parseExpiryLots(e), delta: expiryDelta(t, ctx.today, ctx.yesterday) })),
     critical: map(crit, parseCritical),
@@ -238,7 +253,8 @@ export interface ExecData {
 
 export async function loadExec(ctx: SmCtx): Promise<ExecData> {
   const cfg = ctx.base.config;
-  const wapeRange = { from: addDays(ctx.today, -55), to: ctx.today };
+  // QA G51: week_start = Senin; 8 minggu selesai = Senin (minggu ini - 8 .. - 1) = sampai today-62 (-55 membuang minggu tertua).
+  const wapeRange = { from: addDays(ctx.today, -62), to: ctx.today };
   const [sales, trend, margin, gm, sums, weekly, wapeOut, oSales, oMargin, oWaste, wCat, sCat] = await Promise.all([
     q('sm_ex_sales', ctx),
     q('sm_ex_trend', ctx),
@@ -303,6 +319,7 @@ export async function loadExec(ctx: SmCtx): Promise<ExecData> {
 
 // ---------------------------------------------------------------- Category manager
 export interface CategoryData {
+  shelf: Result<ShelfRow[]>;
   oos: Result<Raw | undefined>;
   heat: Result<HeatVm>;
   products: Result<{ id: number; tmplId: number | null; name: string; oosDays: number; universeDays: number; outlets: number }[]>;
@@ -314,7 +331,7 @@ export interface CategoryData {
 }
 
 export async function loadCategory(ctx: SmCtx): Promise<CategoryData> {
-  const [oos, matrix, prods, exp, expT, price, cov, sig] = await Promise.all([
+  const [oos, matrix, prods, exp, expT, price, cov, sig, shelf] = await Promise.all([
     q('sm_cm_oos', ctx),
     q('sm_cm_oos_matrix', ctx),
     q('sm_cm_oos_products', ctx),
@@ -323,6 +340,7 @@ export async function loadCategory(ctx: SmCtx): Promise<CategoryData> {
     q('sm_cm_price', ctx),
     q('sm_cm_price_coverage', ctx),
     q('sm_cm_signal', ctx),
+    loadShelf(ctx),
   ]);
   // Nama produk untuk CM-3/CM-6 (view OOS/sinyal tidak membawa nama): satu query tambahan dengan id terbatas.
   const ids = Array.from(
@@ -336,6 +354,7 @@ export async function loadCategory(ctx: SmCtx): Promise<CategoryData> {
     }
   }
   return {
+    shelf,
     oos: map(oos, first),
     heat: map(matrix, (rows) => buildOosHeat(rows, ctx.base.catNames, ctx.base.whNames)),
     products: map(prods, (rows) =>

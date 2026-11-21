@@ -9,7 +9,7 @@ import { NextRequest } from 'next/server';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { proxy } from '@/proxy';
 import { SESSION_COOKIE, createSessionValue } from '@/lib/session';
-import { DENIAL_PATH, hasEsbAccess, homePath, navGroups, personaChip, personaOfPath, sessionPersonas, smRouteDenial } from '@/lib/sm-personas';
+import { DENIAL_PATH, hasEsbAccess, homePath, navGroups, personaChip, personaOfPath, sessionPersonas, smdAllowed, smRouteDenial } from '@/lib/sm-personas';
 import { verifySsoTokenV2, type SsoPayloadV2 } from '@/lib/token';
 import { IAT, KEY, TOKEN_A, TOKEN_B, TOKEN_C } from './helpers-v2';
 
@@ -60,7 +60,13 @@ describe('beranda, navigasi, chip', () => {
     expect(g).toHaveLength(1);
     expect(g[0].items.map((i) => i.href)).toEqual(['/store']);
     expect(g[0].title).toBeUndefined();
-    expect(navGroups({ codes: ['SMD'], roles: ['exec', 'store', 'user'] }, true)[0].title).toBe('Supermarket');
+  });
+  it('SMD-saja dengan exec (docs/04 §28.14.1): menu F&B hanya halaman yang mendukung SMD + grup Supermarket', () => {
+    const g = navGroups({ codes: ['SMD'], roles: ['exec', 'store', 'user'] }, true);
+    expect(g.map((x) => x.title)).toEqual(['Food & Beverage', 'Supermarket']);
+    expect(g[0].items.map((i) => i.href)).toEqual(['/', '/sales', '/payments', '/distribution', '/forecast']);
+    // flag SM mati: tidak ada menu F&B untuk sesi tanpa PT F&B
+    expect(navGroups({ codes: ['SMD'], roles: ['exec', 'user'] }, false)).toEqual([]);
   });
   it('sesi campuran: dua grup berjudul; ESB-saja: satu grup tanpa judul; flag SM mati: tanpa grup SM', () => {
     const mixed = navGroups({ codes: ['PB', 'SMD'], roles: ['exec', 'user'] }, true);
@@ -176,5 +182,21 @@ describe('proxy: gerbang persona (eis2)', () => {
       expect(rewriteOf(res), p).toBeNull();
       expect(res.headers.get('x-middleware-next'), p).toBe('1');
     }
+  });
+});
+
+describe('smdAllowed (SMD sebagai toggle filter Brand / PT halaman F&B, G51 B1)', () => {
+  it('hanya sesi eis2 berpersona exec dengan kode SM dan flag SM aktif', () => {
+    expect(smdAllowed({ v: 2, codes: ['PB', 'SMD'], roles: ['all_brands', 'store', 'exec', 'user'] }, true)).toBe(true);
+    expect(smdAllowed({ v: 2, codes: ['SMD'], roles: ['exec', 'user'] }, true)).toBe(true);
+  });
+  it('persona selain exec tetap lewat sidebar (bukan filter)', () => {
+    expect(smdAllowed({ v: 2, codes: ['PB', 'SMD'], roles: ['marketing', 'category', 'user'] }, true)).toBe(false);
+    expect(smdAllowed({ v: 2, codes: ['PB', 'SMD'], roles: ['store', 'user'] }, true)).toBe(false);
+  });
+  it('false bila SM mati, sesi eis1, atau tanpa kode SM', () => {
+    expect(smdAllowed({ v: 2, codes: ['PB', 'SMD'], roles: ['exec', 'user'] }, false)).toBe(false);
+    expect(smdAllowed({ v: 1, codes: ['PB'], roles: ['exec', 'user'] }, true)).toBe(false);
+    expect(smdAllowed({ v: 2, codes: ['PB'], roles: ['exec', 'user'] }, true)).toBe(false);
   });
 });

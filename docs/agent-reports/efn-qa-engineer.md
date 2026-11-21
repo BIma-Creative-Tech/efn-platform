@@ -1081,3 +1081,78 @@ Jika regex test gagal di CI karena format file berubah, perbaiki regex, bukan me
 3. M-3/M-4 = perbedaan fitur vs kontrak; perlu keputusan lead (tunda atau bangun).
 4. Fill rate diperkirakan bila `picking_shared=1` (alokasi FIFO, fit-gap §6.2); belum ada data nyata untuk mengukur frekuensi.
 5. Test baru dan seluruh UAT belum dijalankan.
+
+---
+
+# G51 — QA konsistensi SMD end-to-end (branch feat/wave-51-smd-e2e, cba9491)
+
+Semua verifikasi = membaca kode (tanpa runtime; QA ini tidak menjalankan pytest/vitest/odoo).
+
+## G51.1 Mismatch yang ditemukan dan DIPERBAIKI
+
+1. **Alasan scrap SMD tidak pernah dimuat.** `dim_scrap_reason` hanya diisi job G32 `waste_reasons` (`efn_etl/waste.py:330`, butuh
+   `ETL_ENABLE_WASTE` + efn_ck_production), sedangkan `v_sm_waste_daily` men-join-nya (`infra/clickhouse/init/17-g47-insight-sm.sql:765`)
+   -> semua scrap SMD "Tanpa alasan". Fix: `sm.py` `JOB_SCRAP_REASONS` + `sm_scrap_reason_job()`, dijalankan di
+   `sm_cycle.run_sm_scraps` (grant `stock_scrap_reason_tag` sudah ada di blok G47, `odoo-readonly-grants.sql:497`).
+2. **Stok awal (tahap 6) bertanggal hari seed.** Rekonstruksi B6 = quant sekarang - Σ move setelah hari d
+   (`sm_stock_hist.py:188`), sehingga move inventori "hari ini" ikut terkurangi di semua hari lampau (stok historis tanpa stok
+   awal, dipotong 0; GMROI/stok >30 hari salah). Fix: `seed_demo_supermarket.py` `backdate_opening_stock()` (dipanggil di awal
+   tahap 13) menggeser `stock_move`/`stock_move_line` `is_inventory` ke H-1 sebelum `loop_start`. Idempoten.
+3. **Jendela fill rate.** `ETL_SM_FILL_RECALC_DAYS` default 14, batas 60 (`config.py:416`) vs seed/spec 90 hari
+   (`sm.py` `sql_fill_lines`: `delivery_date >= since`). Fix: batas 1..120; `.env.example`, README ETL, runbook (set 90 untuk demo).
+4. **Minggu tertua forecast hilang.** `app/(app)/forecast/page.tsx:42` dan `lib/sm-data.ts:256` memakai `from = today-55` terhadap
+   `week_start BETWEEN` (Senin); 8 minggu ETL = Senin (minggu ini -56 .. -7), jadi minggu ke-8 selalu terbuang (7 titik). Fix: `-62`.
+5. **Label tipe pembayaran SMD.** Mart `method_type` = `pos_payment_method.payment_method_type` Odoo 19 (`none|terminal|qr_code`,
+   `etl/pos.py:25`), tetapi `smd-merge.ts` `SMD_PAY_TYPE` hanya memetakan `cash|bank|pay_later` -> UI "SMD - none" untuk semua
+   metode seed. Fix: tambah `none/terminal/qr_code` (kunci lama tetap).
+
+## G51.2 Diverifikasi COCOK (tidak diubah)
+
+- Seed A1 vs `sql_fill_lines`/`SQL_FILL_MOVES`: usulan `approved`, `picking_id` = picking DC pertama (pick; DC `pick_ship`) ->
+  satu langkah `move_dest` ke ship (transit); recv = transit->Input outlet (`two_steps`) melintasi batas outlet, storage
+  Input->Stock dikecualikan (src=dst outlet); backorder `backorder_id` dikejar <= 3; `move.date` di-backdate.
+- A2 vs `_sql_dc_purchase`: `picking_type_id = dc.in_type_id` (gudang `efn_is_dc`), `orderpoint_id` + `efn_replenishment_managed`
+  (`_efn_managed_orderpoint` mengisinya); 70% SKU berflag.
+- A3 vs `scrap_sql`: `location_id` outlet -> gudang, tag `scrap_reason_tag_ids` -> `MIN(tag_id)`, nilai = Σ|stock_move.value|,
+  `date_done` di-backdate lewat SQL (cursor memakai `write_date`, tidak terpengaruh).
+- A4 vs `pos.py`: `payment_date`, `amount = amount_total` (incl. PPN, sebasis `net_sales_incl_tax`), metode per config;
+  `v_sm_payment_daily` join `dim_outlet.warehouse_id`.
+- A7 vs `SQL_RECON_STOCK`: picking POS->Customers = keluar W; PO/receipt transit->Input = masuk W; Input->Stock (intra-W) dan
+  pick DC->output diabaikan; scrap = keluar. Grant kolom stock_move/stock_quant/standard_price cukup.
+- Forecast as-of: `asof.py` (format `efn_forecast_asof/1`, generated_at Minggu 16:00 UTC, run_id UUIDv4 deterministik) = loader
+  `load_forecast_asof.py` (cek format/generated_at; kolom `efn.forecast.run` semua ada; `_efn_validate_line` dengan
+  `today=batch_day`, `last_day=batch_day+horizon`; `is_active=False`; tanpa `_efn_on_run_closed_ok`;
+  `_cron_efn_compute_pending` butuh `is_active` + `efn_proposal_pending` -> aman). ETL: `fc_runs`/`fc_daily` tanpa filter
+  `is_active`; akurasi `argMax(generated_at)` dengan `toDate(generated_at WIB) < forecast_date` memilih run as-of terdekat; 8 Senin
+  runbook = tepat `accuracy_weeks(now, 8)`; `v_sm_forecast_daily` memakai run terbaru menurut `generated_at`.
+- insight-web: `parseFilters` — `pt` kosong/tidak sah = semua ESB sesi + SMD (exec); `pt=SMD` = `esb=false`; `pt` hanya-ESB =
+  SMD mati; cabang `sm:` hanya bila `smdOn` dan ⊆ `wids`; satu sisi cabang mengecualikan sisi lain; FilterBar menghapus param bila
+  semua chip (ESB+SMD) aktif. Tidak ada hitung ganda (tabel/company terpisah; trx = orders per outlet). Legend `smd` (c7).
+  `filtersToParams` tidak SMD-aware tetapi tidak dipakai di mana pun (kode mati).
+
+## G51.3 Test yang ditambah
+
+- `services/insight-web/tests/smd-merge.test.ts`: pemetaan `none/terminal/qr_code/''` (regresi mismatch 5).
+- Fix 1 tanpa test baru: `run_sm_scraps` tercakup `test_run_sm_cycle_isolates_failures` (fake mengembalikan kosong). Saran: assert
+  `sm.JOB_SCRAP_REASONS in store.marks` saat data ada.
+
+## G51.4 Risiko / mismatch yang TIDAK diperbaiki
+
+1. **PO "terlambat" tak terlihat di mart.** `fact_dc_purchase_line` tak punya tanggal terima; `v_sm_dc_purchase.is_late` hanya untuk
+   PO `purchase` ber-`date_planned` lampau DAN `qty_received < product_qty` (`17-g47-insight-sm.sql:1064`). Seed menerima semua PO
+   penuh (A2 "±10% terlambat" hanya terlihat di `effective_date` Odoo). Opsi: sisakan ~5% PO belum diterima, atau tambah kolom
+   tanggal terima di mart (desain).
+2. **Basis `/sales` SMD**: net incl. PPN (`sm_fb_daily`), gross & diskon tanpa PPN (`gross_sales = subtotal + discount_amount`) ->
+   `gross - diskon != net` untuk porsi SMD (persentase diskon tetap konsisten). Perlu label/keputusan.
+3. Qty campuran (porsi ESB + pcs/kg SMD) dijumlah di kartu qty `/sales`.
+4. `payment_date` mart memakai `toDate()` UTC (konsisten dengan `outlet_daily`); order 00:00-07:00 WIB bergeser sehari. Seed jam 12:00 WIB aman.
+5. Rantai backorder `pick`/`ship` (`SQL_FILL_MOVES` mengandalkan `move_orig/dest` terwariskan saat `_split`) dan seluruh seed G51
+   belum pernah dijalankan; jalankan smoke 14 hari x 10 SKU dulu (runbook "Belum diverifikasi").
+6. "Forecast 14 hari ke depan" kosong/lampau bila belum ada run forecast nyata (hanya as-of); dicatat di `docs/qa/G51_UAT.md` §0.
+
+## G51.5 File yang diubah QA
+
+`services/etl/efn_etl/sm.py`, `services/etl/efn_etl/sm_cycle.py`, `services/etl/efn_etl/config.py`, `services/etl/README.md`,
+`infra/compose/.env.example`, `scripts/dev/seed_demo_supermarket.py`, `docs/runbooks/demo-supermarket-seed.md`,
+`services/insight-web/lib/smd-merge.ts`, `services/insight-web/lib/sm-data.ts`, `services/insight-web/app/(app)/forecast/page.tsx`,
+`services/insight-web/tests/smd-merge.test.ts`; baru: `docs/qa/G51_UAT.md`.

@@ -127,6 +127,8 @@ SELECT pp.id AS product_id, pp.product_tmpl_id AS template_id, COALESCE(pp.defau
        COALESCE(pt.sale_ok, FALSE) AS sale_ok, COALESCE(pt.available_in_pos, FALSE) AS available_in_pos,
        (COALESCE(pp.active, FALSE) AND COALESCE(pt.active, FALSE)) AS active,
        COALESCE(pt.categ_id, 0) AS categ_id, COALESCE(pc.parent_path, '') AS categ_parent_path,
+       CASE WHEN COALESCE(pt.use_expiration_date, FALSE) THEN COALESCE(pt.expiration_time, 0) ELSE 0 END
+           AS shelf_life_days,
        {version} AS version_ts,
        {version} AS _cursor_ts, pp.id::text AS _cursor_key
 FROM product_product pp
@@ -158,7 +160,22 @@ PRODUCT_COLUMNS = (
     # watermark job `products` di-reset (README).
     "categ_id",
     "categ_parent_path",
+    # G51 (spesifikasi lead G51 §B2/§B4, A5): umur simpan hari = product_template.expiration_time (modul product_expiry,
+    # sama dengan use_expiration_date di atas); 0 = tidak dikelola (use_expiration_date mati). Baris lama = 0 sampai
+    # template berubah (seed A5 menulis expiration_time -> write_date naik) atau watermark `products` di-reset.
+    "shelf_life_days",
 )
+
+SHELF_LIFE_MAX_DAYS = 65_535  # UInt16 ClickHouse
+
+
+def shelf_life_days(value: Any) -> int:
+    """`expiration_time` (hari) -> 0..65535; kosong/negatif/bukan angka = 0 (tidak dikelola)."""
+    try:
+        days = int(value or 0)
+    except (TypeError, ValueError):
+        return 0
+    return min(max(days, 0), SHELF_LIFE_MAX_DAYS)
 
 
 def transform_product(row: dict[str, Any]) -> list[Any]:
@@ -180,6 +197,7 @@ def transform_product(row: dict[str, Any]) -> list[Any]:
         to_utc(row["version_ts"]),
         int(row.get("categ_id") or 0),
         str(row.get("categ_parent_path") or "")[:256],
+        shelf_life_days(row.get("shelf_life_days")),
     ]
 
 

@@ -32,6 +32,8 @@ LOADER_PERSONA = {
     "loadDc": "dc",
     "loadMarketing": "marketing",
 }
+# G51 B4: helper tabel umur simpan (lib/sm-data.ts loadShelf) dipakai /category dan /store.
+HELPER_PERSONAS = {"loadShelf": {"category", "store"}}
 
 
 def policy_views() -> dict[str, tuple[str, set[str]]]:
@@ -75,15 +77,20 @@ def test_pt_level_personas_equal_odoo_web() -> None:
 def test_policy_views_equal_access_sql_views() -> None:
     declared = set(re.findall(r"CREATE OR REPLACE VIEW efn_insight\.(v_sm_\w+)", ACCESS))
     assert declared == set(policy_views())
-    assert len(declared) == 29
+    assert len(declared) == 33  # G51: + payment_daily, product_sales_daily, forecast_daily, lot_stock
 
 
 def test_every_view_queried_by_a_persona_page_is_readable_by_that_persona() -> None:
     views = policy_views()
     queries = web_queries()
-    bodies = re.split(r"export async function (load\w+)\(", SM_DATA)
+    bodies = re.split(r"(?:export )?async function (load\w+)\(", SM_DATA)
     seen_pages: set[str] = set()
     for fn, body in zip(bodies[1::2], bodies[2::2], strict=True):
+        if fn in HELPER_PERSONAS:  # helper non-ekspor dipakai beberapa halaman persona
+            for q in set(re.findall(r"q\('(sm_\w+)'", body)):
+                for v in queries[q][1]:
+                    assert HELPER_PERSONAS[fn] <= views[v][1], (fn, q, v)
+            continue
         persona = LOADER_PERSONA.get(fn)
         if persona is None:  # loadSmBase: dipakai semua persona -> view dasar wajib terbuka untuk semuanya
             for q in set(re.findall(r"q\('(sm_\w+)'", body)) | {

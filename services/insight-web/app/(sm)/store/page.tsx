@@ -3,6 +3,7 @@ import Link from 'next/link';
 import { CutoffCountdown } from '@/components/sm/CutoffCountdown';
 import { CriticalRows, ExpiryRows } from '@/components/sm/ExpiryRows';
 import { ActionLink, SmCardAuto } from '@/components/sm/SmCard';
+import { ShelfLifeTable } from '@/components/sm/ShelfLifeTable';
 import { SmFreshnessBadge } from '@/components/sm/SmFreshnessBadge';
 import { DeltaBadge, PageHeader, StatusPill } from '@/components/ui';
 import { fmtIdr, fmtPct } from '@/lib/format';
@@ -61,6 +62,7 @@ export default async function StorePage({ searchParams }: { searchParams: SmSear
         <a href="#st1-h">Usulan</a>
         <a href="#st2-h">Kedaluwarsa</a>
         <a href="#st3-h">Stok</a>
+        <a href="#st5-h">Umur simpan</a>
         <a href="#st4-h">Susut</a>
       </nav>
 
@@ -187,6 +189,20 @@ export default async function StorePage({ searchParams }: { searchParams: SmSear
               </>
             );
           }}
+        </SmCardAuto>
+
+        <SmCardAuto
+          id="st5"
+          title="Umur simpan & sisa umur lot"
+          mart={MARTS.stock}
+          base={base}
+          now={now}
+          result={data.shelf}
+          hasRows={(d) => d.length > 0}
+          zeroMeans="no-data"
+          texts={{ zero: 'Tidak ada lot berstok.', off: 'Data stok belum tersedia untuk outlet ini.', noData: 'Belum ada lot berstok di outlet ini.' }}
+        >
+          {(rows) => <ShelfLifeTable rows={rows} whNames={base.whNames} showOutlet={showNames} />}
         </SmCardAuto>
 
         <SmCardAuto

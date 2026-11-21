@@ -135,9 +135,11 @@ export interface KpiProps {
   status?: Status;
   info?: ReactNode;
   note?: string;
+  /** Rincian per segmen (mode campuran F&B + Supermarket), tampil di bawah nilai. */
+  parts?: { label: string; value: number | null; fmt?: ValueFmt; note?: string }[];
 }
 
-export function KpiTile({ label, value, fmt, delta, spark, status, info, note }: KpiProps): ReactNode {
+export function KpiTile({ label, value, fmt, delta, spark, status, info, note, parts }: KpiProps): ReactNode {
   return (
     <div className="kpi">
       <dt>
@@ -149,6 +151,19 @@ export function KpiTile({ label, value, fmt, delta, spark, status, info, note }:
         {status && status !== 'neutral' ? <StatusPill status={status} /> : null}
         {delta ? <DeltaBadge value={delta.value} kind={delta.kind} goodWhen={delta.goodWhen} /> : null}
         {note ? <span className="kpi-note">{note}</span> : null}
+        {parts && parts.length > 0 ? (
+          <ul className="kpi-parts" aria-label={`Rincian per segmen: ${label}`}>
+            {parts.map((p) => (
+              <li key={p.label}>
+                <span className="kpi-part-label">{p.label}</span>
+                <span className="kpi-part-value">
+                  {p.value === null ? 'n/a' : fmtValue(p.fmt ?? fmt, p.value)}
+                  {p.note ? <span className="kpi-part-note"> · {p.note}</span> : null}
+                </span>
+              </li>
+            ))}
+          </ul>
+        ) : null}
         {spark ? <Sparkline values={spark} /> : null}
       </dd>
     </div>

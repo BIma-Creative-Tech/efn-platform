@@ -654,3 +654,26 @@ Kontrak: docs/04 §28.13 v20.3, desain `docs/design/insight-supermarket.md`, ADR
 - **Perbaikan lead saat verifikasi:** `cleanText` merapikan spasi sebelum membuang karakter kontrol; tipe reduce di `exec/page.tsx`; `<Link>` di `tidak-berwenang`; tipe array di test.
 - **Verifikasi:** `tsc --noEmit` bersih, `eslint` 0 error (1 warning: param `now` tidak dipakai di `lib/sm-data.ts`), `vitest` 499 lulus / 1 skip, `next build` sukses.
 - **Belum:** uji browser end-to-end per persona di stack prod-lokal; test komponen visual.
+
+## G51 — SMD end-to-end di Insight (B1, B3, B4, B5), 21 Nov 2026
+
+Kontrak: `docs/design/G51_SMD_E2E_LEAD_SPEC.md`, `docs/04` §28.14 (§28.14.1 meralat §28.13.6). Kode ditulis tanpa bisa dijalankan (tidak ada Node di host): tsc/eslint/vitest/next build BELUM dijalankan.
+
+**B1 SMD sebagai filter.**
+- `lib/sm-personas.ts`: `smdAllowed(session, smEnabled)` (eis2 + persona exec + kode SM + flag) menggantikan `smFilterLinks` (chip tautan dihapus). `navGroups`: sesi exec ber-SMD tanpa PT F&B melihat grup F&B berisi `/`, `/sales`, `/payments`, `/distribution`, `/forecast` (`SMD_NAV_HREFS`).
+- `lib/filters.ts`: `parseFilters(raw, esbCodes, now, {smd, smWids})` mengembalikan `sel: PtSelection {allowed, esb, smd, wh}`. `Filters.pt/branch` tetap hanya ESB. `pt=SMD` dan `branch=sm:<id>` hanya sah bila `smd`; `sm:id` harus di `wids` sesi; cabang berlaku untuk semua PT terpilih (pilih cabang satu sisi mengecualikan sisi lain); tanpa PT F&B di sesi, SMD terpilih bawaan.
+- `lib/page-ctx.ts` (sel + tidak redirect untuk exec ber-SMD), `app/(app)/layout.tsx`, `components/FilterBar.tsx` (chip SMD = toggle; pt bawaan = ESB; catatan basis), `lib/shell-data.ts` (outlet SMD di daftar Cabang, satu query `sm_warehouses` hanya untuk sesi exec; tanpa query ESB bila tidak ada kode ESB), `lib/page-filters.ts` (`/forecast` punya filter PT/Cabang untuk sesi exec).
+- `lib/smd-merge.ts` (murni: gabung KPI/tren/peringkat/PT/hari/heatmap/kategori/pembayaran, `mergeSides` kegagalan sebagian, `smdActive`), `lib/smd-data.ts` (server: `runSm`, `runEsb`, `loadEsbTable`, `loadSmdNames`), `components/SmdNotice.tsx`.
+- Halaman: `/`, `/sales`, `/payments`, `/distribution`, `/forecast` memuat ESB (hanya bila `sel.esb`) dan SMD (hanya bila `smdActive`) lalu menggabung. `/flow`, `/data-quality`: "Tidak berlaku untuk SMD" bila hanya SMD; campuran = ESB saja + catatan. Kartu menu/takeaway/menu-mix di `/sales` sama. Filter `cat` (di `/sales`) dan `product` (di `/distribution`) mengecualikan SMD dengan catatan.
+- Basis uang: omzet SMD termasuk PPN, diberi label di KPI/judul/legenda; total gabungan berlabel "basis campuran" (keputusan lead 2/Q-SM46); rata-rata per transaksi tidak digabung (dua tile). HPP% = Σ cogs / Σ net tanpa pajak. MDR hanya F&B.
+- CSV: `csvName` dimatikan pada tabel yang memuat baris SMD (route ekspor belum mengenal SMD; docs/04 §28.14.1 butir 5 belum dibangun).
+
+**B3 `/forecast`**: 8 minggu aktual vs forecast + WAPE (tab), WAPE & bias per outlet (`sm_ex_wape_outlets`) dan per kategori (`sm_fc_by_cat`), forecast 14 hari p10-p90 (`sm_fc_next`, pita = jumlah p10/p90 per SKU, dinyatakan lebih lebar), tautan `efn.demand.forecast` (entri baru allowlist `lib/odoo-links.ts`).
+**B4**: `ShelfLifeTable` di `/category` (kartu cm7) dan `/store` (st5): `sm_shelf_lots` (v_sm_lot_stock, semua lot berstok) + `sm_shelf_products` (v_sm_product_list.shelf_life_days); `lib/sm-shelf.ts`.
+**B5**: bagian "Supermarket (SMD): DC ke outlet" di `/distribution`: fill rate qty/baris (`sm_dc_fill_sums/_daily/_outlets`), terlambat (`sm_dist_late_outlets`), top kurang kirim (`sm_dist_short_products`), status usulan (`sm_dist_proposals`), produk dikurangi/dikecualikan (`sm_dist_reduced_products`, v_sm_replenishment_line).
+
+**Query baru (18)**: `sm_fb_daily`, `sm_fb_by_outlet`, `sm_fb_sales_kpi`, `sm_fb_weekday`, `sm_fb_heat`, `sm_fb_by_category`, `sm_fb_top_products`, `sm_fb_pay_sums`, `sm_fb_pay_matrix`, `sm_fb_pay_trend`, `sm_fc_by_cat`, `sm_fc_next`, `sm_shelf_lots`, `sm_shelf_products`, `sm_dist_late_outlets`, `sm_dist_short_products`, `sm_dist_proposals`, `sm_dist_reduced_products`. Tidak ada tipe parameter baru (live test tetap tercakup `SM_PARAM_TYPES`).
+
+**Test**: `filters-smd`, `smd-merge`, `sm-shelf` (baru); `sm-routing` (smdAllowed, navGroups exec), `queries-sm` (daftar view + asersi G51) diubah.
+
+**Belum diverifikasi**: semua (tsc/eslint/vitest/build); live test terhadap view baru (`v_sm_payment_daily`, `v_sm_product_sales_daily`, `v_sm_forecast_daily`, `v_sm_lot_stock`, `shelf_life_days`); semantik `on_time` (0 = terlambat), `excluded` UInt8, `toDayOfWeek`/`toMonday` sejajar dengan `dow`/`week` ESB; `discounts`/`gross_sales` SMD positif (dipakai `abs`); tampilan CSS (`.notice`, `.muted`) pada halaman baru; `/forecast` ESB tetap "segera".

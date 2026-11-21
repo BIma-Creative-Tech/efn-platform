@@ -74,6 +74,9 @@ ORDER BY supplier_id;
 -- (README ETL bagian G47).
 ALTER TABLE efn_dwh.dim_product ADD COLUMN IF NOT EXISTS categ_id UInt32 DEFAULT 0;
 ALTER TABLE efn_dwh.dim_product ADD COLUMN IF NOT EXISTS categ_parent_path String DEFAULT '';
+-- G51 (spesifikasi lead G51 §B2/§B4): umur simpan hari (product_template.expiration_time; 0 = tidak dikelola). Di file
+-- ini (bukan 18-g51) karena v_sm_product_list di bawah membacanya.
+ALTER TABLE efn_dwh.dim_product ADD COLUMN IF NOT EXISTS shelf_life_days UInt16 DEFAULT 0;
 
 -- ============================================================== Fakta replenishment & DC
 -- Satu baris per baris usulan. header_ts (G47 tambahan) = write_date header usulan: Odoo MENGHAPUS baris lama saat usulan
@@ -585,10 +588,11 @@ SELECT
     p.categ_id AS categ_id,
     p.category AS category,
     p.categ_parent_path AS categ_parent_path,
-    p.active AS active
+    p.active AS active,
+    p.shelf_life_days AS shelf_life_days
 FROM
 (
-    SELECT product_id, template_id, default_code, name, categ_id, category, categ_parent_path, active,
+    SELECT product_id, template_id, default_code, name, categ_id, category, categ_parent_path, active, shelf_life_days,
            assumeNotNull(company_id) AS company_id
     FROM efn_dwh.dim_product FINAL
     WHERE isNotNull(company_id)

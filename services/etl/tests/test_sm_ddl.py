@@ -178,7 +178,7 @@ def test_insert_select_column_lists_equal_ddl() -> None:
 def test_dim_product_category_columns_and_job() -> None:
     assert "ALTER TABLE efn_dwh.dim_product ADD COLUMN IF NOT EXISTS categ_id UInt32 DEFAULT 0;" in DDL
     assert "ALTER TABLE efn_dwh.dim_product ADD COLUMN IF NOT EXISTS categ_parent_path String DEFAULT '';" in DDL
-    assert PRODUCT_COLUMNS[-2:] == ("categ_id", "categ_parent_path")
+    assert PRODUCT_COLUMNS[-3:] == ("categ_id", "categ_parent_path", "shelf_life_days")  # G51 menambah di akhir
 
 
 def test_scrap_job_columns_equal_g32_ddl() -> None:

@@ -16,7 +16,10 @@ PERSONA_GROUPS = {
     "store": "efn_insight_sm.group_insight_store",
 }
 # Persona PT yang diizinkan row policy di SEMUA view yang mengizinkan store (insight-sm-policy.sh SM_POLICY_VIEWS).
-STORE_COVERING_PERSONAS = frozenset({"exec", "category"})
+# SEC-G51-01: hanya exec; category tidak ada di v_sm_payment_daily (G51), jadi category + store tidak menerbitkan
+# store.
+# Invarian diuji services/etl/tests/test_insight_sm_access.py.
+STORE_COVERING_PERSONAS = frozenset({"exec"})
 
 
 class ResUsers(models.Model):
@@ -57,7 +60,7 @@ class ResUsers(models.Model):
         no_outlet = False
         # SEC-G47-01: row policy mengecek persona dan wids terpisah, sedangkan wids = gabungan semua persona. store +
         # persona PT yang TIDAK mencakup semua view store (marketing, dc) akan membuka data store semua outlet; store
-        # tidak diterbitkan untuk kombinasi itu. exec/category sudah mencakup semua view store -> tanpa akses tambahan.
+        # tidak diterbitkan untuk kombinasi itu. exec mencakup semua view store -> tanpa akses tambahan (SEC-G51-01).
         # Perbaikan model (klaim swids terpisah) menunggu revisi kontrak §28.13.
         if "store" in held and org and not org & STORE_COVERING_PERSONAS:
             held = held - {"store"}
