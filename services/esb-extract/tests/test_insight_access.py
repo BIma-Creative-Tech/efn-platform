@@ -194,6 +194,14 @@ def test_movement_reads_all_items_from_finished_slices_only() -> None:
     assert "toUInt32(0) AS dest_id" in body
 
 
+def test_movement_company_code_fail_closed() -> None:
+    # SEC-IR-02: PT dari cabang asal saja; cabang tak dikenal -> '' (row policy `company_code != ''` menolak),
+    # tidak jatuh ke PT default brand (Bacha: cabang BCR belum dipetakan tidak boleh terlihat user BCF).
+    body = dwh_view_body("v_esb_movement_daily")
+    assert "CAST(ob.company_code, 'String') AS company_code" in body
+    assert "t.c_code, ob.company_code" not in body
+
+
 def test_movement_kind_and_item_group_rules() -> None:
     body = dwh_view_body("v_esb_movement_daily")
     assert "multiIf(ob.is_ck = 1, 'ck', ob.is_store = 1, 'store', 'non_sales') AS origin_kind" in body
@@ -217,8 +225,8 @@ def test_movement_kind_and_item_group_rules() -> None:
     # Negatif: 'N' (satuan kemasan) bukan prefix -> tidak boleh menangkap semua kode berawalan N.
     assert "startsWith(t.p_code, 'N')" not in group
     assert "if(pr.category = '', 'Tanpa kategori', pr.category) AS category" in body
-    # PT = PT cabang asal (fallback PT baris fakta), tidak diduplikasi ke PT tujuan.
-    assert "CAST(if(ob.company_code = '', t.c_code, ob.company_code), 'String') AS company_code" in body
+    # PT = PT cabang asal (tanpa fallback, SEC-IR-02), tidak diduplikasi ke PT tujuan.
+    assert "CAST(ob.company_code, 'String') AS company_code" in body
     assert "tb.company_code" not in body
 
 

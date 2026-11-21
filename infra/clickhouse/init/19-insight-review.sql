@@ -28,7 +28,8 @@
 CREATE OR REPLACE VIEW efn_dwh.v_esb_movement_daily AS
 SELECT
     t.day AS day, t.brand AS brand,
-    CAST(if(ob.company_code = '', t.c_code, ob.company_code), 'String') AS company_code,
+    -- Fail-closed (SEC-IR-02): cabang asal tak dikenal di dim_esb_branch -> '' (row policy menolak), bukan PT default brand.
+    CAST(ob.company_code, 'String') AS company_code,
     t.kind AS kind,
     t.origin_id AS origin_branch_id,
     if(ob.branch_name = '', concat('Cabang #', toString(t.origin_id)), ob.branch_name) AS origin_branch_name,

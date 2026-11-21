@@ -22,7 +22,7 @@ Branch `fix/insight-review`. ADR-040 & ADR-041 (Proposed), K25-02. Tidak ada Bas
 - docs: `docs/design/insight-web-queries.md` §2 (+§3.5 catatan), `docs/04_SERVICE_CONTRACTS.md` §26.7.
 
 **Keputusan/asumsi**
-- `company_code` movement = PT cabang **asal** (fallback PT baris fakta), satu baris per pergerakan. Tidak diduplikasi
+- `company_code` movement = PT cabang **asal** (tanpa fallback sejak SEC-IR-02: cabang tak dikenal -> `''`, ditolak row policy), satu baris per pergerakan. Tidak diduplikasi
   ke PT tujuan (jumlah benar untuk user multi-PT). Akibat: user yang hanya ber-scope PT tujuan (mis. toko BCR menerima
   dari CK BCF, bila ada) tidak melihat kiriman itu di view ini; sisi terima tetap ada di `v_esb_flow_daily`.
 - `item_group`: is_fin baris fakta dulu, lalu prefix kode ATAU kategori ESB (WIP → wip; RMT/IDF/'Inventory - Food &
