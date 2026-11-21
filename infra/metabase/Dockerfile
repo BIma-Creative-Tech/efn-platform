@@ -9,7 +9,7 @@
 # lz4-java, httpcore5, httpcore5-h2; sisa 4 CVE jar (guava, mssql-jdbc, zookeeper x2) tetap di .trivyignore.yaml.
 # Pengecualian checkov terdokumentasi (tinjau ulang saat bump Metabase):
 # checkov:skip=CKV_DOCKER_3: run_metabase.sh image resmi mulai sebagai root lalu `su metabase` (MUID/MGID, uid 2000) setelah chown data; USER di sini mematahkan langkah itu.
-FROM metabase/metabase:v0.58.41@sha256:fa9f428c457e3818c1e94e33267729570e5ce6406234b922cf54ed1a358ce11b
+FROM metabase/metabase:v0.65.4.4@sha256:06b66bf50d5b46ad632a836aeb62149eaab768033f9d3dae72ad4b10e6427590
 
 # G18 (PR #60, Trivy): perbaikan keamanan Alpine yang terbit setelah digest upstream dipin - libexpat 2.9.0-r0
 # (CVE-2026-77214); G24 (PR #68, Trivy): brotli-libs 1.2.1-r0 (CVE-2026-111497); G26 (PR #71, Trivy): curl/libcurl
