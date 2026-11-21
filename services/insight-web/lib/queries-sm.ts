@@ -171,16 +171,17 @@ WHERE ${SCOPE} AND ${CATF} AND month BETWEEN {gm_from:Date} AND {to:Date}
 GROUP BY month, outlet_type
 ORDER BY month
 LIMIT 100`),
+  // WAPE hanya outlet: forecast DC = permintaan keluar DC (jumlah outlet) tanpa penjualan aktual -> galat palsu (UAT G51).
   sm_ex_wape_weekly: q(`SELECT week_start, toFloat64(sum(abs_error)) AS abs_sum, toFloat64(sum(actual_qty)) AS actual_sum, toFloat64(sum(forecast_qty)) AS fc_sum
 FROM ${V}forecast_accuracy_weekly
-WHERE ${SCOPE} AND ${CATF} AND week_start BETWEEN {from:Date} AND {to:Date}
+WHERE ${SCOPE} AND ${CATF} AND outlet_type != 'dc' AND week_start BETWEEN {from:Date} AND {to:Date}
 GROUP BY week_start
 ORDER BY week_start
 LIMIT 60`),
   sm_ex_wape_outlets: q(`SELECT warehouse_id, toFloat64(sum(abs_error)) AS abs_sum, toFloat64(sum(actual_qty)) AS actual_sum, toFloat64(sum(forecast_qty)) AS fc_sum,
   toUInt64(uniqExact(product_id)) AS sku_n
 FROM ${V}forecast_accuracy_weekly
-WHERE ${SCOPE} AND ${CATF} AND week_start BETWEEN {from:Date} AND {to:Date}
+WHERE ${SCOPE} AND ${CATF} AND outlet_type != 'dc' AND week_start BETWEEN {from:Date} AND {to:Date}
 GROUP BY warehouse_id
 LIMIT 300`),
   sm_ex_by_outlet_sales: q(`SELECT warehouse_id, toFloat64(sumIf(net_sales_incl_tax, ${D_CUR})) AS rev_cur, toFloat64(sumIf(net_sales_incl_tax, ${D_PREV})) AS rev_prev,
@@ -372,7 +373,7 @@ LIMIT 5000`),
   sm_fc_by_cat: q(`SELECT categ_id, toFloat64(sum(abs_error)) AS abs_sum, toFloat64(sum(actual_qty)) AS actual_sum, toFloat64(sum(forecast_qty)) AS fc_sum,
   toUInt64(uniqExact(product_id)) AS sku_n
 FROM ${V}forecast_accuracy_weekly
-WHERE ${SCOPE} AND ${CATF} AND week_start BETWEEN {from:Date} AND {to:Date}
+WHERE ${SCOPE} AND ${CATF} AND outlet_type != 'dc' AND week_start BETWEEN {from:Date} AND {to:Date}
 GROUP BY categ_id
 LIMIT 500`),
   // Jumlah p10/p90 per SKU melebar dibanding kuantil total sebenarnya (kuantil tidak aditif): pita ditampilkan sebagai batas konservatif.
