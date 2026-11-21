@@ -394,6 +394,15 @@ WHERE ${SCOPE} AND ${CATF} AND quantity > 0
 GROUP BY product_id, warehouse_id
 ORDER BY days_min ASC, value_nearest DESC
 LIMIT 300`),
+  // /store: hanya outlet (lot gudang DC bukan urusan kepala toko; sesi admin ber-wids DC juga).
+  sm_st_shelf_lots: q(`SELECT product_id, warehouse_id, min(days_left) AS days_min, argMin(lot_name, days_left) AS lot_nearest,
+  argMin(expiration_date, days_left) AS exp_nearest, argMin(quantity, days_left) AS qty_nearest, argMin(value_cost, days_left) AS value_nearest,
+  toUInt64(count()) AS lots_n, toFloat64(sum(quantity)) AS qty_total
+FROM ${V}lot_stock
+WHERE ${SCOPE} AND ${CATF} AND quantity > 0 AND outlet_type = 'outlet'
+GROUP BY product_id, warehouse_id
+ORDER BY days_min ASC, value_nearest DESC
+LIMIT 300`),
   sm_shelf_products: q(`SELECT product_id, any(shelf_life_days) AS shelf_days, any(category) AS category_name, any(product_name) AS name_text
 FROM ${V}product_list
 WHERE ${CO} AND product_id IN {ids:Array(UInt32)}

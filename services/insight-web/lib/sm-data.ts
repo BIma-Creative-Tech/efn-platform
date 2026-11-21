@@ -190,8 +190,8 @@ const first = (rows: Raw[]): Raw | undefined => rows[0];
 
 // ---------------------------------------------------------------- Umur simpan (G51 B4)
 /** Lot terdekat kedaluwarsa per produk x outlet (v_sm_lot_stock) + master produk (shelf_life_days). Dua query berurutan. */
-async function loadShelf(ctx: SmCtx): Promise<Result<ShelfRow[]>> {
-  const lots = await q('sm_shelf_lots', ctx);
+async function loadShelf(ctx: SmCtx, outletsOnly = false): Promise<Result<ShelfRow[]>> {
+  const lots = await q(outletsOnly ? 'sm_st_shelf_lots' : 'sm_shelf_lots', ctx);
   if (!lots.ok) return lots;
   const ids = shelfProductIds(lots.data);
   // Master produk gagal -> baris tetap tampil dengan nama "Produk #id" dan umur simpan "tidak dikelola" (bukan galat kartu).
@@ -217,7 +217,7 @@ export async function loadStore(ctx: SmCtx): Promise<StoreData> {
     q('sm_waste_sums', ctx),
     q('sm_waste_reasons', ctx),
     q('sm_sales_net', ctx),
-    loadShelf(ctx),
+    loadShelf(ctx, true),
   ]);
   const basis = cfgStr(ctx.base.config, 'waste.basis');
   return {
