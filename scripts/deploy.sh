@@ -747,7 +747,11 @@ if [[ ",${COMPOSE_PROFILES}," == *",data,"* ]]; then
 fi
 
 echo "==> Up (--no-build: host hanya memakai image bertanda tangan dari GHCR)"
-"${DC[@]}" up -d --remove-orphans --no-build
+# --renew-anon-volumes: image Odoo resmi mendeklarasikan VOLUME /mnt/extra-addons (addon efn_* di-COPY ke sana) dan
+# compose MEWARISKAN anonymous volume container lama saat recreate -> image baru tetap menjalankan addon LAMA, sementara
+# `odoo -u` (container sekali pakai) sudah meng-upgrade DB = kode dan skema tidak cocok (ditemukan gladi prod lokal
+# 21 Nov 2026). Data persisten Odoo ada di volume bernama odoo-data (/var/lib/odoo), tidak terpengaruh.
+"${DC[@]}" up -d --remove-orphans --no-build --renew-anon-volumes
 
 # Compose tidak me-recreate container saat ISI file secret berubah (bind mount menunjuk inode lama).
 # Recreate service yang me-mount leaf/bundle yang baru diterbitkan + sidecar `network_mode: service:<app>`-nya.
@@ -763,7 +767,7 @@ if [[ ${#RENEWED[@]} -gt 0 ]]; then
       | unique[]')
   if [[ ${#RECREATE[@]} -gt 0 ]]; then
     echo "==> Recreate pemakai sertifikat baru: ${RECREATE[*]}"
-    "${DC[@]}" up -d --no-build --no-deps --force-recreate "${RECREATE[@]}"
+    "${DC[@]}" up -d --no-build --no-deps --force-recreate --renew-anon-volumes "${RECREATE[@]}"
   fi
 fi
 

@@ -9,7 +9,7 @@ import { odooOpenUrl } from '@/lib/config';
 import { fmtAge } from '@/lib/format';
 import { getConfig } from '@/lib/runtime';
 import { loadShellData } from '@/lib/shell-data';
-import { navGroups } from '@/lib/sm-personas';
+import { navGroups, smFilterLinks } from '@/lib/sm-personas';
 import { freshnessStatus } from '@/lib/thresholds';
 
 export const dynamic = 'force-dynamic';
@@ -49,7 +49,13 @@ export default async function AppLayout({ children }: { children: React.ReactNod
       headerSlot={<FreshnessBadge ageHours={shell.ageHours} rows={shell.freshness} />}
       belowHeader={
         <>
-          <FilterBar options={shell.options} sessionCodes={esbCodes} defaults={shell.defaults} yesterday={shell.yesterday} />
+          <FilterBar
+            options={shell.options}
+            sessionCodes={esbCodes}
+            smLinks={smFilterLinks(session, cfg.smEnabled)}
+            defaults={shell.defaults}
+            yesterday={shell.yesterday}
+          />
           {status === 'warn' || status === 'bad' || status === 'unknown' ? (
             <div className={`banner banner-${status}`} role="status">
               {shell.ageHours === null

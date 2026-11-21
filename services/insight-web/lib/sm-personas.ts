@@ -89,6 +89,21 @@ export function homePath(s: { codes: readonly string[]; roles: readonly string[]
   return first ? PERSONA_ROUTES[first] : '/belum-aktif';
 }
 
+/**
+ * Chip PT supermarket di filter "Brand / PT" halaman F&B (sesi gabungan ESB + SM). Data SMD tidak ada di view ESB, jadi
+ * chip ini tautan ke dashboard supermarket (Direksi bila persona itu ada, selain itu persona pertama), bukan filter ESB.
+ * Kosong bila INSIGHT_SM_ENABLED mati atau sesi tanpa persona.
+ */
+export function smFilterLinks(
+  s: { codes: readonly string[]; roles: readonly string[] },
+  smEnabled: boolean,
+): { code: string; href: string }[] {
+  if (!smEnabled || !hasSmAccess(s)) return [];
+  const personas = sessionPersonas(s.roles);
+  const href = PERSONA_ROUTES[personas.includes('exec') ? 'exec' : personas[0]];
+  return smCodesOf(s.codes).map((code) => ({ code, href }));
+}
+
 export interface NavGroup {
   title?: string;
   items: readonly NavItem[];
