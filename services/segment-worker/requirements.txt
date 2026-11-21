@@ -11,4 +11,4 @@ clickhouse-connect==0.8.9
 requests==2.34.2
 urllib3==2.8.0
 # >= perbaikan GHSA-6q48-6c7w-9gw2 (sama dengan services/etl).
-certifi==2026.10.19
+certifi==2026.10.23
