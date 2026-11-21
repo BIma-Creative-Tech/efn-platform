@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { collectBootProblems, collectKeyProblems, parseConfig, odooOpenUrl } from '@/lib/config';
+import { collectBootProblems, collectKeyProblems, parseConfig, odooHomeUrl, odooOpenUrl } from '@/lib/config';
 import { contrastRatio, textOn } from '@/lib/contrast';
 import { authenticate } from '@/lib/gate';
 import { clientIp, RateLimiter } from '@/lib/rate-limit';
@@ -45,6 +45,8 @@ describe('konfigurasi', () => {
     const c = parseConfig(baseEnv);
     expect(c.odooOrigin).toBe('https://erp.efn.test:9443');
     expect(odooOpenUrl(c)).toBe('https://erp.efn.test:9443/efn/insight/open');
+    // "Kembali ke Odoo" ke web client, bukan /efn/insight/open (yang memutar balik ke Insight).
+    expect(odooHomeUrl(c)).toBe('https://erp.efn.test:9443/odoo');
     expect(parseConfig({ ...baseEnv, EFN_INSIGHT_ODOO_URL: 'https://erp.efn.test/' }).odooOrigin).toBe('https://erp.efn.test');
   });
 

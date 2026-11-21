@@ -97,6 +97,8 @@ Semua view: SQL SECURITY DEFINER (`efn_insight_definer`), kolom eksplisit, row p
 | `v_esb_data_quality` | temuan | `check_name` String (`alias_unmapped`, `non_ea_lines`, `store_no_sales_h1`, `data_age_hours`, `last_run_not_ok`), `brand`, `company_code` (**selalu terisi**, lihat §4), `item` String, `value` Float64, `last_day` Date |
 | `v_esb_branch_list` (G42) | cabang | `brand`, `company_code`, `branch_id`, `branch_code`, `branch_name`, `is_ck` UInt8, `is_store` UInt8, `active` UInt8 |
 | `v_esb_product_list` (G42) | PT × produk | `brand`, `company_code`, `product_code`, `product_name`, `category`, `uom`, `is_fin` UInt8, `active` UInt8 |
+| `v_esb_movement_daily` (review 21 Nov 2026) | hari × brand × kind × cabang asal × cabang tujuan × produk × uom | `day` Date, `brand` LowCardinality(String), `company_code` String (**PT cabang asal**), `kind` String (`production` \| `delivery`), `origin_branch_id` UInt32, `origin_branch_name` String, `origin_kind` String (`ck` \| `store` \| `non_sales`), `dest_branch_id` UInt32 (0 untuk production), `dest_branch_name` String ('' untuk production), `dest_kind` String (`ck` \| `store` \| `non_sales` \| ''), `item_group` String (`fin` \| `wip` \| `raw` \| `packaging` \| `supplies` \| `other`), `category` String (kategori ESB; `'Tanpa kategori'` bila kosong), `product_code` String, `product_name` String, `uom` String, `qty` Float64, `lines` UInt64 (jumlah baris fakta) |
+| `v_esb_coverage` (review 21 Nov 2026) | brand × PT × entitas harian | `brand`, `company_code` String, `entity` String (`sales`, `payment`, `production`, `delivery`, `transfer`, `fin_sold`), `first_day` Date, `last_day` Date, `days` UInt64 (hari unik dengan slice selesai) |
 
 Semantik penting:
 - `net` = `total − discount` dari ESB `sales-menu-cogs`. **Fakta G41: `total` ESB belum termasuk PB1/service charge**
@@ -108,6 +110,20 @@ Semantik penting:
 - Alur (`v_esb_flow_daily`): `ck_out` dicatat di **cabang CK asal**, `in_ck` di **toko tujuan** (lihat docs/04 §25.6).
   Selisih kirim vs terima hanya bermakna **per produk/hari lintas cabang**, bukan per baris cabang × produk.
 - Tidak ada data per jam (L-112) dan tidak ada stok (stok akhir/awal) -> sell-through berbasis arus barang.
+- Pergerakan (`v_esb_movement_daily`, review 21 Nov 2026; ADR-040/ADR-041 Proposed): `v_esb_flow_daily` hanya produk
+  FIN, sehingga CK tampak "mengirim lebih dari yang diproduksi". View ini memuat **semua** produksi dan kiriman
+  (FIN, WIP, bahan baku RMT/IDF, kemasan PAM, supplies SU*/UNI) per kelompok barang. Penjelasan untuk pembaca:
+  (1) toko membuat FINS/FINK sendiri (`kind='production'`, `origin_kind='store'`) dari WIP/bahan baku yang dikirim CK;
+  (2) kiriman FIN > produksi FIN per hari/produk berasal dari stok CK sebelum periode (stok awal tidak tersedia).
+  Aturan pakai: **jangan menjumlah `qty` lintas `uom`** (kelompokkan per `uom`, atau pakai `lines`/jumlah produk
+  untuk barang non-EA); `uom = 'NO_RATIO'` = qty produksi masih batch. Satu baris per pergerakan dengan PT asal —
+  kiriman lintas PT tidak terlihat oleh user yang hanya ber-scope PT tujuan (sisi terima ada di `v_esb_flow_daily`).
+  Cabang non-penjualan (gudang, head office, damage/expired) = `non_sales`.
+- Cakupan (`v_esb_coverage`): rentang per entitas berbeda (contoh sintetis: `sales` 365 hari, `production`/`delivery`
+  hanya 7 hari terakhir). UI wajib menampilkan rentang ini di halaman yang mencampur entitas dan memotong perbandingan
+  ke irisan rentang (mis. produksi vs terjual hanya pada hari yang ada di kedua entitas). Entitas per brand
+  (`payment`, `production`, `delivery`, `transfer`) diperluas ke setiap PT brand; entitas per toko (`sales`,
+  `fin_sold`) memakai PT cabang. Hari bolong: `days < dateDiff('day', first_day, last_day) + 1`.
 
 ## 3. Katalog query per halaman
 
@@ -579,7 +595,9 @@ LIMIT 500;
 ```
 Peta asal → tujuan (Q-INS3) tidak tersedia: `v_esb_flow_daily` hanya sisi asal/tujuan terpisah. Bila dibutuhkan,
 tambah view baru dari `fact_esb_delivery`/`fact_esb_transfer` (asal, tujuan, produk, qty) dengan keputusan scope:
-baris terlihat oleh PT asal **dan** PT tujuan (dua baris) — belum dibuat di G42.
+baris terlihat oleh PT asal **dan** PT tujuan (dua baris) — belum dibuat di G42. Pembaruan 21 Nov 2026:
+`v_esb_movement_daily` memuat asal → tujuan untuk **delivery** (bukan transfer) dengan satu baris per PT **asal**
+(tidak diduplikasi, agar jumlah benar untuk user multi-PT); opsi dua baris tetap terbuka bila klien meminta.
 
 ### 3.6 Kualitas Data (`/data-quality`) — `v_esb_data_quality`
 

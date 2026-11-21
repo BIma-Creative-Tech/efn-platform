@@ -15,7 +15,8 @@ import { biasStatus, costCoveragePct, marginPct, pctChange, ppChange, wapeBias, 
 import { smPage, type SmSearchParams } from '@/lib/sm-page';
 import { cfgStr } from '@/lib/sm-thresholds';
 import { toNum } from '@/lib/sm-parse';
-import type { OutletRow } from '@/lib/sm-vm';
+import { OUTLET_DROP_PCT, type OutletRow } from '@/lib/sm-vm';
+import { biasReason, outletReason } from '@/lib/status-reasons';
 
 export const dynamic = 'force-dynamic';
 export const metadata: Metadata = { title: 'Direksi' };
@@ -84,6 +85,11 @@ export default async function ExecPage({ searchParams }: { searchParams: SmSearc
     { header: 'Waste %', align: 'right', cell: (r) => fmtPctOrNa(r.wastePct) },
     { header: 'YoY', align: 'right', cell: (r) => fmtPctOrNa(r.yoyPct) },
     { header: 'Status', cell: (r) => (r.status === 'neutral' ? <span className="muted">-</span> : <StatusPill status={r.status} />) },
+    {
+      header: 'Keterangan',
+      cell: (r) => outletReason(r, t, r.wastePct !== null ? wasteStatus(r.wastePct, t) : 'neutral', OUTLET_DROP_PCT),
+      text: (r) => outletReason(r, t, r.wastePct !== null ? wasteStatus(r.wastePct, t) : 'neutral', OUTLET_DROP_PCT),
+    },
   ];
 
   const w = data.waste.ok ? data.waste.data : null;
@@ -276,6 +282,13 @@ export default async function ExecPage({ searchParams }: { searchParams: SmSearc
                       },
                     },
                     { header: 'Status bias', cell: (r) => <StatusPill status={biasStatus(wapeBias(toNum(r.abs_sum), toNum(r.actual_sum), toNum(r.fc_sum)).bias, t)} /> },
+                    {
+                      header: 'Keterangan',
+                      cell: (r) => {
+                        const b = wapeBias(toNum(r.abs_sum), toNum(r.actual_sum), toNum(r.fc_sum)).bias;
+                        return biasReason(b, biasStatus(b, t), t);
+                      },
+                    },
                     { header: 'SKU dievaluasi', align: 'right', cell: (r) => fmtInt(toNum(r.sku_n)) },
                   ]}
                 />

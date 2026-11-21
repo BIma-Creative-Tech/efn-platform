@@ -61,14 +61,44 @@ const SALES_RANGE_PREV = 'sales_date BETWEEN {prev_from:Date} AND {to:Date}';
 
 const SUPPLY = 'in_ck + in_other + store_prod + st_in - st_out';
 
+// Cabang yang benar-benar menjual atau memproduksi (toko atau CK). HEAD OFFICE, gudang, KACS Damage/Expired, Temporary Variance,
+// dst. (`is_store = 0 AND is_ck = 0`) tidak menjual: dikeluarkan dari opsi filter Cabang dan dari peringkat/sell-through/outlier
+// per cabang (keputusan pemilik proyek 21 Nov 2026). Subquery membaca view yang sama yang terkena row policy PT.
+const SALES_BRANCH_SET = 'SELECT brand, branch_id FROM efn_insight.v_esb_branch_list WHERE is_store = 1 OR is_ck = 1';
+const SALES_BRANCH = `((brand, branch_id) IN (${SALES_BRANCH_SET}))`;
+/** Pembayaran: branch_id 0 = branchCode tak dikenal di master cabang; tetap ditampilkan sebagai "Tidak diketahui". */
+const SALES_BRANCH_OR_UNKNOWN = `(branch_id = 0 OR ${SALES_BRANCH})`;
+/** Pergerakan: cabang yang dipilih cocok dengan asal ATAU tujuan kiriman. */
+const MBR =
+  "(empty({branch:Array(String)}) OR has({branch:Array(String)}, concat(brand, ':', toString(origin_branch_id))) OR has({branch:Array(String)}, concat(brand, ':', toString(dest_branch_id))))";
+
 export const QUERIES = {
   // ---------- filter global ----------
   list_branches: {
     params: ['pt'],
     sql: `SELECT brand, company_code, branch_id, branch_name, is_ck, is_store, active
 FROM efn_insight.v_esb_branch_list
-WHERE ${PT}
+WHERE ${PT} AND (is_store = 1 OR is_ck = 1)
 ORDER BY brand, branch_name
+LIMIT 500`,
+  },
+  product_categories: {
+    // (tambahan, review 21 Nov 2026) kategori produk ESB untuk kolom Kategori di tabel per produk (tanpa filter FIN/aktif).
+    params: ['pt'],
+    // Alias sengaja beda dari nama kolom (any(category) AS category memicu alias siklik di ClickHouse).
+    sql: `SELECT brand, product_code, any(category) AS category_label
+FROM efn_insight.v_esb_product_list
+WHERE ${PT}
+GROUP BY brand, product_code
+LIMIT 5000`,
+  },
+  esb_coverage: {
+    // (tambahan, review 21 Nov 2026) cakupan data per entitas (rentang hari yang ada), untuk banner "data tersedia ..".
+    params: ['pt'],
+    sql: `SELECT brand, company_code, entity, first_day, last_day, days
+FROM efn_insight.v_esb_coverage
+WHERE ${PT}
+ORDER BY brand, company_code, entity
 LIMIT 500`,
   },
   list_categories: {
@@ -127,6 +157,7 @@ FROM efn_insight.v_esb_sales_branch_daily
 WHERE ${SALES_RANGE}
   AND ${PT}
   AND ${BR}
+  AND ${SALES_BRANCH}
 GROUP BY brand, company_code, branch_id
 ORDER BY net_sales DESC
 LIMIT 500`,
@@ -197,6 +228,7 @@ WHERE ${DAY_RANGE}
   AND ${PT}
   AND ${BR}
   AND ${PR}
+  AND ${SALES_BRANCH}
 GROUP BY brand, company_code, branch_id
 HAVING supply != 0 OR sold_qty != 0
 ORDER BY sell_through_pct ASC NULLS LAST
@@ -223,6 +255,7 @@ LIMIT 1000`,
        toFloat64(sum(ck_prod)) AS ck_prod_qty, toFloat64(sum(ck_out)) AS ck_out_qty,
        toFloat64(sum(in_ck + in_other)) AS received, toFloat64(sum(store_prod)) AS store_prod_qty,
        toFloat64(sum(sold)) AS sold_qty,
+       toFloat64(sum(${SUPPLY})) AS supply, toFloat64(sum(st_out)) AS st_out_qty,
        if(sum(${SUPPLY}) <= 0, NULL,
           sum(sold) / sum(${SUPPLY}) * 100) AS sell_through_pct
 FROM efn_insight.v_esb_flow_daily
@@ -241,6 +274,7 @@ LIMIT 500`,
        toFloat64(sum(in_ck + in_other + st_in - st_out)) AS received,
        toFloat64(sum(store_prod)) AS store_prod_qty,
        toFloat64(sum(sold)) AS sold_qty,
+       toFloat64(sum(${SUPPLY})) AS supply, toFloat64(sum(st_out)) AS st_out_qty,
        if(sum(${SUPPLY}) <= 0, NULL,
           sum(sold) / sum(${SUPPLY}) * 100) AS sell_through_pct
 FROM efn_insight.v_esb_flow_daily
@@ -248,6 +282,7 @@ WHERE ${DAY_RANGE}
   AND ${PT}
   AND ${BR}
   AND ${PR}
+  AND ${SALES_BRANCH}
 GROUP BY brand, company_code, branch_id, product_code
 HAVING received != 0 OR sold_qty != 0 OR store_prod_qty != 0
 ORDER BY sell_through_pct ASC NULLS LAST, sold_qty DESC
@@ -431,6 +466,7 @@ FROM
     WHERE ${SALES_RANGE}
       AND ${PT}
       AND ${BR}
+      AND ${SALES_BRANCH_OR_UNKNOWN}
     GROUP BY brand, branch_id, method
 )
 GROUP BY brand, branch_id
@@ -467,19 +503,28 @@ ORDER BY day
 LIMIT 1000`,
   },
   dist_transfer: {
+    // Cabang non-penjualan (HO/gudang/damage; bukan toko dan bukan CK) digabung menjadi satu baris per PT dengan branch_id 0
+    // dan label "Non-toko (HO/gudang/damage)": transfer ke/dari cabang itu bukan perpindahan antar toko.
     params: ['from', 'to', 'pt', 'branch', 'product'],
-    sql: `SELECT brand, company_code, branch_id, any(branch_name) AS branch_label,
+    sql: `SELECT brand, company_code, branch_key AS branch_id,
+       if(branch_key = 0, 'Non-toko (HO/gudang/damage)', any(b_name)) AS branch_label,
        toFloat64(sum(ck_out)) AS ck_out_qty, toFloat64(sum(in_ck)) AS in_ck_qty, toFloat64(sum(in_other)) AS in_other_qty,
        toFloat64(sum(st_in)) AS st_in_qty, toFloat64(sum(st_out)) AS st_out_qty,
        toFloat64(sum(st_in) - sum(st_out)) AS st_net
-FROM efn_insight.v_esb_flow_daily
-WHERE ${DAY_RANGE}
-  AND ${PT}
-  AND ${BR}
-  AND ${PR}
-GROUP BY brand, company_code, branch_id
+FROM
+(
+    SELECT brand, company_code, branch_name AS b_name,
+           if(${SALES_BRANCH}, branch_id, toUInt32(0)) AS branch_key,
+           ck_out, in_ck, in_other, st_in, st_out
+    FROM efn_insight.v_esb_flow_daily
+    WHERE ${DAY_RANGE}
+      AND ${PT}
+      AND ${BR}
+      AND ${PR}
+)
+GROUP BY brand, company_code, branch_key
 HAVING ck_out_qty != 0 OR in_ck_qty != 0 OR in_other_qty != 0 OR st_in_qty != 0 OR st_out_qty != 0
-ORDER BY brand, branch_label
+ORDER BY brand, branch_key = 0, branch_label
 LIMIT 500`,
   },
   dist_transfer_top_products: {
@@ -501,7 +546,8 @@ LIMIT 10`,
     // (tambahan) pengganti "tabel selisih cabang x produk": ck_out di cabang CK, in_ck di toko -> selisih bermakna per produk-hari.
     params: ['from', 'to', 'pt', 'product'],
     sql: `SELECT day, brand, product_code, any(product_name) AS product_label,
-       toFloat64(sum(ck_out)) AS ck_out_qty, toFloat64(sum(in_ck)) AS in_ck_qty, toFloat64(sum(ck_out) - sum(in_ck)) AS gap
+       toFloat64(sum(ck_out)) AS ck_out_qty, toFloat64(sum(in_ck)) AS in_ck_qty, toFloat64(sum(ck_out) - sum(in_ck)) AS gap,
+       toFloat64(sum(ck_prod)) AS ck_prod_qty
 FROM efn_insight.v_esb_flow_daily
 WHERE ${DAY_RANGE}
   AND ${PT}
@@ -510,6 +556,57 @@ GROUP BY day, brand, product_code
 HAVING abs(gap) > 0.0005
 ORDER BY abs(gap) DESC
 LIMIT 500`,
+  },
+
+  // ---------- Pergerakan barang semua kelompok (review 21 Nov 2026; v_esb_movement_daily) ----------
+  // v_esb_flow_daily hanya memuat FIN. Data nyata PB (lead, 21 Nov 2026): CK mengirim FIN + WIP; bahan baku, kemasan, supplies
+  // dikirim GUDANG (WHProd, Warehouse Palem = origin_kind 'non_sales') dan sebagian toko (KACS). Karena itu semua asal ditampilkan
+  // dengan kolom asal/tujuan, bukan hanya CK. qty TIDAK boleh dijumlah lintas uom: selalu dikelompokkan per uom.
+  // company_code view ini = PT cabang ASAL.
+  mov_by_group: {
+    params: ['from', 'to', 'pt', 'branch', 'product'],
+    sql: `SELECT origin_kind, dest_kind, item_group, uom, toFloat64(sum(qty)) AS qty_sum, sum(lines) AS lines_n,
+       uniqExact(brand, product_code) AS skus
+FROM efn_insight.v_esb_movement_daily
+WHERE ${DAY_RANGE}
+  AND ${PT}
+  AND kind = 'delivery'
+  AND ${MBR}
+  AND ${PR}
+GROUP BY origin_kind, dest_kind, item_group, uom
+ORDER BY origin_kind, dest_kind, item_group, uom
+LIMIT 500`,
+  },
+  mov_by_category: {
+    params: ['from', 'to', 'pt', 'branch', 'product'],
+    sql: `SELECT origin_kind, item_group, category, uom, toFloat64(sum(qty)) AS qty_sum, sum(lines) AS lines_n,
+       uniqExact(brand, product_code) AS skus
+FROM efn_insight.v_esb_movement_daily
+WHERE ${DAY_RANGE}
+  AND ${PT}
+  AND kind = 'delivery'
+  AND ${MBR}
+  AND ${PR}
+GROUP BY origin_kind, item_group, category, uom
+ORDER BY origin_kind, item_group, qty_sum DESC
+LIMIT 1000`,
+  },
+  mov_ck_product: {
+    // Produksi vs kiriman FIN per CK asal x produk: dasar kolom Keterangan "kirim melebihi produksi". Filter cabang sengaja
+    // tidak dipakai (perbandingan di tingkat CK); filter produk dipakai.
+    params: ['from', 'to', 'pt', 'product'],
+    sql: `SELECT brand, product_code, origin_branch_id, any(origin_branch_name) AS ck_label,
+       toFloat64(sumIf(qty, kind = 'production')) AS prod_qty,
+       toFloat64(sumIf(qty, kind = 'delivery')) AS out_qty
+FROM efn_insight.v_esb_movement_daily
+WHERE ${DAY_RANGE}
+  AND ${PT}
+  AND origin_kind = 'ck' AND item_group = 'fin' AND uom = 'EA'
+  AND ${PR}
+GROUP BY brand, product_code, origin_branch_id
+HAVING prod_qty != 0 OR out_qty != 0
+ORDER BY brand, product_code, origin_branch_id
+LIMIT 5000`,
   },
 
   // ---------- Kualitas data (/data-quality) ----------

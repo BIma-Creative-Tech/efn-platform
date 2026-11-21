@@ -5,6 +5,7 @@
 import type { ReactNode } from 'react';
 import { fmtDelta, fmtValue, type ValueFmt } from '@/lib/format';
 import { STATUS_LABEL, type Status } from '@/lib/thresholds';
+import { TermHints } from './Term';
 
 const ICON_PATHS: Record<string, string> = {
   home: 'M3 11l9-8 9 8v9a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z',
@@ -29,6 +30,13 @@ const ICON_PATHS: Record<string, string> = {
   megaphone: 'M3 10v4h4l8 4V6L7 10zM18 9a4 4 0 0 1 0 6',
   external: 'M14 4h6v6M20 4l-9 9M18 14v5H5V6h5',
   clock: 'M12 3a9 9 0 1 0 0.01 0M12 7v5l3 2',
+  // Kontrol toolbar, sidebar, glosarium.
+  'chevron-down': 'M6 9l6 6 6-6',
+  'chevron-left': 'M15 6l-6 6 6 6',
+  'chevron-right': 'M9 6l6 6-6 6',
+  calendar: 'M4 6h16v14H4zM4 10h16M8 3v4M16 3v4',
+  search: 'M11 4a7 7 0 1 0 0.01 0M20 20l-4-4',
+  book: 'M5 4h12a2 2 0 0 1 2 2v14H7a2 2 0 0 1-2-2zM5 18a2 2 0 0 1 2-2h12M9 8h6',
 };
 
 export function Icon({ name, size = 18 }: { name: string; size?: number }): ReactNode {
@@ -73,10 +81,11 @@ export function DeltaBadge({
   compareLabel?: string;
 }): ReactNode {
   if (value === null || !Number.isFinite(value)) {
+    // Pembanding tidak ada/tidak bisa dihitung (mis. periode lalu belum punya data): tulis eksplisit, bukan "-100%" atau "+inf".
     return (
-      <span className="delta delta-neutral">
-        <span aria-hidden="true">-</span>
-        <span className="sr-only">tidak ada pembanding</span>
+      <span className="delta delta-neutral" title="Tidak ada data pembanding pada periode lalu">
+        <span aria-hidden="true">n/a</span>
+        <span className="sr-only">tidak ada data pembanding</span>
       </span>
     );
   }
@@ -144,6 +153,7 @@ export function KpiTile({ label, value, fmt, delta, spark, status, info, note, p
     <div className="kpi">
       <dt>
         <span>{label}</span>
+        <TermHints text={label} />
         {info ? <InfoTip label={label}>{info}</InfoTip> : null}
       </dt>
       <dd>
@@ -216,6 +226,7 @@ export function Section({ title, children, id }: { title?: string; children: Rea
       {title ? (
         <h2 id={id} className="section-title">
           {title}
+          <TermHints text={title} />
         </h2>
       ) : null}
       {children}

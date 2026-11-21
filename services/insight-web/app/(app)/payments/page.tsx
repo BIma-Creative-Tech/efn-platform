@@ -9,7 +9,9 @@ import type { SeriesColor } from '@/lib/brands';
 import { summarize, type ChartSeries, type ChartSpec, type ColorToken } from '@/lib/chart-spec';
 import { eachDay } from '@/lib/dates';
 import { fmtDayShort, fmtRange } from '@/lib/format';
-import { num, type Result } from '@/lib/loaders';
+import { CoverageNotice } from '@/components/CoverageNotice';
+import { comparable, deltaGuards } from '@/lib/coverage';
+import { loadCoverage, num, type Result } from '@/lib/loaders';
 import { pageCtx, type SearchParams } from '@/lib/page-ctx';
 import { loadEsbTable, loadSmdNames, runEsb, runSm } from '@/lib/smd-data';
 import {
@@ -30,7 +32,7 @@ import {
 import { toNum } from '@/lib/sm-parse';
 import { TABLES } from '@/lib/table-defs';
 import { T } from '@/lib/thresholds';
-import { pctDelta, pctOf, ppDelta, withOther } from '@/lib/vm';
+import { pctOf, withOther } from '@/lib/vm';
 
 export const dynamic = 'force-dynamic';
 export const metadata: Metadata = { title: 'Pembayaran' };
@@ -48,7 +50,7 @@ export default async function PaymentsPage({ searchParams }: { searchParams: Sea
   const mixed = esbOn && smdOn;
   const sm = (n: Parameters<typeof runSm>[0]) => (smdOn ? runSm(n, ctx, sel) : Promise.resolve(null));
 
-  const [kpiR, methodR, trendR, branchR, smSums, smMatrix, smTrend, names] = await Promise.all([
+  const [kpiR, methodR, trendR, branchR, smSums, smMatrix, smTrend, names, cov] = await Promise.all([
     runEsb<Kpi>(esbOn, 'pay_kpi', ctx),
     loadEsbTable(esbOn, 'pay-methods', ctx),
     runEsb<PayTrendRow>(esbOn, 'pay_trend', ctx),
@@ -57,7 +59,10 @@ export default async function PaymentsPage({ searchParams }: { searchParams: Sea
     sm('sm_fb_pay_matrix'),
     sm('sm_fb_pay_trend'),
     smdOn ? loadSmdNames(ctx, sel) : Promise.resolve(null),
+    esbOn ? loadCoverage(ctx) : Promise.resolve(null),
   ]);
+  // Delta = n/a bila periode ini/lalu belum seluruhnya ada di data pembayaran ESB.
+  const { pctDelta, ppDelta } = deltaGuards(comparable(cov, ['payment'], ctx.filters, ctx.prev));
 
   const asRaw = (r: Result<RawRows> | null): Result<RawRows> | null => r;
   const kpiSides = mergeSides(esbOn, kpiR, smdOn, asRaw(smSums));
@@ -144,6 +149,7 @@ export default async function PaymentsPage({ searchParams }: { searchParams: Sea
     <>
       <PageHeader title="Pembayaran" question="Pelanggan membayar dengan apa, dan berapa biaya (MDR) yang kita tanggung?" />
       <FilterNotice adjusted={adjusted} />
+      <CoverageNotice rows={cov} entities={['payment']} range={{ from, to }} />
       <p className="muted small">Periode: {fmtRange(from, to)}. Nilai pembayaran tidak sama dengan penjualan bersih (pembayaran sudah termasuk PB1/service; SMD termasuk PPN).</p>
       {smdOn ? (
         <p className="notice" role="note">

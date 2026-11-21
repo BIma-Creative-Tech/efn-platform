@@ -3,14 +3,16 @@
  * Tabel data (spec §6): <table> asli, <th scope>, aria-sort, sortir kolom, paginasi, filter cepat "hanya bermasalah",
  * tombol drill-down di sel, tautan ekspor CSV (route handler server-side dengan filter & cakupan yang sama).
  */
-import { useMemo, useState } from 'react';
+import { useId, useMemo, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { useDrill } from '@/lib/client-nav';
 import { fmtDate, fmtIdr, fmtIdrShort, fmtInt, fmtPct, fmtQty } from '@/lib/format';
 import { segBadgeClass } from '@/lib/smd-merge';
 import type { ColumnDef, TableName } from '@/lib/table-defs';
-import type { Status } from '@/lib/thresholds';
-import { EmptyState, StatusPill } from './ui';
+import { countText, distinct, matchesQuery, matchesSelects } from '@/lib/table-filter';
+import { STATUS_LABEL, type Status } from '@/lib/thresholds';
+import { TermHints } from './Term';
+import { EmptyState, Icon, StatusPill } from './ui';
 
 export type CellValue = string | number | boolean | null;
 export type TableRow = Record<string, CellValue>;
@@ -81,10 +83,42 @@ export function DataTable({
   const [sort, setSort] = useState(defaultSort ?? null);
   const [page, setPage] = useState(0);
   const [onlyBad, setOnlyBad] = useState(false);
+  const [q, setQ] = useState('');
+  const [sel, setSel] = useState<Record<string, string>>({});
+  const uid = useId();
+
+  // Kolom teks yang dicari, dan kolom yang punya dropdown filter (kategori/status/...).
+  const textCols = useMemo(() => columns.filter((c) => !c.fmt || c.fmt === 'text' || c.fmt === 'segment'), [columns]);
+  const filterCols = useMemo(() => columns.filter((c) => c.filterable || c.fmt === 'status'), [columns]);
+  const options = useMemo(
+    () =>
+      Object.fromEntries(
+        filterCols.map((c) => [
+          c.key,
+          distinct(rows.map((r) => (c.fmt === 'status' ? String(r[c.key] ?? '') : r[c.key] === null || r[c.key] === undefined ? '' : String(r[c.key])))),
+        ]),
+      ),
+    [filterCols, rows],
+  );
+  const searchable = rows.length > 8 || filterCols.length > 0;
 
   const view = useMemo(() => {
     let r = rows;
     if (quickFilter && onlyBad) r = r.filter((x) => quickFilter.statuses.includes(x.status as Status));
+    if (q.trim() !== '') {
+      r = r.filter((x) =>
+        matchesQuery(
+          textCols
+            .map((c) => (x[c.key] === null || x[c.key] === undefined ? '' : String(x[c.key])))
+            .concat(filterCols.filter((c) => c.fmt === 'status').map((c) => STATUS_LABEL[(x[c.key] as Status) ?? 'unknown'] ?? ''))
+            .join(' '),
+          q,
+        ),
+      );
+    }
+    if (Object.values(sel).some((v) => v !== '')) {
+      r = r.filter((x) => matchesSelects(Object.fromEntries(filterCols.map((c) => [c.key, x[c.key] === null || x[c.key] === undefined ? '' : String(x[c.key])])), sel));
+    }
     if (sort) {
       const dir = sort.dir === 'asc' ? 1 : -1;
       r = [...r].sort((a, b) => {
@@ -96,7 +130,7 @@ export function DataTable({
       });
     }
     return r;
-  }, [rows, sort, quickFilter, onlyBad]);
+  }, [rows, sort, quickFilter, onlyBad, q, sel, textCols, filterCols]);
 
   const pages = Math.max(1, Math.ceil(view.length / pageSize));
   const cur = Math.min(page, pages - 1);
@@ -129,7 +163,68 @@ export function DataTable({
         <EmptyState title={emptyTitle} reason="Filter mungkin terlalu sempit, atau data belum masuk." />
       ) : (
         <>
-          <div className="table-wrap" tabIndex={0} role="region" aria-label={`Tabel: ${caption}`}>
+          {searchable ? (
+            <div className="table-tools" role="search" aria-label={`Cari dan saring: ${caption}`}>
+              <div className="tt-search">
+                <Icon name="search" size={16} />
+                <label className="sr-only" htmlFor={`${uid}-q`}>
+                  Cari di tabel {caption}
+                </label>
+                <input
+                  id={`${uid}-q`}
+                  type="search"
+                  className="input"
+                  placeholder="Cari..."
+                  value={q}
+                  onChange={(e) => {
+                    setQ(e.target.value);
+                    setPage(0);
+                  }}
+                />
+              </div>
+              {filterCols.map((c) => (
+                <div key={c.key} className="tt-select">
+                  <label htmlFor={`${uid}-f-${c.key}`}>{c.header}</label>
+                  <select
+                    id={`${uid}-f-${c.key}`}
+                    className="input"
+                    value={sel[c.key] ?? ''}
+                    onChange={(e) => {
+                      setSel((s) => ({ ...s, [c.key]: e.target.value }));
+                      setPage(0);
+                    }}
+                  >
+                    <option value="">Semua</option>
+                    {(options[c.key] ?? []).map((v) => (
+                      <option key={v} value={v}>
+                        {c.fmt === 'status' ? (STATUS_LABEL[v as Status] ?? v) : v}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              ))}
+              <span className="muted small tt-count" aria-live="polite">
+                {countText(view.length, rows.length)}
+              </span>
+              {q !== '' || Object.values(sel).some((v) => v !== '') ? (
+                <button
+                  type="button"
+                  className="btn btn-sm"
+                  onClick={() => {
+                    setQ('');
+                    setSel({});
+                    setPage(0);
+                  }}
+                >
+                  Hapus penyaring
+                </button>
+              ) : null}
+            </div>
+          ) : null}
+          {view.length === 0 ? (
+            <EmptyState title="Tidak ada baris yang cocok dengan pencarian atau penyaring." reason="Ubah kata kunci atau pilih Semua pada dropdown." />
+          ) : null}
+          <div className="table-wrap" tabIndex={0} role="region" aria-label={`Tabel: ${caption}`} hidden={view.length === 0}>
             <table className={`table${stickyFirstCol ? ' sticky-first' : ''}`}>
               <caption className="sr-only">{caption}</caption>
               <thead>
@@ -152,6 +247,7 @@ export function DataTable({
                         ) : (
                           c.header
                         )}
+                        <TermHints text={c.header} />
                       </th>
                     );
                   })}
@@ -178,7 +274,7 @@ export function DataTable({
                           {content}
                         </th>
                       ) : (
-                        <td key={c.key} className={c.align === 'right' ? 'num' : undefined}>
+                        <td key={c.key} className={`${c.align === 'right' ? 'num' : ''}${c.wrap ? ' wrap' : ''}`.trim() || undefined}>
                           {content}
                         </td>
                       );
@@ -214,14 +310,14 @@ export function DataTable({
                 Sebelumnya
               </button>
               <span aria-live="polite">
-                Halaman {cur + 1} dari {pages} ({view.length} baris)
+                Halaman {cur + 1} dari {pages} ({countText(view.length, rows.length)})
               </span>
               <button type="button" className="btn btn-sm" disabled={cur >= pages - 1} onClick={() => setPage(cur + 1)}>
                 Berikutnya
               </button>
             </nav>
           ) : (
-            <p className="muted small pager-note">{view.length} baris</p>
+            <p className="muted small pager-note">{countText(view.length, rows.length)}</p>
           )}
         </>
       )}

@@ -2,7 +2,24 @@
  * Umur simpan & sisa umur lot (G51 B4): penggabungan lot terdekat (v_sm_lot_stock) dengan master produk (shelf_life_days).
  */
 import { describe, expect, it } from 'vitest';
-import { buildShelfRows, fmtShelfLife, shelfProductIds, shelfStatus } from '@/lib/sm-shelf';
+import { buildShelfRows, fmtShelfLife, shelfProductIds, shelfReason, shelfStatus } from '@/lib/sm-shelf';
+
+describe('shelfReason (kolom Keterangan)', () => {
+  it('menyebut angka sisa hari, batas, dan dasar batas', () => {
+    expect(shelfReason({ daysLeft: -3, shelfDays: 14 })).toContain('lewat tanggal kedaluwarsa 3 hari');
+    expect(shelfReason({ daysLeft: 2, shelfDays: 14 })).toContain('Sisa umur 2 hari <= 4 hari (25% umur simpan 14 hari)');
+    expect(shelfReason({ daysLeft: 2, shelfDays: 0 })).toContain('batas 3 hari (umur simpan produk tidak dikelola)');
+    expect(shelfReason({ daysLeft: 20, shelfDays: 14 })).toContain('Sisa umur 20 hari > 4 hari');
+  });
+  it('konsisten dengan shelfStatus', () => {
+    for (const r of [{ daysLeft: -1, shelfDays: 10 }, { daysLeft: 1, shelfDays: 10 }, { daysLeft: 9, shelfDays: 10 }]) {
+      const s = shelfStatus(r).status;
+      const reason = shelfReason(r);
+      if (s === 'good') expect(reason).toContain('>');
+      else expect(reason).not.toContain('Sisa umur 9');
+    }
+  });
+});
 
 const lots = [
   { product_id: 1, warehouse_id: 21, lot_nearest: 'L-002', exp_nearest: '2026-11-25', days_min: 4, qty_nearest: 6, qty_total: 20, value_nearest: 60000, lots_n: 3 },

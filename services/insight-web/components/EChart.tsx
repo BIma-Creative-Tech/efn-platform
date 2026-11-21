@@ -21,9 +21,11 @@ interface Props {
   height: number;
   summaryId: string;
   pattern: boolean;
+  /** Seri yang disembunyikan lewat legend HTML (ChartCard). */
+  hidden: readonly string[];
 }
 
-export default function EChart({ spec, height, summaryId, pattern }: Props): React.ReactNode {
+export default function EChart({ spec, height, summaryId, pattern, hidden }: Props): React.ReactNode {
   const host = useRef<HTMLDivElement>(null);
   const chart = useRef<echarts.ECharts | null>(null);
   const idx = useRef(0);
@@ -76,8 +78,8 @@ export default function EChart({ spec, height, summaryId, pattern }: Props): Rea
     if (!c) return;
     const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
     const contrast = window.matchMedia('(prefers-contrast: more)').matches;
-    c.setOption(buildOption(spec, readTheme(), { animate: !reduced, decal: pattern || contrast }), true);
-  }, [spec, pattern, themeVersion]);
+    c.setOption(buildOption(spec, readTheme(), { animate: !reduced, decal: pattern || contrast, hidden }), true);
+  }, [spec, pattern, themeVersion, hidden]);
 
   const count = spec.categories.length;
   const describe = useCallback(

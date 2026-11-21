@@ -10,7 +10,9 @@ import { codeColor, codeName } from '@/lib/brands';
 import { summarize, type ChartSpec } from '@/lib/chart-spec';
 import { eachDay } from '@/lib/dates';
 import { fmtDayShort, fmtIdrShort, fmtRange } from '@/lib/format';
-import { num, type Result, type Row } from '@/lib/loaders';
+import { CoverageNotice } from '@/components/CoverageNotice';
+import { comparable, deltaGuards } from '@/lib/coverage';
+import { loadCoverage, num, type Result, type Row } from '@/lib/loaders';
 import { pageCtx, type SearchParams } from '@/lib/page-ctx';
 import { loadEsbTable, loadSmdNames, runEsb, runSm } from '@/lib/smd-data';
 import {
@@ -42,7 +44,7 @@ import {
 } from '@/lib/smd-merge';
 import { TABLES } from '@/lib/table-defs';
 import { freshnessStatus, sellThroughStatus, type Status } from '@/lib/thresholds';
-import { pctDelta, ratio, ppDelta, trendSeries, type DailyRow } from '@/lib/vm';
+import { ratio, trendSeries, type DailyRow } from '@/lib/vm';
 
 export const dynamic = 'force-dynamic';
 export const metadata: Metadata = { title: 'Ringkasan' };
@@ -82,7 +84,7 @@ export default async function SummaryPage({ searchParams }: { searchParams: Sear
   const sm = (n: Parameters<typeof runSm>[0]) => (smdOn ? runSm(n, ctx, sel) : Promise.resolve(null));
   const showShare = smdOn || ctx.session.codes.length > 1;
 
-  const [kpiR, trendR, rankR, shareR, stR, flowBrR, freshR, noSalesR, lastRunR, smDaily, smNet, smCogs, smOutlet, smMargin, names] = await Promise.all([
+  const [kpiR, trendR, rankR, shareR, stR, flowBrR, freshR, noSalesR, lastRunR, smDaily, smNet, smCogs, smOutlet, smMargin, names, cov] = await Promise.all([
     runEsb<KpiRowRaw>(esbOn, 'exec_kpi', ctx),
     runEsb<DailyRow>(esbOn, 'exec_trend_daily', ctx),
     loadEsbTable(esbOn, 'branch-rank', ctx),
@@ -98,7 +100,11 @@ export default async function SummaryPage({ searchParams }: { searchParams: Sear
     sm('sm_fb_by_outlet'),
     sm('sm_ex_by_outlet_margin'),
     smdOn ? loadSmdNames(ctx, sel) : Promise.resolve(null),
+    esbOn ? loadCoverage(ctx) : Promise.resolve(null),
   ]);
+  // Delta "vs periode lalu" = n/a (bukan -100%/+inf) bila periode ini atau periode lalu belum seluruhnya ada di data penjualan ESB.
+  // Pada mode campuran (F&B + SMD) cakupan ESB menentukan seluruh delta halaman.
+  const { pctDelta, ppDelta } = deltaGuards(comparable(cov, ['sales'], ctx.filters, ctx.prev));
 
   // ---- KPI: ESB + SMD digabung per PT (SMD = termasuk PPN)
   const kpiSides = mergeSides(esbOn, kpiR, smdOn, smdOn ? allOk([smDaily, smNet, smCogs].map((r) => r as Result<Record<string, unknown>[]>)) : null);
@@ -206,6 +212,7 @@ export default async function SummaryPage({ searchParams }: { searchParams: Sear
     <>
       <PageHeader title="Ringkasan" question="Bagaimana kinerja bisnis periode ini dibanding sebelumnya, dan di mana yang perlu perhatian?" />
       <FilterNotice adjusted={adjusted} />
+      <CoverageNotice rows={cov} entities={['sales']} range={{ from, to }} />
       <p className="muted small">Periode: {fmtRange(from, to)}</p>
       {smdOn ? <SmdBasisNote mixed={mixed} /> : null}
       <SideNote note={kpiSides.note} />

@@ -1348,3 +1348,498 @@ body[data-busy] main {
     transition: none !important;
   }
 }
+
+/* =====================================================================================================
+   Review 21 Nov 2026: sidebar 3 grup (lipat + ciut), toolbar filter, legend grafik, istilah (glosarium),
+   alat tabel. Warna hanya lewat token; tanpa gaya inline selain posisi popover istilah (diizinkan CSP style-src-attr).
+   ===================================================================================================== */
+
+/* ---- sidebar: grup yang bisa dilipat + rail ---- */
+.nav {
+  overflow-y: auto;
+  min-height: 0;
+}
+.sidebar-foot {
+  flex-shrink: 0;
+}
+.nav-tools {
+  display: none;
+  padding: 0 12px 8px;
+}
+.nav-collapse {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 32px;
+  padding: 4px 8px;
+  background: transparent;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  border-radius: var(--radius-sm);
+  color: var(--chrome-muted);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+.nav-collapse:hover {
+  color: var(--chrome-text);
+  background: rgba(255, 255, 255, 0.06);
+}
+.nav-collapse:focus-visible,
+.nav-group-btn:focus-visible {
+  outline: 2px solid var(--chrome-active);
+  outline-offset: -2px;
+}
+.nav-group-btn {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  margin: 0;
+  padding: 12px 20px 4px;
+  background: none;
+  border: 0;
+  color: var(--chrome-muted);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  text-align: left;
+  cursor: pointer;
+}
+.nav-group-btn:hover {
+  color: var(--chrome-text);
+}
+@media (min-width: 768px) and (max-width: 1279px) {
+  /* Rail otomatis: semua menu terlihat sebagai ikon; pelipat grup tidak relevan. */
+  .nav-group-btn {
+    display: none;
+  }
+  .nav ul[hidden] {
+    display: block;
+  }
+  .nav-group + .nav-group {
+    margin-top: 6px;
+    padding-top: 6px;
+    border-top: 1px solid rgba(255, 255, 255, 0.14);
+  }
+}
+@media (min-width: 768px) {
+  .shell[data-collapsed] {
+    grid-template-columns: var(--sidebar-w-rail) minmax(0, 1fr);
+  }
+}
+@media (min-width: 1280px) {
+  .nav-tools {
+    display: block;
+  }
+  /* Ciut manual: ikon saja; teks tetap menjadi nama aksesibel, tooltip lewat atribut title. */
+  .shell[data-collapsed] .nav-link span,
+  .shell[data-collapsed] .nav-collapse span {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+  }
+  .shell[data-collapsed] .brand-sub,
+  .shell[data-collapsed] .version,
+  .shell[data-collapsed] .nav-group-btn {
+    display: none;
+  }
+  .shell[data-collapsed] .brand-mark {
+    padding: 0 12px 16px;
+  }
+  .shell[data-collapsed] .nav ul[hidden] {
+    display: block;
+  }
+  .shell[data-collapsed] .nav-group + .nav-group {
+    margin-top: 6px;
+    padding-top: 6px;
+    border-top: 1px solid rgba(255, 255, 255, 0.14);
+  }
+  .shell[data-collapsed] .nav-collapse {
+    justify-content: center;
+  }
+}
+
+/* ---- toolbar filter ---- */
+.filterbar {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.filterbar-inline {
+  margin-bottom: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+.fb-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+.fb-spacer {
+  flex: 1;
+}
+.fb-summary {
+  margin: 0;
+}
+.fb-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 40px;
+  padding: 4px 12px;
+  border: 1px solid var(--text-muted);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+  list-style: none;
+  cursor: pointer;
+}
+.fb-btn::-webkit-details-marker {
+  display: none;
+}
+.fb-btn:hover {
+  background: var(--surface-2);
+}
+.fb-btn-text {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.2;
+  text-align: left;
+}
+.fb-btn-label {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+.fb-btn-value {
+  font-weight: 600;
+}
+.fb-btn-sub {
+  font-size: 12px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--text);
+}
+.dr {
+  position: relative;
+}
+.dr-panel {
+  position: absolute;
+  z-index: 30;
+  top: calc(100% + 4px);
+  left: 0;
+  width: 340px;
+  max-width: 90vw;
+  padding: 12px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-2);
+}
+.dr-presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+.dr-custom {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+.dr-custom label {
+  display: block;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.dr-custom .input {
+  width: 100%;
+}
+.dr-error {
+  color: var(--bad);
+  font-weight: 600;
+}
+.fb-seg {
+  display: inline-flex;
+  flex-wrap: wrap;
+  border: 1px solid var(--text-muted);
+  border-radius: var(--radius);
+  overflow: hidden;
+  background: var(--surface);
+}
+.fb-seg-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 40px;
+  padding: 4px 12px;
+  border: 0;
+  border-right: 1px solid var(--border);
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+}
+.fb-seg-btn:last-child {
+  border-right: 0;
+}
+.fb-seg-btn:hover {
+  background: var(--surface-2);
+}
+.fb-seg-btn[aria-pressed='true'] {
+  background: var(--accent);
+  color: var(--accent-contrast);
+  font-weight: 600;
+}
+.fb-seg-btn:focus-visible {
+  outline-offset: -3px;
+}
+.fb-na {
+  margin: 0;
+  padding: 6px 10px;
+  font-size: 13px;
+  color: var(--text-muted);
+  border: 1px dashed var(--text-muted);
+  border-radius: var(--radius-sm);
+}
+.filterbar .ms-summary {
+  min-height: 40px;
+  border-radius: var(--radius);
+}
+
+/* ---- legend grafik (chip HTML) ---- */
+.legend {
+  list-style: none;
+  margin: 0 0 6px;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.legend-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 28px;
+  padding: 2px 10px;
+  border: 1px solid var(--text-muted);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+.legend-chip:hover {
+  background: var(--surface-2);
+}
+.legend-chip[aria-pressed='false'] {
+  background: var(--surface-2);
+  color: var(--text-muted);
+  border-style: dashed;
+}
+.legend-chip[aria-pressed='false'] .legend-name {
+  text-decoration: line-through;
+}
+.legend-chip[aria-pressed='false'] .legend-mark {
+  opacity: 0.5;
+}
+.legend-mark {
+  font-size: 14px;
+  line-height: 1;
+}
+.legend-value {
+  padding-left: 6px;
+  border-left: 1px solid var(--border);
+  color: var(--text-muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.legend-dash {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+.sw-c1 { color: var(--c1); }
+.sw-c2 { color: var(--c2); }
+.sw-c3 { color: var(--c3); }
+.sw-c4 { color: var(--c4); }
+.sw-c5 { color: var(--c5); }
+.sw-c6 { color: var(--c6); }
+.sw-c7 { color: var(--c7); }
+.sw-accent { color: var(--accent); }
+.sw-muted { color: var(--text-muted); }
+.sw-good { color: var(--good); }
+.sw-warn { color: var(--warn); }
+.sw-bad { color: var(--bad); }
+
+/* ---- istilah + glosarium ---- */
+.term {
+  display: inline-flex;
+  vertical-align: middle;
+  margin-left: 2px;
+}
+.term-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 24px;
+  min-height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: none;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+.term-btn:hover,
+.term-btn[aria-expanded='true'] {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+.term-pop {
+  position: fixed;
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: min(320px, calc(100vw - 16px));
+  padding: 10px 12px;
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-2);
+  font-size: 13px;
+  font-weight: 400;
+  letter-spacing: normal;
+  text-align: left;
+  text-transform: none;
+  white-space: normal;
+}
+.term-pop-title {
+  font-weight: 600;
+}
+.term-pop-full {
+  font-weight: 400;
+  color: var(--text-muted);
+}
+.term-pop-read {
+  color: var(--text-muted);
+}
+.term-pop-link {
+  align-self: flex-start;
+  color: var(--accent);
+}
+.glossary-index {
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0 0 16px;
+  padding: 0;
+}
+.glossary-index a {
+  display: inline-block;
+  padding: 2px 10px;
+  border: 1px solid var(--text-muted);
+  border-radius: 999px;
+  color: var(--text);
+  text-decoration: none;
+}
+.glossary-index a:hover {
+  background: var(--surface-2);
+}
+.glossary-item {
+  padding: 12px 0;
+  border-bottom: 1px solid var(--border);
+  scroll-margin-top: calc(var(--header-h) + 80px);
+}
+.glossary dt {
+  font-size: 16px;
+  font-weight: 600;
+}
+.glossary dd {
+  margin: 4px 0 0;
+}
+.glossary dd p {
+  margin: 0 0 4px;
+}
+
+/* ---- alat tabel (cari + filter) dan keterangan ---- */
+.table-tools {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  align-items: flex-end;
+  padding: 8px 0;
+}
+.tt-search {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.tt-search .input {
+  min-width: 220px;
+}
+.tt-select {
+  display: flex;
+  flex-direction: column;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.tt-count {
+  margin-left: auto;
+}
+.table td.wrap {
+  white-space: normal;
+  min-width: 260px;
+  max-width: 480px;
+}
+.notice-cov {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  background: var(--warn-soft);
+  border-color: var(--warn);
+}
+.notice-cov ul {
+  margin: 0;
+  padding-left: 16px;
+}
+
+/* Ponsel: toolbar tidak lagi menempel agar tidak memakan layar; kontrol memenuhi lebar. */
+@media (max-width: 767px) {
+  .topbar {
+    position: static;
+  }
+  .fb-row > * {
+    max-width: 100%;
+  }
+  .dr-panel {
+    position: fixed;
+    left: 8px;
+    right: 8px;
+    top: auto;
+    width: auto;
+    max-width: none;
+  }
+  .tt-search .input {
+    min-width: 0;
+    width: 100%;
+  }
+  .tt-search {
+    flex: 1 1 100%;
+  }
+  .tt-count {
+    margin-left: 0;
+  }
+}

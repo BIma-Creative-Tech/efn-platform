@@ -6,20 +6,49 @@
 import Link from 'next/link';
 import { usePathname, useSearchParams } from 'next/navigation';
 import { useEffect, useRef, useState } from 'react';
-import { NAV_ITEMS } from '@/lib/page-filters';
+import { DEFAULT_NAV_PREFS, NAV_PREFS_KEY, parseNavPrefs, serializeNavPrefs, toggleClosed, type NavPrefs } from '@/lib/nav-state';
 import type { NavGroup } from '@/lib/sm-personas';
 import { Icon } from './ui';
 
 const PAGE_ONLY_PARAMS = ['sort', 'rank'];
-/** Param filter ESB yang tidak berlaku di halaman supermarket (dan sebaliknya) tidak dibawa antar kelompok. */
+/** Param filter ESB yang tidak berlaku di halaman supermarket (dan sebaliknya) tidak dibawa antar kelompok. Tanggal (from/to) dibawa ke SEMUA halaman. */
 const ESB_ONLY_PARAMS = ['pt', 'branch', 'product', 'cat'];
 const SM_ONLY_PARAMS = ['wh', 'cat'];
 
-const DEFAULT_GROUPS: readonly NavGroup[] = [{ items: NAV_ITEMS }];
-
-export function NavLinks({ groups = DEFAULT_GROUPS }: { groups?: readonly NavGroup[] }): React.ReactNode {
+/**
+ * Sidebar tiga grup yang bisa dilipat + bisa diciutkan jadi rail ikon. Preferensi di localStorage (try/catch). Menu
+ * yang diciutkan tetap punya nama aksesibel (teks disembunyikan secara visual) dan tooltip (title).
+ */
+export function NavLinks({ groups }: { groups: readonly NavGroup[] }): React.ReactNode {
   const pathname = usePathname();
   const sp = useSearchParams();
+  const [prefs, setPrefs] = useState<NavPrefs>(DEFAULT_NAV_PREFS);
+
+  useEffect(() => {
+    // Nilai tersimpan hanya diketahui di klien; setState lewat callback (bukan sinkron di badan efek).
+    const id = window.setTimeout(() => {
+      try {
+        setPrefs(parseNavPrefs(localStorage.getItem(NAV_PREFS_KEY)));
+      } catch {
+        /* abaikan */
+      }
+    }, 0);
+    return () => window.clearTimeout(id);
+  }, []);
+
+  useEffect(() => {
+    document.querySelector('.shell')?.toggleAttribute('data-collapsed', prefs.collapsed);
+  }, [prefs.collapsed]);
+
+  const save = (next: NavPrefs): void => {
+    setPrefs(next);
+    try {
+      localStorage.setItem(NAV_PREFS_KEY, serializeNavPrefs(next));
+    } catch {
+      /* abaikan */
+    }
+  };
+
   const carry = new URLSearchParams(sp.toString());
   for (const k of PAGE_ONLY_PARAMS) carry.delete(k);
   const smCarry = new URLSearchParams(carry.toString());
@@ -28,32 +57,54 @@ export function NavLinks({ groups = DEFAULT_GROUPS }: { groups?: readonly NavGro
   for (const k of SM_ONLY_PARAMS) esbCarry.delete(k);
   const smPaths = ['/store', '/dc', '/category', '/marketing', '/exec'];
   return (
-    <nav id="nav" aria-label="Navigasi utama" className="nav">
-      {groups.map((g, gi) => (
-        <div key={g.title ?? `g${gi}`}>
-          {g.title ? (
-            <p className="nav-group-title" id={`nav-g${gi}`}>
-              {g.title}
-            </p>
-          ) : null}
-          <ul aria-labelledby={g.title ? `nav-g${gi}` : undefined}>
-            {g.items.map((it) => {
-              const active = pathname === it.href;
-              const qs = (smPaths.includes(it.href) ? smCarry : esbCarry).toString();
-              return (
-                <li key={it.href}>
-                  <Link href={`${it.href}${qs ? `?${qs}` : ''}`} aria-current={active ? 'page' : undefined} className="nav-link">
-                    <Icon name={it.icon} />
-                    <span>{it.label}</span>
-                    {it.soon ? <span className="soon">segera</span> : null}
-                  </Link>
-                </li>
-              );
-            })}
-          </ul>
-        </div>
-      ))}
-    </nav>
+    <>
+      <div className="nav-tools">
+        <button
+          type="button"
+          className="nav-collapse"
+          aria-expanded={!prefs.collapsed}
+          aria-controls="nav"
+          title={prefs.collapsed ? 'Lebarkan menu' : 'Ciutkan menu'}
+          onClick={() => save({ ...prefs, collapsed: !prefs.collapsed })}
+        >
+          <Icon name={prefs.collapsed ? 'chevron-right' : 'chevron-left'} />
+          <span>{prefs.collapsed ? 'Lebarkan menu' : 'Ciutkan menu'}</span>
+        </button>
+      </div>
+      <nav id="nav" aria-label="Navigasi utama" className="nav">
+        {groups.map((g) => {
+          const open = !prefs.closed.includes(g.id);
+          return (
+            <div key={g.id} className="nav-group">
+              <button
+                type="button"
+                className="nav-group-btn"
+                aria-expanded={open}
+                aria-controls={`nav-g-${g.id}`}
+                onClick={() => save({ ...prefs, closed: toggleClosed(prefs.closed, g.id) })}
+              >
+                <span>{g.title}</span>
+                <Icon name={open ? 'chevron-down' : 'chevron-right'} size={14} />
+              </button>
+              <ul id={`nav-g-${g.id}`} hidden={!open}>
+                {g.items.map((it) => {
+                  const active = pathname === it.href;
+                  const qs = (smPaths.includes(it.href) ? smCarry : esbCarry).toString();
+                  return (
+                    <li key={it.href}>
+                      <Link href={`${it.href}${qs ? `?${qs}` : ''}`} aria-current={active ? 'page' : undefined} className="nav-link" title={it.label}>
+                        <Icon name={it.icon} />
+                        <span>{it.label}</span>
+                      </Link>
+                    </li>
+                  );
+                })}
+              </ul>
+            </div>
+          );
+        })}
+      </nav>
+    </>
   );
 }
 

@@ -22,11 +22,27 @@ Mati secara default: `INSIGHT_ENABLED` harus tepat `true`. Bila tidak, semua hal
 | `POST /sso` | login (rate limit 10/menit/IP -> 429; 404 bila nonaktif; 401 halaman generik) |
 | `POST /logout` | hapus cookie -> 303 `/keluar` |
 | `GET /api/health` | `{"status":"ok"}` tanpa detail, tidak menyentuh ClickHouse |
-| `GET /api/export/<tabel>?<filter>` | CSV (BOM, escape formula C3). Tabel: `branch-rank flow-outliers flow-products top-menu menu-mix-branch pay-methods pay-branches dist-matrix dist-gap dq-freshness dq-alias dq-no-sales dq-non-ea dq-last-run`. Cakupan = sesi, data = pemuat yang sama dengan halaman. 401/503/500 tanpa badan. |
-| `/`, `/flow`, `/sales`, `/payments`, `/distribution`, `/data-quality`, `/forecast` | 7 halaman (Forecast = placeholder G44). Path mengikuti §26.8. |
+| `GET /api/export/<tabel>?<filter>` | CSV (BOM, escape formula C3). Tabel: `branch-rank flow-outliers flow-products top-menu menu-mix-branch pay-methods pay-branches dist-matrix dist-gap mov-category dq-freshness dq-alias dq-no-sales dq-non-ea dq-last-run`. Cakupan = sesi, data = pemuat yang sama dengan halaman. 401/503/500 tanpa badan. |
+| `/`, `/flow`, `/sales`, `/payments`, `/distribution`, `/data-quality`, `/forecast`, `/glosarium` | halaman F&B/gabungan (Forecast: ESB belum ada, SMD sudah). Path mengikuti §26.8; `/glosarium` = daftar istilah. |
+| `/exec`, `/store`, `/dc`, `/category`, `/marketing` | halaman Supermarket per persona |
 | `/belum-aktif`, `/sesi-berakhir`, `/keluar` | halaman informasi publik |
 
+## Navigasi (review pemilik proyek 21 Nov 2026)
+Sidebar tiga grup yang **bisa dilipat**, dan sidebar bisa **diciutkan jadi ikon** (>= 1280 px; di bawahnya otomatis rail). Preferensi (`insight-nav`) disimpan di
+`localStorage` (try/catch; nilai rusak -> bawaan). Tombol grup `aria-expanded`; saat ciut, nama tetap ada untuk pembaca layar dan tooltip lewat `title`.
+- **Ringkasan** (F&B + Supermarket): Ikhtisar `/`, Penjualan `/sales`, Pembayaran `/payments`
+- **Food & Beverage**: Produksi vs Penjualan `/flow`, Distribusi CK `/distribution`, Kualitas Data ESB `/data-quality`
+- **Supermarket**: Eksekutif `/exec`, Toko `/store`, DC `/dc`, Kategori `/category`, Marketing `/marketing`, Forecast `/forecast`
+Visibilitas = aturan sesi yang ada (`lib/sm-personas.ts navGroups`): Ringkasan bila ada PT F&B atau exec ber-SMD; F&B bila ada kode ESB (exec ber-SMD tanpa
+PT F&B hanya melihat "Distribusi CK / DC" = bagian DC supermarket); Supermarket = persona di `roles` + `INSIGHT_SM_ENABLED`, Forecast hanya untuk exec ber-SMD.
+Sidebar bawah: **Glosarium** (`lib/glossary.ts`; istilah juga muncul sebagai ikon "i" di label KPI, judul kartu, dan header kolom lewat `components/Term.tsx`).
+
 ## Filter (URL, divalidasi server; tidak valid -> bawaan + pemberitahuan)
+**Perilaku (21 Nov 2026): filter langsung berlaku**, tanpa tombol Terapkan. Chip brand ("Semua" eksplisit) dan preset tanggal memakai `router.push` seketika;
+tanggal kustom (setelah kedua tanggal sah) dan pilihan ganda cabang/kategori/produk di-debounce 400-500 ms. Rentang tanggal yang dipilih ditulis eksplisit ke URL dan
+dibawa ke semua halaman lewat tautan sidebar (`components/Chrome.tsx`), termasuk grup Supermarket. Halaman tanpa rentang tanggal memberi keterangan eksplisit
+"Rentang tanggal tidak berlaku: ..." (`lib/page-filters.ts DATE_NA_REASON`: `/data-quality`, `/forecast`, `/store`). Perakit URL murni: `lib/filter-url.ts`.
+Bawaan rentang berbeda per halaman bila URL tanpa `from/to`: F&B 30 hari, Supermarket 30 hari kecuali Kategori dan Toko 7 hari.
 `from`,`to` (YYYY-MM-DD, `to` <= H-1 WIB, <= 366 hari), `pt` (koma, dipotong ke kode sesi), `branch` (`<brand>:<id>`, koma, maks 50),
 `cat` (**parameter berulang** `?cat=A&cat=B`, karena nama kategori boleh memuat koma; maks 20), `product` (`<brand>:<kode>`, koma, maks 20).
 Halaman Penjualan juga memakai `sort` (`net|qty|margin`) dan `rank` (`top|bottom`).
@@ -38,7 +54,7 @@ Halaman Penjualan juga memakai `sort` (`net|qty|margin`) dan `rank` (`top|bottom
 | `APP_ENV` | - (`production` menolak http) |
 | `CH_URL` / `CH_USER` / `CH_PASSWORD_FILE` | `https://clickhouse:8443` / `efn_insight` / `/run/secrets/clickhouse_password_insight` |
 | `INSIGHT_SSO_KEY_FILE` / `INSIGHT_SESSION_KEY_FILE` / `INSIGHT_SCOPE_KEY_FILE` | `/run/secrets/insight_sso_key` / `insight_session_key` / `insight_scope_key` |
-| `EFN_INSIGHT_ODOO_URL` | wajib saat aktif; **origin lengkap (scheme+host+port)** dipakai untuk cek Origin (C1) dan tautan `.../efn/insight/open` |
+| `EFN_INSIGHT_ODOO_URL` | wajib saat aktif; **origin lengkap (scheme+host+port)** dipakai untuk cek Origin (C1), tautan "Kembali ke Odoo" `.../odoo`, dan "Buka dari Odoo" `.../efn/insight/open` (masuk ulang) |
 | `NODE_EXTRA_CA_CERTS` | `/run/secrets/efn_ca_crt` |
 | `PORT` / `HOSTNAME` | `3002` / `127.0.0.1` (sidecar `insight-web-tls`) |
 | `EFN_ALLOW_PLAINTEXT` | hanya dev non-production (http ke ClickHouse/Odoo) |
@@ -76,6 +92,13 @@ nonaktif); saat aktif juga URL https, password terbaca, CA internal terbaca, `EF
 ## Katalog query tambahan (di luar daftar kanonik §26.8)
 `exec_pt_share`, `exec_sell_through`, `exec_attention` (dicadangkan; Ringkasan memakai `flow_by_branch`/`dq_*`), `flow_daily_trend`, `flow_product_daily`,
 `sales_kpi`, `sales_weekday_heatmap`, `pay_kpi`, `pay_by_branch`, `dist_kpi`, `dist_transfer_top_products`, `dist_ck_gap_by_product`.
+Review 21 Nov 2026 (belum dijalankan terhadap ClickHouse; verifikasi lead): `product_categories` (kategori ESB per produk), `esb_coverage` (`v_esb_coverage`: banner
+cakupan data + perbandingan periode lalu "n/a" bila periode tidak tercakup), `mov_by_group`, `mov_by_category`, `mov_ck_product` (`v_esb_movement_daily`: kiriman CK semua
+kelompok barang, qty selalu per `uom`; `mov_ck_product` = produksi vs kiriman FIN per CK asal untuk kolom Keterangan "kirim melebihi produksi"). Cabang non-penjualan
+(`is_store = 0 AND is_ck = 0`: HEAD OFFICE, gudang, KACS Damage/Expired, Temporary Variance, ...) dikeluarkan dari `list_branches`, `exec_branch_rank`,
+`flow_by_branch`, `flow_outliers`, `pay_by_branch` (branch_id 0 pembayaran tetap tampil); `dist_transfer` menggabungkannya menjadi baris "Non-toko (HO/gudang/damage)" per PT.
+KPI agregat (`flow_summary`, `exec_sell_through`, `dist_kpi`) sengaja tidak difilter. Kolom `Keterangan` (alasan status dengan angka) dari fungsi murni `lib/status-reasons.ts`
+(+ `lib/flow-notes.ts`, `lib/sm-shelf.ts shelfReason`) dan ikut CSV.
 `dq_status_board` dari katalog data-engineer **tidak dipakai** (papan status dihitung dari tabel temuan); `pay_mdr` digabung ke `pay_by_method`; `sales_menu_daily` belum dibuat.
 Ke-36 query dijalankan terhadap ClickHouse 24.8 oleh lead (18 Nov 2026, uji row policy + katalog).
 

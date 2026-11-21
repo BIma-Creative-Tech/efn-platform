@@ -56,6 +56,9 @@ GRANT SELECT ON efn_dwh.v_esb_data_quality_pt TO efn_insight_definer;
 GRANT SELECT ON efn_dwh.v_esb_sales_branch_daily TO efn_insight_definer;
 GRANT SELECT ON efn_dwh.v_esb_branch_list TO efn_insight_definer;
 GRANT SELECT ON efn_dwh.v_esb_product_list TO efn_insight_definer;
+-- Review Insight 21 Nov 2026 (init/19-insight-review.sql): tabel dasarnya sudah ada di daftar ini.
+GRANT SELECT ON efn_dwh.v_esb_movement_daily TO efn_insight_definer;
+GRANT SELECT ON efn_dwh.v_esb_coverage TO efn_insight_definer;
 GRANT SELECT ON efn_dwh.dim_esb_branch TO efn_insight_definer;
 GRANT SELECT ON efn_dwh.dim_esb_product TO efn_insight_definer;
 GRANT SELECT ON efn_dwh.dim_esb_menu TO efn_insight_definer;
@@ -109,6 +112,18 @@ FROM efn_dwh.v_esb_branch_list;
 CREATE OR REPLACE VIEW efn_insight.v_esb_product_list DEFINER = efn_insight_definer SQL SECURITY DEFINER AS
 SELECT brand, company_code, product_code, product_name, category, uom, is_fin, active
 FROM efn_dwh.v_esb_product_list;
+
+-- Review Insight 21 Nov 2026: semua pergerakan produksi + kiriman (FIN dan non-FIN) per kelompok barang; company_code =
+-- PT cabang asal. Rekonsiliasi alur CK (v_esb_flow_daily hanya FIN).
+CREATE OR REPLACE VIEW efn_insight.v_esb_movement_daily DEFINER = efn_insight_definer SQL SECURITY DEFINER AS
+SELECT day, brand, company_code, kind, origin_branch_id, origin_branch_name, origin_kind, dest_branch_id,
+       dest_branch_name, dest_kind, item_group, category, product_code, product_name, uom, qty, lines
+FROM efn_dwh.v_esb_movement_daily;
+
+-- Review Insight 21 Nov 2026: rentang hari yang benar-benar tersedia per entitas (checkpoint selesai).
+CREATE OR REPLACE VIEW efn_insight.v_esb_coverage DEFINER = efn_insight_definer SQL SECURITY DEFINER AS
+SELECT brand, company_code, entity, first_day, last_day, days
+FROM efn_dwh.v_esb_coverage;
 
 -- Grant wildcard: view baru di efn_insight otomatis terbaca -> clickhouse-init.sh MEMVERIFIKASI setiap view efn_insight
 -- punya row policy efn_insight_scope dan mencabut grant ini (fail closed) bila ada yang tidak.

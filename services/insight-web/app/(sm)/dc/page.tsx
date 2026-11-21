@@ -16,6 +16,7 @@ import { smPage, type SmSearchParams } from '@/lib/sm-page';
 import { cfgStr } from '@/lib/sm-thresholds';
 import { toNum } from '@/lib/sm-parse';
 import { nextDeliveryGroup } from '@/lib/sm-vm';
+import { cutoffReason, poReason } from '@/lib/status-reasons';
 
 export const dynamic = 'force-dynamic';
 export const metadata: Metadata = { title: 'Distribution Center' };
@@ -173,6 +174,10 @@ export default async function DcPage({ searchParams }: { searchParams: SmSearchP
                   { header: 'Batas', cell: (r) => (r.cutoffAt ? fmtClockWib(r.cutoffAt) : '-') },
                   { header: 'Baris', align: 'right', cell: (r) => fmtInt(r.lineCount) },
                   { header: 'Berubah', align: 'right', cell: (r) => fmtInt(r.linesChanged) },
+                  {
+                    header: 'Keterangan',
+                    cell: (r) => cutoffReason(cutoffInfo(r.state, r.cutoffAt, now, t, lvl === 'bad'), r.state, t.cutoffUrgentMin),
+                  },
                   { header: 'Odoo', cell: (r) => <ActionLink label="Buka usulan di Odoo" href={odooRecordUrl(origin, 'efn.replenishment.proposal', r.proposalId)} /> },
                 ]}
               />
@@ -265,6 +270,7 @@ export default async function DcPage({ searchParams }: { searchParams: SmSearchP
                 { header: 'Tanggal terjanji', cell: (r) => (r.plannedAt ? fmtDate(r.plannedAt.toISOString().slice(0, 10)) : '-') },
                 { header: 'Nilai Rp', align: 'right', cell: (r) => fmtIdr(r.value) },
                 { header: 'Baris', align: 'right', cell: (r) => fmtInt(r.lines) },
+                { header: 'Keterangan', cell: (r) => poReason(r.late, r.plannedAt ? fmtDate(r.plannedAt.toISOString().slice(0, 10)) : null) },
                 { header: 'Odoo', cell: (r) => <ActionLink label="Buka RFQ/PO di Odoo" href={odooRecordUrl(origin, 'purchase.order', r.orderId)} /> },
               ]}
             />

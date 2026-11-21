@@ -5,9 +5,13 @@
  */
 import dynamic from 'next/dynamic';
 import { useId, useMemo, useState } from 'react';
+import { legendItems, toggleHidden } from '@/lib/chart-legend';
 import { hasData, type ChartSpec } from '@/lib/chart-spec';
 import { fmtValue } from '@/lib/format';
+import { TermHints } from './Term';
 import { EmptyState } from './ui';
+
+const NO_HIDDEN: string[] = [];
 
 const EChart = dynamic(() => import('./EChart'), {
   ssr: false,
@@ -112,15 +116,19 @@ export function ChartCard({
   const [tab, setTab] = useState(0);
   const [asTable, setAsTable] = useState(false);
   const [pattern, setPattern] = useState(false);
+  const [hiddenMap, setHiddenMap] = useState<Record<string, string[]>>({});
   const spec = specs[Math.min(tab, specs.length - 1)];
   const ready = useMemo(() => (spec ? hasData(spec) : false), [spec]);
   const summaryId = `${uid}-sum`;
+  const hidden = useMemo(() => (spec ? (hiddenMap[spec.id] ?? NO_HIDDEN) : NO_HIDDEN), [hiddenMap, spec]);
+  const items = useMemo(() => (spec ? legendItems(spec) : []), [spec]);
 
   return (
     <figure className={`card chart-card${wide ? ' wide' : ''}`}>
       <figcaption className="card-head">
         <div>
           <span className="card-title">{title}</span>
+          <TermHints text={title} />
           {subtitle ? <span className="card-sub">{subtitle}</span> : null}
         </div>
         {ready ? (
@@ -151,7 +159,37 @@ export function ChartCard({
         <SpecTable spec={spec} />
       ) : (
         <>
-          <EChart spec={spec} height={height} summaryId={summaryId} pattern={pattern} />
+          {items.length > 0 ? (
+            <ul className="legend" aria-label={`Legend: ${title}`}>
+              {items.map((it) => {
+                const on = !hidden.includes(it.name);
+                return (
+                  <li key={it.name}>
+                    <button
+                      type="button"
+                      className="legend-chip"
+                      aria-pressed={on}
+                      title={`${on ? 'Sembunyikan' : 'Tampilkan'} seri ${it.name}`}
+                      onClick={() =>
+                        setHiddenMap((m) => ({
+                          ...m,
+                          [spec.id]: toggleHidden(m[spec.id] ?? NO_HIDDEN, it.name, items.map((x) => x.name)),
+                        }))
+                      }
+                    >
+                      <span className={`legend-mark sw-${it.color}`} aria-hidden="true">
+                        {it.glyph}
+                      </span>
+                      <span className="legend-name">{it.name}</span>
+                      {it.dashed ? <span className="legend-dash" aria-hidden="true">putus-putus</span> : null}
+                      {it.value ? <span className="legend-value">{it.value}</span> : null}
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+          ) : null}
+          <EChart spec={spec} height={height} summaryId={summaryId} pattern={pattern} hidden={hidden} />
           {spec.kind === 'heat' ? <HeatLegend spec={spec} /> : null}
         </>
       )}

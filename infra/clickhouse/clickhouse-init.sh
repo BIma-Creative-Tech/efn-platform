@@ -441,7 +441,7 @@ unset SCOPE_KEY
 INSIGHT_SIG="getSetting('SQL_efn_sig') = lower(hex(SHA256(concat('${INSIGHT_KEY}', '|', getSetting('SQL_efn_cids'), '|', getSetting('SQL_efn_codes')))))"
 # Daftar = semua view di insight-access.sql (diuji test_insight_access.py) + diverifikasi ke system.tables di bawah.
 for v in v_esb_sales_daily v_esb_sales_branch_daily v_esb_payment_daily v_esb_flow_daily v_esb_menu_mix \
-         v_esb_data_quality v_esb_branch_list v_esb_product_list; do
+         v_esb_data_quality v_esb_branch_list v_esb_product_list v_esb_movement_daily v_esb_coverage; do
   echo "CREATE ROW POLICY OR REPLACE efn_insight_scope ON efn_insight.${v} USING company_code != '' AND ${FMT} AND ${CODES} AND ${INSIGHT_SIG} TO insight_reader;"
 done | $CH --log_queries=0 --multiquery
 # G47 (docs/04 §28.13.7, L-188): row policy efn_insight_scope untuk v_sm_* (butuh $INSIGHT_KEY tervalidasi di atas).

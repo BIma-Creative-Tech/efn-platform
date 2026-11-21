@@ -5,7 +5,7 @@
 import type { ReactNode } from 'react';
 import { fmtDate, fmtIdr, fmtQty } from '@/lib/format';
 import { fmtDaysLeft } from '@/lib/sm-format';
-import { fmtShelfLife, shelfStatus, type ShelfRow } from '@/lib/sm-shelf';
+import { fmtShelfLife, shelfReason, shelfStatus, type ShelfRow } from '@/lib/sm-shelf';
 import { StatusPill } from '../ui';
 import { SmTable } from './SmTable';
 
@@ -29,8 +29,8 @@ export function ShelfLifeTable({
         rows={rows}
         rowKey={(r) => `${r.productId}-${r.warehouseId}`}
         columns={[
-          { header: 'Produk', cell: (r) => r.name },
-          { header: 'Kategori', cell: (r) => r.category || '-' },
+          { header: 'Produk', cell: (r) => r.name, text: (r) => r.name },
+          { header: 'Kategori', cell: (r) => r.category || '-', text: (r) => r.category, filter: true },
           { header: 'Umur simpan', align: 'right', cell: (r) => fmtShelfLife(r.shelfDays) },
           ...(showOutlet ? [{ header: 'Outlet', cell: (r: ShelfRow) => whNames.get(r.warehouseId) ?? `Outlet #${r.warehouseId}` }] : []),
           { header: 'Lot terdekat', cell: (r) => r.lotName || '-' },
@@ -44,7 +44,10 @@ export function ShelfLifeTable({
               const s = shelfStatus(r);
               return <StatusPill status={s.status} label={s.label} />;
             },
+            text: (r) => shelfStatus(r).label,
+            filter: true,
           },
+          { header: 'Keterangan', cell: (r) => shelfReason(r), text: (r) => shelfReason(r) },
         ]}
       />
     </>

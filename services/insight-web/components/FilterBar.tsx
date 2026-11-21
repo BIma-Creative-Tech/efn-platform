@@ -1,15 +1,18 @@
 'use client';
 /**
- * Filter global (spec §3.2). State = URL search params; server memvalidasi ulang (klien hanya untuk UX).
- * Perubahan diterapkan lewat tombol "Terapkan" (bukan tiap ketikan). Chip aktif dengan tombol hapus + Reset.
+ * Toolbar filter global halaman F&B (spec §3.2; review 21 Nov 2026). State = URL search params; server memvalidasi ulang
+ * (klien hanya untuk UX). Filter DIPERLAKUKAN LANGSUNG: chip brand dan preset tanggal memakai `router.push` seketika;
+ * tanggal kustom dan pilihan ganda (cabang/kategori/produk) di-debounce ~400-500 ms. Tidak ada tombol "Terapkan".
+ * Hanya kontrol yang berlaku di halaman ini yang ditampilkan; halaman tanpa rentang tanggal memberi keterangan eksplisit.
  */
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
-import { useEffect, useState, useTransition } from 'react';
+import { useEffect, useEffectEvent, useState, useTransition } from 'react';
 import { codeColor, codeName } from '@/lib/brands';
-import { addDays } from '@/lib/dates';
-import { fmtRange } from '@/lib/format';
-import { appliesTo } from '@/lib/page-filters';
 import { announce } from '@/lib/client-nav';
+import { buildEsbQuery, nextPt, sameSet, type FilterDraft } from '@/lib/filter-url';
+import { fmtRange } from '@/lib/format';
+import { appliesTo, DATE_NA_REASON } from '@/lib/page-filters';
+import { DateRangeControl } from './DateRangeControl';
 import { MultiSelect, type Option } from './MultiSelect';
 
 export interface FilterOptions {
@@ -24,47 +27,20 @@ interface Props {
   sessionCodes: string[];
   /** Kode brand ESB sesi (SMD tidak termasuk). */
   esbCodes: string[];
-  /** SMD adalah toggle sungguhan (sesi exec); false -> perilaku lama. */
+  /** SMD adalah pilihan sungguhan (sesi exec); false -> perilaku lama. */
   smdAllowed?: boolean;
   defaults: { from: string; to: string };
   yesterday: string;
 }
 
-const sameSet = (a: readonly string[], b: readonly string[]): boolean => a.length === b.length && a.every((x) => b.includes(x));
-
-type Preset = '7' | '30' | '90' | 'mtd' | 'prev-month' | 'ytd' | 'custom';
-
-function presetRange(p: Preset, yesterday: string): { from: string; to: string } | null {
-  const [y, m] = yesterday.split('-').map(Number);
-  const pad = (n: number) => String(n).padStart(2, '0');
-  switch (p) {
-    case '7':
-      return { from: addDays(yesterday, -6), to: yesterday };
-    case '30':
-      return { from: addDays(yesterday, -29), to: yesterday };
-    case '90':
-      return { from: addDays(yesterday, -89), to: yesterday };
-    case 'mtd':
-      return { from: `${y}-${pad(m)}-01`, to: yesterday };
-    case 'prev-month': {
-      const first = `${y}-${pad(m)}-01`;
-      const to = addDays(first, -1);
-      return { from: `${to.slice(0, 7)}-01`, to };
-    }
-    case 'ytd':
-      return { from: `${y}-01-01`, to: yesterday };
-    default:
-      return null;
-  }
-}
+const DEBOUNCE_MS = 500;
 
 function FilterForm({ options, sessionCodes, smdAllowed = false, defaults, yesterday }: Props): React.ReactNode {
   const router = useRouter();
   const pathname = usePathname();
   const sp = useSearchParams();
   const [pending, start] = useTransition();
-  // Bawaan (pt kosong) = semua PT sesi, termasuk SMD untuk sesi exec (keputusan 21 Nov 2026, sama dengan brand lain).
-  const defaultCodes = sessionCodes;
+  const [queued, setQueued] = useState<FilterDraft | null>(null);
 
   const urlFrom = sp.get('from') ?? defaults.from;
   const urlTo = sp.get('to') ?? defaults.to;
@@ -72,153 +48,181 @@ function FilterForm({ options, sessionCodes, smdAllowed = false, defaults, yeste
   const urlBranch = (sp.get('branch') ?? '').split(',').filter(Boolean);
   const urlCat = sp.getAll('cat');
   const urlProduct = (sp.get('product') ?? '').split(',').filter(Boolean);
+  const urlKey = sp.toString();
 
-  const [from, setFrom] = useState(urlFrom);
-  const [to, setTo] = useState(urlTo);
-  const [preset, setPreset] = useState<Preset>('custom');
-  const [pt, setPt] = useState<string[]>(urlPt);
   const [branch, setBranch] = useState<string[]>(urlBranch);
   const [cat, setCat] = useState<string[]>(urlCat);
   const [product, setProduct] = useState<string[]>(urlProduct);
+  const [seen, setSeen] = useState(urlKey);
+  const [dirty, setDirty] = useState(false);
+  // Sinkron dari URL (Kembali/Maju, hapus chip, drill-down) selama tidak ada perubahan pilihan ganda yang menunggu debounce.
+  if (seen !== urlKey && !dirty) {
+    setSeen(urlKey);
+    setBranch(urlBranch);
+    setCat(urlCat);
+    setProduct(urlProduct);
+  }
 
   useEffect(() => {
     document.body.toggleAttribute('data-busy', pending);
   }, [pending]);
-
-  const apply = (next: { from: string; to: string; pt: string[]; branch: string[]; cat: string[]; product: string[] }): void => {
-    const p = new URLSearchParams(sp.toString());
-    for (const k of ['from', 'to', 'pt', 'branch', 'cat', 'product']) p.delete(k);
-    if (next.from !== defaults.from || next.to !== defaults.to) {
-      p.set('from', next.from);
-      p.set('to', next.to);
-    }
-    // Tanpa param = semua PT sesi (bawaan, termasuk SMD bila boleh). Subset apa pun ditulis eksplisit.
-    if (next.pt.length > 0 && !sameSet(next.pt, defaultCodes)) p.set('pt', [...next.pt].sort().join(','));
-    if (next.branch.length > 0) p.set('branch', next.branch.join(','));
-    for (const c of next.cat) p.append('cat', c);
-    if (next.product.length > 0) p.set('product', next.product.join(','));
-    const qs = p.toString();
+  const push = (next: FilterDraft, forceDate: boolean): void => {
+    // Membatalkan debounce yang menunggu: `queued` = null -> efek di bawah membersihkan timernya.
+    setQueued(null);
+    setDirty(false);
+    const qs = buildEsbQuery(sp, next, { defaults, allCodes: sessionCodes, forceDate });
     start(() => router.push(qs ? `${pathname}?${qs}` : pathname));
     announce('Filter diterapkan. Data diperbarui.');
   };
+  const later = (next: FilterDraft): void => {
+    setDirty(true);
+    setQueued(next);
+  };
+  // Debounce pilihan ganda tanpa ref (aturan react-hooks/refs): timer hidup di efek, dibatalkan saat `queued` berubah/unmount.
+  const flush = useEffectEvent((next: FilterDraft) => push(next, false));
+  useEffect(() => {
+    if (queued === null) return;
+    const id = window.setTimeout(() => flush(queued), DEBOUNCE_MS);
+    return () => window.clearTimeout(id);
+  }, [queued]);
 
-  const current = { from, to, pt, branch, cat, product };
+  const current: FilterDraft = { from: urlFrom, to: urlTo, pt: urlPt, branch, cat, product };
   const hasDate = appliesTo(pathname, 'date');
   const hasPt = appliesTo(pathname, 'pt', smdAllowed);
   const hasBranch = appliesTo(pathname, 'branch', smdAllowed);
   const hasCat = appliesTo(pathname, 'cat');
   const hasProduct = appliesTo(pathname, 'product');
+  const dateNa = DATE_NA_REASON[pathname];
 
+  // Halaman tanpa filter sama sekali (glosarium).
+  if (!hasDate && !hasPt && !hasBranch && !hasCat && !hasProduct && !dateNa) return null;
+
+  const allSelected = urlPt.length === 0 || sameSet(urlPt, sessionCodes);
+  // Mengganti brand/PT membuang cabang terpilih yang bukan milik brand/PT baru (kalau tidak, hasilnya kosong tanpa penjelasan).
+  const withPt = (pt: string[]): FilterDraft => {
+    const codes = pt.length === 0 ? sessionCodes : pt;
+    const keep = urlBranch.filter((b) => {
+      const o = options.branches.find((x) => x.value === b);
+      return !o || codes.includes(o.code);
+    });
+    return { ...current, pt, branch: keep };
+  };
   // Tanpa PT dipilih = semua PT sesi (termasuk outlet SMD untuk sesi exec).
-  const branchOptions = options.branches.filter((b) => (pt.length === 0 ? defaultCodes.includes(b.code) : pt.includes(b.code)));
-  const na = 'Tidak berlaku di halaman ini';
+  const branchOptions = options.branches.filter((b) => (urlPt.length === 0 ? sessionCodes.includes(b.code) : urlPt.includes(b.code)));
 
   // Chip aktif (dari URL, bukan draft).
-  const chips: { key: string; label: string; remove: () => void }[] = [];
-  if (urlFrom !== defaults.from || urlTo !== defaults.to) {
-    chips.push({ key: 'date', label: fmtRange(urlFrom, urlTo), remove: () => apply({ ...current, from: defaults.from, to: defaults.to }) });
-  }
-  for (const c of urlPt) {
-    chips.push({ key: `pt-${c}`, label: c, remove: () => apply({ ...current, pt: urlPt.filter((x) => x !== c) }) });
-  }
   const labelOf = (list: Option[], v: string): string => list.find((o) => o.value === v)?.label ?? v;
-  for (const b of urlBranch) {
-    chips.push({ key: `b-${b}`, label: labelOf(options.branches, b), remove: () => apply({ ...current, branch: urlBranch.filter((x) => x !== b) }) });
+  const chips: { key: string; label: string; remove: () => void }[] = [];
+  if (hasDate && (urlFrom !== defaults.from || urlTo !== defaults.to)) {
+    chips.push({ key: 'date', label: fmtRange(urlFrom, urlTo), remove: () => push({ ...current, from: defaults.from, to: defaults.to }, false) });
   }
-  for (const c of urlCat) {
-    chips.push({ key: `c-${c}`, label: c, remove: () => apply({ ...current, cat: urlCat.filter((x) => x !== c) }) });
+  if (hasPt) {
+    for (const c of urlPt) chips.push({ key: `pt-${c}`, label: c, remove: () => push(withPt(urlPt.filter((x) => x !== c)), false) });
   }
-  for (const pr of urlProduct) {
-    chips.push({ key: `p-${pr}`, label: labelOf(options.products, pr), remove: () => apply({ ...current, product: urlProduct.filter((x) => x !== pr) }) });
+  if (hasBranch) {
+    for (const b of urlBranch) chips.push({ key: `b-${b}`, label: labelOf(options.branches, b), remove: () => push({ ...current, branch: urlBranch.filter((x) => x !== b) }, false) });
+  }
+  if (hasCat) {
+    for (const c of urlCat) chips.push({ key: `c-${c}`, label: c, remove: () => push({ ...current, cat: urlCat.filter((x) => x !== c) }, false) });
+  }
+  if (hasProduct) {
+    for (const pr of urlProduct) chips.push({ key: `p-${pr}`, label: labelOf(options.products, pr), remove: () => push({ ...current, product: urlProduct.filter((x) => x !== pr) }, false) });
   }
 
   return (
-    <form
-      className="filters"
-      aria-label="Filter data"
-      onSubmit={(e) => {
-        e.preventDefault();
-        apply(current);
-      }}
-    >
-      <div className="filter-row">
-        <fieldset className="f-group" disabled={!hasDate}>
-          <legend>Rentang tanggal{hasDate ? '' : ` (${na})`}</legend>
-          <label className="sr-only" htmlFor="f-preset">
-            Preset rentang
-          </label>
-          <select
-            id="f-preset"
-            className="input"
-            value={preset}
-            onChange={(e) => {
-              const p = e.target.value as Preset;
-              setPreset(p);
-              const r = presetRange(p, yesterday);
-              if (r) {
-                setFrom(r.from);
-                setTo(r.to);
-              }
-            }}
-          >
-            <option value="custom">Kustom</option>
-            <option value="7">7 hari</option>
-            <option value="30">30 hari</option>
-            <option value="mtd">Bulan ini</option>
-            <option value="prev-month">Bulan lalu</option>
-            <option value="90">90 hari</option>
-            <option value="ytd">Tahun ini</option>
-          </select>
-          <label className="sr-only" htmlFor="f-from">
-            Dari tanggal
-          </label>
-          <input id="f-from" type="date" className="input" value={from} max={yesterday} onChange={(e) => { setFrom(e.target.value); setPreset('custom'); }} />
-          <span aria-hidden="true">-</span>
-          <label className="sr-only" htmlFor="f-to">
-            Sampai tanggal
-          </label>
-          <input id="f-to" type="date" className="input" value={to} max={yesterday} onChange={(e) => { setTo(e.target.value); setPreset('custom'); }} />
-        </fieldset>
+    <div className="filterbar" role="group" aria-label="Filter data">
+      <div className="fb-row">
+        {hasDate ? (
+          <DateRangeControl from={urlFrom} to={urlTo} yesterday={yesterday} onChange={(r) => push({ ...current, from: r.from, to: r.to }, true)} />
+        ) : dateNa ? (
+          <p className="fb-na" role="note">
+            <strong>Rentang tanggal tidak berlaku:</strong> {dateNa}
+          </p>
+        ) : null}
 
-        <fieldset className="f-group" disabled={!hasPt}>
-          <legend>Brand / PT{hasPt ? '' : ` (${na})`}</legend>
-          {sessionCodes.length <= 1 ? (
-            <span className="chip chip-static">{sessionCodes[0] ? codeName(sessionCodes[0]) : '-'}</span>
+        {hasPt ? (
+          sessionCodes.length <= 1 ? (
+            <span className="chip chip-static" title="Brand sesi Anda">
+              {sessionCodes[0] ? codeName(sessionCodes[0]) : '-'}
+            </span>
           ) : (
-            <div role="group" aria-label="Brand atau PT" className="chips">
+            <div role="group" aria-label="Brand atau PT" className="fb-seg">
+              <button type="button" className="fb-seg-btn" aria-pressed={allSelected} onClick={() => push(withPt([]), false)}>
+                Semua
+              </button>
               {sessionCodes.map((c) => {
-                const on = pt.includes(c);
+                const on = !allSelected && urlPt.includes(c);
                 return (
-                  <button key={c} type="button" className="chip chip-toggle" aria-pressed={on} title={codeName(c)} onClick={() => setPt(on ? pt.filter((x) => x !== c) : [...pt, c])}>
+                  <button
+                    key={c}
+                    type="button"
+                    className="fb-seg-btn"
+                    aria-pressed={on}
+                    title={codeName(c)}
+                    onClick={() => push(withPt(nextPt(urlPt, c, sessionCodes)), false)}
+                  >
                     <span className={`dot dot-${codeColor(c)}`} aria-hidden="true" />
                     {c}
                   </button>
                 );
               })}
             </div>
-          )}
-          {smdAllowed && (pt.length === 0 || pt.includes('SMD')) ? (
-            <p className="muted small" role="note">
-              SMD: omzet termasuk PPN; kartu khusus F&amp;B tidak memuat SMD.
-            </p>
-          ) : null}
-        </fieldset>
+          )
+        ) : null}
 
-        <MultiSelect label="Cabang" summaryNoun="cabang" options={branchOptions} selected={branch} onChange={setBranch} max={50} disabledReason={hasBranch ? undefined : na} />
-        <MultiSelect label="Kategori menu" summaryNoun="kategori" options={options.categories.map((c) => ({ value: c, label: c }))} selected={cat} onChange={setCat} max={20} disabledReason={hasCat ? undefined : na} />
-        <MultiSelect label="Produk FIN" summaryNoun="produk" options={options.products} selected={product} onChange={setProduct} max={20} disabledReason={hasProduct ? undefined : na} />
+        {hasBranch ? (
+          <MultiSelect
+            label="Cabang"
+            summaryNoun="cabang"
+            options={branchOptions}
+            selected={branch}
+            onChange={(v) => {
+              setBranch(v);
+              later({ ...current, branch: v, cat, product });
+            }}
+            max={50}
+          />
+        ) : null}
+        {hasCat ? (
+          <MultiSelect
+            label="Kategori menu"
+            summaryNoun="kategori"
+            options={options.categories.map((c) => ({ value: c, label: c }))}
+            selected={cat}
+            onChange={(v) => {
+              setCat(v);
+              later({ ...current, branch, cat: v, product });
+            }}
+            max={20}
+          />
+        ) : null}
+        {hasProduct ? (
+          <MultiSelect
+            label="Produk FIN"
+            summaryNoun="produk"
+            options={options.products}
+            selected={product}
+            onChange={(v) => {
+              setProduct(v);
+              later({ ...current, branch, cat, product: v });
+            }}
+            max={20}
+          />
+        ) : null}
 
-        <div className="f-actions">
-          <button type="submit" className="btn btn-primary" disabled={pending}>
-            Terapkan
+        <span className="fb-spacer" />
+        {chips.length > 0 ? (
+          <button type="button" className="btn btn-sm" onClick={() => push({ from: defaults.from, to: defaults.to, pt: [], branch: [], cat: [], product: [] }, false)}>
+            Reset
           </button>
-          {chips.length > 0 ? (
-            <button type="button" className="btn" onClick={() => { setPt([]); setBranch([]); setCat([]); setProduct([]); apply({ from: defaults.from, to: defaults.to, pt: [], branch: [], cat: [], product: [] }); }}>
-              Reset
-            </button>
-          ) : null}
-        </div>
+        ) : null}
       </div>
+
+      {hasPt && smdAllowed && (urlPt.length === 0 || urlPt.includes('SMD')) ? (
+        <p className="muted small" role="note">
+          SMD: omzet termasuk PPN; kartu khusus F&amp;B tidak memuat SMD.
+        </p>
+      ) : null}
 
       {chips.length > 0 ? (
         <ul className="chip-list" aria-label="Filter aktif">
@@ -232,12 +236,10 @@ function FilterForm({ options, sessionCodes, smdAllowed = false, defaults, yeste
           ))}
         </ul>
       ) : null}
-    </form>
+    </div>
   );
 }
 
 export function FilterBar(props: Props): React.ReactNode {
-  const sp = useSearchParams();
-  // Reset draft setiap URL berubah (Kembali/Maju browser, drill-down, hapus chip).
-  return <FilterForm key={sp.toString()} {...props} />;
+  return <FilterForm {...props} />;
 }

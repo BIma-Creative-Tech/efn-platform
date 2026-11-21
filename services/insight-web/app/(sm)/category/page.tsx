@@ -15,6 +15,7 @@ import { fmtDaysLeft, fmtPctOrNa, fmtSuppressed } from '@/lib/sm-format';
 import { oosRate, oosStatus, pct, ppChange, priceStatus } from '@/lib/sm-kpi';
 import { smPage, type SmSearchParams } from '@/lib/sm-page';
 import { toNum, toNumOrNull } from '@/lib/sm-parse';
+import { expiryReason, priceReason } from '@/lib/status-reasons';
 
 export const dynamic = 'force-dynamic';
 export const metadata: Metadata = { title: 'Kategori' };
@@ -179,14 +180,24 @@ export default async function CategoryPage({ searchParams }: { searchParams: SmS
                   rows={lots}
                   rowKey={(l) => String(l.alertId)}
                   columns={[
-                    { header: 'Produk', cell: (l) => l.productName },
-                    { header: 'Lot', cell: (l) => l.lotName || '-' },
+                    { header: 'Produk', cell: (l) => l.productName, text: (l) => l.productName },
+                    { header: 'Lot', cell: (l) => l.lotName || '-', text: (l) => l.lotName },
                     { header: 'Outlet', cell: (l) => base.whNames.get(l.warehouseId) ?? `Outlet #${l.warehouseId}` },
                     { header: 'Qty', align: 'right', cell: (l) => fmtQty(l.qty) },
                     { header: 'Sisa umur', align: 'right', cell: (l) => fmtDaysLeft(l.daysLeft) },
                     { header: 'Nilai Rp (HPP)', align: 'right', cell: (l) => fmtIdr(l.valueCost) },
-                    { header: 'Status', cell: (l) => <StatusPill status={EXPIRY_PILL[l.display].status} label={EXPIRY_PILL[l.display].label} /> },
+                    {
+                      header: 'Status',
+                      cell: (l) => <StatusPill status={EXPIRY_PILL[l.display].status} label={EXPIRY_PILL[l.display].label} />,
+                      text: (l) => EXPIRY_PILL[l.display].label,
+                      filter: true,
+                    },
                     { header: 'Markdown', cell: (l) => markdownText(l) },
+                    {
+                      header: 'Keterangan',
+                      cell: (l) => expiryReason(l.display, l.daysLeft, l.valueCost),
+                      text: (l) => `${l.productName} ${l.lotName} ${expiryReason(l.display, l.daysLeft, l.valueCost)}`,
+                    },
                     { header: 'Odoo', cell: (l) => <ActionLink label="Buka lot di Odoo" href={odooRecordUrl(origin, 'stock.lot', l.lotId)} /> },
                   ]}
                 />
@@ -250,6 +261,10 @@ export default async function CategoryPage({ searchParams }: { searchParams: SmS
                           const s = priceStatus(r.diffPct, r.sampleN, t);
                           return <StatusPill status={s.status} label={s.label} />;
                         },
+                      },
+                      {
+                        header: 'Keterangan',
+                        cell: (r) => priceReason(r.diffPct, r.sampleN, priceStatus(r.diffPct, r.sampleN, t).status, t),
                       },
                       { header: 'Odoo', cell: (r) => <ActionLink label="Buka produk di Odoo" href={odooRecordUrl(origin, 'product.template', r.productTmplId)} /> },
                     ]}

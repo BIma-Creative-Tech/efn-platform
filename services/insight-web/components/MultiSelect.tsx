@@ -1,9 +1,10 @@
 'use client';
 /**
  * Pilihan ganda dengan pencarian (combobox sederhana berbasis <details> + kotak centang): dapat dioperasikan
- * dengan keyboard dan pembaca layar tanpa pustaka UI. Perubahan baru diterapkan saat tombol "Terapkan" FilterBar ditekan.
+ * dengan keyboard dan pembaca layar tanpa pustaka UI. Perubahan diteruskan lewat `onChange`; toolbar filter menerapkannya
+ * otomatis (debounce) tanpa tombol "Terapkan". Panel ditutup dengan Esc atau klik di luar.
  */
-import { useId, useMemo, useState } from 'react';
+import { useEffect, useId, useMemo, useRef, useState } from 'react';
 
 export interface Option {
   value: string;
@@ -46,6 +47,27 @@ export function MultiSelect({
     return Array.from(m.entries());
   }, [matches]);
 
+  const box = useRef<HTMLDetailsElement>(null);
+  useEffect(() => {
+    const onDown = (e: PointerEvent): void => {
+      const el = box.current;
+      if (el?.open && e.target instanceof Node && !el.contains(e.target)) el.open = false;
+    };
+    const onKey = (e: KeyboardEvent): void => {
+      const el = box.current;
+      if (e.key === 'Escape' && el?.open) {
+        el.open = false;
+        el.querySelector('summary')?.focus();
+      }
+    };
+    document.addEventListener('pointerdown', onDown);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('pointerdown', onDown);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, []);
+
   if (disabledReason) {
     return (
       <div className="ms ms-disabled">
@@ -69,7 +91,7 @@ export function MultiSelect({
   };
 
   return (
-    <details className="ms">
+    <details className="ms" ref={box}>
       <summary className="ms-summary">
         <span className="ms-label">{label}</span>
         <span>{selected.length === 0 ? `Semua ${summaryNoun}` : `${selected.length} ${summaryNoun}`}</span>

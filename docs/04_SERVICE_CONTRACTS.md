@@ -2677,7 +2677,9 @@ Browser staf (WireGuard)
   brand/Holding", `implied_ids` = pengguna). Tidak ada model data baru (tidak butuh record rule); bila log audit dibuat
   sebagai model, wajib `company_id` + record rule (konvensi CLAUDE.md).
 - Menu "Dashboard Insight" → action `efn_insight.action_open` (URL action ke `/efn/insight/open`, target `self`).
-  Tautan kembali dari insight-web: **`{EFN_INSIGHT_ODOO_URL}/efn/insight/open`** (bukan deep link `/odoo/action-…`).
+  Tautan "Kembali ke Odoo" di insight-web: **`{EFN_INSIGHT_ODOO_URL}/odoo`** (web client; bukan deep link `/odoo/action-…`).
+  Tombol "Buka dari Odoo" di halaman sesi berakhir/error SSO: `{EFN_INSIGHT_ODOO_URL}/efn/insight/open` (masuk ulang).
+  Koreksi 21 Nov 2026: versi awal memakai `/efn/insight/open` untuk tautan kembali sehingga selalu memutar balik ke Insight.
 - **`GET /efn/insight/open`** (`type='http'`, `auth='user'`, tanpa `sudo` untuk membaca cakupan selain membaca tabel relasi
   seperti `efn_data_ask`):
 
@@ -2855,8 +2857,8 @@ perlu dan dicatat), `frame-ancestors 'none'`, `Referrer-Policy: no-referrer`, `X
   proses** (`INSIGHT_CH_MAX_CONCURRENCY`, 1..24, **default 12**; harus ≤ 24; antrean maks 200, tunggu maks 20 dtk →
   kartu galat "timeout" pada blok itu, bukan error halaman), sehingga ekspor CSV paralel tetap muat. Profil
   `CREATE ... IF NOT EXISTS` dan `ALTER SETTINGS PROFILE` di `insight-access.sql` wajib identik (deploy lama vs baru).
-- Definer `efn_insight_definer` `NOT IDENTIFIED HOST NONE` dengan `GRANT SELECT` **per objek** (bukan `efn_dwh.*`): 9 view
-  `efn_dwh.v_esb_*`, 10 tabel `efn_dwh.*esb*`, `efn_esb.extract_checkpoint`, `efn_esb.extract_run` — tanpa mart Odoo/GL/audit,
+- Definer `efn_insight_definer` `NOT IDENTIFIED HOST NONE` dengan `GRANT SELECT` **per objek** (bukan `efn_dwh.*`): 11 view
+  `efn_dwh.v_esb_*` (9 G42 + 2 review 21 Nov 2026), 10 tabel `efn_dwh.*esb*`, `efn_esb.extract_checkpoint`, `efn_esb.extract_run` — tanpa mart Odoo/GL/audit,
   `efn_esb.raw_doc`, `bom_ratio` (daftar diuji `test_insight_access.py`); view
   `SQL SECURITY DEFINER` dengan kolom eksplisit; `GRANT SELECT ON efn_insight.* TO insight_reader` (wildcard) —
   `clickhouse-init.sh` memverifikasi **setiap** view `efn_insight` punya row policy dan **mencabut grant + gagal** bila ada yang tidak.
@@ -2871,8 +2873,19 @@ perlu dan dicatat), `frame-ancestors 'none'`, `Referrer-Policy: no-referrer`, `X
 | `v_esb_data_quality` | `efn_dwh.v_esb_data_quality_pt` (baru, G42) | baris tingkat brand (`company_code=''`: `data_age_hours`, `last_run_not_ok`) **diperluas** ke kode PT brand secara **dinamis** dari `SELECT DISTINCT brand, company_code FROM dim_esb_branch FINAL` (Bacha → BCF dan BCR; ikut override cabang Q-ESB3; brand tanpa cabang → baris tidak muncul = "Tidak diketahui") — L-123. Pemetaan statis `pb→PB…` pada draf diganti ini |
 | `v_esb_branch_list` | view baru `efn_dwh` dari `dim_esb_branch` | `brand, company_code, branch_id, branch_code, branch_name, is_ck, is_store, active` (filter cabang) |
 | `v_esb_product_list` | view baru `efn_dwh` dari `dim_esb_product` × PT cabang brand | `brand, company_code, product_code, product_name, category, uom, is_fin, active`; PT dari `dim_esb_branch` (bukan `dim_esb_product.company_code` = PT default brand); kategori menu dari `list_categories` (sales_daily) |
+| `v_esb_movement_daily` (21 Nov 2026) | `efn_dwh.v_esb_movement_daily` (`init/19-insight-review.sql`) | semua produksi + kiriman (FIN **dan** non-FIN: WIP, bahan baku, kemasan, supplies) per `item_group`, asal → tujuan, per `uom` (qty tidak dijumlah lintas satuan); `company_code` = PT cabang asal (cabang tak dikenal -> `''`, ditolak row policy; SEC-IR-02). User PT asal melihat nama/jenis cabang tujuan PT lain dalam brand yang sama; user PT tujuan saja tidak melihat baris kiriman (SEC-IR-03, sisi terima tetap di `v_esb_flow_daily`); slice selesai saja |
+| `v_esb_coverage` (21 Nov 2026) | `efn_dwh.v_esb_coverage` (`init/19-insight-review.sql`) | rentang hari tersedia per brand × PT × entitas harian (`first_day`, `last_day`, `days`) dari `extract_checkpoint` status `done` |
 
-Delapan view (rinci kolom & grain: `docs/design/insight-web-queries.md` §2, yang menang atas tabel ini).
+Sepuluh view (rinci kolom & grain: `docs/design/insight-web-queries.md` §2, yang menang atas tabel ini).
+
+**Review Insight 21 Nov 2026 (ADR-040, ADR-041 — Proposed).** Dua view terakhir ditambahkan karena halaman
+"Produksi vs Penjualan" membingungkan: `v_esb_flow_daily` hanya FIN (semantik L-116 tidak berubah), sehingga CK tampak
+mengirim lebih dari yang diproduksi tanpa keterangan — padahal CK juga mengirim WIP, gudang (WHProd/Palem) mengirim bahan baku/kemasan/supplies, toko memproduksi
+FIN sendiri, dan kiriman FIN di atas produksi berasal dari stok CK sebelum periode (stok awal tidak ditarik).
+`v_esb_movement_daily` = **rekonsiliasi alur CK**; `v_esb_coverage` = **cakupan data** per entitas (sales vs
+production/delivery/transfer/payment/fin_sold punya rentang berbeda) agar UI menyatakan rentang dan memotong
+perbandingan ke irisannya. Keduanya ikut grant definer per objek, row policy `efn_insight_scope` (loop
+`clickhouse-init.sh`), dan pagar fail-closed di atas; tabel dasar tidak bertambah.
 
 - **Row policy** (dibuat `clickhouse-init.sh` per view di atas; kunci dari `/run/secrets/insight_scope_key` — string hex
   apa adanya setelah strip, `[0-9a-fA-F]` ≥ 64 karakter (kontrak kerja menyebut ≥ 32; dipilih yang lebih ketat agar sama

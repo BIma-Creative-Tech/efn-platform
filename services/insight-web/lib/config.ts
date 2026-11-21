@@ -87,9 +87,17 @@ export function parseConfig(env: Env): InsightConfig {
   };
 }
 
-/** Tautan kembali ke Odoo (docs/04 §26.2): `{origin}/efn/insight/open`. null bila belum dikonfigurasi. */
+/**
+ * Tautan masuk ulang ke Insight lewat Odoo (docs/04 §26.2): `{origin}/efn/insight/open` menerbitkan token SSO baru
+ * lalu kembali ke Insight. Hanya untuk halaman sesi berakhir/error SSO. null bila belum dikonfigurasi.
+ */
 export function odooOpenUrl(cfg: Pick<InsightConfig, 'odooOrigin'>): string | null {
   return cfg.odooOrigin ? `${cfg.odooOrigin}/efn/insight/open` : null;
+}
+
+/** Tautan "Kembali ke Odoo" (docs/04 §26.2): web client `{origin}/odoo`. null bila belum dikonfigurasi. */
+export function odooHomeUrl(cfg: Pick<InsightConfig, 'odooOrigin'>): string | null {
+  return cfg.odooOrigin ? `${cfg.odooOrigin}/odoo` : null;
 }
 
 /**

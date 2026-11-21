@@ -9,6 +9,7 @@ import { asOfText, emptyText, freshnessOf, resolveCardState, staleBanner, type E
 import type { MartFreshness } from '@/lib/sm-parse';
 import type { SmThresholds } from '@/lib/sm-thresholds';
 import { RetryButton } from '../RetryButton';
+import { TermHints } from '../Term';
 import { DeltaBadge, EmptyState, Icon, InfoTip, StatusPill } from '../ui';
 import type { Status } from '@/lib/thresholds';
 
@@ -35,6 +36,7 @@ export function SmCard({
     <section className={`card sm-card${wide ? ' wide' : ''}`} aria-labelledby={`${id}-h`}>
       <h2 id={`${id}-h`} tabIndex={-1}>
         {title}
+        <TermHints text={title} />
       </h2>
       {asOf ? <p className="sm-asof">{asOf}</p> : null}
       {banner ? (
@@ -159,6 +161,7 @@ export function SmKpiTile({
     <div className="kpi">
       <dt>
         <span>{label}</span>
+        <TermHints text={label} />
         {info ? <InfoTip label={label}>{info}</InfoTip> : null}
       </dt>
       <dd>

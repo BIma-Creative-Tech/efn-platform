@@ -12,6 +12,7 @@ ROOT = Path(__file__).resolve().parents[3]
 CH = ROOT / "infra" / "clickhouse"
 DDL12 = (CH / "init" / "12-g41-esb.sql").read_text(encoding="utf-8")
 DDL13 = (CH / "init" / "13-g42-insight.sql").read_text(encoding="utf-8")
+DDL19 = (CH / "init" / "19-insight-review.sql").read_text(encoding="utf-8")
 ACCESS = (CH / "access" / "insight-access.sql").read_text(encoding="utf-8")
 INIT_SH = (CH / "clickhouse-init.sh").read_text(encoding="utf-8")
 
@@ -30,7 +31,31 @@ EXPECTED_INSIGHT_VIEWS = {
     "v_esb_data_quality",
     "v_esb_branch_list",
     "v_esb_product_list",
+    "v_esb_movement_daily",  # review Insight 21 Nov 2026 (19-insight-review.sql)
+    "v_esb_coverage",
 }
+REVIEW_DWH_VIEWS = {"v_esb_movement_daily", "v_esb_coverage"}
+# Kontrak kolom (frontend menulis query paralel terhadap daftar ini; urutan = urutan SELECT).
+MOVEMENT_COLUMNS = [
+    "day",
+    "brand",
+    "company_code",
+    "kind",
+    "origin_branch_id",
+    "origin_branch_name",
+    "origin_kind",
+    "dest_branch_id",
+    "dest_branch_name",
+    "dest_kind",
+    "item_group",
+    "category",
+    "product_code",
+    "product_name",
+    "uom",
+    "qty",
+    "lines",
+]
+COVERAGE_COLUMNS = ["brand", "company_code", "entity", "first_day", "last_day", "days"]
 
 
 def strip_comments(sql: str) -> str:
@@ -38,9 +63,9 @@ def strip_comments(sql: str) -> str:
 
 
 def dwh_view_body(name: str) -> str:
-    """Badan view efn_dwh.<name> (tanpa komentar) dari 12/13."""
+    """Badan view efn_dwh.<name> (tanpa komentar) dari 12/13/19."""
     header = f"CREATE OR REPLACE VIEW efn_dwh.{name} AS"
-    for ddl in (DDL13, DDL12):
+    for ddl in (DDL19, DDL13, DDL12):
         if header in ddl:
             return strip_comments(ddl.split(header, 1)[1].split(";", 1)[0])
     raise AssertionError(f"view efn_dwh.{name} tidak ditemukan")
@@ -125,6 +150,100 @@ def test_new_dwh_views_idempotent_and_named_columns() -> None:
             depth -= ch == ")"
             items += ch == "," and depth == 0
         assert items == len(cols), name
+
+
+def _top_level_items(name: str) -> int:
+    head = dwh_view_body(name)
+    head = head[head.index("SELECT") + 6 :].split("\nFROM", 1)[0]
+    depth, items = 0, 1
+    for ch in head:
+        depth += ch == "("
+        depth -= ch == ")"
+        items += ch == "," and depth == 0
+    return items
+
+
+def test_review_dwh_views_idempotent_and_contract_columns() -> None:
+    assert set(re.findall(r"CREATE OR REPLACE VIEW efn_dwh\.(\w+) AS", DDL19)) == REVIEW_DWH_VIEWS
+    code = strip_comments(DDL19)
+    assert not re.search(r"\b(DROP|TRUNCATE|ALTER|INSERT|CREATE TABLE)\b", code)
+    assert "SELECT *" not in code
+    assert output_columns("v_esb_movement_daily") == MOVEMENT_COLUMNS
+    assert output_columns("v_esb_coverage") == COVERAGE_COLUMNS
+    for name in REVIEW_DWH_VIEWS:
+        assert _top_level_items(name) == len(output_columns(name)), name  # setiap item SELECT teratas ber-AS
+    views = insight_views()
+    assert views["v_esb_movement_daily"] == (MOVEMENT_COLUMNS, "efn_dwh.v_esb_movement_daily")
+    assert views["v_esb_coverage"] == (COVERAGE_COLUMNS, "efn_dwh.v_esb_coverage")
+
+
+def test_movement_reads_all_items_from_finished_slices_only() -> None:
+    body = dwh_view_body("v_esb_movement_daily")
+    # Semua produk (FIN dan non-FIN): tidak ada filter is_fin di fakta (beda dengan v_esb_flow_daily).
+    assert "is_fin = 1 AND" not in body and "WHERE is_fin" not in body
+    assert "FROM efn_dwh.fact_esb_production FINAL" in body and "FROM efn_dwh.fact_esb_delivery FINAL" in body
+    assert "fact_esb_transfer" not in body and "fact_esb_fin_sold_daily" not in body
+    # Hanya versi slice selesai terakhir (pola v_esb_flow_daily).
+    assert "(brand, prod_date, _version) IN" in body and "(brand, delivery_date, _version) IN" in body
+    assert body.count("FROM efn_esb.extract_checkpoint FINAL") == 2
+    assert "WHERE entity = 'production' AND scope_key = '*'" in body
+    assert "WHERE entity = 'delivery' AND scope_key = '*'" in body
+    # qty tidak pernah dijumlah lintas satuan: uom ikut kunci agregasi.
+    assert "GROUP BY day, brand, kind, origin_id, dest_id, p_code, uom_r\n" in body
+    assert "'production' AS kind" in body and "'delivery' AS kind" in body
+    assert "toUInt32(0) AS dest_id" in body
+
+
+def test_movement_company_code_fail_closed() -> None:
+    # SEC-IR-02: PT dari cabang asal saja; cabang tak dikenal -> '' (row policy `company_code != ''` menolak),
+    # tidak jatuh ke PT default brand (Bacha: cabang BCR belum dipetakan tidak boleh terlihat user BCF).
+    body = dwh_view_body("v_esb_movement_daily")
+    assert "CAST(ob.company_code, 'String') AS company_code" in body
+    assert "t.c_code, ob.company_code" not in body
+
+
+def test_movement_kind_and_item_group_rules() -> None:
+    body = dwh_view_body("v_esb_movement_daily")
+    assert "multiIf(ob.is_ck = 1, 'ck', ob.is_store = 1, 'store', 'non_sales') AS origin_kind" in body
+    dest_kind = "if(t.kind = 'production', '', multiIf(tb.is_ck = 1, 'ck', tb.is_store = 1, 'store', 'non_sales'))"
+    assert dest_kind in body
+    group = re.sub(r"\s+", " ", body.split("multiIf(\n", 1)[1].split("AS item_group", 1)[0]).strip()
+    # Urutan multiIf = prioritas: FIN dulu, lalu WIP, bahan baku, kemasan, supplies, sisanya other.
+    order = [group.index(f"'{g}'") for g in ("fin", "wip", "raw", "packaging", "supplies", "other")]
+    assert order == sorted(order)
+    assert group.startswith("t.fin_s = 1, 'fin',")
+    for needle in (
+        "startsWith(t.p_code, 'WIP') OR pr.category = 'Inventory - WIP', 'wip'",
+        "startsWith(t.p_code, 'RMT')",
+        "startsWith(t.p_code, 'IDF')",
+        "pr.category IN ('Inventory - Food & Beverage', 'Import Ingredient'), 'raw'",
+        "startsWith(t.p_code, 'PAM') OR pr.category = 'Packaging Material', 'packaging'",
+        "startsWith(t.p_code, 'SU') OR startsWith(t.p_code, 'UNI') OR "
+        "pr.category IN ('Supplies', 'Uniform'), 'supplies'",
+    ):
+        assert needle in group, needle
+    # Negatif: 'N' (satuan kemasan) bukan prefix -> tidak boleh menangkap semua kode berawalan N.
+    assert "startsWith(t.p_code, 'N')" not in group
+    assert "if(pr.category = '', 'Tanpa kategori', pr.category) AS category" in body
+    # PT = PT cabang asal (tanpa fallback, SEC-IR-02), tidak diduplikasi ke PT tujuan.
+    assert "CAST(ob.company_code, 'String') AS company_code" in body
+    assert "tb.company_code" not in body
+
+
+def test_coverage_from_finished_daily_checkpoints_mapped_to_pt() -> None:
+    body = dwh_view_body("v_esb_coverage")
+    entities = "entity IN ('sales', 'payment', 'production', 'delivery', 'transfer', 'fin_sold')"
+    assert body.count(entities) == 2
+    assert body.count("status = 'done'") == 2
+    # Per brand ('*') -> semua PT brand; per toko -> PT cabang. Tanpa cabang terdaftar -> tidak ada baris.
+    assert "scope_key = '*'" in body and "scope_key != '*'" in body
+    assert (
+        "INNER JOIN (SELECT DISTINCT brand, company_code FROM efn_dwh.dim_esb_branch FINAL WHERE company_code != '')"
+    ) in body
+    assert "toString(branch_id) AS scope_key" in body and "s.scope_key = k.scope_key" in body
+    assert "LEFT JOIN" not in body  # fail closed: baris tanpa PT tidak pernah muncul
+    assert "uniqExact(u.day) AS days_d" in body
+    assert "efn_esb.extract_run" not in body
 
 
 def test_insight_reader_only_reads_efn_insight() -> None:

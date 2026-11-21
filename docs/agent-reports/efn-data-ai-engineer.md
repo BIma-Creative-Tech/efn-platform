@@ -5,6 +5,67 @@ ADR terkait (semua `Proposed`): ADR-003, ADR-006, ADR-007, ADR-008, ADR-010, ADR
 
 **Tidak ada yang dijalankan.** Mesin penulis tidak punya Python; semua kode, test, dan SQL belum pernah dieksekusi. Validasi pertama terjadi di CI / oleh QA.
 
+## Review Insight — rekonsiliasi alur CK & cakupan data (21 Nov 2026)
+
+Branch `fix/insight-review`. ADR-040 & ADR-041 (Proposed), K25-02. Tidak ada Bash: **tidak ada yang dijalankan**
+(pytest, ruff, ClickHouse) — lead menerapkan dan menguji.
+
+**File**
+- baru `infra/clickhouse/init/19-insight-review.sql`: `efn_dwh.v_esb_movement_daily`, `efn_dwh.v_esb_coverage`.
+- `infra/clickhouse/access/insight-access.sql`: grant definer 2 view + `efn_insight.v_esb_movement_daily`,
+  `efn_insight.v_esb_coverage` (DEFINER `efn_insight_definer`, SQL SECURITY DEFINER, kolom eksplisit).
+- `infra/clickhouse/clickhouse-init.sh`: 2 view masuk loop row policy `efn_insight_scope` (tanpa ini pagar fail-closed
+  mencabut grant `efn_insight.*` dan init gagal).
+- test: `services/esb-extract/tests/test_insight_access.py` (kontrak kolom persis, aturan item_group + negatif prefix
+  'N', filter checkpoint, uom di kunci agregasi, coverage fail-closed, grant = penutupan rekursif, policy loop),
+  `services/esb-extract/tests/test_ddl.py` (19 hanya view; flow tetap FIN-only).
+- docs: `docs/design/insight-web-queries.md` §2 (+§3.5 catatan), `docs/04_SERVICE_CONTRACTS.md` §26.7.
+
+**Keputusan/asumsi**
+- `company_code` movement = PT cabang **asal** (tanpa fallback sejak SEC-IR-02: cabang tak dikenal -> `''`, ditolak row policy), satu baris per pergerakan. Tidak diduplikasi
+  ke PT tujuan (jumlah benar untuk user multi-PT). Akibat: user yang hanya ber-scope PT tujuan (mis. toko BCR menerima
+  dari CK BCF, bila ada) tidak melihat kiriman itu di view ini; sisi terima tetap ada di `v_esb_flow_daily`.
+- `item_group`: is_fin baris fakta dulu, lalu prefix kode ATAU kategori ESB (WIP → wip; RMT/IDF/'Inventory - Food &
+  Beverage'/'Import Ingredient' → raw; PAM/'Packaging Material' → packaging; SU*/UNI/'Supplies'/'Uniform' → supplies).
+  "N" pada catatan Packaging ditafsirkan sebagai **satuan**, bukan prefix (prefix 'N' akan menangkap kode lain).
+- Production tidak memakai alias `NAME:` (kode selalu kode ESB di production/delivery), jadi tanpa join alias.
+- Coverage: entitas `'*'` diperluas ke semua PT brand (pola `v_esb_data_quality_pt`), entitas per toko (sales,
+  fin_sold) ke PT cabang; `status = 'done'` (records.py menulis 'done'); `days` = hari unik dengan ≥1 slice selesai.
+
+**Belum terverifikasi**
+- DDL belum pernah dijalankan di ClickHouse (sintaks `CAST(x, 'String')`, tipe keluaran LowCardinality vs String,
+  performa join dim × fakta production ±ratusan ribu baris).
+- pytest/ruff belum dijalankan.
+- Apakah ada kiriman lintas PT nyata (Bacha BCF ↔ BCR) — menentukan apakah keputusan PT asal cukup.
+- Apakah semua cabang `scope_key` sales/fin_sold ada di `dim_esb_branch` (yang tidak ada tidak dihitung di coverage).
+
+### Lanjutan: kategori menu kosong 94% (21 Nov 2026)
+
+Akar (diverifikasi lead di efn-prod): 664 dari 740 `menu_code` terjual tidak ada di `dim_esb_menu` karena
+`/menu/browse` tidak memuatnya; baris `report/sales-menu-cogs` membawa `menuCategory`/`menuCategoryDetail`.
+
+**File**
+- `services/esb-extract/efn_esb/transform.py`: `sales_menu_version(day)`, `transform_sales_menus(rows, brand,
+  company_code, day)` (murni; filter salesType Sales/kosong + `menuCategory` terisi, lalu `transform_menus`).
+- `services/esb-extract/efn_esb/extract.py`: `extract_sales` menambah tabel `dim_esb_menu` ke `SliceResult` (PT default
+  brand = sama dengan baris master).
+- Test: `tests/test_transform.py` (filter kategori kosong/spasi/tanpa kunci, salesType non-Sales, tanpa kode; urutan
+  versi), `tests/test_runner.py` (slice sales Bacha: dim ber-PT BCF, versi awal hari, urutan tulis sebelum checkpoint).
+- `services/esb-extract/README.md` (bagian Alur & idempotensi).
+
+**Pilihan versi.** `dim_esb_menu` = `ReplacingMergeTree(_version)`, tidak bisa "isi hanya bila belum ada". Baris sales
+memakai `_version` = 00:00 UTC hari penjualan: run master setelah hari itu selalu menang (browse sumber utama), hari
+penjualan lebih baru menang atas yang lama, backfill mundur tidak menimpa. Jendela sementara: sales hari D yang ditarik
+sebelum run master pertama setelah D 00:00 UTC bisa menang atas browse untuk kode yang ada di keduanya sampai run master
+berikutnya (isi sales = kategori terisi, jadi tidak pernah mengosongkan). Kode yang ada di browse dengan kategori kosong
+tetap kosong (browse menang) — tidak diubah.
+Backfill sekali jalan (bukan file init) = SQL di laporan ke lead; `_version` = `toDateTime64(hari terakhir, 3, 'UTC')`
+sehingga konsisten dengan jalur kode.
+
+**Belum terverifikasi:** pytest/ruff belum dijalankan; SQL backfill belum dijalankan (memori ARRAY JOIN atas ±11,8 rb
+payload — jalankan per brand bila perlu); asumsi `menuCode` di payload bertipe string JSON (angka -> '' di
+`JSONExtractString`, baris itu terlewat).
+
 ## Gelombang 51 — SMD end-to-end: view Insight B2/B4, histori stok B6, histori forecast A6 (21 Nov 2026)
 
 Kontrak: `docs/design/G51_SMD_E2E_LEAD_SPEC.md` + keputusan lead G51 (is_reconstructed & versi aman, jalur A6
@@ -1827,3 +1888,8 @@ lock ada (sengaja, fail closed).
 - File `services/segment-worker/efn_segment/http.py` bernama sama dengan modul stdlib `http`; aman karena hanya diimpor
   absolut sebagai `efn_segment.http`, tetapi lead boleh mengganti nama menjadi `transport.py` (agent tidak bisa
   menghapus file).
+
+**Verifikasi lead (21 Nov 2026):** pytest esb-extract lulus, ruff 0.16.10 bersih (satu reformat `transform.py`). Backfill
+`dim_esb_menu` dari `raw_doc` dijalankan di efn-prod dengan dua koreksi atas SQL draf: tanpa `FINAL` pada `raw_doc` (gagal dengan
+`ARRAY JOIN`; duplikat diredam `argMax(..., doc_date)`), dan alias kolom dalam dibedakan dari alias agregat (galat
+`ILLEGAL_AGGREGATION`). Hasil: +1.004 kode, kategori kosong di `v_esb_sales_daily` (22 Okt–20 Nov) 94% -> 0%.

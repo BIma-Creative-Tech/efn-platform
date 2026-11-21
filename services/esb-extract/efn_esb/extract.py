@@ -35,6 +35,7 @@ from efn_esb.transform import (
     transform_production_result,
     transform_products,
     transform_sales_lines,
+    transform_sales_menus,
     transform_simple_mfg,
     transform_simple_transfer,
     transform_stock,
@@ -166,7 +167,9 @@ def extract_sales(rt: BrandRuntime, task: SliceTask, version: datetime, get: Get
     rows = _list(get, "/report/sales-menu-cogs", params, rt, limit=REPORT_LIMIT, send_limit=False)
     company = rt.cfg.company_for(branch)
     lines = transform_sales_lines(rows, rt.cfg.key, company, branch, task.day, version)
-    result = SliceResult(task, version, tables={"fact_esb_sales_line": lines})
+    # Pelengkap master menu: kode yang tidak ada di /menu/browse (versi = awal hari penjualan).
+    menus = transform_sales_menus(rows, rt.cfg.key, rt.cfg.company_code, task.day)
+    result = SliceResult(task, version, tables={"fact_esb_sales_line": lines, "dim_esb_menu": menus})
     result.raw.append(RawDoc("report/sales-menu-cogs", f"{day}|{branch}", task.day, rows))
     return result
 

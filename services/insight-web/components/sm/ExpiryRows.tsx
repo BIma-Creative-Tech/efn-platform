@@ -7,6 +7,7 @@ import { fmtIdr, fmtQty } from '@/lib/format';
 import { odooRecordUrl } from '@/lib/odoo-links';
 import { fmtCover, fmtDaysLeft } from '@/lib/sm-format';
 import type { CriticalRow, ExpiryDisplay, ExpiryLot } from '@/lib/sm-parse';
+import { expiryReason } from '@/lib/status-reasons';
 import type { Status } from '@/lib/thresholds';
 import { StatusPill } from '../ui';
 import { ActionLink } from './SmCard';
@@ -60,6 +61,8 @@ export function ExpiryRows({
               <dd>{fmtIdr(l.valueCost)}</dd>
               <dt>Markdown</dt>
               <dd>{markdownText(l)}</dd>
+              <dt>Keterangan</dt>
+              <dd>{expiryReason(l.display, l.daysLeft, l.valueCost)}</dd>
               {l.lotName ? (
                 <>
                   <dt>Lot</dt>
@@ -113,6 +116,12 @@ export function CriticalRows({
                   <dd>{fmtCover(r.cover)}</dd>
                 </>
               ) : null}
+              <dt>Keterangan</dt>
+              <dd>
+                {out
+                  ? `Stok habis (0 dari minimum ${fmtQty(r.minQty)}): penjualan hilang sampai ada pengisian.`
+                  : `Stok ${fmtQty(r.onHand)} di bawah minimum ${fmtQty(r.minQty)}${r.cover !== null ? `; cakupan ${fmtCover(r.cover)}` : ''}.`}
+              </dd>
               <dt>Usulan order</dt>
               <dd>{r.openProposalId !== null ? 'Sudah di usulan order terdekat' : 'Belum ada di usulan'}</dd>
               {whNames ? (

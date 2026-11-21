@@ -55,27 +55,34 @@ describe('beranda, navigasi, chip', () => {
   it('sessionPersonas urut prioritas', () => {
     expect(sessionPersonas(['exec', 'store', 'user', 'category'])).toEqual(['store', 'category', 'exec']);
   });
-  it('SMD-saja: halaman ESB disembunyikan, hanya grup Supermarket', () => {
+  it('SMD-saja non-exec: halaman ESB disembunyikan, hanya grup Supermarket (tanpa Forecast)', () => {
     const g = navGroups({ codes: ['SMD'], roles: ['store', 'user'] }, true);
     expect(g).toHaveLength(1);
+    expect(g[0].id).toBe('sm');
     expect(g[0].items.map((i) => i.href)).toEqual(['/store']);
-    expect(g[0].title).toBeUndefined();
   });
-  it('SMD-saja dengan exec (docs/04 §28.14.1): menu F&B hanya halaman yang mendukung SMD + grup Supermarket', () => {
+  it('SMD-saja dengan exec (docs/04 §28.14.1): Ringkasan, Distribusi (bagian DC), dan Supermarket + Forecast', () => {
     const g = navGroups({ codes: ['SMD'], roles: ['exec', 'store', 'user'] }, true);
-    expect(g.map((x) => x.title)).toEqual(['Food & Beverage', 'Supermarket']);
-    expect(g[0].items.map((i) => i.href)).toEqual(['/', '/sales', '/payments', '/distribution', '/forecast']);
-    // flag SM mati: tidak ada menu F&B untuk sesi tanpa PT F&B
+    expect(g.map((x) => x.title)).toEqual(['Ringkasan', 'Food & Beverage', 'Supermarket']);
+    expect(g[0].items.map((i) => i.href)).toEqual(['/', '/sales', '/payments']);
+    expect(g[1].items.map((i) => i.href)).toEqual(['/distribution']);
+    expect(g[2].items.map((i) => i.href)).toEqual(['/exec', '/store', '/forecast']);
+    // flag SM mati: tidak ada menu untuk sesi tanpa PT F&B
     expect(navGroups({ codes: ['SMD'], roles: ['exec', 'user'] }, false)).toEqual([]);
   });
-  it('sesi campuran: dua grup berjudul; ESB-saja: satu grup tanpa judul; flag SM mati: tanpa grup SM', () => {
-    const mixed = navGroups({ codes: ['PB', 'SMD'], roles: ['exec', 'user'] }, true);
-    expect(mixed.map((g) => g.title)).toEqual(['Food & Beverage', 'Supermarket']);
-    expect(mixed[0].items.some((i) => i.href === '/data-quality')).toBe(true);
+  it('sesi campuran: tiga grup (urutan persona exec,store,dc,category,marketing, Forecast terakhir); ESB-saja: tanpa grup Supermarket', () => {
+    const mixed = navGroups({ codes: ['PB', 'SMD'], roles: ['exec', 'marketing', 'dc', 'user'] }, true);
+    expect(mixed.map((g) => g.title)).toEqual(['Ringkasan', 'Food & Beverage', 'Supermarket']);
+    expect(mixed[1].items.map((i) => i.href)).toEqual(['/flow', '/distribution', '/data-quality']);
+    expect(mixed[2].items.map((i) => i.href)).toEqual(['/exec', '/dc', '/marketing', '/forecast']);
     const esb = navGroups({ codes: ['PB'], roles: ['user'] }, true);
-    expect(esb).toHaveLength(1);
-    expect(esb[0].title).toBeUndefined();
-    expect(navGroups({ codes: ['PB', 'SMD'], roles: ['exec', 'user'] }, false).flatMap((g) => g.items).some((i) => i.href === '/exec')).toBe(false);
+    expect(esb.map((g) => g.id)).toEqual(['summary', 'fnb']);
+    expect(navGroups({ codes: ['PB', 'SMD'], roles: ['exec', 'user'] }, false).flatMap((g) => g.items).some((i) => i.href === '/exec' || i.href === '/forecast')).toBe(false);
+  });
+  it('tidak ada item bertanda "segera" dan semua href unik per sesi', () => {
+    const all = navGroups({ codes: ['PB', 'SMD'], roles: ['exec', 'store', 'dc', 'category', 'marketing', 'user'] }, true).flatMap((g) => g.items);
+    expect(new Set(all.map((i) => i.href)).size).toBe(all.length);
+    expect(all.every((i) => !('soon' in i))).toBe(true);
   });
   it('hasEsbAccess', () => {
     expect(hasEsbAccess({ codes: ['SMD'] })).toBe(false);

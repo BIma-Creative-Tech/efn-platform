@@ -1,6 +1,8 @@
 import type { Metadata } from 'next';
 import { Block, ErrorCard } from '@/components/blocks';
 import { ChartCard } from '@/components/ChartCard';
+import { CkMovementCard, type GroupRow } from '@/components/CkMovementCard';
+import { CoverageNotice } from '@/components/CoverageNotice';
 import { DataTable, type TableRow } from '@/components/DataTable';
 import { FilterNotice } from '@/components/FilterNotice';
 import { MixedScopeNote, NotApplicableSmd } from '@/components/SmdNotice';
@@ -10,7 +12,8 @@ import { SmTable } from '@/components/sm/SmTable';
 import { EmptyState, KpiRow, KpiTile, PageHeader, Section, StatusPill } from '@/components/ui';
 import { summarize, type ChartSpec } from '@/lib/chart-spec';
 import { fmtDayShort, fmtInt, fmtPct, fmtQty, fmtRange } from '@/lib/format';
-import { num } from '@/lib/loaders';
+import { comparable, deltaGuards } from '@/lib/coverage';
+import { loadCoverage, num } from '@/lib/loaders';
 import { pageCtx, type SearchParams } from '@/lib/page-ctx';
 import { loadEsbTable, loadSmdProductNames, runEsb, runSm } from '@/lib/smd-data';
 import { esbOnlyMode, smdActive, smdExcludedNote } from '@/lib/smd-merge';
@@ -21,8 +24,9 @@ import { loadSmBase } from '@/lib/sm-data';
 import { toNum, type ProposalState } from '@/lib/sm-parse';
 import { cfgStr } from '@/lib/sm-thresholds';
 import { TABLES } from '@/lib/table-defs';
+import { fillReason } from '@/lib/status-reasons';
 import { gapStatus } from '@/lib/thresholds';
-import { pctDelta, pctOf } from '@/lib/vm';
+import { pctOf } from '@/lib/vm';
 
 export const dynamic = 'force-dynamic';
 export const metadata: Metadata = { title: 'Distribusi' };
@@ -44,7 +48,7 @@ export default async function DistributionPage({ searchParams }: { searchParams:
   const excluded = smdExcludedNote(sel, ctx.filters, 'product');
   const sm = (n: Parameters<typeof runSm>[0]) => (smdOn ? runSm(n, ctx, sel) : Promise.resolve(null));
 
-  const [kpiR, delR, matR, topR, gapR, base, fillSums, fillDaily, fillOutlets, lateOutlets, shortProducts, proposals, reduced] = await Promise.all([
+  const [kpiR, delR, matR, topR, gapR, base, fillSums, fillDaily, fillOutlets, lateOutlets, shortProducts, proposals, reduced, cov, groupR, catR] = await Promise.all([
     runEsb<Kpi>(esbOn, 'dist_kpi', ctx),
     runEsb<{ day: string; ck_out_qty: number; in_ck_qty: number; in_other_qty: number }>(esbOn, 'dist_ck_delivery', ctx),
     loadEsbTable(esbOn, 'dist-matrix', ctx),
@@ -58,7 +62,12 @@ export default async function DistributionPage({ searchParams }: { searchParams:
     sm('sm_dist_short_products'),
     sm('sm_dist_proposals'),
     sm('sm_dist_reduced_products'),
+    esbOn ? loadCoverage(ctx) : Promise.resolve(null),
+    runEsb<GroupRow>(esbOn, 'mov_by_group', ctx),
+    loadEsbTable(esbOn, 'mov-category', ctx),
   ]);
+  // Perbandingan periode lalu hanya bermakna bila kedua periode ada di data pengiriman dan transfer.
+  const { pctDelta } = deltaGuards(comparable(cov, ['delivery', 'transfer'], ctx.filters, ctx.prev));
   const prodIds = [
     ...(shortProducts && shortProducts.ok ? shortProducts.data : []),
     ...(reduced && reduced.ok ? reduced.data : []),
@@ -80,9 +89,11 @@ export default async function DistributionPage({ searchParams }: { searchParams:
       ) : (
         <>
           {mode === 'mixed' ? <MixedScopeNote /> : null}
+          <CoverageNotice rows={cov} entities={['delivery', 'transfer']} range={{ from, to }} />
           <p className="muted small">
-            Periode: {fmtRange(from, to)}. Hanya produk FIN. Pengiriman dicatat di cabang CK dan penerimaan di toko tujuan; selisih bermakna per produk dan hari,
-            bukan per cabang. Peta asal-tujuan belum tersedia.
+            Periode: {fmtRange(from, to)}. <strong>Hanya produk jadi (FIN)</strong>; bahan baku, WIP, kemasan, dan supplies ada di kartu &ldquo;Kiriman CK per
+            kelompok barang&rdquo; di bawah. Pengiriman dicatat di cabang CK dan penerimaan di toko tujuan; selisih bermakna per produk dan hari, bukan per
+            cabang. Transfer ke/dari HEAD OFFICE, gudang, dan cabang damage/expired digabung sebagai &ldquo;Non-toko&rdquo; (bukan toko). Peta asal-tujuan belum tersedia.
           </p>
 
           <Section title="Indikator utama" id="kpi">
@@ -94,8 +105,8 @@ export default async function DistributionPage({ searchParams }: { searchParams:
                 const gapPct = pctOf(Math.abs(gap), num(k.ck_out_cur));
                 return (
                   <KpiRow>
-                    <KpiTile label="Dikirim CK" value={num(k.ck_out_cur)} fmt="num" delta={{ value: pctDelta(num(k.ck_out_cur), num(k.ck_out_prev)), kind: 'pct', goodWhen: 'neutral' }} />
-                    <KpiTile label="Diterima dari CK" value={num(k.in_ck_cur)} fmt="num" delta={{ value: pctDelta(num(k.in_ck_cur), num(k.in_ck_prev)), kind: 'pct', goodWhen: 'neutral' }} />
+                    <KpiTile label="Dikirim CK (hanya FIN)" value={num(k.ck_out_cur)} fmt="num" info="Hanya produk jadi (FIN). Bahan baku, WIP, kemasan, dan supplies yang juga dikirim CK tidak termasuk; lihat kartu Kiriman CK per kelompok barang." delta={{ value: pctDelta(num(k.ck_out_cur), num(k.ck_out_prev)), kind: 'pct', goodWhen: 'neutral' }} />
+                    <KpiTile label="Diterima dari CK (hanya FIN)" value={num(k.in_ck_cur)} fmt="num" delta={{ value: pctDelta(num(k.in_ck_cur), num(k.in_ck_prev)), kind: 'pct', goodWhen: 'neutral' }} />
                     <KpiTile
                       label="Selisih kirim vs terima"
                       value={gap}
@@ -158,7 +169,8 @@ export default async function DistributionPage({ searchParams }: { searchParams:
                         fmt: 'num',
                         categories: cats,
                         series: [{ name: 'Neto transfer', data: vals, color: 'c1', itemColors: vals.map((v) => (v < 0 ? 'c5' : 'c1')) }],
-                        drill: { param: 'branch', values: used.map((r) => String(r.branch_key)), label: 'cabang' },
+                        // Baris gabungan non-toko (branch_key null) tidak bisa dijadikan filter cabang.
+                        drill: { param: 'branch', values: used.map((r) => (typeof r.branch_key === 'string' ? r.branch_key : '')), label: 'cabang' },
                         summary: summarize('Neto transfer per cabang', cats, vals, 'num', false),
                       },
                     ]}
@@ -209,6 +221,8 @@ export default async function DistributionPage({ searchParams }: { searchParams:
               )}
             </Block>
           </Section>
+
+          <CkMovementCard groupR={groupR} catR={catR} />
         </>
       )}
 
@@ -326,6 +340,10 @@ export default async function DistributionPage({ searchParams }: { searchParams:
                     { header: 'Pengiriman', align: 'right', cell: (r) => fmtInt(r.deliveries) },
                     { header: 'Terlambat', align: 'right', cell: (r) => fmtInt(r.late) },
                     { header: 'Status', cell: (r) => <StatusPill status={fillStatus(r.main, t)} /> },
+                    {
+                      header: 'Keterangan',
+                      cell: (r) => fillReason(r.main, fillStatus(r.main, t), t) + (r.late > 0 ? ` ${fmtInt(r.late)} dari ${fmtInt(r.deliveries)} pengiriman terlambat.` : ''),
+                    },
                   ]}
                 />
 
