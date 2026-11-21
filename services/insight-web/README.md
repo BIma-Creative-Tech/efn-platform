@@ -38,7 +38,7 @@ Halaman Penjualan juga memakai `sort` (`net|qty|margin`) dan `rank` (`top|bottom
 | `APP_ENV` | - (`production` menolak http) |
 | `CH_URL` / `CH_USER` / `CH_PASSWORD_FILE` | `https://clickhouse:8443` / `efn_insight` / `/run/secrets/clickhouse_password_insight` |
 | `INSIGHT_SSO_KEY_FILE` / `INSIGHT_SESSION_KEY_FILE` / `INSIGHT_SCOPE_KEY_FILE` | `/run/secrets/insight_sso_key` / `insight_session_key` / `insight_scope_key` |
-| `EFN_INSIGHT_ODOO_URL` | wajib saat aktif; **origin lengkap (scheme+host+port)** dipakai untuk cek Origin (C1) dan tautan `.../efn/insight/open` |
+| `EFN_INSIGHT_ODOO_URL` | wajib saat aktif; **origin lengkap (scheme+host+port)** dipakai untuk cek Origin (C1), tautan "Kembali ke Odoo" `.../odoo`, dan "Buka dari Odoo" `.../efn/insight/open` (masuk ulang) |
 | `NODE_EXTRA_CA_CERTS` | `/run/secrets/efn_ca_crt` |
 | `PORT` / `HOSTNAME` | `3002` / `127.0.0.1` (sidecar `insight-web-tls`) |
 | `EFN_ALLOW_PLAINTEXT` | hanya dev non-production (http ke ClickHouse/Odoo) |

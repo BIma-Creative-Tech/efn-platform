@@ -5,7 +5,7 @@ import { Shell } from '@/components/Shell';
 import { requireSession } from '@/lib/auth';
 import { codeName } from '@/lib/brands';
 import { esbCodesOf } from '@/lib/claims';
-import { odooOpenUrl } from '@/lib/config';
+import { odooHomeUrl } from '@/lib/config';
 import { fmtAge } from '@/lib/format';
 import { getConfig } from '@/lib/runtime';
 import { loadShellData } from '@/lib/shell-data';
@@ -26,7 +26,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   const cfg = getConfig();
   const esbCodes = esbCodesOf(session.codes);
   const smd = smdAllowed(session, cfg.smEnabled);
-  const odoo = odooOpenUrl(cfg);
+  const odoo = odooHomeUrl(cfg);
   const groups = navGroups(session, cfg.smEnabled);
 
   if (esbCodes.length === 0 && !smd) {

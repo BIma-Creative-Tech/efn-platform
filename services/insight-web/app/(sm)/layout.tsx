@@ -2,7 +2,7 @@ import type { Metadata } from 'next';
 import { Shell } from '@/components/Shell';
 import { requireSession } from '@/lib/auth';
 import { personasOf } from '@/lib/claims';
-import { odooOpenUrl } from '@/lib/config';
+import { odooHomeUrl } from '@/lib/config';
 import { getConfig } from '@/lib/runtime';
 import { navGroups, PERSONA_LABEL } from '@/lib/sm-personas';
 
@@ -19,7 +19,7 @@ export default async function SmLayout({ children }: { children: React.ReactNode
     <Shell
       session={session}
       groups={navGroups(session, cfg.smEnabled)}
-      odooUrl={odooOpenUrl(cfg)}
+      odooUrl={odooHomeUrl(cfg)}
       roleLabel={roleLabel}
       footNote="Data: mart supermarket (ETL tiap 15 menit)"
     >

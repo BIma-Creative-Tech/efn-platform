@@ -2677,7 +2677,9 @@ Browser staf (WireGuard)
   brand/Holding", `implied_ids` = pengguna). Tidak ada model data baru (tidak butuh record rule); bila log audit dibuat
   sebagai model, wajib `company_id` + record rule (konvensi CLAUDE.md).
 - Menu "Dashboard Insight" → action `efn_insight.action_open` (URL action ke `/efn/insight/open`, target `self`).
-  Tautan kembali dari insight-web: **`{EFN_INSIGHT_ODOO_URL}/efn/insight/open`** (bukan deep link `/odoo/action-…`).
+  Tautan "Kembali ke Odoo" di insight-web: **`{EFN_INSIGHT_ODOO_URL}/odoo`** (web client; bukan deep link `/odoo/action-…`).
+  Tombol "Buka dari Odoo" di halaman sesi berakhir/error SSO: `{EFN_INSIGHT_ODOO_URL}/efn/insight/open` (masuk ulang).
+  Koreksi 21 Nov 2026: versi awal memakai `/efn/insight/open` untuk tautan kembali sehingga selalu memutar balik ke Insight.
 - **`GET /efn/insight/open`** (`type='http'`, `auth='user'`, tanpa `sudo` untuk membaca cakupan selain membaca tabel relasi
   seperti `efn_data_ask`):
 
