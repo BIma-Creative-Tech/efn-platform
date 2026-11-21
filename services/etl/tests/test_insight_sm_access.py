@@ -616,3 +616,23 @@ def test_platform_campaign_stats_view_is_aggregate_only() -> None:
     for forbidden in ("member_id", "payload", "code_enc", "code_hash", "SELECT *"):
         assert forbidden not in view, forbidden
     assert "SET LOCAL ROLE efn_platform_owner;" in body and "GRANT SELECT ON platform.campaign" not in body
+
+
+# ---------------------------------------------------------------- SEC-G51-01 invarian persona x wids
+ODOO_SCOPE = (
+    Path(__file__).resolve().parents[3] / "services/odoo/addons/efn_insight_sm/models/res_users.py"
+).read_text(encoding="utf-8")
+
+
+def test_every_store_view_also_allows_store_covering_personas() -> None:
+    """Odoo menerbitkan store bersama persona PT hanya bila persona itu ada di STORE_COVERING_PERSONAS; wids sesi =
+    gabungan semua persona, jadi setiap view yang mengizinkan store WAJIB juga mengizinkan persona itu (SEC-G47/G51-01).
+    """
+    covering = set(
+        re.findall(r'"(\w+)"', ODOO_SCOPE.split("STORE_COVERING_PERSONAS = frozenset({", 1)[1].split("}", 1)[0])
+    )
+    assert covering == {"exec"}
+    for view, (_cls, pers) in manifest().items():
+        allowed = set(pers.split(","))
+        if "store" in allowed:
+            assert covering <= allowed, (view, allowed)

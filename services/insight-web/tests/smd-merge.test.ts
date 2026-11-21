@@ -213,6 +213,20 @@ describe('Pembayaran SMD', () => {
     const t = smdPayTrendRows([{ day: '2026-11-02', method_type: 'pay_later', amount_sum: 9, pay_n: 1 }, { day: '2026-11-02', method_type: 'x', amount_sum: 1, pay_n: 1 }]);
     expect(t.map((r) => r.payment_type)).toEqual(['SMD - Bayar nanti', 'SMD - x']);
   });
+  it('QA G51: method_type dari mart = payment_method_type Odoo 19 (none/terminal/qr_code), bukan mentah "none"', () => {
+    const t = smdPayTrendRows([
+      { day: '2026-11-02', method_type: 'none', amount_sum: 1, pay_n: 1 },
+      { day: '2026-11-02', method_type: 'terminal', amount_sum: 1, pay_n: 1 },
+      { day: '2026-11-02', method_type: 'qr_code', amount_sum: 1, pay_n: 1 },
+      { day: '2026-11-02', method_type: '', amount_sum: 1, pay_n: 1 },
+    ]);
+    expect(t.map((r) => r.payment_type)).toEqual([
+      'SMD - Manual (tunai / transfer / kartu)',
+      'SMD - Terminal kartu (EDC)',
+      'SMD - QR code',
+      'SMD - Tidak diketahui',
+    ]);
+  });
 });
 
 describe('opsi cabang SMD (daftar Cabang)', () => {

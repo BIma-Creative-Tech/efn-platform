@@ -350,7 +350,12 @@ export function mergeCategories(
 
 // ---------------------------------------------------------------- Pembayaran
 
+// `method_type` di mart = pos_payment_method.payment_method_type Odoo 19 (ETL efn_etl/pos.py): none | terminal | qr_code.
+// Kunci cash/bank/pay_later (field `type` lama) dipertahankan sebagai cadangan. Rincian tunai/QRIS/debit ada di nama metode.
 export const SMD_PAY_TYPE: Readonly<Record<string, string>> = {
+  none: 'Manual (tunai / transfer / kartu)',
+  terminal: 'Terminal kartu (EDC)',
+  qr_code: 'QR code',
   cash: 'Tunai',
   bank: 'Bank / non-tunai',
   pay_later: 'Bayar nanti',

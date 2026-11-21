@@ -313,7 +313,7 @@ Kode: `efn_etl/behavior.py`. DDL: `infra/clickhouse/init/16-g50-behavior.sql`. G
   (+`ETL_ENABLE_SM_CAMPAIGN`) `sm_campaign`.
 - Env baru (semua default aman): `ETL_ENABLE_SM` (false; butuh `ETL_ENABLE_ODOO`), `ETL_SM_COMPANIES` (`SMD`, ⊆ SM_CODES),
   `ETL_ENABLE_SM_EXPIRY` (false), `ETL_ENABLE_SM_CAMPAIGN` (false; production butuh `PROMO_CAMPAIGN_ENABLED=true`, L-180),
-  `ETL_SM_FILL_RECALC_DAYS` (14, 1..60), `ETL_SM_CAMPAIGN_ATTR_DAYS` (30, 1..365), `ETL_SM_STOCK_BACKFILL_DAYS` (90, 1..400).
+  `ETL_SM_FILL_RECALC_DAYS` (14, 1..120), `ETL_SM_CAMPAIGN_ATTR_DAYS` (30, 1..365), `ETL_SM_STOCK_BACKFILL_DAYS` (90, 1..400).
 - Grant: blok "Gelombang 47" di `sql/odoo-readonly-grants.sql` (bersyarat per modul) + view `efn_etl.purchase_partner`.
 - Backfill kategori produk (`dim_product.categ_id/categ_parent_path`): reset watermark job `products` sekali setelah
   deploy (admin ClickHouse): `INSERT INTO efn_dwh.etl_watermark (job, watermark, rows_loaded, updated_at) VALUES

@@ -39,7 +39,8 @@ export default async function ForecastPage({ searchParams }: { searchParams: Sea
   const now = new Date();
   const today = wibToday(now);
 
-  const range = { from: addDays(today, -55), to: today };
+  // QA G51: week_start = Senin; -55 membuang minggu tertua (8 minggu = Senin minggu ini - 56 s.d. - 7) -> -62.
+  const range = { from: addDays(today, -62), to: today };
   const [base, weekly, outlets, cats, next] = smdOn
     ? await Promise.all([
         loadSmBase(ctx.session, now),

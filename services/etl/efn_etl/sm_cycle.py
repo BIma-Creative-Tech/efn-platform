@@ -143,6 +143,7 @@ def run_sm_scraps(
     max_pages: int,
 ) -> PagedResult:
     """Deteksi kolom efn_* tiap siklus (murah) lalu jalankan job incremental umum (cursor write_date, RMT)."""
+    run_job(sm.sm_scrap_reason_job(), odoo, sink, store, overlap, batch_size, max_pages)  # nama alasan (dim kecil)
     cols = {str(r["column_name"]) for r in odoo.query(sm.SQL_SCRAP_EFN_COLUMNS, {})}
     job = sm.sm_scrap_job(codes, "efn_warehouse_id" in cols, "efn_waste_value" in cols)
     res = run_job(job, odoo, sink, store, overlap, batch_size, max_pages)

@@ -413,7 +413,7 @@ class Settings:
             sm_companies=sm_companies,
             sm_expiry_enabled=sm_expiry,
             sm_campaign_enabled=sm_campaign,
-            sm_fill_recalc_days=_int_range(e, "ETL_SM_FILL_RECALC_DAYS", 14, 1, 60),
+            sm_fill_recalc_days=_int_range(e, "ETL_SM_FILL_RECALC_DAYS", 14, 1, 120),
             sm_campaign_attr_days=_int_range(e, "ETL_SM_CAMPAIGN_ATTR_DAYS", 30, 1, 365),
             sm_stock_backfill_days=_int_range(e, "ETL_SM_STOCK_BACKFILL_DAYS", 90, 1, 400),
             sm_stock_reconstruct_days=sm_reconstruct_days,

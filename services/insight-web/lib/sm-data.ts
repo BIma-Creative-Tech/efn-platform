@@ -253,7 +253,8 @@ export interface ExecData {
 
 export async function loadExec(ctx: SmCtx): Promise<ExecData> {
   const cfg = ctx.base.config;
-  const wapeRange = { from: addDays(ctx.today, -55), to: ctx.today };
+  // QA G51: week_start = Senin; 8 minggu selesai = Senin (minggu ini - 8 .. - 1) = sampai today-62 (-55 membuang minggu tertua).
+  const wapeRange = { from: addDays(ctx.today, -62), to: ctx.today };
   const [sales, trend, margin, gm, sums, weekly, wapeOut, oSales, oMargin, oWaste, wCat, sCat] = await Promise.all([
     q('sm_ex_sales', ctx),
     q('sm_ex_trend', ctx),

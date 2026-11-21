@@ -1858,7 +1858,7 @@ def do_purchases(day_pos, products, suppliers, dc_ops, counters):
             when[picking.id] = actual_dt
     if not receipts:
         return
-    receipts.action_assign()
+    assign_open(receipts)
     for picking in receipts:
         day = when[picking.id]
         for move in picking.move_ids.filtered(lambda m: m.state not in ("done", "cancel")):
@@ -1898,7 +1898,7 @@ def do_purchases(day_pos, products, suppliers, dc_ops, counters):
         batch = receipts.filtered(lambda p, d=day: when[p.id].date() == d)
         done = validate(batch, (when[batch[:1].id] + timedelta(hours=7)).date())
         stores = done.move_ids.filtered(lambda m: m.state == "done").move_dest_ids.picking_id
-        stores.action_assign()
+        assign_open(stores)
         stored = validate(stores, (when[batch[:1].id] + timedelta(hours=7)).date())
         for p in done:
             stamp[p.id] = when[p.id]
@@ -1932,6 +1932,17 @@ def chain_legs(proposal):
     }
 
 
+def assign_open(pickings):
+    """action_assign hanya untuk picking yang masih punya move terbuka (stock.picking 19.0 melempar UserError
+    "Nothing to check the availability for." bila semua move done/cancel, mis. leg yang seluruh barisnya dibatalkan)."""
+    open_ = pickings.filtered(
+        lambda p: p.state not in ("done", "cancel") and p.move_ids.filtered(lambda m: m.state not in ("done", "cancel"))
+    )
+    if open_:
+        open_.action_assign()
+    return open_
+
+
 def run_legs(items, ship_when, recv_when, counters):
     """items = [(proposal, prop)]. Proses pick -> ship -> receipt -> storage untuk satu gelombang."""
     Picking = env["stock.picking"].sudo()
@@ -1944,7 +1955,7 @@ def run_legs(items, ship_when, recv_when, counters):
         if not prop.get("backorder"):
             cancel |= legs[rec.id]["pick"] | legs[rec.id]["ship"] | legs[rec.id]["recv"]
     stamp = {}
-    allp["pick"].action_assign()
+    assign_open(allp["pick"])
     for rec, prop in items:
         if not prop.get("short"):
             continue
@@ -1956,7 +1967,7 @@ def run_legs(items, ship_when, recv_when, counters):
     for leg in ("pick", "ship", "recv"):
         pickings = allp[leg]
         if leg != "pick":
-            pickings.action_assign()
+            assign_open(pickings)
         # Satu button_validate per (leg, waktu) — batch lintas usulan; picking yang dibatalkan sisanya = ``cancel``.
         by_when = {}
         for rec, prop in items:
@@ -1971,7 +1982,7 @@ def run_legs(items, ship_when, recv_when, counters):
     stores = recv_done.move_ids.filtered(lambda m: m.state == "done").move_dest_ids.picking_id.filtered(
         lambda p: p.state not in ("done", "cancel")
     )
-    stores.action_assign()
+    assign_open(stores)
     by_recv = {}
     for rec, prop in items:
         for p in legs[rec.id]["recv"]:
@@ -2105,7 +2116,7 @@ def do_backorders(day, counters):
         for _leg, pickings, when in groups:
             if not pickings:
                 continue
-            pickings.action_assign()
+            assign_open(pickings)
             done = validate(pickings, day)
             cancel_leftover(pickings, pickings)
             for p in done:
@@ -2115,7 +2126,7 @@ def do_backorders(day, counters):
             lambda p: p.state not in ("done", "cancel")
         )
         if stores:
-            stores.action_assign()
+            assign_open(stores)
             for p in validate(stores, day):
                 stamp[p.id] = local_dt(day, 15, offset)
     backdate_pickings(stamp)
@@ -2159,7 +2170,7 @@ def do_sales_out(day, sales, codes, products, allowed, counters):
     if not created:
         return
     created.action_confirm()
-    created.action_assign()  # FEFO (removal strategy kategori), dibatasi stok tersedia
+    assign_open(created)  # FEFO (removal strategy kategori), dibatasi stok tersedia
     done = validate(created, day)
     cancel_leftover(created, created)  # tanpa stok sama sekali -> batal (tidak menggantung)
     counters["sale_pickings"] += len(done)
@@ -2257,9 +2268,33 @@ def do_scraps(day, products, tags, counters):
     env.invalidate_all()
 
 
+# ---------------------------------------------------------------- stok awal (tahap 6) -> sebelum jendela loop
+def backdate_opening_stock():
+    """QA G51: penyesuaian inventori tahap 6 bertanggal hari seed. Rekonstruksi stok harian ETL (B6, sm_stock_hist) =
+    quant sekarang - Σ move SETELAH hari d, sehingga stok awal bertanggal 'hari ini' ikut terkurangi untuk semua hari lampau
+    (stok historis jauh di bawah nyata / negatif). Digeser ke sebelum awal loop (H-1 loop_start 00:00 WIB). Idempoten."""
+    opening = local_dt(loop_start - timedelta(days=1), 0)
+    env.flush_all()
+    env.cr.execute(
+        "UPDATE stock_move SET date = %s WHERE company_id = %s AND is_inventory AND state = 'done' AND date > %s",
+        (opening, company.id, opening),
+    )
+    moved = env.cr.rowcount
+    env.cr.execute(
+        "UPDATE stock_move_line SET date = %s WHERE date > %s AND move_id IN "
+        "(SELECT id FROM stock_move WHERE company_id = %s AND is_inventory AND state = 'done')",
+        (opening, opening, company.id),
+    )
+    env.invalidate_all()
+    env.cr.commit()
+    say(f"stok awal: {moved} move inventori digeser ke {opening} (UTC) agar rekonstruksi stok historis benar")
+
+
 # ---------------------------------------------------------------- tahap 13: loop harian
 def stage_g51_loop(products, suppliers, allowed):
     parts = [p for p in ("flow", "a7", "a3") if p in PARTS]
+    if parts:
+        backdate_opening_stock()
     codes = e2e_codes(allowed)
     sales = load_sales(products, codes)
     say(

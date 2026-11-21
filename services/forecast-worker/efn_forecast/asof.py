@@ -144,4 +144,8 @@ def validate_document(doc: Any) -> dict[str, Any]:
 
 
 def write_document(path: Path, doc: dict[str, Any]) -> None:
-    path.write_text(json.dumps(doc, separators=(",", ":"), ensure_ascii=False), encoding="utf-8")
+    """SEC-G51-04: hanya file .json baru (mode "x": tolak bila sudah ada, tidak menimpa)."""
+    if path.suffix != ".json":
+        raise ContractError("asof_out_suffix")
+    with path.open("x", encoding="utf-8") as fh:
+        fh.write(json.dumps(doc, separators=(",", ":"), ensure_ascii=False))

@@ -53,6 +53,7 @@ JOB_MARKDOWN: Final = "sm_expiry_markdown"
 JOB_EXPIRY_AGG: Final = "sm_expiry_agg"
 JOB_CAMPAIGN: Final = "sm_campaign"
 JOB_SCRAPS: Final = "sm_scraps"
+JOB_SCRAP_REASONS: Final = "sm_scrap_reasons"
 
 Q2: Final = Decimal("0.01")
 Q3: Final = Decimal("0.001")
@@ -712,6 +713,14 @@ def sm_scrap_job(codes: Sequence[str], has_efn_warehouse: bool, has_efn_value: b
 
     sql = scrap_sql(has_efn_warehouse, has_efn_value, company_filter("c", codes))
     return Job(JOB_SCRAPS, "odoo", sql, "fact_scrap", SCRAP_COLUMNS, transform_scrap)
+
+
+def sm_scrap_reason_job() -> Job:
+    """Job `sm_scrap_reasons` (QA G51): nama alasan scrap -> dim_scrap_reason. Tanpa ini v_sm_waste_daily menampilkan
+    "Tanpa alasan" untuk SMD bila ETL_ENABLE_WASTE (job G32 `waste_reasons`) mati. Tag tidak punya company_id."""
+    from efn_etl.waste import REASON_COLUMNS, SQL_REASONS, transform_reason
+
+    return Job(JOB_SCRAP_REASONS, "odoo", SQL_REASONS, "dim_scrap_reason", REASON_COLUMNS, transform_reason)
 
 
 # ---------------------------------------------------------------- daftar job runner

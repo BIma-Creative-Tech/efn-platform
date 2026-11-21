@@ -76,7 +76,7 @@ class TestInsightSmScope(TransactionCase):
 
     def test_store_dropped_with_marketing_or_dc(self):
         # SEC-G47-01: store + marketing/dc tidak boleh membuka view store untuk semua outlet.
-        for persona in ("marketing", "dc"):
+        for persona in ("marketing", "dc", "category"):  # SEC-G51-01: category juga
             with self.subTest(persona=persona):
                 user = self.make_user(f"efn_sm_scope_{persona}_store", [persona, "store"])
                 user.sudo().efn_outlet_warehouse_ids = [Command.set([self.outlet1.id])]

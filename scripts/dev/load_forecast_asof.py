@@ -18,7 +18,6 @@ salinan ClickHouse (fact_forecast_daily) tetap untuk akurasi.
 
 import json
 import os
-import re
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -43,6 +42,15 @@ Run = env["efn.forecast.run"].sudo().with_context(tracking_disable=True, mail_cr
 Daily = env["efn.forecast.daily"].sudo()
 Chunk = env["efn.forecast.chunk"].sudo()
 cap = fa.max_qty(env)
+
+# SEC-G51-02: hanya DB demo supermarket (guard sama dengan seed_demo_supermarket.py) dan hanya PT SMD (cek per file).
+_setup = (
+    env["ir.module.module"]
+    .sudo()
+    .search([("name", "=", "efn_setup_supermarket"), ("state", "=", "installed")], limit=1)
+)
+if not _setup or not _setup.demo or not env.ref("efn_setup_supermarket.warehouse_smd01", raise_if_not_found=False):
+    raise SystemExit(f"{TAG} bukan DB demo supermarket (efn_setup_supermarket dengan data demo + outlet SMD01 wajib)")
 now = fields.Datetime.now()
 summary = {"created": 0, "skipped": 0, "lines": 0, "rejected": 0}
 
@@ -66,7 +74,7 @@ for path in files:
     if generated != expected or generated > now - timedelta(days=1):
         raise SystemExit(f"{TAG} {path.name}: generated_at harus Minggu 23:00 WIB sebelum as_of dan di masa lalu")
     code = run_open.get("company_code")
-    if not isinstance(code, str) or not re.fullmatch(r"[A-Z]{2,8}", code):
+    if code != "SMD":  # SEC-G51-02: hanya PT demo supermarket
         raise SystemExit(f"{TAG} {path.name}: company_code tidak valid")
     company = env["res.company"].sudo().search([("efn_brand_code", "=", code)], limit=1)
     if not company:

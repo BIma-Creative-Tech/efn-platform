@@ -40,3 +40,6 @@ infra/traefik/dev/local/
 
 # arsip kit pribadi Claude (bukan bagian repo)
 docs/claude-standard-kit.zip
+
+# G51 demo: keluaran forecast --as-of (docs/runbooks/demo-supermarket-seed.md §8), bisa berisi data penjualan
+var/

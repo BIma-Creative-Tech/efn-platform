@@ -329,6 +329,11 @@ Catatan & batasan:
 - Jangan menghapus lalu memuat ulang run as-of setelah ETL menyalinnya: ETL tidak melihat penghapusan Odoo, sehingga
   run lama tetap `ok` di `dim_forecast_run` (run_id Odoo baru = baris ganda dengan generated_at sama). Bila terpaksa,
   muat ulang di DB demo baru.
+- **Wajib untuk demo (QA G51):** `ETL_SM_FILL_RECALC_DAYS=90` di `infra/compose/.env` (default 14 hanya membaca usulan
+  14 hari terakhir -> `fact_dc_fill_rate` seed 90 hari tidak penuh; batas atas 120). Setelah satu siklus penuh boleh
+  dikembalikan ke 14 (baris lama tetap di ClickHouse).
+- Keterlambatan PO (A2 "±10% terlambat") TIDAK terlihat di mart: `v_sm_dc_purchase.is_late` hanya menyala untuk PO `purchase`
+  yang `date_planned` lewat dan `qty_received < product_qty`; seed menerima semua PO penuh.
 - Flag ETL G51 terkait (default mati): `ETL_SM_STOCK_RECONSTRUCT_DAYS=90` (histori stok GMROI dari stock move A1/A2/A3/A7,
   butuh `ETL_ENABLE_SM=true`), lihat `services/etl/efn_etl/sm_stock_hist.py`.
 - **Belum diverifikasi** (penulis tanpa shell): perintah di atas belum pernah dijalankan; izin tulis bind mount untuk
