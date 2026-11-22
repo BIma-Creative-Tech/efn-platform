@@ -32,18 +32,35 @@ tertinggal: selalu branch dari `origin/main`.
 
 **Sedang dikerjakan:** review keamanan `efn-security-reviewer` atas branch; lalu push + satu PR (user merge manual).
 
+**22 Nov pagi — "Data tidak dapat dimuat":** log insight-web 07:58–08:00 WIB = ClickHouse code 159 (timeout 30 dtk profil
+`insight_readonly`) + code 241 (memori > 2 GB per query) + antrean semaphore habis, terutama `exec_*`, `flow_*`, `list_categories`.
+Penyebab: setelah top-up 1 tahun, view `v_esb_sales_branch_daily` / `v_esb_sales_daily` / `v_esb_flow_daily` menghitung `FINAL` +
+filter checkpoint + `uniqExact` + JOIN atas seluruh fakta setiap query; Docker Desktop juga sempat tidak responsif (tekanan memori).
+Mitigasi UI: layar memuat yang memblokir (README insight-web, belum di-commit, sudah ter-deploy di efn-prod). Perbaikan akar
+(belum): tabel agregat harian (mis. `agg_esb_sales_branch_daily`, `agg_esb_flow_daily`) diisi saat ekstraksi/copy, view membaca agregat.
+
 **Langkah berikutnya:**
-1. Setelah top-up efn-prod dari sesi d4: cek `v_esb_coverage` (production dst. 1 tahun) dan jalankan ulang SQL isi `dim_esb_menu` dari
-   `raw_doc` bila raw sales baru ikut disalin (SQL di `docs/agent-reports/efn-data-ai-engineer.md`, koreksi lead).
+1. ~~Top-up efn-prod dari sesi d4~~ **selesai 22 Nov 04:50 WIB**: `v_esb_coverage` PB 2025-11-17..2026-11-20 = 369 hari untuk
+   sales/production/delivery/fin_sold, transfer 368 (1 Agt 2026 galat ESB), payment 350 (19 tanggal ditolak ESB permanen).
+   Isi ulang `dim_esb_menu` dari `raw_doc`: +16 kode (2.317 -> 2.333); kategori kosong 0,1% baris / 0% net (1 tahun).
+   Berikutnya dari d4: sales 2025-02-01..2025-11-16 lalu top-up kedua -> jalankan ulang SQL yang sama.
 2. Uji browser oleh user (toolbar, popover tanggal, sidebar ciut, legend, popover istilah) — belum diuji di browser nyata.
-3. Rotasi `insight_scope_key` env efn-prod (tercetak di transkrip lewat pesan galat ClickHouse; temuan pre-existing, lihat laporan security).
+3. ~~Rotasi `insight_scope_key` env efn-prod~~ **selesai 21 Nov 20:23 WIB** (fingerprint lama 8b1061dae150 -> baru 3d6e8c3f6b01;
+   43/43 row policy `efn_insight_scope` memuat kunci baru; halaman memuat data; edge 9443 = 200). Kunci lama tidak berlaku lagi,
+   jadi baris `query_log` lama tidak perlu dihapus. Perbaikan struktural SEC-IR-01 (komitmen hash, revisi ADR-041) belum.
+4. Usulan infra: 14 sidecar TLS `network_mode: "service:<x>"` hanya `depends_on: [x]` -> recreate service utama membuat sidecar
+   menempel ke netns container lama (gejala: Insight 502 Bad Gateway 21 Nov). Tambah `depends_on: {x: {condition: service_started,
+   restart: true}}` atau selalu recreate sidecar bersama service utama.
 
 **Blocker / pertanyaan untuk user:**
 1. Menyalakan extractor ESB harian langsung di efn-prod butuh kredensial ESB di env itu + pemenuhan §1a (DPO, user API read-only, Legal).
 2. (lama) Command global `~/.claude/commands/{handoff,lanjut,security-check}.md` menimpa versi project EFN.
 
 **Gotcha:**
+- Recreate `insight-web` (atau service lain ber-sidecar TLS) WAJIB diikuti `up -d --no-deps --force-recreate insight-web-tls`,
+  kalau tidak edge mengembalikan 502 (sidecar memakai netns container lama).
 - Container insight-web rootfs read-only: skrip uji lewat stdin (`node --input-type=module -`).
+- `openssl rand -hex` di Git Bash Windows menulis CRLF: normalisasi (`tr -dc 0-9a-f`) sebelum menjadi file secret.
 - ClickHouse: `FINAL` + `ARRAY JOIN` pada `raw_doc` gagal; alias agregat tidak boleh sama dengan kolom dalam yang dipakai di WHERE.
 - Sesi uji eis2 butuh peran dasar `user` + persona, `wids` memuat 0 hanya untuk persona tingkat PT (lib/claims.ts scopeConsistent).
 - gitleaks CI memindai semua branch; squash merge memunculkan fingerprint baru → inline `gitleaks:allow` untuk fixture.

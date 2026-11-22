@@ -37,6 +37,11 @@ Visibilitas = aturan sesi yang ada (`lib/sm-personas.ts navGroups`): Ringkasan b
 PT F&B hanya melihat "Distribusi CK / DC" = bagian DC supermarket); Supermarket = persona di `roles` + `INSIGHT_SM_ENABLED`, Forecast hanya untuk exec ber-SMD.
 Sidebar bawah: **Glosarium** (`lib/glossary.ts`; istilah juga muncul sebagai ikon "i" di label KPI, judul kartu, dan header kolom lewat `components/Term.tsx`).
 
+**Layar memuat yang memblokir** (22 Nov 2026, `components/LoadingOverlay.tsx`, `lib/loading-store.ts`): aktif saat klik tautan internal, drill-down,
+perubahan filter, dan "Coba lagi"; `.shell` diberi `inert` sehingga menu/halaman tidak bisa diklik atau difokus sampai URL berubah (halaman tanpa
+Suspense: commit = semua query selesai) atau transisi selesai; batas aman 90 dtk. Muat awal memakai `app/loading.tsx` (layar penuh). Visual: batang
+animasi yang bereaksi ke kursor/sentuhan, tahapan, detik berjalan, progres perkiraan, tip; `prefers-reduced-motion` mematikan animasi.
+
 ## Filter (URL, divalidasi server; tidak valid -> bawaan + pemberitahuan)
 **Perilaku (21 Nov 2026): filter langsung berlaku**, tanpa tombol Terapkan. Chip brand ("Semua" eksplisit) dan preset tanggal memakai `router.push` seketika;
 tanggal kustom (setelah kedua tanggal sah) dan pilihan ganda cabang/kategori/produk di-debounce 400-500 ms. Rentang tanggal yang dipilih ditulis eksplisit ke URL dan
