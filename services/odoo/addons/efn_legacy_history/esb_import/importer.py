@@ -800,11 +800,27 @@ class _Run:
         return rec.id
 
     def _do_category(self, rows):
+        # G61 (docs/fit-gap/G61_KATEGORI_PRODUK_PB.md): bundel membawa pohon peran (`Persediaan / ...`, urut kedalaman)
+        # -> tingkat atas TANPA induk brand. product.category tidak ber-company: pohon dipakai bersama PT/brand, jadi
+        # kategori yang sudah ada dengan nama + induk sama (mis. dibuat scripts/migration/recategorize_pb.py) ditautkan
+        # ke xmlid bundel, bukan digandakan. Urutan stabil: induk (lebih dangkal) selalu lebih dulu.
         for row in sorted(rows, key=lambda r: r["data"].get("parent_key") is not None):
             code = row["company_code"]
-            root = None if row["data"].get("parent_key") else self._category_root()
-            plan = m.category_plan(row["data"], self, root)
+            plan = m.category_plan(row["data"], self, None)
+            if not plan.missing:
+                self._adopt_category(row["xmlid"], plan.owned)
             self.upsert("category", "category", code, row["esb_key"], row["xmlid"], plan, self.env)
+
+    def _adopt_category(self, full, owned):
+        name = self._name(full)
+        if not name or self.res_id(full):
+            return
+        found = self.env["product.category"].search(
+            [("name", "=", owned["name"]), ("parent_id", "=", owned["parent_id"] or False)], limit=1
+        )
+        if found:
+            self._bind(name, "product.category", found.id)
+            self._exists_cache[("product.category", found.id)] = True
 
     def _do_pos_category(self, rows):
         for row in sorted(rows, key=lambda r: r["data"].get("parent_key") is not None):

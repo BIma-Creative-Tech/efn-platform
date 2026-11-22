@@ -154,9 +154,9 @@ pajak, tanggal ISO `YYYY-MM-DD`.
 |---|---|---|---|
 | `branch.jsonl` | `branch_wh` (store/ck/warehouse) atau `branch_loc` (location) | `branch_id` | `branch_id, name, warehouse_code, type, is_central_kitchen, active, pos_xmlid` (xmlid `branch_pos`, hanya store) / lokasi: `branch_id, name, type="location", parent_key, active` |
 | `uom.jsonl` | `uom` | teks satuan ESB | `esb_uom, uom_xmlid` (null = tak terpetakan → error), `ea_factor` |
-| `category.jsonl` | `category` | nama kategori ESB | `name, parent_key` (null; ESB satu tingkat) |
+| `category.jsonl` | `category` | path kategori target G61 (`Persediaan / Bahan Baku / Impor`; satu baris per simpul, urut kedalaman) | `name` (simpul terakhir), `parent_key` (xmlid simpul induk; null = tingkat atas, tanpa induk brand). Sumber = `efn_mig/category_roles.csv`; kategori ESB tidak terpetakan → export gagal (exit 2) |
 | `pos_category.jsonl` | `pos_category` | `kategori` atau `kategori/detail` | `name, parent_key` |
-| `product.jsonl` | `product` | `product_code` | `default_code, name, categ_key, uom_esb, uom_xmlid, ea_factor, type="consu", is_storable=true, purchase_ok, sale_ok=false, is_fin, active, batch_to_ea_ratio` |
+| `product.jsonl` | `product` | `product_code` | `default_code, name, categ_key, uom_esb, uom_xmlid, ea_factor, type, is_storable, purchase_ok, sale_ok, is_fin, active, batch_to_ea_ratio` — `categ_key`/`type`/`is_storable`/`sale_ok`/`purchase_ok` dari peran kategori (`category_roles.csv`, G61); FIN selalu `purchase_ok=false` |
 | `menu.jsonl` | `menu` | `menu_code` | `menu_code, name, pos_categ_key, list_price, available_in_pos, sale_ok, type="consu", active, bom_name, alias_of, is_takeaway` — takeaway `" T"` dengan menu dasar: `alias_of` = xmlid menu dasar → importer **tidak** membuat produk baru, hanya menambah xmlid kedua ke record dasar. Menu arsip (hanya di histori 24 bulan / nonaktif): `active=false` → importer membuat produk arsip |
 | `supplier.jsonl` | `supplier` | kode | `ref, name, is_company, supplier_rank, active` |
 | `customer.jsonl` | `customer` | kode | `ref, name, is_company, customer_rank, category_name, payment_term_key, active` (tanpa alamat/PIC/telepon/NPWP) |

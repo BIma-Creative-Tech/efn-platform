@@ -179,7 +179,25 @@ $MIG python esb_to_odoo.py reconcile --bundle /out/$RUN.efnmig --result /out/$RU
 
 Ulang impor nyata dengan bundel yang sama harus menghasilkan `created = 0` (idempoten lewat xmlid `efn_mig_esb.*`).
 `reconcile` dry-run: beri `--result /out/$RUN.dryrun.result.efnmig` (run_id sama dengan bundel).
-Kategori produk induk brand (`PB`) dibuat sebagai kategori tingkat atas (Odoo 19 tanpa kategori "All").
+Kategori produk (G61): bundel membawa pohon per peran akuntansi dari `scripts/migration/efn_mig/category_roles.csv`
+(`Persediaan / …`, `Perlengkapan / …`, `Beban / Jasa / …`, `Aset Tetap / …`), tanpa induk brand. Kategori ESB yang tidak
+ada di tabel menggagalkan export (exit 2): tambahkan barisnya (disetujui Finance), lalu ekspor ulang. Untuk DB yang sudah
+diimpor dengan struktur lama, lihat §4.5.
+
+**Wajib setelah impor master nyata (G54):** `pos.config` hasil impor sengaja **tanpa metode bayar** sehingga "Open
+Register" ditolak. Sebelum POS dipakai, jalankan wizard *Point of Sale → Configuration → Lengkapi konfigurasi POS*
+(`efn_setup_pos` ≥ 19.0.1.15.0; README modul §G54) per company yang diimpor:
+1. Company aktif = brand yang diimpor (mis. PB). Mode **Cek**, POS dikosongkan (= semua POS aktif) → simpan ringkasan
+   (`blocked` P07 diharapkan; blocker lain, mis. P10 operation type kosong = perbaiki `branch_map`/gudang dulu).
+2. Mode **Apply** oleh user ber-hak *Point of Sale / Administrator* **dan** *Akuntansi / Administrator* → tunai per
+   outlet (jurnal `<brand>C..`), EDC, QRIS manual, akun POS company, pajak default untuk menu tanpa pajak. Poin EFN
+   hanya untuk POS yang `efn_loyalty_redeem_enabled`.
+3. Jalankan Apply sekali lagi → tidak boleh ada baris `fixed` (idempoten). Ringkasan "N dari N siap dibuka" + daftar
+   peringatan (header struk, preset F&B, PB1 tanpa akun) dilampirkan ke berita acara (§6).
+4. Uji satu outlet: login kasir → buka & tutup sesi tanpa transaksi.
+
+Sebelum `-u efn_setup_pos` di efn-prod: pastikan tidak ada jurnal ber-kode `QRIS` di PT ber-POS
+(`SELECT company_id FROM account_journal WHERE code = 'QRIS'` = 0 baris), karena kode jurnal unik per company.
 
 ### 4.3 Histori (rentang terbatas)
 ```bash
@@ -221,6 +239,7 @@ manifest), bukan nama berkas `<parent>_<PT>_<YYYYMM>`; tanpa laporan itu importe
 
 ### 4.4 Validasi fungsional di Odoo (checklist)
 - [ ] Gudang/lokasi/`pos.config` PB sesuai `branch_map`; tidak ada sesi POS terbuka dibuat.
+- [ ] Wizard *Lengkapi konfigurasi POS* (G54, §4.2) sudah di-apply: 0 POS `blocked`, apply ulang tanpa baris `fixed`.
 - [ ] Sampel 20 produk + 20 menu: nama, kategori, UoM, harga jual, aktif/arsip benar; takeaway `" T"` = xmlid kedua pada
       menu dasar (bukan produk baru).
 - [ ] BoM phantom (menu) dan normal (CK) dengan komponen & qty sesuai ESB untuk 5 sampel.
@@ -230,6 +249,37 @@ manifest), bukan nama berkas `<parent>_<PT>_<YYYYMM>`; tanpa laporan itu importe
 - [ ] Tidak ada `pos.order`/`account.move`/`stock.move` baru dari impor (`SELECT count(*) ... WHERE create_date > <mulai>`).
 - [ ] Forecast `efn_demand_forecast` membaca `efn.legacy.flow.daily` untuk tanggal < cutover (`efn_mig_esb.cutover_date.PB`
       hanya ditulis run nyata `cutover-param`; di dry-run cukup cek metode `_efn_legacy_outflow()` mengembalikan data).
+
+### 4.5 Restrukturisasi kategori PB yang sudah diimpor (G61)
+Untuk DB yang sudah berisi produk PB dengan struktur lama (`PB / <kategori ESB>`, menu tanpa kategori), misalnya
+efn-prod. Ringkasan untuk manajer dan tabel pemetaan ada di
+[G61_KATEGORI_PRODUK_PB.md](../fit-gap/G61_KATEGORI_PRODUK_PB.md). Skrip: `scripts/migration/recategorize_pb.py`.
+
+Prasyarat (dicek ulang oleh skrip; gagal = batal tanpa menulis):
+- tidak ada sesi POS PB yang belum ditutup;
+- 0 `stock.move` dan 0 `stock.quant` untuk produk PB;
+- setiap produk PB punya kategori ESB yang ada di `category_roles.csv`, atau berupa menu (`sale_ok`, tanpa kategori);
+- backup DB sudah diambil (§8: dump terenkripsi / PITR WAL-G).
+
+```bash
+cd infra/compose
+export DCM ODOO_DB    # sama dengan §4.2 (overlay migration: /opt/efn-migration + /mnt/efn-mig)
+G61="$DCM run --rm --no-deps -T --label traefik.enable=false -e ODOO_WORKERS=0 -e ODOO_MAX_CRON_THREADS=0"
+# 1) DRY-RUN (default): semua langkah dijalankan lalu di-rollback; laporan CSV per produk
+$G61 -e EFN_G61_REPORT=/mnt/efn-mig/g61_dryrun_$(date +%Y%m%d%H%M).csv odoo \
+  odoo shell -d "$ODOO_DB" --no-http --max-cron-threads=0 --log-level=warn < ../../scripts/migration/recategorize_pb.py
+#   -> "[efn-g61] {...}": unmapped harus 0; periksa per_target, warnings (akun kosong, mis. A10 Perangkat Lunak),
+#      bom_lines_service_component, available_in_pos_outside_menu, categories_removed/kept_old
+# 2) Review laporan bersama Finance (kolom note = ambiguitas A1-A11), lalu APPLY:
+$G61 -e EFN_G61_APPLY=1 -e EFN_G61_REPORT=/mnt/efn-mig/g61_apply_$(date +%Y%m%d%H%M).csv odoo \
+  odoo shell -d "$ODOO_DB" --no-http --max-cron-threads=0 --log-level=warn < ../../scripts/migration/recategorize_pb.py
+# 3) Ulangi dry-run: perubahan produk harus 0 (old_flags = new_flags, kategori sama), categories_created = []
+```
+Exit: 0 OK · 1 ada produk tak terpetakan (tidak ada yang ditulis) · 2 prasyarat/konfigurasi gagal.
+Skrip ini hanya menyentuh PT `PB` (`EFN_G61_COMPANY`, SMD ditolak). Akun kategori adalah PLACEHOLDER sampai Finance
+menjawab Q-ESB16: kategori baru langsung diisi, sedangkan kategori yang sudah ada hanya diisi bila akunnya kosong.
+Kategori lama di bawah `PB` yang sudah kosong dan tidak dirujuk akan dihapus (bersama xmlid-nya). Laporan CSV disimpan
+di `MIG_EXCHANGE_DIR` dan ikut aturan hapus §7.
 
 ## 5. Ukuran tabel histori & dampak backup (wajib dilaporkan di dry-run PB)
 

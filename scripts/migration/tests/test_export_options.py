@@ -42,7 +42,7 @@ def test_strict_default_recorded_and_clean(tmp_path: Path, keys: b.Keys, maps: M
 
 
 def test_default_uom(tmp_path: Path, keys: b.Keys, maps: Maps, source: FakeSource) -> None:
-    source.dims["dim_esb_product"].append(product("PKG1", "Kemasan", "Bahan", "", 0, None))
+    source.dims["dim_esb_product"].append(product("PKG1", "Kemasan", "Packaging", "", 0, None))
     errors, _ = levels(export(tmp_path / "a", keys, maps, source, ExportOptions()))
     assert "PRODUCT_UOM" in errors  # default ketat tetap error
     bundle = export(tmp_path / "b", keys, maps, source, ExportOptions(default_uom="uom.product_uom_unit"))

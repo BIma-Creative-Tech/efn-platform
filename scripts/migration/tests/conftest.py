@@ -154,8 +154,8 @@ class FakeSource:
                 branch(99, "Tutup", active=0),
             ],
             "dim_esb_product": [
-                product("FIN-001", "FIN Roti Tawar", "Roti", "", 1, 12.0),
-                product("RM001", "Tepung", "Bahan", "KG", 0, None),
+                product("FIN-001", "FIN Roti Tawar", "FIN", "", 1, 12.0),
+                product("RM001", "Tepung", "Local - Dry", "KG", 0, None),
             ],
             "dim_esb_menu": [menu("M01", "Roti Tawar"), menu("M01T", "Roti Tawar T", takeaway=1)],
             "dim_esb_supplier": [{"supplier_code": "SUP1", "supplier_name": "PT Pemasok", "active": 1}],
