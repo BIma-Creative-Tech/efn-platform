@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- G60-B demo: tarif MDR PLACEHOLDER (EDC 1,5%, QRIS 0,7%) untuk metode EDC/QRIS manual efn_setup_pos per PT yang
+     punya akun l10n_id_65110020 (Bank Administration Fees). Bukan tarif kontrak (Q-G60-5); tidak ada tarif di data/. -->
+<odoo>
+    <function model="efn.mdr.rate" name="_efn_load_demo_rates"/>
+</odoo>

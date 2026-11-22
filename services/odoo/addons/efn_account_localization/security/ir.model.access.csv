@@ -1,0 +1,5 @@
+id,name,model_id:id,group_id:id,perm_read,perm_write,perm_create,perm_unlink
+access_efn_mdr_rate_readonly,efn.mdr.rate accounting readonly,model_efn_mdr_rate,account.group_account_readonly,1,0,0,0
+access_efn_mdr_rate_manager,efn.mdr.rate accounting manager,model_efn_mdr_rate,account.group_account_manager,1,1,1,1
+access_efn_outlet_analytic_wizard_manager,efn.outlet.analytic.wizard accounting manager,model_efn_outlet_analytic_wizard,account.group_account_manager,1,1,1,1
+access_efn_outlet_analytic_wizard_line_manager,efn.outlet.analytic.wizard.line accounting manager,model_efn_outlet_analytic_wizard_line,account.group_account_manager,1,1,1,1

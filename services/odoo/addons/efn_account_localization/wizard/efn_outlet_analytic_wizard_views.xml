@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="efn_outlet_analytic_wizard_view_form" model="ir.ui.view">
+        <field name="name">efn.outlet.analytic.wizard.form</field>
+        <field name="model">efn.outlet.analytic.wizard</field>
+        <field name="arch" type="xml">
+            <form string="Siapkan Analitik Outlet">
+                <div class="alert alert-info" role="alert">
+                    Satu akun analitik plan "Outlet" per gudang outlet (gudang yang dipakai Point of Sale). Laba-rugi
+                    jurnal tutup sesi POS dicap otomatis ke akun ini. "Cek" tidak mengubah data; "Terapkan" idempoten.
+                </div>
+                <group>
+                    <field name="company_id" options="{'no_create': True}"/>
+                    <field name="include_all_warehouses"/>
+                    <field name="summary" invisible="not summary"/>
+                </group>
+                <field name="line_ids" invisible="not line_ids">
+                    <list decoration-danger="status == 'blocked'" decoration-success="status == 'fixed'"
+                          decoration-info="status in ('link', 'create')">
+                        <field name="warehouse_id"/>
+                        <field name="analytic_account_id"/>
+                        <field name="status"/>
+                        <field name="message"/>
+                    </list>
+                </field>
+                <footer>
+                    <button name="action_check" string="Cek" type="object" class="btn-secondary"/>
+                    <button name="action_apply" string="Terapkan" type="object" class="btn-primary"/>
+                    <button string="Tutup" special="cancel" class="btn-secondary"/>
+                </footer>
+            </form>
+        </field>
+    </record>
+
+    <record id="action_efn_outlet_analytic_wizard" model="ir.actions.act_window">
+        <field name="name">Siapkan Analitik Outlet</field>
+        <field name="res_model">efn.outlet.analytic.wizard</field>
+        <field name="view_mode">form</field>
+        <field name="target">new</field>
+    </record>
+
+    <menuitem id="menu_efn_outlet_analytic_wizard"
+              name="Siapkan Analitik Outlet"
+              parent="account.menu_analytic_accounting"
+              action="action_efn_outlet_analytic_wizard"
+              sequence="40"
+              groups="account.group_account_manager"/>
+</odoo>
