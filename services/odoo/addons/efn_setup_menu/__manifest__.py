@@ -4,7 +4,8 @@
 {
     "name": "EFN Setup - Menu Finance/Accounting/Produksi",
     "summary": "Pisahkan menu Finance dan Accounting; label 'Produksi' untuk Manufacturing (semua bahasa aktif).",
-    "version": "19.0.1.0.0",
+    # 19.0.1.1.0 (G59-C): action + menu "Entri Berulang" (account.move auto_post CE), data saja.
+    "version": "19.0.1.1.0",
     "category": "EFN/Setup",
     "author": "Era Food and Nourishment",
     "license": "LGPL-3",

@@ -83,6 +83,17 @@ class TestEfnSetupMenu(TransactionCase):
             self.assertEqual(self.env.ref(xmlid).parent_id, finance, xmlid)
         self.assertFalse(self.Menu.search([("parent_id", "=", self.root.id)]))
 
+    def test_recurring_entries_menu(self):
+        """G59-C: menu data-only di Jurnal & Penutupan; domain = auto_post berulang CE."""
+        menu = self.env.ref("efn_setup_menu.menu_efn_recurring_entries")
+        self.assertEqual(menu.parent_id, self.env.ref("account.menu_finance_entries"))
+        self.assertEqual(menu.action, self.env.ref("efn_setup_menu.action_efn_recurring_entries"))
+        self.assertEqual(menu.action.domain, "[('auto_post', 'in', ('monthly', 'quarterly', 'yearly'))]")
+        billing = new_test_user(
+            self.env, login="efn_menu_billing_rec", groups="base.group_user,account.group_account_invoice"
+        )
+        self.assertNotIn(menu.id, self.Menu.with_user(billing)._visible_menu_ids())
+
     def test_billing_user_cannot_see_accounting_root(self):
         billing = new_test_user(
             self.env, login="efn_menu_billing", groups="base.group_user,account.group_account_invoice"

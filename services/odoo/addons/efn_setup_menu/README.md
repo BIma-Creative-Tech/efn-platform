@@ -14,6 +14,12 @@ Spesifikasi: `docs/fit-gap/G54_G55_G61_ODOO_SETUP.md` §G55 (efn-odoo-functional
 Menu `efn_account_reports` dan `efn_intercompany` ikut pindah karena induknya pindah. Modul ini **tidak** depend ke
 modul-modul itu. xmlid akar Accounting dipakai `efn_web_home` (`ROOT_MENU_GROUPS`, kelompok "accounting").
 
+**G59-C (19.0.1.1.0):** menu **Accounting → Jurnal & Penutupan → Entri Berulang** (`menu_efn_recurring_entries`,
+grup `account.group_account_user` + `account.group_account_manager`) membuka `account.move` dengan
+`auto_post in (monthly, quarterly, yearly)`. Entri/tagihan berulang memakai fitur CE `auto_post` + `auto_post_until`
+(salinan dibuat `_copy_recurring_entries`); tidak ada modul `efn_account_recurring` dan tidak ada template pembayaran
+berulang (D-3 `docs/fit-gap/G59_G60_ACCOUNTING_PORT.md`: pembayaran tanpa dokumen sumber melemahkan SoD).
+
 Label ditulis untuk en_US **dan setiap bahasa terpasang** oleh `ir.ui.menu._efn_apply_menu_labels`. Method ini
 dipanggil `<function>` di `data/menu_data.xml` (noupdate=0), sehingga berjalan saat install dan setiap upgrade.
 
