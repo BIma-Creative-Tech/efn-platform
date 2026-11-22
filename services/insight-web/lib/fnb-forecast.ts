@@ -23,7 +23,8 @@ export function parseDcCodes(raw: string | undefined | null): string[] {
 }
 
 export function isDcCode(code: unknown, dcCodes: readonly string[]): boolean {
-  return typeof code === 'string' && dcCodes.includes(code.trim());
+  // Pembandingan persis, sama dengan has() di SQL fnb_fc_* (SEC-G53-03).
+  return typeof code === 'string' && dcCodes.includes(code);
 }
 
 export interface WhRow {
