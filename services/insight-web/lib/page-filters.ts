@@ -39,6 +39,11 @@ export interface NavItem {
   href: string;
   label: string;
   icon: string;
+  /**
+   * Halaman bersama F&B + Supermarket (Penjualan, Pembayaran, Forecast) yang tampil di dua grup untuk sesi exec ber-SMD:
+   * `esb` = tautan grup F&B (SMD dibuang dari `pt`), `smd` = tautan grup Supermarket (`pt=SMD`). Lihat `scopedQuery`.
+   */
+  scope?: 'esb' | 'smd';
 }
 
 /** Katalog item menu (satu sumber; pengelompokan dan visibilitas ada di lib/sm-personas.ts navGroups). */
@@ -52,7 +57,9 @@ export const NAV = {
   forecast: { href: '/forecast', label: 'Forecast', icon: 'trend' },
 } as const satisfies Record<string, NavItem>;
 
-/** Item grup Ringkasan (F&B + Supermarket). */
-export const SUMMARY_ITEMS: readonly NavItem[] = [NAV.overview, NAV.sales, NAV.payments];
-/** Item grup Food & Beverage. */
-export const FNB_ITEMS: readonly NavItem[] = [NAV.flow, NAV.distribution, NAV.dataQuality];
+/** Item grup Ringkasan (F&B + Supermarket). Keputusan pemilik proyek 22 Nov 2026: hanya Ikhtisar. */
+export const SUMMARY_ITEMS: readonly NavItem[] = [NAV.overview];
+/** Item grup Food & Beverage (22 Nov 2026: Penjualan, Pembayaran, Forecast juga di grup Supermarket). */
+export const FNB_ITEMS: readonly NavItem[] = [NAV.sales, NAV.payments, NAV.flow, NAV.distribution, NAV.forecast, NAV.dataQuality];
+/** Halaman bersama yang digandakan ke grup Supermarket (sesi exec ber-SMD). */
+export const SHARED_HREFS: readonly string[] = [NAV.sales.href, NAV.payments.href, NAV.forecast.href];

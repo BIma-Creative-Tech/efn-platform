@@ -75,6 +75,12 @@ Halaman baru (route group `(persona)` di `services/insight-web`), slug mengikuti
 
 - Beranda `/` mengarahkan ke halaman persona pertama menurut `roles` (urutan prioritas: `store`, `dc`, `category`, `marketing`, `exec`). Pengguna dengan beberapa peran melihat semua rute miliknya di sidebar, dengan judul grup "Supermarket" di atas daftar.
 - Halaman G42 berbasis ESB (`/flow`, `/sales`, `/payments`, `/distribution`, `/forecast`) tidak relevan untuk PT SMD dan **disembunyikan** untuk sesi yang hanya berisi kode `SMD`. Untuk sesi campuran (holding) kedua grup tampil, dipisah judul grup "Supermarket" dan "Food & Beverage". `/data-quality` tetap bersama.
+- **Revisi pemilik proyek 22 Nov 2026 (struktur menu):** grup Ringkasan hanya Ikhtisar. Penjualan, Pembayaran, dan Forecast tampil
+  di grup **Food & Beverage dan Supermarket**: halamannya tetap satu, tautan F&B membuang `SMD` dari `pt`, tautan Supermarket
+  memakai `pt=SMD` (`scopedQuery`/`navItemActive` di `lib/sm-personas.ts`). Salinan di Supermarket hanya untuk sesi exec ber-SMD
+  (aturan L-219). Eksekutif, Toko, dan Marketing juga akan punya **versi F&B dari data ESB**, dengan persona yang sama
+  (`exec`/`store`/`marketing` di token, dibatasi kode brand/PT ESB sesi). Versi F&B ini belum dibangun; kontraknya (docs/04)
+  menyusul di gelombang terpisah.
 - Akses ke rute di luar `roles` → halaman 403 ramah ("Halaman ini untuk peran lain. Hubungi admin bila Anda memerlukannya"), bukan 404 (agar pengguna tahu halaman itu ada). Apakah `exec` boleh membuka semua halaman persona: **Q-INS-S9** (keputusan security; default spesifikasi: tidak, hanya sesuai `roles`).
 - Pengguna `store` tanpa warehouse → token tidak diterbitkan (§28.11); halaman `/belum-aktif` yang sudah ada dipakai dengan kalimat khusus: "Akun Anda belum ditautkan ke outlet. Minta admin mengisi outlet Anda di Odoo."
 

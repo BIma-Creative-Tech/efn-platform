@@ -9,7 +9,7 @@ import { NextRequest } from 'next/server';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { proxy } from '@/proxy';
 import { SESSION_COOKIE, createSessionValue } from '@/lib/session';
-import { DENIAL_PATH, hasEsbAccess, homePath, navGroups, personaChip, personaOfPath, sessionPersonas, smdAllowed, smRouteDenial } from '@/lib/sm-personas';
+import { DENIAL_PATH, hasEsbAccess, homePath, navGroups, navItemActive, personaChip, personaOfPath, scopedQuery, sessionPersonas, smdAllowed, smRouteDenial } from '@/lib/sm-personas';
 import { verifySsoTokenV2, type SsoPayloadV2 } from '@/lib/token';
 import { IAT, KEY, TOKEN_A, TOKEN_B, TOKEN_C } from './helpers-v2';
 
@@ -61,28 +61,60 @@ describe('beranda, navigasi, chip', () => {
     expect(g[0].id).toBe('sm');
     expect(g[0].items.map((i) => i.href)).toEqual(['/store']);
   });
-  it('SMD-saja dengan exec (docs/04 §28.14.1): Ringkasan, Distribusi (bagian DC), dan Supermarket + Forecast', () => {
+  it('SMD-saja dengan exec (docs/04 §28.14.1): Ringkasan (Ikhtisar), Distribusi (bagian DC), Supermarket + Penjualan/Pembayaran/Forecast', () => {
     const g = navGroups({ codes: ['SMD'], roles: ['exec', 'store', 'user'] }, true);
     expect(g.map((x) => x.title)).toEqual(['Ringkasan', 'Food & Beverage', 'Supermarket']);
-    expect(g[0].items.map((i) => i.href)).toEqual(['/', '/sales', '/payments']);
+    expect(g[0].items.map((i) => i.href)).toEqual(['/']);
     expect(g[1].items.map((i) => i.href)).toEqual(['/distribution']);
-    expect(g[2].items.map((i) => i.href)).toEqual(['/exec', '/store', '/forecast']);
+    expect(g[2].items.map((i) => i.href)).toEqual(['/exec', '/store', '/sales', '/payments', '/forecast']);
+    expect(g[2].items.filter((i) => i.scope === 'smd').map((i) => i.href)).toEqual(['/sales', '/payments', '/forecast']);
     // flag SM mati: tidak ada menu untuk sesi tanpa PT F&B
     expect(navGroups({ codes: ['SMD'], roles: ['exec', 'user'] }, false)).toEqual([]);
   });
-  it('sesi campuran: tiga grup (urutan persona exec,store,dc,category,marketing, Forecast terakhir); ESB-saja: tanpa grup Supermarket', () => {
-    const mixed = navGroups({ codes: ['PB', 'SMD'], roles: ['exec', 'marketing', 'dc', 'user'] }, true);
+  it('sesi campuran (22 Nov 2026): Penjualan, Pembayaran, Forecast di grup F&B (scope esb) DAN Supermarket (scope smd)', () => {
+    const mixed = navGroups({ codes: ['PB', 'BCF', 'SMD'], roles: ['exec', 'marketing', 'dc', 'user'] }, true);
     expect(mixed.map((g) => g.title)).toEqual(['Ringkasan', 'Food & Beverage', 'Supermarket']);
-    expect(mixed[1].items.map((i) => i.href)).toEqual(['/flow', '/distribution', '/data-quality']);
-    expect(mixed[2].items.map((i) => i.href)).toEqual(['/exec', '/dc', '/marketing', '/forecast']);
+    expect(mixed[0].items.map((i) => i.href)).toEqual(['/']);
+    expect(mixed[1].items.map((i) => i.href)).toEqual(['/sales', '/payments', '/flow', '/distribution', '/forecast', '/data-quality']);
+    expect(mixed[1].items.filter((i) => i.scope === 'esb').map((i) => i.href)).toEqual(['/sales', '/payments', '/forecast']);
+    expect(mixed[1].esbCodes).toEqual(['BCF', 'PB']);
+    expect(mixed[2].items.map((i) => i.href)).toEqual(['/exec', '/dc', '/marketing', '/sales', '/payments', '/forecast']);
+  });
+  it('ESB-saja: tanpa grup Supermarket, tanpa scope; Forecast F&B tampil', () => {
     const esb = navGroups({ codes: ['PB'], roles: ['user'] }, true);
     expect(esb.map((g) => g.id)).toEqual(['summary', 'fnb']);
-    expect(navGroups({ codes: ['PB', 'SMD'], roles: ['exec', 'user'] }, false).flatMap((g) => g.items).some((i) => i.href === '/exec' || i.href === '/forecast')).toBe(false);
+    expect(esb[1].items.map((i) => i.href)).toEqual(['/sales', '/payments', '/flow', '/distribution', '/forecast', '/data-quality']);
+    expect(esb.flatMap((g) => g.items).some((i) => i.scope !== undefined)).toBe(false);
+    expect(esb[1].esbCodes).toBeUndefined();
+    // flag SM mati: tidak ada menu persona / salinan Supermarket
+    const off = navGroups({ codes: ['PB', 'SMD'], roles: ['exec', 'user'] }, false);
+    expect(off.map((g) => g.id)).toEqual(['summary', 'fnb']);
+    expect(off.flatMap((g) => g.items).some((i) => i.href === '/exec' || i.scope !== undefined)).toBe(false);
   });
-  it('tidak ada item bertanda "segera" dan semua href unik per sesi', () => {
+  it('tidak ada item bertanda "segera" dan semua (href, scope) unik per sesi', () => {
     const all = navGroups({ codes: ['PB', 'SMD'], roles: ['exec', 'store', 'dc', 'category', 'marketing', 'user'] }, true).flatMap((g) => g.items);
-    expect(new Set(all.map((i) => i.href)).size).toBe(all.length);
+    expect(new Set(all.map((i) => `${i.href}:${i.scope ?? ''}`)).size).toBe(all.length);
     expect(all.every((i) => !('soon' in i))).toBe(true);
+  });
+  it('scopedQuery: smd -> pt=SMD + cabang sm: saja, tanpa cat/product; esb -> SMD & sm: dibuang, pt kosong -> kode ESB sesi', () => {
+    const carry = new URLSearchParams('from=2026-11-01&to=2026-11-21&pt=PB,SMD&branch=12,sm:21&cat=Roti&product=7');
+    const smd = scopedQuery('smd', carry, ['BCF', 'PB']);
+    expect(Object.fromEntries(smd)).toEqual({ from: '2026-11-01', to: '2026-11-21', pt: 'SMD', branch: 'sm:21' });
+    const esb = scopedQuery('esb', carry, ['BCF', 'PB']);
+    expect(Object.fromEntries(esb)).toEqual({ from: '2026-11-01', to: '2026-11-21', pt: 'PB', branch: '12', cat: 'Roti', product: '7' });
+    expect(scopedQuery('esb', new URLSearchParams('pt=SMD&branch=sm:21'), ['BCF', 'PB']).toString()).toBe('pt=BCF%2CPB');
+    expect(scopedQuery('esb', new URLSearchParams(''), ['PB']).get('pt')).toBe('PB');
+    expect(carry.get('pt')).toBe('PB,SMD'); // input tidak dimutasi
+  });
+  it('navItemActive: item ber-scope dibedakan oleh pt; tanpa scope cukup path', () => {
+    const fnb = { href: '/sales', label: 'Penjualan', icon: 'cart', scope: 'esb' as const };
+    const sm = { ...fnb, scope: 'smd' as const };
+    expect(navItemActive(sm, '/sales', new URLSearchParams('pt=SMD'))).toBe(true);
+    expect(navItemActive(fnb, '/sales', new URLSearchParams('pt=SMD'))).toBe(false);
+    expect(navItemActive(fnb, '/sales', new URLSearchParams('pt=PB'))).toBe(true);
+    expect(navItemActive(fnb, '/sales', new URLSearchParams(''))).toBe(true);
+    expect(navItemActive(sm, '/payments', new URLSearchParams('pt=SMD'))).toBe(false);
+    expect(navItemActive({ href: '/flow', label: 'x', icon: 'flow' }, '/flow', new URLSearchParams('pt=SMD'))).toBe(true);
   });
   it('hasEsbAccess', () => {
     expect(hasEsbAccess({ codes: ['SMD'] })).toBe(false);
