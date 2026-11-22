@@ -19,7 +19,7 @@ QUERIES = (WEB / "lib" / "queries-sm.ts").read_text(encoding="utf-8")
 SM_DATA = (WEB / "lib" / "sm-data.ts").read_text(encoding="utf-8")
 DEFAULTS_TS = (WEB / "lib" / "sm-defaults.ts").read_text(encoding="utf-8")
 CLAIMS = (WEB / "lib" / "claims.ts").read_text(encoding="utf-8")
-ODOO_USERS = (ROOT / "services/odoo/addons/efn_insight_sm/models/res_users.py").read_text(encoding="utf-8")
+ODOO_USERS = (ROOT / "services/odoo/addons/efn_insight/models/res_users.py").read_text(encoding="utf-8")
 ODOO_TOKEN = (ROOT / "services/odoo/addons/efn_insight/lib/insight_token.py").read_text(encoding="utf-8")
 COMPOSE = (ROOT / "infra" / "compose" / "docker-compose.yml").read_text(encoding="utf-8")
 KPI_JSON = json.loads((ROOT / "docs" / "contracts" / "insight_sm_kpi_defaults.json").read_text(encoding="utf-8"))
@@ -58,7 +58,7 @@ def web_queries() -> dict[str, tuple[str, set[str]]]:
 
 
 def test_persona_sets_equal_across_odoo_web_policy() -> None:
-    odoo = set(re.findall(r'^\s+"(\w+)": "efn_insight_sm\.group_insight_\w+"', ODOO_USERS, re.M))
+    odoo = set(re.findall(r'^\s+"(\w+)": "efn_insight\.group_insight_\w+"', ODOO_USERS, re.M))
     web = set(re.findall(r"'(\w+)'", CLAIMS.split("export const PERSONAS = [", 1)[1].split("]", 1)[0]))
     token = set(re.findall(r'"(\w+)"', ODOO_TOKEN.split("PERSONAS = frozenset({", 1)[1].split("}", 1)[0]))
     policy_case = set(re.findall(r"\b(\w+)(?=\||\))", POLICY.split('case "$_p" in', 1)[1].split("esac", 1)[0]))
