@@ -9,6 +9,7 @@ import Link from 'next/link';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { useEffect, useRef, useState, useTransition } from 'react';
 import { announce } from '@/lib/client-nav';
+import { useBusy } from '@/lib/loading-store';
 import { buildSmQuery } from '@/lib/filter-url';
 import { fmtRange } from '@/lib/format';
 import type { SmFilters } from '@/lib/sm-filters';
@@ -44,6 +45,7 @@ export function SmFilterForm({
   const pathname = usePathname();
   const sp = useSearchParams();
   const [pending, start] = useTransition();
+  useBusy(pending);
   const timer = useRef<number | null>(null);
   const [wh, setWh] = useState<string[]>(filters.wh.map(String));
   const [cat, setCat] = useState<string[]>(filters.cat.map(String));

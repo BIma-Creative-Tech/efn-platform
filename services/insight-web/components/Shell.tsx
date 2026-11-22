@@ -7,6 +7,7 @@ import type { ReactNode } from 'react';
 import type { Session } from '@/lib/session';
 import type { NavGroup } from '@/lib/sm-personas';
 import { FocusMain, NavLinks, NavToggle, ThemeSelect } from './Chrome';
+import { LoadingOverlay } from './LoadingOverlay';
 import { Icon } from './ui';
 
 export function Shell({
@@ -80,6 +81,7 @@ export function Shell({
           <FocusMain />
         </div>
       </div>
+      <LoadingOverlay />
     </>
   );
 }

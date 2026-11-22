@@ -209,6 +209,11 @@ Tampilan status: `StatusPill` = ikon (centang / segitiga seru / silang-lingkaran
 > - **Tabel**: kotak pencarian, dropdown filter kolom kategori/status, "n dari N baris"; **kolom Keterangan** untuk setiap status (alasan dengan angka).
 > - **Legend grafik** berupa chip HTML (swatch + penanda bentuk + total/nilai terakhir, toggle seri, `aria-pressed`); legend bawaan ECharts dimatikan.
 > - **Istilah**: glosarium (`/glosarium`) dan ikon "i" (popover bisa dibuka keyboard/sentuh) di label KPI, judul kartu, header kolom.
+>
+> **Keputusan pemilik proyek 22 Nov 2026:** (1) **layar memuat yang memblokir** seluruh halaman (menu dan konten tidak bisa diklik) selama navigasi,
+> perubahan filter, dan "Coba lagi"; tampilan menarik dan interaktif (`components/LoadingOverlay.tsx`). Alasan: query rentang 1 tahun bisa puluhan detik dan
+> klik beruntun memenuhi antrean query. (2) Perbaikan akar kelambatan = **tabel agregat harian ClickHouse**, dikerjakan sebagai paket terpisah **setelah PR
+> `fix/insight-review` di-merge**.
 
 ### 3.1 Shell
 

@@ -9,6 +9,7 @@ import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { useEffect, useEffectEvent, useState, useTransition } from 'react';
 import { codeColor, codeName } from '@/lib/brands';
 import { announce } from '@/lib/client-nav';
+import { useBusy } from '@/lib/loading-store';
 import { buildEsbQuery, nextPt, sameSet, type FilterDraft } from '@/lib/filter-url';
 import { fmtRange } from '@/lib/format';
 import { appliesTo, DATE_NA_REASON } from '@/lib/page-filters';
@@ -40,6 +41,7 @@ function FilterForm({ options, sessionCodes, smdAllowed = false, defaults, yeste
   const pathname = usePathname();
   const sp = useSearchParams();
   const [pending, start] = useTransition();
+  useBusy(pending);
   const [queued, setQueued] = useState<FilterDraft | null>(null);
 
   const urlFrom = sp.get('from') ?? defaults.from;

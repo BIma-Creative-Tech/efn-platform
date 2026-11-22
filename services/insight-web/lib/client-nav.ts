@@ -4,6 +4,7 @@
  */
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { useCallback } from 'react';
+import { beginNav } from './loading-store';
 
 export type DrillParam = 'branch' | 'cat' | 'product';
 
@@ -37,6 +38,7 @@ export function useDrill(): (param: DrillParam, value: string, label: string) =>
   return useCallback(
     (param, value, label) => {
       const next = addFilterValue(new URLSearchParams(sp.toString()), param, value);
+      if (next.toString() !== sp.toString()) beginNav();
       router.push(`${pathname}?${next.toString()}`);
       const what = param === 'branch' ? 'cabang' : param === 'cat' ? 'kategori' : 'produk';
       announce(`Filter ditambahkan: ${what} ${label}. Data diperbarui.`);
