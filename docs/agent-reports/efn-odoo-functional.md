@@ -1186,3 +1186,49 @@ Konsumsi:
 - status impor G43 per brand;
 - lisensi `openupgradelib`;
 - tidak ada referensi Cybrosys yang relevan (tidak dicari lebih jauh).
+
+## 23 Nov 2026 — Kanal online SMD (pickup + pre-order), `efn_setup_supermarket_online`
+
+Worktree `efn-platform-smweb`, branch `feat/supermarket-web`. Keputusan user 23 Nov: SMD punya kanal online sendiri
+(ambil di toko + slot pre-order), tanpa dine-in/QR/reservasi, independen dari brand lain. Fit-gap: docs/08 §14.
+
+### Hasil
+- **Semua standar/efn yang ada, tanpa kode baru:** `efn_online_order` (kanal + outlet), `efn_online_slot` (generik,
+  tidak khusus F&B, mendukung ritel) [V repo], `resource.calendar` CE, `pos.category` CE.
+- Modul baru `services/odoo/addons/efn_setup_supermarket_online` 19.0.1.0.0 (data-only). Depends: `point_of_sale`,
+  `sale_stock`, `resource`, `efn_online_order`, `efn_online_slot`, `efn_setup_supermarket`. **Tidak** depends
+  `efn_setup_online`. Modul terpisah dipilih agar `efn_setup_supermarket` tidak bergantung pada modul online.
+  - data: 13 `pos.category` (nama persis dari lead; `noupdate="0"` karena nama = kontrak situs), partner generik dan
+    tim Super-App SMD.
+  - demo: `channel_smd`, `user_online_smd`, `journal_titipan_smd` (TTPO), `pricelist_online_smd`,
+    `cash_rounding_smd_idr_1`, kalender WIB/WITA, outlet `outlet_smd01..05` (kode `SMD01..SMD05`, gudang toko, prep 30
+    menit, slot aktif).
+  - 8 test `TransactionCase` (tag `efn`); test demo di-skip tanpa `--with-demo`. Termasuk katalog end-to-end lewat
+    user teknis (kategori "Sayur", label PPN, 5 outlet, `fulfilment.scheduled`).
+- Seed `scripts/dev/seed_demo_supermarket.py` tahap 15 (setelah tahap 2, semua mode, dilewati bila modul tidak ada):
+  - mengisi `pos_categ_ids` sesuai kind;
+  - menautkan produk ke kanal SMD dan mengisi `efn_online_description` bila kosong;
+  - **kecuali alkohol** (belum ada verifikasi usia online; izin jual hanya outlet ber-capability). Alkohol yang sudah
+    dipublikasikan manual tidak dicabut.
+- `pos.category` tanpa `company_id` [V source 19.0]. POS memuat semua kategori kecuali `limit_categories` aktif [V].
+  Nama baru tidak bentrok dengan kategori demo `efn_setup_pos` [V repo].
+
+### Rekomendasi untuk efn-odoo-engineer / devsecops
+1. **[Engineer] Pindahkan kebijakan W-11** (`group_online_channel.api_key_duration` 35 + `base.group_user` 0) dari
+   data `efn_setup_online` ke `efn_online_order`. Sekarang kanal yang tidak memasang `efn_setup_online` (SMD) memakai
+   batas 90 hari. Mitigasi saat ini: skrip rotasi membuat key 30 hari.
+2. **[DevSecOps]** Tambahkan `efn_setup_supermarket_online` ke `EFN_TEST_MODULES` (`.github/workflows/ci.yml`).
+3. **[BFF]** `ONLINE_CHANNELS` + secret `odoo_api_key_online_smd` untuk mengaktifkan kanal (bukan bagian modul ini).
+4. Tidak ada yang perlu dihapus/disederhanakan: modul ini tidak menduplikasi fitur standar.
+
+### Pertanyaan klien
+Q-SMO1 (batas nominal/qty), Q-SMO2 (jam ambil), Q-SMO3 (prep/kapasitas/jeda/horizon slot), Q-SMO4 (metode bayar),
+Q-SMO5 (label non-halal online), Q-SMO6 (alkohol online), Q-SM43 (konfirmasi kode `SMD01..05`). Rincian dan default
+di README modul.
+
+### Belum terverifikasi
+- Install dan test runtime: tidak dijalankan (tanpa shell).
+- `safe_eval` comprehension + `Command` di `attendance_ids` (pola sama sudah dipakai `efn_setup_supermarket`).
+- Apakah POS 19 menampilkan kategori tanpa produk di POS brand lain.
+- Kategori dari skrip brand-catalog di DB nyata (nama sama hanya menjadi duplikat label).
+- Runbook `docs/runbooks/demo-supermarket-seed.md` belum menyebut tahap 15.

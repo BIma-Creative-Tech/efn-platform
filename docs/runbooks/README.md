@@ -81,6 +81,7 @@ Alert keamanan yang tidak terjelaskan → pintu masuk insiden: [security-inciden
 | CLI CS online lewat wrapper `efn-online-cs`: pasang sudoers, grup `efn-cs` / `efn-cs-approver`, alasan via stdin | [online-orders.md](online-orders.md#cli-cs) |
 | API key Odoo kanal online: pemasangan timer rotasi otomatis 30 hari `efn-rotate-online-key`, rotasi darurat, metrik (R-T15, W-11) | [odoo-online-api-key.md](odoo-online-api-key.md) |
 | Mengaktifkan kanal online PT ke-7 WTZ (PT Wetzel's Pretzels, G24 docs/04 §16): overlay `online-wtz`, key `--channel=WTZ --bootstrap`, migrasi 13 | [odoo-online-api-key.md#kanal-baru](odoo-online-api-key.md#kanal-baru) |
+| Mengaktifkan kanal online supermarket SMD (PT Supermarket Demo, 23 Nov 2026; pickup + pre-order, web `supermarket.`): overlay `online-smd`, key `--channel=SMD --bootstrap`, migrasi 19 | [odoo-online-api-key.md#kanal-baru](odoo-online-api-key.md#kanal-baru) |
 | API key Odoo user teknis QR meja `QR-PB`/`QR-BCF` (G22): key pertama `--bootstrap`, aktivasi `FNB_QR_ENABLED`, rotasi, hentikan | [odoo-qr-api-key.md](odoo-qr-api-key.md) |
 | API key Odoo user teknis reservasi meja `BOOKING-PB`/`BOOKING-BCF` (G23): key pertama `--bootstrap`, aktivasi `BOOKING_ENABLED`, rotasi, hentikan | [odoo-booking-api-key.md](odoo-booking-api-key.md) |
 | API key Odoo user teknis promo Super-App `PROMO-PB` (G27): key pertama `--bootstrap`, aktivasi `PROMO_ENABLED`, persetujuan privasi, rotasi, hentikan | [odoo-promo-api-key.md](odoo-promo-api-key.md) |

@@ -448,6 +448,18 @@ run "$W" --channel=BOOKING-WTZ;          expect_deny "77e BOOKING-WTZ ditolak al
 conf OVERLAP_SECONDS=0 CHANNELS=GL,QR-WTZ; rot; expect_deny "77f CHANNELS memuat QR-WTZ ditolak (allowlist)" "CHANNELS"
 conf OVERLAP_SECONDS=0 CHANNELS=GL,WTZ; rot --status
 if [[ $RC -eq 0 ]]; then ok "77g CHANNELS=GL,WTZ diterima konfigurasi (WTZ kode allowlist G24)"; else bad "77g CHANNELS GL,WTZ"; fi
+# 23 Nov 2026 (keputusan user): SMD = kanal online PT Supermarket Demo; ship OFF & overlay test tidak ada (pola WTZ)
+: > /tmp/journal.log; conf OVERLAP_SECONDS=0
+run "$W" --channel=SMD;                  expect_deny "77h SMD di allowlist tetapi belum di-deploy tanpa --bootstrap ditolak" "tidak didefinisikan compose"
+run "$W" --channel=SMD --bootstrap;      expect_deny "77i --bootstrap SMD tanpa file overlay ditolak" "overlay"
+run "$W" --channel=QR-SMD;               expect_deny "77j QR-SMD ditolak allowlist (SMD tanpa QR meja)" "salah satu"
+run "$W" --channel=BOOKING-SMD;          expect_deny "77k BOOKING-SMD ditolak allowlist (SMD tanpa reservasi)" "salah satu"
+run "$W" --channel=PROMO-SMD;            expect_deny "77l PROMO-SMD ditolak allowlist" "salah satu"
+conf OVERLAP_SECONDS=0 CHANNELS=GL,SMD; rot --status
+if [[ $RC -eq 0 ]]; then ok "77m CHANNELS=GL,SMD diterima konfigurasi (SMD kode allowlist)"; else bad "77m CHANNELS GL,SMD"; fi
+# Batas daftar 16 (dulu 8): 6 kanal online + QR/BOOKING/PROMO (11 kode) sah untuk --all
+conf OVERLAP_SECONDS=0 CHANNELS=GL,PB,BCR,BCF,WTZ,SMD,QR-PB,QR-BCF,BOOKING-PB,BOOKING-BCF,PROMO-PB; rot --status
+if [[ $RC -eq 0 ]]; then ok "77n CHANNELS 11 kode allowlist diterima (batas 16)"; else bad "77n CHANNELS 11 kode"; fi
 : > /tmp/journal.log; conf OVERLAP_SECONDS=0
 # User teknis bersama beberapa kanal (data demo) -> Odoo shell menolak sebelum key dibuat (fail-closed)
 echo user_shared > /tmp/fk/odoo-err.efn_online_pb; N_PB=$(wc -l < "$PBDB"); : > /tmp/journal.log; run "$W" --channel=PB --force

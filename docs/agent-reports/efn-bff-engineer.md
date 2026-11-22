@@ -1265,3 +1265,90 @@ Cron akrual harian Odoo `efn_loyalty_accounting` memanggil `GET /v1/pos/loyalty/
   terpetakan setelah katalog kanal SMD tersinkron sukses; sebelum itu semua event SMD `unknown_channel`.
 - "Sebelum status processing": baris `subject_erasure` ditulis di transaksi yang sama dengan `UPDATE … SET status =
   'processing'` (urutan statement sesudahnya, tetapi commit atomik → ETL tidak pernah melihat `processing` tanpa kunci).
+
+## Kanal belanja online SMD (keputusan pemilik proyek 23 Nov 2026; ADR-045 Proposed, K25-07) — 23 Nov 2026
+> Worktree `efn-platform-smweb`, branch `feat/supermarket-web`. **Belum dijalankan lokal** (tanpa shell): tsc, eslint,
+> Jest (`src/odoo-rpc/smd-channel.spec.ts` dan seluruh suite yang memakai `MockOdooOnline`) harus dijalankan lead di
+> container.
+
+### Audit allowlist kanal/PT di `src/` (hasil)
+| Allowlist | Sebelum | Tindakan |
+|---|---|---|
+| `ONLINE_CHANNELS` (`app-config.ts` `onlineChannels`) | regex §10.2, default `GL` | Tidak diubah. SMD menyala hanya bila operator menulis `SMD` di sini; default tetap `GL`. Komentar diperbarui. |
+| API key per kanal `ODOO_API_KEY_ONLINE_<KODE>_FILE` / `odoo_api_key_online_<kode>` | generik dari kode kanal | Tidak diubah; `SMD` → `ODOO_API_KEY_ONLINE_SMD_FILE` / `odoo_api_key_online_smd`, placeholder `disabled` & literal non-dev ditolak, start gagal bila kanal aktif tanpa secret (diuji). |
+| `catalogSyncChannels` (catalog sync) | `ONLINE_CHANNELS` ∪ PT QR/booking | Tidak diubah; SMD hanya masuk lewat `ONLINE_CHANNELS`. |
+| `COMPANY_CODES` (catalog `fromOdoo`, cart, orders, poin online, behavior, segmen kampanye, migrasi, POS) | sudah memuat `SMD` sejak G44 | Tidak diubah. |
+| Cart / orders / slot | via `CatalogService.channel()` (kanal ∈ `ONLINE_CHANNELS`, outlet `slot_enabled` + `ONLINE_SLOTS_ENABLED`) | Tidak diubah; slot tidak terikat `business_type`. |
+| Wishlist / notify-me / price alert | produk harus ada di salinan katalog kanal | Tidak diubah; berlaku setelah katalog SMD tersinkron. |
+| `PROMO_COMPANIES` (banner) | regex kode PT, default = kanal online pertama | Tidak diubah. Banner SMD butuh `PROMO_COMPANIES` memuat `SMD` + secret `odoo_api_key_promo_smd`. |
+| `CAMPAIGN_COMPANIES` (inbox) | default `SMD` (G50) | Tidak diubah. |
+| Behavior `resolveChannelCompanies` | `channel_data` salinan katalog, PT ∈ `COMPANY_CODES` | Tidak diubah; event SMD tetap `unknown_channel` sampai katalog SMD tersinkron sukses. |
+| `FNB_QR_COMPANIES` / `BOOKING_COMPANIES` | allowlist `FNB_COMPANY_CODES = PB,BCF` | Tidak diubah; SMD sudah ditolak `ConfigError` (getter + `assertStartupSecrets`, walau fitur mati). Komentar ditambah. Guard berupa allowlist kode PT, bukan cek `business_type` runtime. |
+| `INVOICE_COMPANIES` (faktur atas nama, §13.5) | `GL,BCR` | **Diubah → `GL,BCR,SMD`** (SMD = PT ritel PPN; sama dengan guard Odoo `_efn_invoice_party_available`: `efn_business_type == 'retail'`). Kontrak §13.5 perlu disunting (usulan di bawah). |
+
+### File berubah
+- `services/api-gateway/src/odoo-rpc/odoo-online.mock.ts` — kanal `SMD` (company/brand `SMD`, retail, nama "Supermarket Demo (demo)"),
+  mode bayar `qris`+`bank_transfer` (tanpa `counter`, K25-07), outlet `SMD01..SMD03` (pickup + slot 60 menit),
+  20 produk (id 201..220, tmpl 2001..2020) dalam 10 kategori dengan nama persis Sayur, Buah, Daging, Ikan & Seafood,
+  Bakery, Dairy & Chilled, Frozen, Dry Grocery, Minuman, Snack (id kategori 21..30, urutan 1..10). 203 `low`, 208 `out`
+  (demo notify-me). Katalog per kanal: SMD hanya produk SMD; kanal lama tetap produk 11..14 + `TOKO-01` (perilaku lama
+  tidak berubah). Pengecekan outlet `TOKO-01` yang di-hardcode diganti `hasOutlet(channel, outlet)`; `stock`/`image`/
+  quote memvalidasi produk milik kanal. `setInvoiceParty` stub menerima SMD.
+- `services/api-gateway/src/orders/invoice-request.ts` — `INVOICE_COMPANIES` + `SMD`.
+- `services/api-gateway/src/config/app-config.ts` — hanya komentar (`onlineChannels`, `FNB_COMPANY_CODES`).
+- `services/api-gateway/src/odoo-rpc/smd-channel.spec.ts` (baru) — default `GL` tanpa SMD; SMD dikenali bila di
+  `ONLINE_CHANNELS`; QR/booking aktif tidak menyeret SMD ke sinkron; SMD ditolak di `FNB_QR_COMPANIES`/`BOOKING_COMPANIES`
+  (getter + start); key `ODOO_API_KEY_ONLINE_SMD_FILE` + fallback `odoo_api_key_online_smd`, placeholder, literal,
+  secret hilang; `CatalogService.channels` SMD hanya tampil bila di `ONLINE_CHANNELS` (retail, brand SMD, outlet ber-slot,
+  mode tanpa counter); mock: 10 kategori persis, katalog tidak tercampur, stok/quote/slot per outlet SMD, outlet/produk
+  kanal lain → `not_found`; `INVOICE_COMPANIES` memuat SMD dan tidak memuat PT F&B.
+- README: `src/catalog/README.md`, `src/odoo-rpc/README.md`.
+
+### Untuk lead / agent lain
+- Aktivasi SMD (dev/stg): `ONLINE_CHANNELS=GL,SMD` (atau daftar lain + `SMD`), secret `odoo_api_key_online_smd`
+  (`ODOO_API_KEY_ONLINE_SMD_FILE`, overlay `docker-compose.online-smd.yml`), banner: `PROMO_COMPANIES=…,SMD` + secret
+  `odoo_api_key_promo_smd`; slot: `ONLINE_SLOTS_ENABLED=true`; poin online: kill switch `ONLINE_LOYALTY_*` + flag
+  `loyalty` kanal Odoo + kebijakan loyalty PT SMD (data). Jangan isi `FNB_QR_COMPANIES`/`BOOKING_COMPANIES` dengan SMD
+  (start gagal).
+- Kode outlet online SMD ≤ 16 karakter (Q-SM43); mock memakai `SMD01..SMD03` (data Odoo nyata dari agent data).
+- Judul dua test lama masih berbunyi "SMD belum punya kanal online" (`catalog.spec.ts` G44, komentar
+  `online-config.spec.ts:24`); isinya tetap benar (SMD tidak di default), tidak saya ubah.
+
+### Usulan teks docs/04 (untuk disunting lead; docs/04 TIDAK saya ubah)
+- **§12.1, butir "Revisi 18 Nov 2026"**: ganti "kanal online belum ada" → "kanal online `SMD` (kode kanal = kode PT,
+  `brand_code` `SMD`, `business_type` retail) ditetapkan pemilik proyek 23 Nov 2026: katalog, keranjang, checkout bayar
+  dulu (K25-07, tanpa `counter`), pickup + slot pre-order, poin, wishlist/notify-me/price alert, inbox, banner promo,
+  event perilaku. **Tidak** ada QR meja (§14.A) dan reservasi (§15.5): `FNB_QR_COMPANIES`/`BOOKING_COMPANIES` tetap
+  `PB|BCF`. Ship OFF: tidak di default `ONLINE_CHANNELS`; user teknis `efn_online_smd`, secret
+  `odoo_api_key_online_smd` (env `ODOO_API_KEY_ONLINE_SMD_FILE`)." Tambahkan `efn_online_smd` ke daftar user teknis
+  (L-37) dan `smd` ke daftar secret.
+- **§13.5**: "Hanya kanal PT PPN (GL, BCR, **SMD**); PT F&B (PB1) → `422 invoice_not_available`." (Odoo sudah memakai
+  `efn_business_type == retail`, jadi tidak perlu perubahan Odoo.)
+- **§28.8**: ganti "(SMD belum punya kanal online)" → "(kanal SMD aktif hanya bila `SMD` ada di `ONLINE_CHANNELS`)".
+- **§28.10 (Flag & default)**, bila ada tabel flag: tambah baris `ONLINE_CHANNELS` memuat `SMD` = OFF default;
+  `PROMO_COMPANIES` memuat `SMD` untuk banner SMD.
+
+### Belum terverifikasi
+- tsc/eslint/Jest belum dijalankan. Risiko utama: spec lain yang mengandalkan mock (`TOKO-01`, produk 11..14) seharusnya
+  tidak berubah perilaku untuk kanal lama, tetapi belum dibuktikan dengan run penuh.
+- Status PPN per kategori (sayur/buah/daging sering bebas PPN; fit-gap Q-SM5) belum dimodelkan: mock memakai satu label
+  `PPN (demo)`; harga produk SMD placeholder.
+- Kontrak Odoo nyata kanal SMD (user teknis, outlet, `slot_enabled`, `payment_modes`, flag `loyalty`) dikerjakan agent
+  lain; BFF tidak bisa memverifikasi sebelum katalog SMD tersinkron.
+
+### Tindak lanjut SEC-03 (Low, SECURITY_REVIEW_2026-11-23_supermarket-web) — mock SMD = data Odoo (23 Nov 2026)
+> Belum dijalankan lokal (tanpa shell).
+- `odoo-online.mock.ts`: data mock SMD disamakan dengan `efn_setup_supermarket_online/demo/efn_online_smd_demo.xml`.
+  - `payment_modes` mentah `qris,va,ewallet`. Peta `paymentModes` sekarang `string[]`, dan blok katalog stub
+    melewatkannya ke `parsePaymentModes` seperti klien json2, sehingga BFF hanya menawarkan `qris`.
+  - Outlet `SMD01..SMD05` memakai `public_name` Odoo (Jakarta/Bandung/Tangerang/Surabaya/Denpasar), prep 30, slot 60.
+  - 13 kategori: + Personal Care, Household, Impor Premium (id 31..33), produk 221..226.
+  - Daftar `pos.category` diambil dari `tests/test_setup_supermarket_online.py` + README modul.
+    `data/pos_category_data.xml` belum ada di worktree saat dicek.
+- Kanal lama: `parsePaymentModes` atas mode yang semuanya dikenal mengembalikan daftar yang sama, jadi perilaku tidak berubah.
+- Slot stub tetap generik (09–17 WIB, kapasitas 3, lead 4 jam), tidak meniru Odoo (09–20, 10/slot, 120 menit, WITA untuk SMD05).
+- `smd-channel.spec.ts`: mode yang ditampilkan `['qris']`, mode mentah mock `['qris','va','ewallet']`, 5 outlet (prep 30,
+  slot 60), 13 kategori persis. Tidak ada uji `bank_transfer` untuk SMD.
+- Judul test `catalog.spec.ts` (blok G44) dan komentar `online-config.spec.ts:24` diperbarui; assertion tidak diubah.
+- Catatan untuk lead: selama BFF belum mendukung `va`/`ewallet`, checkout SMD hanya bisa QRIS. Di production ini butuh
+  `ONLINE_PAYMENT_METHODS` memuat `qris` + `PAYMENT_PROVIDER` xendit|midtrans (L-103). Bila tidak, kanal SMD tampil tanpa mode bayar.

@@ -19,6 +19,95 @@ import type { ShelfTab } from '@/components/landing/Shelf';
 import type { WallBrand } from '@/components/landing/BrandWall';
 import { PORTFOLIO } from '@/lib/portfolio';
 import { OrderModePicker } from '@/components/booking/OrderModePicker';
+import { SupermarketLanding, type AisleStat, type PickCard } from '@/components/supermarket/SupermarketLanding';
+import type { StageProduct } from '@/components/supermarket/HeroStage';
+import { AISLES, aisleHref, aisleOfCategory, fastestPrep, featuredAisles, pickupStores, type Aisle } from '@/lib/supermarket';
+
+/**
+ * Beranda supermarket: kanal SMD -> kategori + produk per lorong unggulan (paralel, cache 60 dtk di proxy katalog).
+ * Katalog gagal -> landing tetap tampil tanpa angka/foto (tautan lorong jatuh ke pencarian).
+ */
+async function SupermarketHome({ brand }: { brand: Brand }) {
+  const channels = await loadChannels(brand);
+  const all = channels.ok ? channels.data : [];
+  const channel = channels.ok ? pickChannel(all, null) : null;
+  const channelParam = all.length > 1 ? (channel?.channel_code ?? null) : null;
+  const categories = channel ? await loadCategories(channel.channel_code) : null;
+  const cats = categories?.ok ? categories.data : [];
+  const bt = channel ? channelBusinessType(channel) : null;
+  const catName = new Map(cats.map((c) => [c.category_id, c.name]));
+
+  const featured = featuredAisles();
+  const perAisle = await Promise.all(
+    featured.map(async (a) => {
+      const cat = channel ? findCategory(cats, a.category) : null;
+      if (!channel || !cat) return { a, items: [] as ProductSummary[], more: false };
+      const r = await loadProducts({ channel: channel.channel_code, category: cat.category_id, limit: 24 });
+      return r.ok ? { a, items: r.data.items, more: Boolean(r.data.next_cursor) } : { a, items: [] as ProductSummary[], more: false };
+    }),
+  );
+
+  const aisleStats: Record<string, AisleStat> = {};
+  for (const { a, items, more } of perAisle) {
+    const photo = pickPhotos(items, [], 1)[0];
+    aisleStats[a.id] = { count: items.length > 0 ? `${items.length}${more ? '+' : ''}` : null, src: photo ? imageUrl(photo.image_sha, 512) : null };
+  }
+
+  const fallbackAisle: Aisle = AISLES[AISLES.length - 1]!;
+  const productHref = (id: number) => (channelParam ? `/belanja/${id}?${new URLSearchParams({ channel: channelParam })}` : `/belanja/${id}`);
+  const card = (p: ProductSummary, aisle: Aisle | null): PickCard => {
+    const a = aisle ?? aisleOfCategory(p.category_id !== null ? catName.get(p.category_id) : null) ?? fallbackAisle;
+    const pd = priceDisplay(p, bt);
+    return { id: p.product_id, name: p.name, price: formatRupiah(pd.amount), taxNote: pd.taxNote, src: imageUrl(p.image_sha, 512), href: productHref(p.product_id), icon: a.icon, tone: a.tone, aisle: a.label };
+  };
+  // Rak: dua produk per lorong unggulan (bergambar dulu), lalu sisa katalog umum; tanpa duplikat, maks 12.
+  const seen = new Set<number>();
+  const picks: PickCard[] = [];
+  const push = (p: ProductSummary, a: Aisle | null) => {
+    if (picks.length >= 12 || seen.has(p.product_id)) return;
+    seen.add(p.product_id);
+    picks.push(card(p, a));
+  };
+  for (const { a, items } of perAisle) {
+    const withImg = pickPhotos(items, [], 2);
+    for (const p of [...withImg, ...items].slice(0, 2)) push(p, a);
+  }
+  // SEC-04: katalog umum hanya bila rak masih tipis (hemat kuota rate limit katalog per IP).
+  const general = channel && picks.length < 6 ? await loadProducts({ channel: channel.channel_code, limit: 24 }) : null;
+  const generalItems = general?.ok ? general.data.items : [];
+  for (const p of generalItems) push(p, null);
+
+  // Panggung hero: produk katalog (bergambar dulu); katalog kosong/gagal -> tiga lorong unggulan (tanpa harga).
+  const fromCatalog: StageProduct[] = [...picks].sort((x, y) => Number(Boolean(y.src)) - Number(Boolean(x.src))).slice(0, 3);
+  const stage: StageProduct[] =
+    fromCatalog.length > 0
+      ? fromCatalog
+      : featured.slice(0, 3).map((a, i) => ({ id: -(i + 1), name: a.label, price: 'Lihat lorong', src: null, href: aisleHref(cats, a, channelParam), icon: a.icon, tone: a.tone }));
+  const stores = pickupStores(all);
+  const prep = fastestPrep(stores);
+  const total = perAisle.reduce((n, x) => n + x.items.length, 0);
+  const anyMore = perAisle.some((x) => x.more) || Boolean(general?.ok && general.data.next_cursor);
+  const productCount = Math.max(total, generalItems.length);
+
+  return (
+    <HeroSlider variant="overlay" brandChannels={brandChannelMap(all)}>
+      <SupermarketLanding
+        brand={brand}
+        channelParam={channelParam}
+        categories={cats}
+        aisleStats={aisleStats}
+        picks={picks}
+        stage={stage}
+        ticket={{ store: stores[0]?.name ?? null, prepMinutes: prep }}
+        stores={stores}
+        modes={orderModes({ brand, channels: channels.ok ? all : null, channelParam })}
+        loyaltyActive={all.some((c) => c.loyalty?.earn === true || c.loyalty?.redeem === true)}
+        productCount={productCount > 0 ? `${productCount}${anyMore ? '+' : ''}` : null}
+        fastestPrep={prep}
+      />
+    </HeroSlider>
+  );
+}
 
 /**
  * Beranda per brand. Satu komponen untuk semua tenant; copy hero dari `Brand.hero` (lib/brands.ts), warna/tipografi dari
@@ -30,6 +119,8 @@ import { OrderModePicker } from '@/components/booking/OrderModePicker';
  */
 export default async function HomePage() {
   const brand = await getBrand();
+  // Supermarket demo (PT SMD): landing glassmorphism + golden ratio (components/supermarket), tanpa dine-in/reservasi.
+  if (brand.id === 'supermarket') return <SupermarketHome brand={brand} />;
   const landing = landingFor(brand.id);
   if (landing) return <LandingHome brand={brand} landing={landing} />;
   // G23 §15.7: beranda `app.` (holding) = landing Super-App bergaya Eraspace.

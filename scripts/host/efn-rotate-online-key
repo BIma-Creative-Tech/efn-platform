@@ -13,7 +13,7 @@
 # Konfigurasi opsional /etc/efn/online-key-rotation.conf (milik root, tidak boleh ditulis grup/lainnya). Baris
 # KUNCI=nilai (TIDAK di-source; kunci allowlist, nilai divalidasi):
 #   CHANNELS=GL,PB           kanal yang dirotasi --all (G20, docs/04 §12.1: kode kanal = kode PT, hanya ALLOWED_CHANNELS
-#                            GL PB BCR BCF WTZ + G22 QR-PB QR-BCF; unik). Kosong -> ONLINE_CHANNELS dari $COMPOSE_DIR/.env
+#                            GL PB BCR BCF WTZ SMD + G22 QR-PB QR-BCF; unik). Kosong -> ONLINE_CHANNELS dari $COMPOSE_DIR/.env
 #                            (ditulis deploy.sh = kanal yang di-deploy; kosong = GL) + QR-<PT> bila FNB_QR_ENABLED=true.
 #   KEY_DAYS=30              masa berlaku key baru (2..90; WAJIB <= api_key_duration grup teknis efn_setup_online)
 #   ROTATE_BEFORE_DAYS=10    rotasi bila sisa masa berlaku < N hari (1..KEY_DAYS-1). Timer harian -> N-1 kali coba ulang
@@ -38,7 +38,7 @@
 #   efn-rotate-online-key --channel=BCF --bootstrap     key PERTAMA kanal yang belum ada di ONLINE_CHANNELS (secret masih
 #                            placeholder): overlay docker-compose.online-<kode>.yml ikut di-mount sementara agar key
 #                            bisa diverifikasi di BFF sebelum kanal diaktifkan (runbook odoo-online-api-key.md#kanal-baru)
-# G20 (docs/04 §12.1, L-48): kode kanal = kode PT, HANYA ALLOWED_CHANNELS (GL, PB, BCR, BCF, G24 WTZ; sama dengan
+# G20 (docs/04 §12.1, L-48): kode kanal = kode PT, HANYA ALLOWED_CHANNELS (GL, PB, BCR, BCF, G24 WTZ, SMD; sama dengan
 # EFN_ONLINE_CHANNEL_CODES di scripts/lib/deploy-validate.sh). Kode lama RTL/FNB & kanal G19 berhifen ditolak.
 # Kode -> nama: huruf kecil. PB -> secret odoo_api_key_online_pb, user teknis efn_online_pb, env BFF
 # ODOO_API_KEY_ONLINE_PB_FILE. Satu user teknis = SATU kanal (L-37): user yang terhubung ke kanal lain DITOLAK
@@ -96,7 +96,9 @@ ADMIN_GROUP=efn-superadmin
 # G24 (docs/04 §16.1, L-91): WTZ = kanal online PT Wetzel's Pretzels (overlay docker-compose.online-wtz.yml); TANPA
 # QR-WTZ/BOOKING-WTZ (L-92: WTZ tidak memakai QR meja/reservasi).
 # G27: PROMO-PB = user teknis promo Super-App PB (overlay docker-compose.online-promo-pb.yml).
-ALLOWED_CHANNELS=(GL PB BCR BCF WTZ QR-PB QR-BCF BOOKING-PB BOOKING-BCF PROMO-PB)
+# 23 Nov 2026 (keputusan user): SMD = kanal online PT Supermarket Demo (overlay docker-compose.online-smd.yml, user
+# efn_online_smd); pickup + pre-order, TANPA QR-SMD/BOOKING-SMD/PROMO-SMD.
+ALLOWED_CHANNELS=(GL PB BCR BCF WTZ SMD QR-PB QR-BCF BOOKING-PB BOOKING-BCF PROMO-PB)
 BASE_CHANNEL=GL
 ACTOR="?"; CH="?"
 log() {
@@ -223,13 +225,14 @@ for d in COMPOSE_DIR SECRETS_DIR STATE_DIR TEXTFILE_DIR; do
 done
 [[ -d "$COMPOSE_DIR" && -d "$SECRETS_DIR" ]] || die "COMPOSE_DIR/SECRETS_DIR tidak ada"
 # G19/G20: daftar kanal (CHANNELS / ONLINE_CHANNELS) - setiap kode divalidasi regex kontrak (tanpa '/', '.', '_', spasi
-# -> tidak ada path traversal / injeksi nama secret), WAJIB di ALLOWED_CHANNELS, unik, maks 8.
+# -> tidak ada path traversal / injeksi nama secret), WAJIB di ALLOWED_CHANNELS, unik, maks 16
+# (23 Nov 2026: dulu 8; --all gabungan 6 kanal online + QR/BOOKING/PROMO bisa 11 -> batas lama menolak konfigurasi sah).
 CH_LIST=()
 parse_channels() { # $1 = daftar koma -> CH_LIST; rc 1 bila tidak valid
   local raw="$1" c
   local -A uniq=()
   CH_LIST=()
-  [[ "$raw" =~ ^[A-Z][A-Z0-9-]{1,15}(,[A-Z][A-Z0-9-]{1,15}){0,7}$ ]] || return 1
+  [[ "$raw" =~ ^[A-Z][A-Z0-9-]{1,15}(,[A-Z][A-Z0-9-]{1,15}){0,15}$ ]] || return 1
   IFS=, read -r -a CH_LIST <<< "$raw"
   for c in "${CH_LIST[@]}"; do
     allowed_channel "$c" || return 1

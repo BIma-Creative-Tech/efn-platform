@@ -1365,3 +1365,25 @@ Test `efn_setup_role/tests/test_setup_role.py` (13 test): matriks, Terminal POS,
 ### 13.8 Pertanyaan klien (G22, minimal)
 - **Q-QR6 (baru):** pesanan QR dari ponsel **langsung ke dapur**, atau **dikonfirmasi pelayan** dulu (satu ketukan *Order*; menyaring pesanan iseng)? Default: **dikonfirmasi pelayan** (`efn_qr_kitchen_mode='confirm'`), bisa diubah per kasir/area tanpa kode.
 - Tidak baru (sudah di register): master data modifier & paket per brand (18-22, Ops F&B), model printer struk untuk slip QR (P-18), 18-38 (auditor lintas PT), Q-ORG-1..5 (default dipakai, L-65).
+
+## 14. Kanal online Supermarket Demo (SMD): pickup + pre-order (2026-11-23)
+
+Keputusan user 23 Nov 2026: SMD mendapat kanal belanja online sendiri (ambil di toko + pre-order berjadwal), tanpa
+dine-in/QR meja/reservasi, independen dari data brand lain. Legenda: [V] diverifikasi (repo / source odoo 19.0),
+[B] belum terverifikasi.
+
+| Kebutuhan | Standar CE / efn yang sudah ada | Custom baru | Konfigurasi | Status |
+|---|---|---|---|---|
+| Kanal Super-App per PT | `efn_online_order` (`efn.online.channel`, kode = kode PT) | Tidak | `efn_setup_supermarket_online` demo `channel_smd` (SMD/SMD, mode confirm, Rp5 jt / 20, 70 menit, qris/va/ewallet) | [V] repo, belum dijalankan |
+| Ambil di toko | `efn.online.outlet` + gudang outlet CE | Tidak | 5 outlet `SMD01`..`SMD05` → `efn_setup_supermarket.warehouse_smd01..05` (bukan DC), prep 30 menit | [V] repo |
+| Pre-order berjadwal | `efn_online_slot` (generik, tidak khusus F&B) + `resource.calendar` CE + `sale.order.commitment_date` | Tidak | slot 60 menit / 10 per slot / 120 menit / 7 hari; kalender WIB + WITA (Denpasar) | [V] repo + field attendance 19.0 [V] |
+| Pajak ritel | PPN l10n_id company SMD (`taxes_id` produk), tanpa fiscal position | Tidak | — (tarif placeholder Q-SM5) | [V] |
+| Kategori katalog online | `pos.category` CE (katalog = `pos_categ_ids[:1]`) | Tidak | 13 kategori (nama = kontrak situs), tanpa Alkohol | `pos.category` tanpa `company_id` [V source 19.0] |
+| User teknis BFF | grup `efn_online_order.group_online_channel` | Tidak | `efn_online_smd`, satu company, tanpa API key | [V] |
+| Publikasi produk | `product.template.efn_online_channel_ids` | Tidak | seed tahap 15 (semua kind kecuali alkohol) | [V] repo |
+| Masa berlaku API key 35 hari (W-11) | data `efn_setup_online` | **Gap kecil** (lokasi kebijakan) | Tidak diduplikasi; rekomendasi: pindahkan ke `efn_online_order` | [R] |
+
+Alasan tidak memakai `efn_setup_online`: modul itu memuat partner/tim/kanal GL, PB, BCR, BCF, WTZ (data brand lain).
+Tidak ada modul yang bergantung padanya [V]. Referensi OCA/Cybrosys: tidak relevan (tanpa kode baru).
+Belum terverifikasi [B]: install/test runtime, tampilan kategori POS tanpa produk di POS brand lain, bentrok nama dengan
+kategori dari skrip brand-catalog di DB nyata.
