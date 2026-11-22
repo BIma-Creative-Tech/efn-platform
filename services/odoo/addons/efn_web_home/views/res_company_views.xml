@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <!-- Settings > Users & Companies > Companies > tab "Beranda EFN". -->
+    <record id="view_company_form_efn_home" model="ir.ui.view">
+        <field name="name">res.company.form.efn.home</field>
+        <field name="model">res.company</field>
+        <field name="inherit_id" ref="base.view_company_form"/>
+        <field name="arch" type="xml">
+            <xpath expr="//notebook" position="inside">
+                <page string="Beranda EFN" name="efn_home">
+                    <group>
+                        <group string="Branding">
+                            <field name="efn_brand_accent_color" widget="color"/>
+                            <field name="efn_brand_logo_home" widget="image"
+                                   options="{'preview_image': 'efn_brand_logo_home'}"/>
+                        </group>
+                        <group string="Pengumuman">
+                            <field name="efn_home_announcement_active"/>
+                            <field name="efn_home_announcement_html"
+                                   nolabel="1" colspan="2"
+                                   invisible="not efn_home_announcement_active"/>
+                        </group>
+                    </group>
+                </page>
+            </xpath>
+        </field>
+    </record>
+</odoo>

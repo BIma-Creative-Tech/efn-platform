@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <!-- Menu root agar user selalu bisa kembali ke Beranda (tidak ditampilkan sebagai kartu). -->
+    <menuitem id="menu_home_root"
+              name="Beranda"
+              action="action_home"
+              groups="base.group_user"
+              sequence="1"/>
+</odoo>
