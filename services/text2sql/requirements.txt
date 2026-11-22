@@ -1,5 +1,5 @@
 # Service Text-to-SQL (Python 3.12, G38). Versi di-pin; diaudit pip-audit di CI.
-sqlglot==26.0.0
+sqlglot==30.30.0
 PyYAML==6.0.3
 # HTTP klien ClickHouse HTTPS 8443 / Ollama mTLS / 9router; versi sama dengan ai-ocr-worker (pip-audit 2026-10).
 requests==2.34.2
