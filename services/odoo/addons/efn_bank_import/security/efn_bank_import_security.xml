@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- G58 §4.3: template & log per company (rule global). -->
+<odoo>
+    <data noupdate="1">
+        <record id="efn_bank_import_template_rule_company" model="ir.rule">
+            <field name="name">EFN template mutasi bank: company user</field>
+            <field name="model_id" ref="model_efn_bank_import_template"/>
+            <field name="domain_force">[('company_id', 'in', company_ids)]</field>
+        </record>
+        <record id="efn_bank_import_log_rule_company" model="ir.rule">
+            <field name="name">EFN log impor mutasi: company user</field>
+            <field name="model_id" ref="model_efn_bank_import_log"/>
+            <field name="domain_force">[('company_id', 'in', company_ids)]</field>
+        </record>
+    </data>
+</odoo>

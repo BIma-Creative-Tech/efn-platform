@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- G58 §3.2: Accounting > Jurnal & Penutupan (account.menu_finance_entries) > Rekonsiliasi. Section terlihat untuk
+     readonly (ringkasan & pembayaran belum teralokasi); rekonsiliasi bank hanya Accounting/Bookkeeper. -->
+<odoo>
+    <menuitem id="menu_efn_reconcile_section"
+              name="Rekonsiliasi"
+              parent="account.menu_finance_entries"
+              sequence="10"
+              groups="account.group_account_readonly,account.group_account_user"/>
+    <menuitem id="menu_efn_reconcile_accounts"
+              name="Rekonsiliasi Akun"
+              parent="menu_efn_reconcile_section"
+              action="action_efn_reconcile_overview"
+              sequence="10"/>
+    <menuitem id="menu_efn_reconcile_bank"
+              name="Rekonsiliasi Bank"
+              parent="menu_efn_reconcile_section"
+              action="action_efn_bank_reconciliation"
+              sequence="20"
+              groups="account.group_account_user"/>
+    <menuitem id="menu_efn_reconcile_unapplied"
+              name="Pembayaran Belum Teralokasi"
+              parent="menu_efn_reconcile_section"
+              action="action_efn_unapplied_payments"
+              sequence="30"
+              groups="account.group_account_readonly,account.group_account_user"/>
+</odoo>

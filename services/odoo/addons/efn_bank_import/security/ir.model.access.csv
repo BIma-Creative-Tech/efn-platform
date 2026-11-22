@@ -1,0 +1,7 @@
+id,name,model_id:id,group_id:id,perm_read,perm_write,perm_create,perm_unlink
+access_efn_bank_import_template_user,efn.bank.import.template user,model_efn_bank_import_template,account.group_account_user,1,0,0,0
+access_efn_bank_import_template_manager,efn.bank.import.template manager,model_efn_bank_import_template,account.group_account_manager,1,1,1,1
+access_efn_bank_import_log_readonly,efn.bank.import.log readonly,model_efn_bank_import_log,account.group_account_readonly,1,0,0,0
+access_efn_bank_import_log_user,efn.bank.import.log user,model_efn_bank_import_log,account.group_account_user,1,1,1,0
+access_efn_bank_import_log_manager,efn.bank.import.log manager,model_efn_bank_import_log,account.group_account_manager,1,1,1,0
+access_efn_bank_import_wizard_user,efn.bank.import.wizard user,model_efn_bank_import_wizard,account.group_account_user,1,1,1,1

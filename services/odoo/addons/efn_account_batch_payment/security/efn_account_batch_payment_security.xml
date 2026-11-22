@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- G58 §5.1: batch & konfigurasi format per company (rule global). Format tata letak global tanpa data rahasia. -->
+<odoo>
+    <data noupdate="1">
+        <record id="efn_account_batch_payment_rule_company" model="ir.rule">
+            <field name="name">EFN batch pembayaran: company user</field>
+            <field name="model_id" ref="model_efn_account_batch_payment"/>
+            <field name="domain_force">[('company_id', 'in', company_ids)]</field>
+        </record>
+        <record id="efn_account_batch_payment_format_company_rule_company" model="ir.rule">
+            <field name="name">EFN konfigurasi format transfer: company user</field>
+            <field name="model_id" ref="model_efn_account_batch_payment_format_company"/>
+            <field name="domain_force">[('company_id', 'in', company_ids)]</field>
+        </record>
+    </data>
+</odoo>

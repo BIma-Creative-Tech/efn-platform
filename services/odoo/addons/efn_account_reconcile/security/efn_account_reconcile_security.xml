@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- G58 §3.1: ringkasan rekonsiliasi per company (sumber menjumlah lintas PT). Rule global, bukan per grup. -->
+<odoo>
+    <data noupdate="1">
+        <record id="efn_reconcile_account_rule_company" model="ir.rule">
+            <field name="name">EFN ringkasan rekonsiliasi: company user</field>
+            <field name="model_id" ref="model_efn_reconcile_account"/>
+            <field name="domain_force">[('company_id', 'in', company_ids)]</field>
+        </record>
+    </data>
+</odoo>
