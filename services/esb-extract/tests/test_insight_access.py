@@ -14,11 +14,12 @@ DDL12 = (CH / "init" / "12-g41-esb.sql").read_text(encoding="utf-8")
 DDL13 = (CH / "init" / "13-g42-insight.sql").read_text(encoding="utf-8")
 DDL19 = (CH / "init" / "19-insight-review.sql").read_text(encoding="utf-8")
 DDL21 = (CH / "init" / "21-g52-insight-fnb.sql").read_text(encoding="utf-8")
+DDL22 = (CH / "init" / "22-g53-insight-fnb-forecast.sql").read_text(encoding="utf-8")
 ACCESS = (CH / "access" / "insight-access.sql").read_text(encoding="utf-8")
 INIT_SH = (CH / "clickhouse-init.sh").read_text(encoding="utf-8")
 ESB_POLICY_SH = (CH / "access" / "insight-esb-policy.sh").read_text(encoding="utf-8")
-# G52 §28.15.7: jumlah policy ESB (10 + 4); konstanta yang sama di clickhouse-init.sh (ESB_POLICY_EXPECTED).
-ESB_POLICY_COUNT = 14
+# G52 §28.15.7 + G53: jumlah policy ESB (11 + 4); konstanta yang sama di clickhouse-init.sh (ESB_POLICY_EXPECTED).
+ESB_POLICY_COUNT = 15
 
 # G52: WHERE opsional satu baris (hanya v_esb_store_payment_daily: `WHERE branch_id != 0`).
 INSIGHT_VIEW_RE = re.compile(
@@ -38,6 +39,7 @@ EXPECTED_INSIGHT_VIEWS = {
     "v_esb_product_list",
     "v_esb_movement_daily",  # review Insight 21 Nov 2026 (19-insight-review.sql)
     "v_esb_coverage",
+    "v_esb_forecast_daily",  # G53 forecast F&B (22-g53-insight-fnb-forecast.sql)
     # G52 §28.15.8 (persona Toko F&B, kelas BR)
     "v_esb_store_sales_daily",
     "v_esb_store_menu_daily",
@@ -73,9 +75,9 @@ def strip_comments(sql: str) -> str:
 
 
 def dwh_view_body(name: str) -> str:
-    """Badan view efn_dwh.<name> (tanpa komentar) dari 12/13/19/21."""
+    """Badan view efn_dwh.<name> (tanpa komentar) dari 12/13/19/21/22."""
     header = f"CREATE OR REPLACE VIEW efn_dwh.{name} AS"
-    for ddl in (DDL21, DDL19, DDL13, DDL12):
+    for ddl in (DDL22, DDL21, DDL19, DDL13, DDL12):
         if header in ddl:
             return strip_comments(ddl.split(header, 1)[1].split(";", 1)[0])
     raise AssertionError(f"view efn_dwh.{name} tidak ditemukan")

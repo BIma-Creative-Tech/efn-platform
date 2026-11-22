@@ -9,6 +9,7 @@
  *   (dibaca Node sekali saat start; file diperiksa sendiri saat boot).
  * - Tiga kunci HMAC harus valid (hex >= 64) dan BERBEDA satu sama lain (docs/04 §26.10; ADR-024).
  */
+import { parseDcCodes } from './fnb-forecast';
 import { parseKey } from './hmac';
 
 export type Env = Record<string, string | undefined>;
@@ -24,6 +25,8 @@ export interface InsightConfig {
   acceptEit2: boolean;
   /** INSIGHT_FNB_PERSONA_ENABLED (§28.15.10): aktif hanya string persis "true"; default false. TIDAK bergantung INSIGHT_SM_ENABLED. */
   fnbEnabled: boolean;
+  /** INSIGHT_FNB_DC_CODES: kode gudang pusat (agregat outlet) yang dikeluarkan dari total forecast F&B; dipisah koma, default kosong. */
+  fnbDcCodes: string[];
   production: boolean;
   allowPlaintext: boolean;
   chUrl: string;
@@ -80,6 +83,7 @@ export function parseConfig(env: Env): InsightConfig {
     acceptEit1: env.INSIGHT_ACCEPT_EIT1 === undefined || env.INSIGHT_ACCEPT_EIT1.trim() === '' ? true : env.INSIGHT_ACCEPT_EIT1 === 'true',
     acceptEit2: env.INSIGHT_ACCEPT_EIT2 === undefined || env.INSIGHT_ACCEPT_EIT2.trim() === '' ? true : env.INSIGHT_ACCEPT_EIT2 === 'true',
     fnbEnabled: env.INSIGHT_FNB_PERSONA_ENABLED === 'true',
+    fnbDcCodes: parseDcCodes(env.INSIGHT_FNB_DC_CODES),
     production,
     allowPlaintext,
     chUrl: ch ? `${ch.origin}${ch.pathname.replace(/\/+$/, '')}` : '',

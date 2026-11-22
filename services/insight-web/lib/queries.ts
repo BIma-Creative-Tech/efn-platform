@@ -29,7 +29,11 @@ export type ParamName =
   | 'yoy_from'
   | 'yoy_to'
   | 'm_from'
-  | 'ref_day';
+  | 'ref_day'
+  // Forecast F&B
+  | 'today'
+  | 'until'
+  | 'dc_codes';
 
 export type ChType = 'Date' | 'Array(String)' | 'String' | 'UInt8';
 
@@ -51,6 +55,9 @@ export const PARAM_TYPES: Record<ParamName, ChType> = {
   yoy_to: 'Date',
   m_from: 'Date',
   ref_day: 'Date',
+  today: 'Date',
+  until: 'Date',
+  dc_codes: 'Array(String)',
 };
 
 export interface QueryDef {
@@ -928,6 +935,45 @@ WHERE ${SALES_RANGE}
 GROUP BY is_takeaway
 ORDER BY is_takeaway
 LIMIT 2`,
+  },
+
+  // ---------- Forecast F&B (tambahan, 23 Nov 2026): v_esb_forecast_daily = run forecast OK daily terbaru per PT; satuan qty ----------
+  // dc_codes = kode gudang pusat (agregat outlet; env INSIGHT_FNB_DC_CODES), dikeluarkan dari total dan top produk.
+  fnb_fc_next: {
+    params: ['pt', 'today', 'until', 'dc_codes'],
+    sql: `SELECT forecast_date, toFloat64(sum(yhat)) AS yhat_sum, toFloat64(sum(p10)) AS p10_sum, toFloat64(sum(p90)) AS p90_sum,
+       max(generated_at) AS gen_at
+FROM efn_insight.v_esb_forecast_daily
+WHERE ${PT}
+  AND forecast_date BETWEEN {today:Date} AND {until:Date}
+  AND NOT has({dc_codes:Array(String)}, warehouse_code)
+GROUP BY forecast_date
+ORDER BY forecast_date
+LIMIT 60`,
+  },
+  fnb_fc_by_wh: {
+    params: ['pt', 'today', 'until'],
+    sql: `SELECT company_code, warehouse_id, any(warehouse_code) AS wh_code, any(warehouse_name) AS wh_label,
+       toFloat64(sum(yhat)) AS yhat_sum, toFloat64(sum(p10)) AS p10_sum, toFloat64(sum(p90)) AS p90_sum,
+       uniqExact(product_id) AS product_n
+FROM efn_insight.v_esb_forecast_daily
+WHERE ${PT}
+  AND forecast_date BETWEEN {today:Date} AND {until:Date}
+GROUP BY company_code, warehouse_id
+ORDER BY yhat_sum DESC
+LIMIT 500`,
+  },
+  fnb_fc_top_products: {
+    params: ['pt', 'today', 'until', 'dc_codes'],
+    sql: `SELECT company_code, product_code, any(product_name) AS product_label, any(category) AS category_label,
+       toFloat64(sum(yhat)) AS yhat_sum, toFloat64(sum(p10)) AS p10_sum, toFloat64(sum(p90)) AS p90_sum
+FROM efn_insight.v_esb_forecast_daily
+WHERE ${PT}
+  AND forecast_date BETWEEN {today:Date} AND {until:Date}
+  AND NOT has({dc_codes:Array(String)}, warehouse_code)
+GROUP BY company_code, product_code
+ORDER BY yhat_sum DESC
+LIMIT 20`,
   },
 } as const satisfies Record<string, QueryDef>;
 
