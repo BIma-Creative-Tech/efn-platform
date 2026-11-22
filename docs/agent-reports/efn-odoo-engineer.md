@@ -3326,3 +3326,266 @@ Spesifikasi: `docs/fit-gap/G54_G55_G61_ODOO_SETUP.md` §G55/§G61. Worktree `efn
 - `res.lang._activate_lang`, `get_installed`, dan `_visible_menu_ids` di Odoo 19 (dibaca dari GitHub, belum dieksekusi).
 - Skrip `recategorize_pb.py` belum ada TransactionCase dan belum dijalankan di DB nyata.
 - Perilaku `-u account`/`-u mrp` terhadap label (uji manual README).
+
+# G59 — `efn_tax_withholding`, `efn_account_deferred`, menu "Entri Berulang" (23 Nov 2026, branch `feat/odoo-completion`) — BELUM DIJALANKAN
+
+Spesifikasi `docs/fit-gap/G59_G60_ACCOUNTING_PORT.md` §G59-A/B/C; ADR-049 (port), ADR-027, ADR-031. Default Q-G59-1..5
+dipakai (PPh 23 2 %, 4(2) 10 %, 26 20 %, kode objek placeholder, potong saat tagihan). Tidak di-commit.
+
+## Modul & file
+- `services/odoo/addons/efn_tax_withholding/` (baru, 19.0.1.0.0, depends `account`, `l10n_id`, `efn_core`): `models/account_tax.py`
+  (`efn_pph_kind`, `efn_bupot_object_code`, constraint, loader demo privat), `models/account_move_line.py` (`efn_bupot_number/date`,
+  related `efn_pph_kind`/`efn_pph_object_code`/`efn_pph_partner_vat` [grup Accounting User/Manager], guard `write`, constraint),
+  `views/account_tax_views.xml`, `views/withholding_register_views.xml` (list editable + pivot + search + action + menu Taxes &
+  Fiscal), `demo/account_tax_pph_demo.xml` (`<function>`), `security/ir.model.access.csv` (header), `tests/test_withholding.py`, README.
+- `services/odoo/addons/efn_account_deferred/` (baru, port `custom_account_deferred`, 19.0.1.0.0, depends `account`, `efn_core`):
+  `models/{account_move,account_move_line,res_company,res_config_settings}.py`, `views/{account_move_views,deferred_views,
+  res_config_settings_views}.xml`, `demo/deferred_demo.xml`, `security/ir.model.access.csv` (header), `tests/test_deferred.py`
+  (3 port + 9 baru), README (provenance).
+- `efn_setup_menu` 19.0.1.0.0 → 19.0.1.1.0: action + menu `menu_efn_recurring_entries` di `data/menu_data.xml`, test
+  `test_recurring_entries_menu`, README.
+
+## Untuk lead (di luar batas file saya)
+- `EFN_TEST_MODULES` tambah: `efn_tax_withholding`, `efn_account_deferred` (`efn_setup_menu` sudah ada).
+- `RPC_ALLOWLIST`: `("account.move", "action_efn_open_deferred_entries")`: `ensure_one` + `check_access('read')`, hanya
+  mengembalikan act_window (domain `efn_deferred_origin_move_id = self.id`), tanpa sudo. `("account.move", "button_draft")`
+  sudah ada (efn_intercompany); kini juga override `efn_account_deferred` — alasan perlu diperluas: ACL/rule CE + pra-cek lock
+  date, entri turunan di-draft/hapus dengan hak user (tanpa sudo). `account.move.line.write` (efn_tax_withholding) = ORM_OVERRIDES
+  (guard grup Accounting untuk field bukti potong). Tidak ada metode publik lain.
+- Hash commit `odoo-platform` untuk provenance README belum dicatat (snapshot tanpa metadata git).
+
+## Belum diverifikasi
+- Semua test belum dijalankan di Odoo 19 nyata.
+- Rekonsiliasi `_get_lock_date_violations`/`fiscalyear_lock_date` di test (asumsi tidak ada statement line belum rekonsiliasi).
+- Akses field `groups` pada related `efn_pph_partner_vat` via `read()` → `AccessError` untuk Billing; test NPWP memakai
+  `PiiKeyMixin` dipanggil tanpa pewarisan (di-skip bila `efn_pii_base_vat` tidak terpasang).
+- Demo: xmlid akun `l10n_id_21210030/50/60`, `11210040`, `28110030` (dari spesifikasi [G], CSV l10n_id tidak ada di subset lokal);
+  bila tidak ditemukan, demo dilewati dengan log INFO.
+- `efn_audit` tidak menangkap export list (dicek grep) → sisa risiko dicatat di README `efn_tax_withholding`.
+
+# G60 — `efn_account_localization` 19.0.1.0.0: voucher + 4-eyes, MDR, analitik Outlet (23 Nov 2026, branch `feat/odoo-completion`) — BELUM DIJALANKAN
+
+Spesifikasi `docs/fit-gap/G59_G60_ACCOUNTING_PORT.md` §G60 (A/B/C); ADR-049 (port `custom_levis_localization`), ADR-031.
+Default dipakai: ambang 0 (nonaktif), rekening dimasking kecuali Accounting Manager, satu EDC + satu QRIS per PT (tarif
+placeholder demo), hanya baris laba-rugi per outlet, analitik untuk user akuntansi, PO membawa outlet. Tidak di-commit.
+
+## Modul & file (baru, depends `account`, `analytic`, `point_of_sale`, `stock`, `purchase_stock`, `efn_core`)
+- `models/`: `account_payment.py` (gerbang + approve/reject + rekonsiliasi pasca-approve + helper voucher + masking),
+  `account_payment_register.py` (`_post_payments` menahan payment di atas ambang), `efn_mdr_rate.py` (model baru),
+  `pos_session.py` (hook `_create_bank_payment_moves` MDR + `_create_account_move` cap outlet), `outlet_analytic.py`
+  (helper murni), `account_move.py`, `stock_warehouse.py`, `purchase_order_line.py`, `res_company.py`,
+  `res_config_settings.py`, `terbilang.py`.
+- `wizard/efn_outlet_analytic_wizard.py` (+ line, transient) + view/menu; `reports/` (paperformat, template voucher/receipt,
+  action tanpa attachment); `views/` (payment, tarif MDR, smart button sesi, gudang, settings); `data/` (plan Outlet,
+  imply analitik ke `account.group_account_invoice`); `demo/` (`<function>` tarif placeholder); `security/` (ACL + 3 rule
+  company); `tests/test_payment_approval.py`, `tests/test_pos_mdr_outlet.py`; README (provenance).
+- Penyimpangan kecil dari spesifikasi: cap outlet dilakukan satu kali pasca `_create_account_move` (filter
+  `internal_group` income/expense) alih-alih override `_get_sale_vals`/`_get_rounding_difference_vals`/
+  `_get_stock_expense_vals` — hasil sama, distribusi bawaan sudah terhitung sehingga digabung, bukan ditimpa. Tanggal tarif
+  MDR = tanggal jurnal sesi (bukan `stop_at`). Smart button "Jurnal MDR" memakai act_window ber-`active_id` (tanpa metode
+  publik). Selisih kas penutupan belum dicap (diizinkan spesifikasi, dicatat README).
+
+## Untuk lead (di luar batas file saya)
+- `EFN_TEST_MODULES` tambah: `efn_account_localization`.
+- `RPC_ALLOWLIST` (semua metode publik non-underscore di modul ini):
+  - `("account.payment", "action_post")`: override CE; hanya MENAMBAH penolakan (`UserError`) bila perlu persetujuan dan
+    belum `approved`, lalu `super()` (ACL/rule CE).
+  - `("account.payment", "action_draft")`: override CE; `super()` lalu gugurkan persetujuan `approved` → `not_required`.
+  - `("account.payment", "action_efn_request_approval")`: `check_access('write')` + company payment ⊆ `user.company_ids` +
+    state `draft` + approval `not_required/rejected` + `_efn_needs_approval()`.
+  - `("account.payment", "action_efn_approve")`: `_efn_check_approver` = grup `account.group_account_manager` +
+    `check_access('write')` + company + state `draft`/`to_approve` + 4-eyes (≠ peminta, ≠ pembuat), lalu `action_post()`.
+  - `("account.payment", "action_efn_reject")`: `_efn_check_approver` (sama), tetap draft.
+  - `("efn.outlet.analytic.wizard", "action_check")`: `_efn_check_access` (Accounting Manager + company wizard ∈
+    `user.company_ids`), hanya menulis baris wizard.
+  - `("efn.outlet.analytic.wizard", "action_apply")`: `_efn_check_access`, lalu sudo; idempoten, savepoint per gudang.
+  - Tidak ada metode publik di `efn.mdr.rate`, `pos.session`, `stock.warehouse`, `purchase.order.line`,
+    `account.payment.register`, `res.company`.
+- `efn_setup_audit`: tambah `efn.audit.rule` untuk `efn.mdr.rate`, field `efn_approval_*` `account.payment`,
+  `res.company.efn_payment_approval_threshold` (spesifikasi urut 5; bukan file saya).
+- Hash commit `odoo-platform` untuk provenance README belum tersedia (snapshot tanpa metadata git).
+
+## Belum diverifikasi
+- Semua test belum dijalankan di Odoo 19 nyata (tanpa shell).
+- [B] Rekonsiliasi payment wizard yang ditahan lalu disetujui (`matched_payment_ids` → `_efn_reconcile_matched_moves`).
+- [B] `analytic_distribution` hasil cap bertahan sampai post jurnal sesi (tidak dihitung ulang) dan analytic line memakai
+  kolom `plan._column_name()`; pengaruh imply grup analitik ke test modul lain yang menghitung menu/field terlihat.
+- [B] Distribution model `account_prefix` cocok dengan baris penjualan sesi (test `test_existing_distribution_kept...`).
+- [B] Render QWeb voucher (`'{:,.{dp}f}'.format`, `\x00`) di sandbox 19 — sama dengan sumber Levi's, belum dieksekusi di EFN.
+- Deteksi transfer internal (CE 19 tanpa `is_internal_transfer`).
+- Demo tarif bergantung xmlid akun `l10n_id_65110020` (dari spesifikasi [G]); bila tidak ada, dilewati diam-diam.
+
+# G57 — `efn_account_asset` 19.0.1.0.0: aset tetap + tagihan -> draf aset (23 Nov 2026, branch `feat/odoo-completion`) — BELUM DIJALANKAN
+
+Spesifikasi `docs/fit-gap/G57_G58_ACCOUNTING_PORT.md` §1; ADR-049 (port `ee_gap/custom_accounting_asset` + pola seed
+`_tenants/custom_levis_asset_accounts`, snapshot `origin/main` 23 Nov 2026), ADR-031. Default §9 dipakai (satu akun
+`12210030`; SOFT tanpa akun -> konfirmasi diblokir; umur 60/96/48/48/48/96; LVA dibebankan; jurnal `DEPR`). Tidak di-commit.
+
+## Modul & file (baru, depends `account`, `mail`, `efn_audit`; tanpa `efn_setup_menu` — induk menu CE dipindah G55)
+- `models/`: `efn_account_asset.py`, `efn_account_asset_group.py` (seed `_efn_seed_groups`/`_efn_seed_company`,
+  `efn_check_asset_manager`), `efn_account_asset_location.py`, `efn_account_asset_depreciation_line.py`,
+  `efn_account_asset_revaluation.py`, `efn_account_asset_partial_disposal.py`, `account_move.py` (`_post` -> draf aset,
+  `button_draft` tolak/hapus, `unlink` lepas baris).
+- `wizards/` disposal, revaluasi, pelepasan sebagian, posting, register (XLSX xlsxwriter + PDF `web.external_layout`) + views.
+- `security/` (privilege "Aset Tetap", 2 grup, ACL 24 baris, 6 rule company), `data/` (sequence, cron OdooBot harian,
+  audit rule, `<function>` seed tidak noupdate, server action list), `views/`, `report/`, `demo/` (kelompok LVA), README.
+- `tests/`: `test_asset.py` + `test_quantity_asset.py` (port), `test_asset_bill.py`, `test_asset_security.py`,
+  `test_asset_register.py` (tag `efn`).
+- Penyimpangan kecil: riwayat revaluasi/pelepasan `r---` untuk Pengguna (spesifikasi `rwc-`); disposal menghapus baris
+  jadwal belum diposting; konfirmasi juga mewajibkan akun aset; `action_efn_reseed` ada di `efn.account.asset.group`.
+
+## Untuk lead (di luar batas file saya)
+- `EFN_TEST_MODULES` tambah: `efn_account_asset`.
+- `RPC_ALLOWLIST` (semua metode publik):
+  - `efn.account.asset`: `action_confirm`, `action_cancel`, `action_reset_draft`, `action_post_selected`,
+    `action_open_dispose_wizard`, `action_open_revaluation_wizard`, `action_open_partial_disposal_wizard` ->
+    `_efn_check_manager` (grup Aset / Manager + `check_access('write')` + company ⊆ `env.companies`), sebelum sudo.
+  - `efn.account.asset`: `action_view_partial_disposals`, `action_view_merged_assets`, `action_view_revaluations` ->
+    `check_access('read')`, hanya act_window.
+  - `efn.account.asset.group`: `action_efn_reseed` -> `efn_check_asset_manager`, seed sudo hanya PT `env.companies` ber-CoA id.
+  - `efn.account.asset.depreciation.line`: `action_post_now`, `action_reverse` -> `asset_id._efn_check_manager()`.
+  - `efn.account.asset.disposal.wizard.action_dispose`, `efn.account.asset.revaluation.wizard.action_revalue`,
+    `efn.account.asset.partial.disposal.wizard.action_retire` -> `asset_id._efn_check_manager()`;
+    `efn.account.asset.post.wizard.action_post` -> `efn_check_asset_manager` + company ∩ `env.companies` + `_efn_check_manager`.
+  - `efn.account.asset.register.wizard`: `action_xlsx`, `action_pdf` -> `_efn_check_access` (grup Aset user/manager atau
+    `account.group_account_readonly` + company wizard ⊆ `env.companies`), baca dengan hak user.
+  - `("account.move", "button_draft")` sudah ada: perluas deskripsi "+ efn_account_asset: tolak bila aset running dari
+    tagihan, hapus draf aset (sudo setelah cek company), un-post baris penyusutan (sudo)". `account.move.unlink`,
+    `efn.account.asset.create/write` = ORM_OVERRIDES.
+
+## Belum diverifikasi
+- Semua test belum dijalankan di Odoo 19 nyata (tanpa shell).
+- [B] `AccountTestInvoicingCommon` 19: `env.user` non-su (grup manager ditambahkan via sudo) dan `setup_other_company` tidak
+  menambah company ke user (ditambah eksplisit).
+- [B] `patch.object(fields.Date, "context_today", ...)` di test (pengganti monkeypatch sumber).
+- [B] `_render_qweb_html` mengembalikan bytes vs Markup (test menangani keduanya); QWeb memanggil `o._efn_register_data()`.
+- [B] Tampilan M2o `source_move_id` untuk user aset tanpa hak akuntansi.
+- Seed di DB nyata (PT l10n_id + kategori G61) dan perilaku posting ke periode terkunci.
+- Hash commit `odoo-platform` untuk provenance tidak tersedia (snapshot tanpa metadata git).
+
+## G57 putaran perbaikan security (SEC-G57-02, SEC-G57-03) — BELUM DIJALANKAN ULANG
+- Run lead sebelumnya: 47 test hijau (lead mengubah `test_pdf_renders`: set `external_report_layout_id`; dipertahankan).
+- SEC-G57-02: `SYSTEM_FIELDS` + `_efn_check_system_fields` di create/write (AccessError kecuali `env.su` + context
+  `efn_asset_system_write`); semua jalur internal (confirm/cancel/reset, wizard disposal/revaluasi, pelepasan, merge,
+  tagihan -> aset) menulis lewat `_efn_system()` sesudah cek akses. Create menerima nilai default (draft / nol).
+- SEC-G57-03: Workbook `strings_to_formulas/strings_to_urls=False` + `write_string` untuk teks.
+- Test baru: `test_sec_g57_02_user_cannot_write_system_fields`, `test_sec_g57_02_user_cannot_create_with_system_fields`,
+  `test_sec_g57_03_xlsx_text_never_formula`. Tidak ada metode publik baru (`_efn_system`, `_efn_check_system_fields` privat).
+
+# G58 — `efn_account_reconcile`, `efn_bank_import`, `efn_account_batch_payment` 19.0.1.0.0 (23 Nov 2026, branch `feat/odoo-completion`) — BELUM DIJALANKAN
+
+Spesifikasi `docs/fit-gap/G57_G58_ACCOUNTING_PORT.md` §3–§5 + `G59_G60_ACCOUNTING_PORT.md` D-5 (true-up MDR) & §0 asumsi 2
+(persetujuan payment). ADR-049 (port `ee_gap/custom_account_reconcile`, `ee_gap/custom_bank_import`,
+`ee_gap/custom_account_batch_payment`, bagian generik `_tenants/custom_levis_bank_reconcile`; snapshot `origin/main`
+23 Nov 2026), ADR-031. Tidak di-commit.
+
+## Modul & file
+- `efn_account_reconcile` (depends `account`): `models/` (`efn_reconcile_account.py` view SQL per company,
+  `account_bank_statement_line.py` kandidat/auto-match/`_efn_reconcile_with_amls` + `_efn_reconcile_model_writeoffs`,
+  `account_move.py` `button_draft` unreconcile, `account_move_line.py` guard + `efn_transaction_ref`,
+  `account_payment.py` blok duplikat + `efn_is_unapplied`, `account_account.py` `efn_no_auto_match`), `wizard/` (item jurnal,
+  mutasi bank halaman penuh), `security/`, `views/`, `tests/` (4 file), README.
+- `efn_bank_import` (depends `account`, `efn_audit`, `efn_setup_menu`): template (CSV generik + BCA korporat, parser privat),
+  log immutable, wizard (lock date fail-closed, dedup hash per company + sidik baris, batas 10 MB/20.000 baris), `data/`
+  (audit rule + `<function>` template contoh per company), `tests/test_bank_import.py`, README.
+- `efn_account_batch_payment` (depends `account`, `efn_audit`): batch (empat mata validasi ≠ ekspor, attachment 24 jam +
+  cron tiap jam, hash/pengekspor/waktu), format global + konfigurasi per company×jurnal, renderer privat `csv` + sanitasi,
+  rekening fail-closed (placeholder keyring/kosong/bukan angka), cek `efn_approval_state` bila field ada, `data/` (sequence,
+  5 format noupdate, 2 audit rule, cron), `tests/test_batch_payment.py`, README.
+
+## Untuk lead (di luar batas file saya)
+- `EFN_TEST_MODULES` tambah: `efn_account_reconcile`, `efn_bank_import`, `efn_account_batch_payment`.
+- `RPC_ALLOWLIST`:
+  - `account.bank.statement.line`: `action_efn_open_match_wizard`, `action_efn_auto_match` -> `_efn_check_reconcile_access`
+    (grup `account.group_account_user` + `check_access('write')` + company ⊆ `env.companies`).
+  - `efn.bank.reconcile.wizard`: `default_get`, `action_search_more`, `action_efn_suggest`, `action_reconcile` ->
+    `st_line._efn_check_reconcile_access`; `action_reconcile` juga `check_access('read')` item + validasi ulang domain kandidat.
+  - `efn.account.reconcile.wizard`: `default_get`, `action_reconcile` -> `_efn_validate_lines` (grup user + `check_access('write')`
+    item + satu company ⊆ `env.companies`).
+  - `efn.reconcile.account`: `init` (hook ORM init), `action_open_lines` (`check_access('read')`, act_window tanpa sudo).
+  - `("account.move", "button_draft")` (sudah ada): tambah "+ efn_account_reconcile: unreconcile sebelum super, catat chatter".
+  - `("account.payment", "action_post")` BARU: "override CE (efn_account_reconcile: blokir kembaran posted kecuali
+    `efn_duplicate_checked`)".
+  - `efn.bank.import.wizard`: `action_import` -> `_efn_check_access` (grup user + read jurnal + create baris mutasi + company
+    ⊆ `env.companies` + template company jurnal), log sudo setelah cek.
+  - `efn.account.batch.payment`: `action_validate`, `action_open_payments` -> `_efn_check_group(account.group_account_user,
+    write/read)`; `action_generate_export_file` -> `_efn_check_group(account.group_account_manager)` + empat mata + format
+    terverifikasi + rekening fail-closed; `action_draft` -> `_efn_check_group(account.group_account_manager)`.
+  - `account.payment`: `action_efn_create_batch` -> grup user + `check_access('write')` + company + satu jurnal/arah + G60.
+  - `account.move.line.write`, `efn.bank.import.log.write` = ORM_OVERRIDES.
+
+## Penyimpangan dari spesifikasi
+- `efn_bank_import`: `journal.check_access('read')` + `account.bank.statement.line.check_access('create')`, bukan
+  `check_access('write')` jurnal (ACL CE: write `account.journal` hanya Administrator -> Bookkeeper selalu ditolak).
+- Wizard pencocokan hanya halaman penuh (tanpa versi dialog). Cron file transfer tiap jam (spesifikasi: harian).
+- Menu Rekonsiliasi: section `group_account_readonly,group_account_user` (spesifikasi section = user, tetapi anak
+  "Rekonsiliasi Akun"/"Belum Teralokasi" harus terlihat readonly).
+
+## Belum diverifikasi
+- Semua test belum dijalankan di Odoo 19 nyata (tanpa shell); ruff belum dijalankan (baris ≤120 dicek manual).
+- [B] Blok duplikat `account.payment.action_post` aktif DB-wide: test modul efn lain yang mem-post dua payment identik
+  (partner/nominal/tanggal/arah) akan gagal bila modul ini terpasang di run gabungan.
+- [B] Validasi view 19: field `company_id` ganda (satu `invisible`) untuk domain `check_company`; xpath `memo` di form
+  payment dipakai dua modul.
+- [B] `_get_default_amls_matching_domain` CE (allow_draft=False) mengembalikan list (dipakai `filtered_domain`).
+- [B] `AccountTestInvoicingCommon`: `env.user.company_ids |= ...` dan `new_test_user` oleh accountman (pola efn_intercompany).
+- [B] Ripgrep di mesin ini tidak melihat folder `data/` (global ignore?): pastikan `git status` memuat `data/` ketiga
+  modul (bila diabaikan, `git add -f`).
+- [B] Format bank (BCA MCM, Mandiri MCM, BNI, BRI) tetap baseline tak terverifikasi (Q-G58-2); parser XLS/XLSX fase 2.
+
+# G57 — `efn_petty_cash` 19.0.1.0.0: kas kecil outlet (imprest) & uang muka (23 Nov 2026, branch `feat/odoo-completion`) — BELUM DIJALANKAN
+
+Spesifikasi `docs/fit-gap/G57_G58_ACCOUNTING_PORT.md` §2; ADR-049 (port `ee_gap/custom_petty_cash` 19.0.0.5.0, snapshot
+`origin/main` 23 Nov 2026), ADR-031. Default: Q-PC1 akun uang muka placeholder buatan Finance (fail-closed `UserError`),
+Q-PC2 uang muka kustodian (tanpa `cash_journal_id`), pemegang = partner/user (tanpa `hr`), fund imprest per outlet, empat
+mata pola `efn_loyalty_accounting`. Hook sumber (grup ke semua user internal) TIDAK diport. Tidak di-commit.
+
+## Modul & file (depends `account`, `mail`, `efn_audit`, `efn_setup_menu`)
+- `models/`: `common.py` (konstanta + helper non-model), `petty_cash_type.py` (resolusi akun/jurnal fail-closed),
+  `petty_cash_fund.py` (baru), `petty_cash_request.py`, `petty_cash_request_line.py`, `petty_cash_realization.py`,
+  `petty_cash_realization_line.py`, `account_move.py` (3 field penanda).
+- `wizard/petty_cash_report_wizard.py` + view (Kartu/Outstanding/Aging, XLSX + PDF), `report/` (3 voucher port + PDF laporan).
+- `security/` (privilege, 4 grup, ACL 21 baris, 7 rule company global + 5 rule "milik sendiri" + 5 rule semua),
+  `data/` (sequence, template email, cron harian, 3 `efn.audit.rule`), `views/` (+ menu root "Kas Kecil" seq 57, pintasan
+  `efn_setup_menu.menu_efn_cash_bank`), README.
+- `tests/`: `common.py`, `test_request_flow.py` (13), `test_fund.py` (9), `test_security.py` (4), tag `efn`.
+
+## Penyimpangan dari spesifikasi
+- Pelunasan tagihan pihak ketiga = entri jurnal umum + `reconcile()` (bukan `account.payment.register` yang menulis ulang
+  akun outstanding jurnal); `payment_journal_id` jenis `general`.
+- ACL baris (rincian/baris realisasi) user `rwcu` (spesifikasi `rwc-`): hapus baris di form; dibatasi draft di kode.
+- Jurnal beban wajib dikonfigurasi (sumber: fallback jurnal umum pertama). Posting realisasi hanya dari status Diajukan.
+- Tanpa data demo; tanpa `cash_journal_id`; voucher memakai pembungkus mandiri sumber (bukan `web.html_container`).
+
+## Untuk lead (di luar batas file saya)
+- `EFN_TEST_MODULES` tambah: `efn_petty_cash`.
+- `RPC_ALLOWLIST`:
+  - `efn.petty.cash.request`: `action_submit`, `action_cancel`, `action_reset_to_draft` -> `check_access('write')` + state;
+    `action_approve`, `action_reject` -> `_efn_check_approver` (grup approver + `check_access('write')` + company ∈
+    `user.company_ids` + state + user ∉ pembuat/penyunting/pemegang); `action_disburse`, `action_return_balance`,
+    `action_reimburse_shortfall`, `action_settle` -> `_efn_check_finance` (grup finance + `check_access('write')` + company
+    + user ∉ pembuat/pemegang) + plafon; `action_open_realization`, `action_view_moves`, `action_view_realizations` ->
+    `check_access('read')`, hanya act_window.
+  - `efn.petty.cash.realization`: `action_submit`, `action_cancel`, `action_reset_to_draft` -> `check_access('write')` +
+    state; `action_post` -> `_efn_check_poster` (grup finance + `check_access('write')` + company + user ∉
+    pembuat/penyunting/pemegang); `action_view_bills` -> `check_access('read')`.
+  - `efn.petty.cash.fund`: `action_request_replenishment` -> `check_access('read')` + user = kustodian atau grup finance,
+    request dibuat dengan hak user; `action_close_fund` -> `_efn_check_finance` (grup finance + `check_access('write')` +
+    company + user ≠ kustodian); `action_view_requests`, `action_view_realizations`, `action_view_moves` ->
+    `check_access('read')`.
+  - `efn.petty.cash.type`: `action_view_requests` -> `check_access('read')`.
+  - `efn.petty.cash.report.wizard`: `action_xlsx`, `action_pdf` -> `_efn_check_access` (grup finance atau
+    `account.group_account_readonly` + company wizard ∈ `env.companies`), baca dengan hak user.
+  - `create`/`write`/`unlink` (request, realization, baris, fund) = ORM_OVERRIDES.
+- Tindak lanjut: grup ke persona di `efn_setup_role` + `SOD-PC1` (report-only); root menu ke `efn_web_home`
+  `ROOT_MENU_GROUPS` ("finance").
+
+## Belum diverifikasi
+- Semua test belum dijalankan di Odoo 19 nyata (tanpa shell); `ruff check`/`ruff format --check` belum dijalankan (baris
+  ≤120 dicek manual) — bila format gagal, `ruff format services/odoo/addons/efn_petty_cash` bersifat mekanis.
+- [B] Entri `move_type=entry` di jurnal bank (pencairan/pengembalian) diterima `_post` CE 19 (sumber melakukan hal sama).
+- [B] `AccountTestInvoicingCommon` 19: fixture dibuat accountman + `sudo`; user uji `new_test_user` dengan company A/B.
+- [B] Lampiran tanpa `res_model` hanya terbaca pembuatnya (test membuat nota sebagai pemohon).
+- [B] `payment_state` tagihan yang direkonsiliasi dengan entri umum = `paid` (test menerima `in_payment`).
+- [B] `disburse_via_payment=1` dan multi-mata uang tidak diuji.
+- [B] Ripgrep mesin ini tidak melihat `data/`: pastikan `git status` memuat `services/odoo/addons/efn_petty_cash/data/`.
