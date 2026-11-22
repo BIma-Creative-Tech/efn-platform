@@ -3224,3 +3224,105 @@ setelah itu test Odoo meng-assert byte-exact otomatis. Frontend wajib memakai in
   (wajib uji upgrade DB demo SMD: id grup + anggota tetap).
 - Field duplikat `company_ids` (invisible) di tab Insight form user diterima validator view 19.0.
 - Langkah runbook impor CSV `docs/runbooks/esb-extract.md` dan revisi docs/04 nilai vektor: belum (di luar cakupan).
+
+# G56 efn_web_home (23 Nov 2026)
+
+Port `odoo-platform` `core/custom_home_console` 19.0.1.0.0 -> `efn_web_home` 19.0.1.0.0 (ADR-049; LGPL-3; depends
+`web`, `mail`). Provenance + daftar perubahan di README modul.
+
+## File
+- `services/odoo/addons/efn_web_home/`: `__manifest__.py`, `__init__.py`, `hooks.py`, `models/res_company.py`,
+  `models/res_users.py` (`efn_home_bootstrap`), `security/ir.model.access.csv` (header saja, tanpa model baru),
+  `views/{home_action,menu_views,res_company_views,res_users_views,login_templates}.xml`,
+  `static/src/home/{home.js,home.xml,home.scss,spotlight_search.js,spotlight_search.xml,recent_service.js,navbar_patch.js,navbar_patch.xml}`,
+  `static/src/login/login.scss`, `tests/{test_home_bootstrap.py,test_login_page.py}`, `README.md`.
+- `efn_core/tests/test_rpc_surface.py`: entri `RPC_ALLOWLIST` `("res.users", "efn_home_bootstrap")`.
+- `.github/workflows/ci.yml`: `efn_web_home` di akhir `EFN_TEST_MODULES`.
+
+## Keputusan
+- Aplikasi + kelompok dihitung server dari `ir.ui.menu.load_menus(False)` user pemanggil (kunci `'root'`, field
+  `xmlid`/`children` — diverifikasi WebFetch base 19.0); pemetaan xmlid menu root via `env.ref(..., raise_if_not_found=False)`,
+  fallback kategori modul. Tanpa 309 ikon PNG; ikon menu CE atau tile huruf.
+- Branding = `env.company`; aksen divalidasi `#RRGGBB`.
+- Login: inherit `web.login_layout` (struktur diverifikasi di source 19.0 lokal): kelas body `o_efn_login` + logo EFN.
+
+## Untuk lead (WAJIB)
+- Salin biner: `cp services/superapp-web/public/brands/efn/ebn.png services/odoo/addons/efn_web_home/static/src/img/efn_logo.png`
+  (alat saya tidak bisa menyalin file biner). Tanpa ini `test_logo_asset_served` gagal.
+
+## Belum diverifikasi (test BELUM DIJALANKAN)
+- `t-inherit` extension pada `web.NavBar.AppsMenu` dengan xpath `div[hasclass('o_navbar_apps_menu')]/*[1]`
+  (template ada di 19.0; xpath dibawa dari sumber yang berjalan di 19).
+- `base.view_users_form` / `base.view_company_form` punya `<notebook>` (WebFetch: ya).
+- `command.openMainPalette({searchValue})` (ada di command_service.js 19.0).
+- `mail.activity.search` sebagai user non-admin tanpa error; CSS `web.assets_frontend` tidak bentrok dengan modul lain.
+- Dampak ke tour efn lain: semua user internal mendapat `action_id` Beranda saat install (tour efn memakai URL eksplisit;
+  grep tidak menemukan selector navbar apps).
+
+---
+
+# G54 — Wizard "Lengkapi konfigurasi POS" (`efn_setup_pos` 19.0.1.15.0, 23 Nov 2026) — BELUM DIJALANKAN
+
+Spesifikasi: `docs/fit-gap/G54_G55_G61_ODOO_SETUP.md` §G54 (efn-odoo-functional). Worktree `efn-platform-odoo`,
+branch `feat/odoo-completion`, tidak di-commit. Tidak menyentuh `efn_setup_menu` / `scripts/migration` (G55/G61).
+
+## Modul & file
+- `efn_setup_pos/wizard/efn_pos_setup_wizard.py` (baru): `efn.pos.setup.wizard` + `.line` (transient, `company_id`,
+  `_check_company_auto`); mode check (P01..P19 + W-01..W-04 + C-09 hitung) / apply (C-01..C-09, savepoint per config,
+  cek ulang). Hak: check = POS manager; apply = + `account.group_account_manager` (server-side), superuser (odoo shell) boleh.
+  Fungsi murni `cash_journal_code()` (§3.1).
+- `wizard/efn_pos_setup_wizard_views.xml`: form, action (binding list/form `pos.config`, `group_ids` POS manager), menu di
+  `point_of_sale.menu_point_config_product`.
+- `security/ir.model.access.csv` (baru), `security/efn_pos_setup_wizard_security.xml` (rule multi-company).
+- Data: `data/pos_payment_method_qris_manual_data.xml` (baru; GL/PB/BCR/BCF/WTZ/IMD/CUP, bukan SMD); EDC, Poin EFN,
+  preset dine-in/takeaway IMD & CUP ditambahkan ke file yang ada. Tanpa migrasi (xmlid noupdate baru dibuat saat `-u`).
+- `tests/test_g54_pos_setup_wizard.py` (8 test, tag `efn`), `README.md` §G54, `docs/runbooks/migrasi-esb-odoo.md` §4.2/§4.4.
+
+## Penyimpangan dari spesifikasi
+- `pos.config` CE 19 bukan `mail.thread` → tidak ada `message_post`; jejak = baris wizard + `_logger.info` (id saja).
+- P02 hanya dicek (tidak menulis negara fiskal). C-07 dijalankan tingkat company (metode EDC/QRIS dipakai banyak POS).
+- Metode tunai bersama (P08) dilepas dari POS saat apply setelah metode tunai eksklusif dibuat.
+
+## Belum diverifikasi / titik rawan test
+- `open_ui()` sebagai kasir `group_pos_user` (ACL baca jurnal/metode saat `_validate_fields`).
+- xmlid chart `l10n_id_11210011/99900001/99900002`, `account_journal_payment_debit_account_id` untuk IMD.
+- `new_test_user(..., company_ids=[Command.set(...)])`; `invalidate_all(flush=False)` setelah rollback savepoint.
+- Kode jurnal `QRIS` bentrok di DB lama → `-u` gagal (cek SQL di runbook).
+- Efek `pos_hr` (membuat `hr.employee` untuk POS manager) saat apply.
+
+# G55 `efn_setup_menu` + G61 kategori produk PB (23 Nov 2026) — BELUM DIJALANKAN
+
+Spesifikasi: `docs/fit-gap/G54_G55_G61_ODOO_SETUP.md` §G55/§G61. Worktree `efn-platform-odoo`, branch
+`feat/odoo-completion`, tidak di-commit. Tidak menyentuh `efn_setup_pos` (G54).
+
+## Modul & file
+- **G55** `services/odoo/addons/efn_setup_menu/` (19.0.1.0.0, LGPL-3, depends `account`, `mrp`): `data/menu_data.xml`
+  (noupdate=0: akar `menu_accounting_root`, Kas & Bank, 4 menu CE dipindah, `<function _efn_apply_menu_labels>`),
+  `models/ir_ui_menu.py` (label untuk en_US + semua bahasa terpasang), `hooks.py` (uninstall: kembalikan induk CE,
+  `parent_id` ondelete=restrict), `tests/test_menu_labels.py` (6 test, tag `efn`), README. CI: `EFN_TEST_MODULES` + modul.
+- **G61** `scripts/migration/efn_mig/category_roles.csv` (52 baris, kolom `note` = A1–A11) + `category_roles.py` (parser
+  murni, validasi peran↔type/is_storable/akar). `mapping.build_categories` (pohon per simpul, urut kedalaman, tanpa
+  induk brand) dan `build_products` (categ_key + flag per peran; tak terpetakan/kosong → `MapError` exit 2).
+  `scripts/migration/recategorize_pb.py` (odoo shell; DRY-RUN default = rollback; `EFN_G61_APPLY=1`; laporan CSV
+  `EFN_G61_REPORT`; prasyarat 0 sesi POS/move/quant; menu → `Menu / <akar pos.category>`; akun placeholder; xmlid
+  importer ditautkan; kategori lama kosong di bawah `PB` dihapus; SMD ditolak).
+- Importer `efn_legacy_history/esb_import/importer.py` `_do_category`: tingkat atas tanpa induk brand + tautkan
+  kategori yang sudah ada (nama + induk). Test Odoo `test_esb_import.py` disesuaikan.
+- pytest `scripts/migration/tests/test_category_roles.py` (baru), `conftest.py`/`test_mapping.py`/`test_export_options.py`
+  memakai nama kategori ESB nyata. `.dockerignore` mengecualikan CSV peran.
+- Dokumen: `docs/fit-gap/G61_KATEGORI_PRODUK_PB.md`, runbook `migrasi-esb-odoo.md` §4.2 + §4.5, README
+  `scripts/migration` dan `efn_legacy_history`.
+
+## Penyimpangan / asumsi
+- xmlid akar = `efn_setup_menu.menu_accounting_root` (mengikuti `efn_web_home`), bukan `menu_efn_accounting_root`.
+- Nama berkas mengikuti tugas lead (`category_roles.csv`, `recategorize_pb.py`), bukan nama di spesifikasi.
+- Aturan A2 `supplierinfo` di export = False (sumber supplierinfo/PO ESB belum diekspor). Skrip memakai `seller_ids`.
+- Skrip satu transaksi (bukan per fase). Akun kategori lama hanya diisi bila kosong; `property_cost_method` hanya untuk
+  kategori baru.
+- Bundel belum membawa kategori menu, jadi menu baru dari impor berikutnya tanpa kategori. Skrip dijalankan ulang.
+
+## Belum diverifikasi
+- Semua test belum dijalankan (Odoo 19 + pytest) — efn-lead menjalankan di container.
+- `res.lang._activate_lang`, `get_installed`, dan `_visible_menu_ids` di Odoo 19 (dibaca dari GitHub, belum dieksekusi).
+- Skrip `recategorize_pb.py` belum ada TransactionCase dan belum dijalankan di DB nyata.
+- Perilaku `-u account`/`-u mrp` terhadap label (uji manual README).
