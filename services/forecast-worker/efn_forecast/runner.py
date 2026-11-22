@@ -55,6 +55,9 @@ from efn_forecast.source import Warehouse
 
 log = logging.getLogger(__name__)
 KINDS = ("daily", "weekly_minmax")
+# Data penjualan boleh tertinggal paling lama N hari dari as_of (mis. histori ESB/legacy yang masuk berkala). Lebih dari
+# itu run gagal `stale_sales`: ramalan dari data basi lebih berbahaya daripada usulan kemarin yang tetap berlaku.
+MAX_DATA_LAG_DAYS = 14
 
 
 class DataSource(Protocol):
@@ -158,17 +161,29 @@ def compute(
     start = as_of - timedelta(days=params.history_days - 1)
     products = source.products(company_id)
     sales = source.sales(company, start, as_of)
-    stock_start = max(start, as_of - timedelta(days=params.stock_days - 1))
-    stock = source.stock(company_id, stock_start, as_of) if params.stock_days > 0 else []
-    panel = build_panel(start, as_of, sales, stock, products, {w.warehouse_id: w.code for w in warehouses})
+    # Histori berakhir di hari terakhir yang punya penjualan (bukan as_of): hari tanpa data bukan permintaan nol.
+    # Selisih hari (lag) ditambahkan ke horizon lalu dipotong, jadi tanggal baris tetap as_of+1 .. as_of+horizon.
+    wh_ids = {w.warehouse_id for w in warehouses}
+    data_until = max((d for w, _p, d, _q in sales if w in wh_ids), default=as_of)
+    lag = (as_of - data_until).days
+    if lag > MAX_DATA_LAG_DAYS:
+        raise NoData("stale_sales")
+    if lag:
+        log.warning("data penjualan %s s.d. %s (tertinggal %d hari dari %s)", company, data_until, lag, as_of)
+    stock_start = max(start, data_until - timedelta(days=params.stock_days - 1))
+    stock = source.stock(company_id, stock_start, data_until) if params.stock_days > 0 else []
+    panel = build_panel(start, data_until, sales, stock, products, {w.warehouse_id: w.code for w in warehouses})
     if not panel.series:
         raise NoData("no_series")
     years = range(start.year, as_of.year + 2)
     odoo_entries = source.calendar(company_id, date(start.year, 1, 1), date(as_of.year + 1, 12, 31))
     entries = merge_entries(lib(years), odoo_entries)
-    result = forecast_panel(panel, entries, params.calendar, params.pipeline, runner)
+    pipeline_cfg = replace(params.pipeline, horizon_days=params.pipeline.horizon_days + lag)
+    result = forecast_panel(panel, entries, params.calendar, pipeline_cfg, runner)
     dc = {w.warehouse_id: w.code for w in warehouses if w.code in params.dc_codes}
     forecasts = aggregate_dc(result.forecasts, dc)
+    if lag:
+        forecasts = tuple(replace(f, yhat=f.yhat[lag:], sigma=f.sigma[lag:]) for f in forecasts)
     bt = None
     if params.backtest_enabled:
         bt = backtest(panel, entries, params.calendar, params.pipeline, runner, params.backtest_days)
