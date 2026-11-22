@@ -29,6 +29,10 @@ censoring OOS (tidak ada snapshot stok Odoo sebelum cutover).
   pertama bulan, configurable), libur nasional, cuti bersama, `custom`, Ramadan (30 hari sebelum 1 Syawal atau entri
   manual), 5 bucket Lebaran (H−14..H−8, H−7..H−4, H−3..H−1, H..H+2, H+3..H+7). 1 Syawal dari libur "Idul Fitri"
   library/Odoo; override: entri manual `lebaran_window`, env `FORECAST_LEBARAN_DATES`.
+- **Data tertinggal** (histori ESB/legacy yang masuk berkala): histori berakhir di hari terakhir yang punya penjualan
+  (gudang terpilih), bukan hari ini; horizon diperpanjang sebanyak selisih hari lalu dipotong, jadi tanggal baris tetap
+  hari ini+1 .. +`FORECAST_HORIZON_DAYS`. Selisih > 14 hari (`MAX_DATA_LAG_DAYS`) → run gagal `stale_sales`. Data nyata PB
+  (s.d. 16 Nov, run 22 Nov): WAPE 0,90 → 0,55.
 - **Censoring OOS**: stok akhir hari ≤ 0 (snapshot ada, SKU ber-stok dalam 14 hari sebelumnya) → hari itu bukan
   permintaan nol (diimputasi rata-rata 28 hari).
 - **Per seri** (setelah dibagi faktor): `regular` → AutoETS (default ruang model `ZNZ` = tanpa tren,

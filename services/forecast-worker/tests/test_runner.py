@@ -19,8 +19,9 @@ NOW = datetime(2026, 11, 18, 16, 30, tzinfo=UTC)  # 23:30 WIB, hari bisnis 18 No
 
 
 class FakeSource:
-    def __init__(self, fail: str = "") -> None:
+    def __init__(self, fail: str = "", sales_lag: int = 0) -> None:
         self.fail = fail
+        self.sales_lag = sales_lag  # hari terakhir tanpa data (histori legacy/ESB yang tertinggal)
         self.calls: list[str] = []
 
     def _hit(self, name: str) -> None:
@@ -35,7 +36,7 @@ class FakeSource:
     def sales(self, company: str, start: date, end: date) -> list[tuple[int, int, date, float]]:
         self._hit("sales")
         rows = []
-        for i in range((end - start).days + 1):
+        for i in range((end - start).days + 1 - self.sales_lag):
             day = start + timedelta(days=i)
             rows.append((2, 101, day, 5.0 + (day.weekday() >= 5) * 3))
             if i % 4 == 0:
@@ -289,3 +290,31 @@ def test_warehouse_code_sent_exactly_as_in_source() -> None:
 def test_invalid_kind_rejected() -> None:
     with pytest.raises(ValueError):
         run_batch("hourly", FakeSource(), None, "SMD", _params(), FakeRunner(), NOW, _lib)
+
+
+def _lines(odoo: FakeOdoo) -> list[dict[str, Any]]:
+    return [line for n, p in odoo.calls if n == "ingest" for line in p["lines"]]
+
+
+def test_sales_lag_ends_history_at_last_data_day_and_keeps_line_dates() -> None:
+    fresh, lagged, runner = FakeOdoo(), FakeOdoo(), FakeRunner()
+    run_batch("daily", FakeSource(), fresh, "SMD", _params(), FakeRunner(), NOW, _lib)
+    report = run_batch("daily", FakeSource(sales_lag=3), lagged, "SMD", _params(), runner, NOW, _lib)
+    assert report.status == "ok" and report.lines == 6 * 28
+    lines = _lines(lagged)
+    dates = sorted(line["date"] for line in lines)
+    assert (dates[0], dates[-1]) == ("2026-11-19", "2026-12-16")  # tetap as_of+1 .. as_of+horizon (lolos kontrak)
+    assert all(h == 28 + 3 for _name, _n, h in runner.calls)  # horizon diperpanjang sebanyak lag lalu dipotong
+
+    def _yhat(odoo: FakeOdoo) -> dict[str, float]:
+        return {x["date"]: x["yhat"] for x in _lines(odoo) if x["warehouse_code"] == "SMD01" and x["product_id"] == 101}
+
+    # 3 hari tanpa data tidak dibaca sebagai penjualan nol: level sama dengan data segar (pola mingguan, 4 minggu penuh)
+    assert _yhat(lagged) == pytest.approx(_yhat(fresh), rel=0.02)
+
+
+def test_sales_older_than_max_lag_fails_run() -> None:
+    odoo = FakeOdoo()
+    report = run_batch("daily", FakeSource(sales_lag=15), odoo, "SMD", _params(), FakeRunner(), NOW, _lib)
+    assert report.status == "failed" and report.error == "stale_sales"
+    assert odoo.calls[-1][0] == "run_close" and odoo.calls[-1][1]["status"] == "failed"
