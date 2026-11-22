@@ -117,9 +117,8 @@ def test_features_buckets_weekend_and_no_double_counting() -> None:
     start = date(2027, 2, 20)
     feats = build_features(start, 120, build_spec(entries, cfg), cfg)
     idx = (syawal - start).days
-    assert (
-        feats.lebaran_bucket[idx] == 3 and feats.lebaran_bucket[idx - 14] == 0 and feats.lebaran_bucket[idx + 8] == -1
-    )
+    assert feats.lebaran_bucket[idx] == 3 and feats.lebaran_bucket[idx - 14] == 0 and feats.lebaran_bucket[idx + 8] == 5
+    assert feats.lebaran_bucket[idx + 21] == 5 and feats.lebaran_bucket[idx + 22] == -1  # pasca-Lebaran H+8..H+21
     assert not feats.holiday[idx] and not feats.cuti_bersama[idx + 1]  # diserap bucket Lebaran
     assert feats.holiday[(date(2027, 5, 1) - start).days]
     assert bool(feats.weekend[(date(2027, 2, 26) - start).days])  # Jumat

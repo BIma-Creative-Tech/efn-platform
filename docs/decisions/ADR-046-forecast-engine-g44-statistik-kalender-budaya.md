@@ -88,7 +88,7 @@ flowchart LR
 - Minggu gajian: dihitung, bukan disimpan per tanggal: `payday_tail_days` (default 7) dan `payday_head_days` (default 7)
   per company di `ir.config_parameter`/setelan; hari ke-d dalam jendela = regressor `is_payday_window`.
 - Regressor model: `dow` (one-hot), `is_payday_window`, `is_holiday`, `is_cuti_bersama`, `days_to_lebaran` (bucket
-  −14..+7), `is_ramadan`, `promo_active` (dari markdown/near-expiry & `sale_loyalty`, bila ada). Kalender turun ke
+  −14..+7; amandemen G46d 22 Nov 2026: + bucket pasca-Lebaran +8..+21), `is_ramadan`, `promo_active` (dari markdown/near-expiry & `sale_loyalty`, bila ada). Kalender turun ke
   ClickHouse sebagai `dim_calendar` lewat ETL.
 
 ### 3.3 Model
