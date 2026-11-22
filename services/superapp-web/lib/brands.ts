@@ -3,7 +3,8 @@
  *
  * ADR terkait: ADR multi-tenant by domain & unified cart lintas PT (status Proposed).
  * Tenant: `efn` (holding), `grandlucky` (PT GL), `parisbaguette` (PT PB), `bacha` (BCR butik + BCF kafe, satu domain),
- * `wetzels` (PT WTZ, G24 docs/04 §16). PT SMD (G44, §12.1) hanya di peta PT (`COMPANIES`), bukan tenant.
+ * `wetzels` (PT WTZ, G24 docs/04 §16), `supermarket` (PT SMD, supermarket demo K18-01; kanal online pickup + pre-order
+ * sejak keputusan user 23 Nov 2026 — tanpa dine-in/QR meja/reservasi).
  * Token visual: docs/design/brand-tokens.md.
  * Risiko dimitigasi: R-T14 (duplikasi komponen per brand) — tema hanya lewat CSS custom properties.
  *
@@ -11,7 +12,7 @@
  * import Node.js. Brand tidak dikenal -> brand default (`efn`), bukan error.
  */
 
-export type BrandId = 'efn' | 'grandlucky' | 'parisbaguette' | 'bacha' | 'wetzels';
+export type BrandId = 'efn' | 'grandlucky' | 'parisbaguette' | 'bacha' | 'wetzels' | 'supermarket';
 
 /** Kode company sesuai kontrak `res.company.efn_brand_code` (docs/04_SERVICE_CONTRACTS.md §1). */
 export type CompanyCode = 'EFN' | 'GL' | 'PB' | 'BCR' | 'BCF' | 'WTZ' | 'FARM' | 'SMD';
@@ -46,9 +47,8 @@ export const COMPANIES: Record<CompanyCode, CompanyInfo> = {
   WTZ: { code: 'WTZ', displayName: "PT Wetzel's Pretzels", businessType: 'fnb', tableService: false },
   FARM: { code: 'FARM', displayName: 'FARM', businessType: null, tableService: false },
   // G44 (docs/04 §12.1 revisi 18 Nov 2026, ADR-045 Proposed): PT Supermarket Demo, placeholder (nama/kode final Q-SM1).
-  // Odoo: retail/PPN, tetapi kanal online SMD BELUM ADA -> businessType null (tidak memenuhi syarat belanja/faktur online),
-  // tanpa tenant/domain, tanpa brand_code kanal, tanpa tema/aset brand.
-  SMD: { code: 'SMD', displayName: 'PT Supermarket Demo', businessType: null, tableService: false },
+  // Keputusan user 23 Nov 2026: kanal online SMD (pickup + pre-order) -> ritel/PPN seperti di Odoo. Tanpa layanan meja.
+  SMD: { code: 'SMD', displayName: 'PT Supermarket Demo', businessType: 'retail', tableService: false },
 };
 
 /** True bila semua kode PT adalah PT PPN (GL/BCR). Daftar kosong atau kode tak dikenal -> false. */
@@ -70,6 +70,7 @@ export const BRAND_CODE_CHANNELS: Readonly<Record<string, readonly CompanyCode[]
   PB: ['PB'],
   BACHA: ['BCR', 'BCF'],
   WTZ: ['WTZ'],
+  SMD: ['SMD'],
 };
 
 /** Kanal/PT milik sebuah `brand_code`; kode tak dikenal -> daftar kosong. */
@@ -467,6 +468,60 @@ export const BRANDS: Record<BrandId, Brand> = {
       logoLetterSpacing: 'normal',
       radius: '10px',
       cardShadow: '0 12px 32px rgba(0, 20, 60, 0.35)',
+    },
+  },
+  // Supermarket demo SMD (K18-01, docs/04 §28; kanal online keputusan user 23 Nov 2026). Nama & identitas visual = PLACEHOLDER
+  // (nama/kode final Q-SM1, tanpa logo resmi -> logo teks). Arah visual permintaan user: modern premium, glassmorphism,
+  // golden ratio (φ) — tata letak di components/supermarket + aturan `html[data-brand='supermarket']` di globals.css.
+  // Palet "evergreen & champagne": hijau tua (aksi), emas sampanye (dekoratif saja), latar gading hangat.
+  // Font = Fraunces/Geist self-host (OFL), sama dengan holding. Kontras WCAG diuji tests/brands.test.ts.
+  supermarket: {
+    id: 'supermarket',
+    name: 'Supermarket Demo',
+    tagline: 'Supermarket segar: belanja dari ponsel, ambil di toko terdekat.',
+    logoText: 'Supermarket Demo',
+    logoSrc: null,
+    logoKind: 'wordmark',
+    preorderHint: 'Pilih jadwal ambil yang pas',
+    subdomain: 'supermarket',
+    subdomainAliases: [],
+    hosts: ['supermarket.efn.local'],
+    companies: ['SMD'],
+    brandCode: 'SMD',
+    hero: {
+      eyebrow: 'Segar setiap pagi',
+      title: 'Belanja segar, siap Anda ambil',
+      lead: 'Sayur, buah, daging, hingga kebutuhan rumah. Pilih dari ponsel, bayar di aplikasi, lalu ambil di toko tanpa antre.',
+    },
+    theme: {
+      scheme: 'light',
+      chrome: '#0e3b2e',
+      chromeContrast: '#ffffff',
+      primary: '#17573f',
+      primaryContrast: '#ffffff',
+      accent: '#c8a24e',
+      accentSoft: '#efe7d6',
+      focus: '#17573f',
+      surface: '#ffffff',
+      surfaceAlt: '#f5f1e8',
+      text: '#14261e',
+      textMuted: '#4a5a51',
+      border: '#dcd3c1',
+      fontDisplay: `'Fraunces Variable', ${SERIF_SYSTEM}`,
+      fontBody: `'Geist Variable', Inter, ${SANS_SYSTEM}`,
+      fontHeading: `'Fraunces Variable', ${SERIF_SYSTEM}`,
+      fontLabel: `'Geist Mono Variable', ${MONO_SYSTEM}`,
+      fontNav: `'Geist Variable', Inter, ${SANS_SYSTEM}`,
+      headingWeight: '500',
+      headingLetterSpacing: '-0.02em',
+      headingTransform: 'none',
+      navTransform: 'none',
+      uiWeight: '600',
+      logoWeight: '600',
+      logoTransform: 'none',
+      logoLetterSpacing: '-0.01em',
+      radius: '16px',
+      cardShadow: '0 18px 44px rgba(20, 38, 30, 0.12)',
     },
   },
 };

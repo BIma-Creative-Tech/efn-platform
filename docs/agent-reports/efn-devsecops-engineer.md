@@ -24,6 +24,42 @@
   untuk healthcheck. Staging/prod: terbitkan ulang intermediate + pasang ulang wrapper `efn-deploy` (12 image) sebelum
   rilis; stack lokal yang sedang jalan akan mendapat CA dev baru saat `gen-secrets.sh` → `up -d --force-recreate`.
 
+## Kanal online SMD + tenant web `supermarket` (23 Nov 2026, worktree `efn-platform-smweb`, branch `feat/supermarket-web`, belum di-commit)
+
+Dasar: keputusan user 23 Nov 2026 — PT Supermarket Demo `SMD` mendapat kanal online sendiri (kode kanal = kode PT,
+pola G20 L-48), pickup di toko + pre-order, tanpa QR meja/reservasi. Pola persis kanal WTZ (G24).
+
+**Perubahan**
+- `infra/compose/docker-compose.online-smd.yml` (baru): `api-gateway` env `ODOO_API_KEY_ONLINE_SMD_FILE` + secret
+  `odoo_api_key_online_smd`. Hanya disertakan deploy.sh bila `SMD` ada di `ONLINE_CHANNELS`.
+- `infra/compose/docker-compose.yml`: secret top-level `odoo_api_key_online_smd`; router Traefik `web` + `Host(supermarket.<domain>)`
+  (sertifikat edge dev/local-edge `*.efn.local` sudah mencakup; prod ACME per host lewat certresolver yang sama).
+- `scripts/secrets.list`: `odoo_api_key_online_smd host:disabled` (gen-secrets.sh membaca daftar ini → placeholder `disabled`).
+- `scripts/lib/deploy-validate.sh`: `EFN_ONLINE_CHANNEL_CODES=(GL PB BCR BCF WTZ SMD)`. Default `ONLINE_CHANNELS` tetap
+  `GL` (compose, deploy.sh, deploy.yml) → kanal SMD mati sampai dinyalakan eksplisit. SMD tetap di luar daftar QR/booking/promo.
+- `scripts/host/efn-rotate-online-key`: `ALLOWED_CHANNELS` + `SMD`; batas `parse_channels` dinaikkan 8 → 16 kode.
+  **Bug laten yang ditemukan:** `--all` menggabungkan kanal online + QR-*/BOOKING-*/PROMO-*; dengan semua fitur aktif
+  sudah 10 kode sebelum SMD (11 sesudahnya) → regex `{0,7}` menolak konfigurasi sah. Keunikan + allowlist tetap membatasi.
+- `scripts/check-encryption.sh`: regex least privilege `odoo_api_key_online_(gl|pb|bcr|bcf|wtz|smd)`; render
+  `prod-online` otomatis memuat overlay baru lewat glob `docker-compose.online-*.yml`.
+- CI `.github/workflows/ci.yml` (job infra): glob overlay sudah mencakup `online-smd` → hanya komentar. `deploy.yml`: komentar.
+- Alert: `alert-rules.yml` generik per label `channel` (tidak ada daftar kanal di ekspresi) → hanya komentar.
+- Test: `test-efn-deploy.sh` 92w dibalik (SMD kini diterima) + 92w2–92w9 (daftar 6 kanal, SMD saja, huruf kecil
+  ditolak, QR/booking SMD ditolak, default tetap GL); `test-efn-rotate-online-key.sh` 77h–77n (SMD belum di-deploy,
+  `--bootstrap` tanpa overlay, QR-/BOOKING-/PROMO-SMD ditolak, CHANNELS GL,SMD, daftar 11 kode diterima).
+- Docs: `docs/runbooks/odoo-online-api-key.md` (tabel kanal, §1b paragraf SMD, batas 16), `docs/runbooks/README.md`
+  (baris indeks), `README.md` (hosts: + `wetzels.efn.local supermarket.efn.local`), komentar unit systemd, docker-compose.dev.yml.
+- PostgreSQL: tidak perlu migrasi baru — `19-platform-g44.sql` sudah menambah `SMD` ke CHECK `online_order_part`,
+  `payment_intent(_portion)`, ledger loyalty (deploy.sh mewajibkan 19).
+
+**Temuan BFF (tidak diubah):** `onlineApiKeyEnvName`/`onlineApiKeySecretName` (`app-config.ts`) generik per kode
+kanal → `SMD` otomatis memakai `ODOO_API_KEY_ONLINE_SMD_FILE`/`odoo_api_key_online_smd`; `onlineChannels` tidak punya
+allowlist. Perlu ditinjau agent BFF: `odoo-rpc/odoo-online.mock.ts` (dev mock) belum punya entri `SMD`
+(company/brand, payment modes, `slotChannels` untuk pre-order) dan `online-config.spec.ts` belum punya assert SMD.
+
+**Belum terverifikasi:** `docker compose config`, shellcheck, dan kedua skrip test belum dijalankan (tanpa Bash di sesi
+ini) — perintah diserahkan ke koordinator.
+
 ## K25-06 identitas stack (20 Nov 2026, worktree efn-platform-k2506, branch feat/k25-06-stack-name, belum di-commit) — compose jalan dengan nama project & subnet apa pun
 
 Pemicu: gladi prod lokal `efn-prod` (lead menambal `sed`): label/konfigurasi memakai nama network `efn_*`, subnet tetap

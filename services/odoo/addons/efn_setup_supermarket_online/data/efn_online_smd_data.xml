@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Partner generik + tim Super-App PT Supermarket Demo (pola efn_setup_online/data/efn_online_setup_data.xml, ditulis
+     ulang untuk SMD; TIDAK memakai record efn_setup_online agar SMD independen).
+     Partner generik TANPA HP/email/NPWP (UU PDP; constraint kanal _check_efn_partner_generic). Pemetaan order <-> member
+     hanya di BFF. noupdate="1": perubahan nama lewat UI tidak ditimpa upgrade. -->
+<odoo noupdate="1">
+    <record id="partner_superapp_smd" model="res.partner">
+        <field name="name">Pelanggan Super-App - PT Supermarket Demo</field>
+        <field name="company_id" ref="efn_setup_supermarket.company_smd"/>
+        <field name="is_company" eval="False"/>
+    </record>
+    <record id="team_superapp_smd" model="crm.team">
+        <field name="name">Super-App Supermarket Demo</field>
+        <field name="company_id" ref="efn_setup_supermarket.company_smd"/>
+    </record>
+</odoo>

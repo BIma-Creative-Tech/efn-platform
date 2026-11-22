@@ -114,12 +114,14 @@ EFN_SECURITY_CONTROLS=(RABBITMQ_STRICT_PERMISSIONS ETL_AUDIT_COPY_ENABLED ETL_LO
 # RTL/FNB dan kanal G19 berhifen DITOLAK. Kanal baru = tambah di sini + scripts/secrets.list + compose + overlay +
 # ALLOWED_CHANNELS di scripts/host/efn-rotate-online-key (runbook odoo-online-api-key.md#kanal-baru).
 # G24 (docs/04 §16.1, L-91..L-93): + WTZ (PT Wetzel's Pretzels; kios F&B, tidak di daftar QR/booking).
-EFN_ONLINE_CHANNEL_CODES=(GL PB BCR BCF WTZ)
+# Keputusan user 23 Nov 2026 (supermarket web): + SMD (PT Supermarket Demo; pickup di toko + pre-order, tanpa QR
+# meja/reservasi -> tidak di daftar QR/booking/promo). Kanal tetap mati sampai SMD dimasukkan eksplisit ke ONLINE_CHANNELS.
+EFN_ONLINE_CHANNEL_CODES=(GL PB BCR BCF WTZ SMD)
 EFN_ONLINE_BASE_CHANNEL=GL
 # Kode PT (entitas root) docs/04 §12.1 = sumber tunggal di deploy: SAMA dengan Selection efn_core.efn_brand_code, BFF
 # COMPANY_CODES, CHECK company_code PostgreSQL platform (infra/postgres/init, terakhir 19-platform-g44.sql) dan ETL.
 # G44 (docs/04 §12.1 revisi 18 Nov 2026, §28, L-144): + SMD (PT Supermarket Demo, placeholder; nama/kode final Q-SM1).
-# SMD TIDAK punya kanal online/QR/reservasi/promo (tidak masuk daftar turunan di atas). Setiap daftar PT turunan
+# SMD TIDAK punya QR/reservasi/promo; kanal online SMD ditambahkan 23 Nov 2026 (EFN_ONLINE_CHANNEL_CODES). Setiap daftar PT turunan
 # (EFN_ONLINE_CHANNEL_CODES, EFN_FNB_QR_COMPANY_CODES, EFN_BOOKING_COMPANY_CODES, EFN_PROMO_COMPANY_CODES) WAJIB
 # subset daftar ini (efn_validate_company_lists). G43 (19 Nov 2026, merge): + IMD, CUP (fnb,
 # placeholder Q-ESB5), sama dengan CHECK PostgreSQL 18-platform-g43.sql + 19-platform-g44.sql.

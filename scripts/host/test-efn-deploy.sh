@@ -557,13 +557,23 @@ vc "92o BOOKING_COMPANIES=WTZ ditolak (L-92)" 1 staging BOOKING_COMPANIES=WTZ
 u "92p efn_validate_online_channels WTZ" 0 efn_validate_online_channels WTZ
 u "92q efn_validate_fnb_qr_companies WTZ ditolak" 1 efn_validate_fnb_qr_companies WTZ
 u "92r efn_validate_booking_companies WTZ ditolak" 1 efn_validate_booking_companies WTZ
-# G44 (docs/04 §12.1 revisi 18 Nov 2026): kode PT SMD (PT Supermarket Demo) dikenal; bukan kanal online/QR/reservasi
+# G44 (docs/04 §12.1 revisi 18 Nov 2026): kode PT SMD (PT Supermarket Demo) dikenal; bukan kanal QR/reservasi/promo.
+# 23 Nov 2026 (keputusan user, supermarket web): SMD = kanal online ke-6 (overlay online-smd), mati sampai eksplisit.
 u "92s efn_validate_company_code SMD diterima (G44)" 0 efn_validate_company_code SMD
 u "92t efn_validate_company_code smd (huruf kecil) ditolak" 1 efn_validate_company_code smd
 u "92u efn_validate_company_code RTL (kode lama) ditolak" 1 efn_validate_company_code RTL
 u "92v daftar PT turunan subset EFN_COMPANY_CODES" 0 efn_validate_company_lists
-u "92w efn_validate_online_channels SMD ditolak (tanpa kanal online)" 1 efn_validate_online_channels SMD
+u "92w efn_validate_online_channels SMD diterima (kanal online 23 Nov 2026)" 0 efn_validate_online_channels SMD
 u "92x efn_validate_promo_companies SMD ditolak" 1 efn_validate_promo_companies SMD
+vc "92w2 ONLINE_CHANNELS=GL,PB,BCR,BCF,WTZ,SMD diterima" 0 production ONLINE_CHANNELS=GL,PB,BCR,BCF,WTZ,SMD
+vc "92w3 ONLINE_CHANNELS=SMD saja diterima" 0 staging ONLINE_CHANNELS=SMD
+vc "92w4 ONLINE_CHANNELS=smd (huruf kecil) ditolak" 1 staging ONLINE_CHANNELS=smd
+vc "92w5 FNB_QR_COMPANIES=PB,SMD ditolak (tanpa QR meja)" 1 staging FNB_QR_COMPANIES=PB,SMD
+vc "92w6 BOOKING_COMPANIES=SMD ditolak (tanpa reservasi)" 1 staging BOOKING_COMPANIES=SMD
+u "92w7 efn_validate_fnb_qr_companies SMD ditolak" 1 efn_validate_fnb_qr_companies SMD
+u "92w8 efn_validate_booking_companies SMD ditolak" 1 efn_validate_booking_companies SMD
+# Default aman: ONLINE_CHANNELS default compose/deploy = GL saja (SMD tidak ikut tanpa dinyalakan eksplisit)
+u "92w9 EFN_ONLINE_BASE_CHANNEL tetap GL (SMD bukan default)" 0 test "$EFN_ONLINE_BASE_CHANNEL" = GL
 # G43 (ADR-043): IMD/CUP dikenal sebagai kode PT (dasar ledger/kebijakan), bukan kanal QR/reservasi
 u "92y efn_validate_company_code IMD diterima (G43)" 0 efn_validate_company_code IMD
 u "92z efn_validate_company_code CUP diterima (G43)" 0 efn_validate_company_code CUP

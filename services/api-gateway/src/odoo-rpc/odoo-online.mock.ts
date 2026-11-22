@@ -29,6 +29,7 @@ import {
   TransferSubmitInput,
   TransferSubmitResult,
 } from './odoo-online.types';
+import { parsePaymentModes } from './odoo-online.parse';
 
 /**
  * STUB json2 untuk DEV/TEST SAJA (`ODOO_ONLINE_MOCK=true`, L-7). `AppConfig.odooOnlineMock` menolak start di
@@ -55,6 +56,13 @@ import {
  *   `DEMOGL10` — potongan 10 % hanya kanal brand `GL` (di kanal lain → `promo_rejected`, "bukan untuk brand ini").
  * Kode di `expiredPromos` (test) diperlakukan seperti kode tak dikenal (`promo_rejected`) — meniru Odoo yang memetakan
  * semua galat `_try_apply_code` ke `promo_rejected` tanpa pesan.
+ *
+ * Kanal supermarket `SMD` (keputusan pemilik proyek 23 Nov 2026; PT Supermarket Demo, brand SMD, retail PPN, ADR-045
+ * Proposed), diselaraskan dengan `efn_setup_supermarket_online` (SEC-03): katalog SENDIRI (produk 201..226, 13 kategori
+ * dengan nama persis Sayur, Buah, Daging, Ikan & Seafood, Bakery, Dairy & Chilled, Frozen, Dry Grocery, Minuman, Snack,
+ * Personal Care, Household, Impor Premium), outlet `SMD01..SMD05` (pickup, prep 30, slot 60), `payment_modes` mentah
+ * Odoo `qris,va,ewallet` (K25-07) → BFF hanya menawarkan `qris`. Slot stub tetap generik (09–17 WIB, kapasitas 3, min
+ * 4 jam), BUKAN 09–20/10/120 menit seperti data Odoo. Produk 203 `low`, 208 `out` (demo notify-me). Tetap tampil HANYA bila `SMD` ada di `ONLINE_CHANNELS`. Produk 11..14 & `TOKO-01` tidak berlaku di SMD.
  */
 interface MockOrder {
   ref: string;
@@ -88,8 +96,8 @@ interface MockOrder {
 }
 
 /**
- * Kanal demo G20: kode kanal = kode PT (§12.1), brand (§11.3). G44: PT Supermarket Demo `SMD` SENGAJA tidak ada di
- * sini — §12.1 revisi 18 Nov 2026: "kanal online belum ada" untuk SMD (mock meniru kanal Odoo yang benar-benar dibuat).
+ * Kanal demo G20: kode kanal = kode PT (§12.1), brand (§11.3). `SMD` (23 Nov 2026): kanal supermarket; tetap mati
+ * kecuali operator menaruh `SMD` di `ONLINE_CHANNELS` (default `GL`).
  */
 const MOCK_CHANNELS: Readonly<Record<string, { company: string; brand: string | null; name: string }>> = {
   GL: { company: 'GL', brand: 'GL', name: 'Grand Lucky (demo)' },
@@ -97,15 +105,37 @@ const MOCK_CHANNELS: Readonly<Record<string, { company: string; brand: string | 
   BCR: { company: 'BCR', brand: 'BACHA', name: 'Bacha Coffee Butik (demo)' },
   BCF: { company: 'BCF', brand: 'BACHA', name: 'Bacha Coffee Kafe (demo)' },
   WTZ: { company: 'WTZ', brand: 'WTZ', name: "Wetzel's Pretzels (demo)" },
+  SMD: { company: 'SMD', brand: 'SMD', name: 'Supermarket Demo (demo)' },
 };
-/** Mode bayar default kanal demo (§12.2 no. 1) — PLACEHOLDER. */
-const MOCK_PAYMENT_MODES: Readonly<Record<string, ('qris' | 'counter' | 'bank_transfer')[]>> = {
+/**
+ * Mode bayar MENTAH kanal demo seperti dikirim Odoo (§12.2 no. 1) — PLACEHOLDER. Katalog stub melewatkannya ke
+ * `parsePaymentModes` (sama dengan klien json2), jadi mode yang belum didukung BFF (`va`, `ewallet`) terbuang.
+ */
+const MOCK_PAYMENT_MODES: Readonly<Record<string, string[]>> = {
   GL: ['qris', 'counter', 'bank_transfer'],
   PB: ['qris', 'bank_transfer'],
   BCR: ['qris', 'counter'],
   BCF: ['counter', 'bank_transfer'],
   WTZ: ['qris', 'counter'],
+  // = efn_setup_supermarket_online/demo/efn_online_smd_demo.xml `payment_modes` (K25-07: hanya gateway, tanpa
+  // `counter`/`bank_transfer`); setelah filter BFF tersisa `qris`.
+  SMD: ['qris', 'va', 'ewallet'],
 };
+/** Outlet pickup demo per kanal (PLACEHOLDER); kanal tanpa entri memakai `TOKO-01`. */
+const DEFAULT_OUTLETS: readonly { code: string; name: string }[] = [{ code: 'TOKO-01', name: 'Toko Demo 01' }];
+/** SMD = `efn.online.outlet` demo Odoo (kode = kode gudang toko, prep 30, slot 60). */
+const MOCK_OUTLETS: Readonly<Record<string, readonly { code: string; name: string }[]>> = {
+  SMD: [
+    { code: 'SMD01', name: 'SMD Jakarta (DEMO)' },
+    { code: 'SMD02', name: 'SMD Bandung (DEMO)' },
+    { code: 'SMD03', name: 'SMD Tangerang (DEMO)' },
+    { code: 'SMD04', name: 'SMD Surabaya (DEMO)' },
+    { code: 'SMD05', name: 'SMD Denpasar (DEMO)' },
+  ],
+};
+function outletsOf(channel: string): readonly { code: string; name: string }[] {
+  return MOCK_OUTLETS[channel] ?? DEFAULT_OUTLETS;
+}
 /** G26 §17.3: rekening DEMO (bukan rekening nyata; nomor berawalan 9999 seperti VA dummy) untuk kanal mock. */
 export const MOCK_TRANSFER_ACCOUNT = { bank_name: 'Bank Demo', account_number: '9999000123', account_holder: 'PT Demo EFN (mock)' } as const;
 /** Produk reward Odoo (discount line) demo — id di luar katalog. */
@@ -123,12 +153,64 @@ const DEFAULT_WEIGHTS: readonly [number, number | null][] = [
   [14, null],
 ];
 
-const PRODUCTS: { id: number; tmpl: number; name: string; priceIncl: number; categ: number; stock: 'in_stock' | 'low' | 'out' }[] = [
+/** Kategori demo: id → nama + urutan (PLACEHOLDER). 21..30 = kategori supermarket SMD (nama persis, 23 Nov 2026). */
+const CATEGORIES: Readonly<Record<number, { name: string; sequence: number }>> = {
+  1: { name: 'Sembako', sequence: 1 },
+  2: { name: 'Uji', sequence: 2 },
+  21: { name: 'Sayur', sequence: 1 },
+  22: { name: 'Buah', sequence: 2 },
+  23: { name: 'Daging', sequence: 3 },
+  24: { name: 'Ikan & Seafood', sequence: 4 },
+  25: { name: 'Bakery', sequence: 5 },
+  26: { name: 'Dairy & Chilled', sequence: 6 },
+  27: { name: 'Frozen', sequence: 7 },
+  28: { name: 'Dry Grocery', sequence: 8 },
+  29: { name: 'Minuman', sequence: 9 },
+  30: { name: 'Snack', sequence: 10 },
+  31: { name: 'Personal Care', sequence: 11 },
+  32: { name: 'Household', sequence: 12 },
+  33: { name: 'Impor Premium', sequence: 13 },
+};
+
+/** `channel` absen = produk bersama kanal demo lama; `channel: 'SMD'` = hanya katalog SMD. */
+const PRODUCTS: { id: number; tmpl: number; name: string; priceIncl: number; categ: number; stock: 'in_stock' | 'low' | 'out'; channel?: string }[] = [
   { id: 11, tmpl: 101, name: 'Beras Premium 5 kg', priceIncl: 79_900, categ: 1, stock: 'in_stock' },
   { id: 12, tmpl: 102, name: 'Minyak Goreng 2 L', priceIncl: 38_500, categ: 1, stock: 'low' },
   { id: 13, tmpl: 103, name: 'Produk Uji Stok-Kurang (mock)', priceIncl: 12_000, categ: 2, stock: 'in_stock' },
   { id: 14, tmpl: 104, name: 'Produk Uji Habis (mock)', priceIncl: 15_000, categ: 2, stock: 'out' },
+  // SMD — HARGA DEMO PLACEHOLDER (bukan harga jual; status PPN per kategori = fit-gap Q-SM5)
+  { id: 201, tmpl: 2001, name: 'Bayam Hijau 250 g', priceIncl: 6_500, categ: 21, stock: 'in_stock', channel: 'SMD' },
+  { id: 202, tmpl: 2002, name: 'Wortel Lokal 500 g', priceIncl: 9_900, categ: 21, stock: 'in_stock', channel: 'SMD' },
+  { id: 203, tmpl: 2003, name: 'Pisang Cavendish 1 kg', priceIncl: 27_900, categ: 22, stock: 'low', channel: 'SMD' },
+  { id: 204, tmpl: 2004, name: 'Apel Fuji 1 kg', priceIncl: 42_500, categ: 22, stock: 'in_stock', channel: 'SMD' },
+  { id: 205, tmpl: 2005, name: 'Daging Sapi Has Dalam 500 g', priceIncl: 89_000, categ: 23, stock: 'in_stock', channel: 'SMD' },
+  { id: 206, tmpl: 2006, name: 'Dada Ayam Fillet 500 g', priceIncl: 34_900, categ: 23, stock: 'in_stock', channel: 'SMD' },
+  { id: 207, tmpl: 2007, name: 'Ikan Kakap Fillet 500 g', priceIncl: 59_000, categ: 24, stock: 'in_stock', channel: 'SMD' },
+  { id: 208, tmpl: 2008, name: 'Udang Vaname 500 g', priceIncl: 64_500, categ: 24, stock: 'out', channel: 'SMD' },
+  { id: 209, tmpl: 2009, name: 'Roti Tawar Gandum', priceIncl: 18_500, categ: 25, stock: 'in_stock', channel: 'SMD' },
+  { id: 210, tmpl: 2010, name: 'Croissant Mentega isi 4', priceIncl: 32_000, categ: 25, stock: 'in_stock', channel: 'SMD' },
+  { id: 211, tmpl: 2011, name: 'Susu UHT Full Cream 1 L', priceIncl: 19_900, categ: 26, stock: 'in_stock', channel: 'SMD' },
+  { id: 212, tmpl: 2012, name: 'Yoghurt Plain 500 g', priceIncl: 27_500, categ: 26, stock: 'in_stock', channel: 'SMD' },
+  { id: 213, tmpl: 2013, name: 'Nugget Ayam 500 g', priceIncl: 42_900, categ: 27, stock: 'in_stock', channel: 'SMD' },
+  { id: 214, tmpl: 2014, name: 'Kentang Goreng Beku 1 kg', priceIncl: 38_500, categ: 27, stock: 'in_stock', channel: 'SMD' },
+  { id: 215, tmpl: 2015, name: 'Beras Pandan Wangi 5 kg', priceIncl: 82_500, categ: 28, stock: 'in_stock', channel: 'SMD' },
+  { id: 216, tmpl: 2016, name: 'Minyak Goreng 2 L', priceIncl: 37_900, categ: 28, stock: 'in_stock', channel: 'SMD' },
+  { id: 217, tmpl: 2017, name: 'Air Mineral 1,5 L', priceIncl: 6_900, categ: 29, stock: 'in_stock', channel: 'SMD' },
+  { id: 218, tmpl: 2018, name: 'Teh Melati Botol 350 ml', priceIncl: 4_500, categ: 29, stock: 'in_stock', channel: 'SMD' },
+  { id: 219, tmpl: 2019, name: 'Keripik Kentang 68 g', priceIncl: 11_900, categ: 30, stock: 'in_stock', channel: 'SMD' },
+  { id: 220, tmpl: 2020, name: 'Biskuit Cokelat 120 g', priceIncl: 9_500, categ: 30, stock: 'in_stock', channel: 'SMD' },
+  { id: 221, tmpl: 2021, name: 'Sabun Mandi Cair 450 ml', priceIncl: 24_900, categ: 31, stock: 'in_stock', channel: 'SMD' },
+  { id: 222, tmpl: 2022, name: 'Pasta Gigi 190 g', priceIncl: 16_500, categ: 31, stock: 'in_stock', channel: 'SMD' },
+  { id: 223, tmpl: 2023, name: 'Deterjen Cair 800 ml', priceIncl: 21_900, categ: 32, stock: 'in_stock', channel: 'SMD' },
+  { id: 224, tmpl: 2024, name: 'Sabun Cuci Piring 780 ml', priceIncl: 14_900, categ: 32, stock: 'in_stock', channel: 'SMD' },
+  { id: 225, tmpl: 2025, name: 'Minyak Zaitun Extra Virgin 500 ml', priceIncl: 129_000, categ: 33, stock: 'in_stock', channel: 'SMD' },
+  { id: 226, tmpl: 2026, name: 'Keju Cheddar Impor 200 g', priceIncl: 68_500, categ: 33, stock: 'in_stock', channel: 'SMD' },
 ];
+/** Produk yang berlaku di kanal: kanal ber-katalog sendiri (SMD) hanya produknya; kanal lain hanya produk bersama. */
+function productsOf(channel: string): typeof PRODUCTS {
+  const own = PRODUCTS.some((p) => p.channel === channel);
+  return PRODUCTS.filter((p) => (own ? p.channel === channel : p.channel === undefined));
+}
 const STOCK_SHORT_PRODUCT = 13;
 /** Hanya untuk demo: label pajak tampilan; tarif sungguhan selalu dari Odoo. */
 const TAX_LABEL = 'PPN (demo)';
@@ -161,7 +243,7 @@ export class MockOdooOnline implements OdooOnlineApi {
   /** SEC-131: `max_qty_per_line` kanal demo (default 20 = `max_qty` katalog stub); qty baris > nilai ini → issue `qty_limit`. */
   maxQtyPerLine = MOCK_MAX_QTY_PER_LINE;
   /** G20 §12.2: `payment_modes` per kanal (test boleh mengubah). */
-  readonly paymentModes = new Map<string, ('qris' | 'counter' | 'bank_transfer')[]>(Object.entries(MOCK_PAYMENT_MODES).map(([k, v]) => [k, [...v]]));
+  readonly paymentModes = new Map<string, string[]>(Object.entries(MOCK_PAYMENT_MODES).map(([k, v]) => [k, [...v]]));
   /** G20 §12.3: `max_order_weight_kg` per kanal (0/absen = mati). */
   readonly maxOrderWeightKg = new Map<string, number>([['BCF', 10]]);
   /** G20 §12.3: `weight_missing_policy` per kanal (default `block` bila batas aktif). */
@@ -203,14 +285,14 @@ export class MockOdooOnline implements OdooOnlineApi {
     this.track('catalog', channel);
     const items: CatalogItem[] = since
       ? []
-      : PRODUCTS.map((p, i) => {
+      : productsOf(channel).map((p, i) => {
           const incl = this.price(p.id);
           return {
             product_id: p.id,
             tmpl_id: p.tmpl,
             name: p.name,
             description: `Deskripsi demo ${p.name}.`,
-            categ: { id: p.categ, name: p.categ === 1 ? 'Sembako' : 'Uji', parent_id: null, sequence: p.categ },
+            categ: { id: p.categ, name: CATEGORIES[p.categ]?.name ?? 'Uji', parent_id: null, sequence: CATEGORIES[p.categ]?.sequence ?? p.categ },
             uom: 'Unit',
             image_sha: sha(`mock-image-${p.tmpl}`).slice(0, 40),
             sequence: i + 1,
@@ -233,18 +315,17 @@ export class MockOdooOnline implements OdooOnlineApi {
         currency: 'IDR',
         active: true,
         fulfilment: { pickup: true, delivery: false },
-        outlets: [
-          {
-            outlet_code: 'TOKO-01',
-            public_name: 'Toko Demo 01',
-            pickup_enabled: true,
-            prep_minutes: 30,
-            active: true,
-            // G23 §15.4: pre-order berjadwal demo hanya kanal F&B (kue/hampers)
-            ...(this.slotChannels.has(channel) ? { slot_enabled: true, slot_minutes: 60 } : {}),
-          },
-        ],
-        payment_modes: [...(this.paymentModes.get(channel) ?? ['qris'])],
+        outlets: outletsOf(channel).map((o) => ({
+          outlet_code: o.code,
+          public_name: o.name,
+          pickup_enabled: true,
+          prep_minutes: 30,
+          active: true,
+          // G23 §15.4: pre-order berjadwal demo kanal F&B (kue/hampers) + SMD (pickup supermarket, 23 Nov 2026)
+          ...(this.slotChannels.has(channel) ? { slot_enabled: true, slot_minutes: 60 } : {}),
+        })),
+        // seperti klien json2: mode mentah Odoo → parsePaymentModes (mode yang belum didukung BFF dibuang)
+        payment_modes: parsePaymentModes([...(this.paymentModes.get(channel) ?? ['qris'])]),
         business_type: channel === 'PB' || channel === 'BCF' || channel === 'WTZ' ? 'fnb' : 'retail',
         loyalty: { ...(this.loyaltyFlags.get(channel) ?? { earn: true, redeem: true }) },
       },
@@ -253,13 +334,19 @@ export class MockOdooOnline implements OdooOnlineApi {
 
   async stock(channel: string, outlet: string, productIds: number[]): Promise<StockRow[]> {
     this.track('stock', channel);
-    if (outlet !== 'TOKO-01') throw new OdooRpcError('business', 'not_found');
-    return PRODUCTS.filter((p) => productIds.includes(p.id)).map((p) => ({ product_id: p.id, status: p.stock }));
+    if (!this.hasOutlet(channel, outlet)) throw new OdooRpcError('business', 'not_found');
+    return productsOf(channel)
+      .filter((p) => productIds.includes(p.id))
+      .map((p) => ({ product_id: p.id, status: p.stock }));
+  }
+
+  private hasOutlet(channel: string, outlet: string): boolean {
+    return outletsOf(channel).some((o) => o.code === outlet);
   }
 
   async image(channel: string, tmplId: number, size: 512 | 1024): Promise<ImageResult> {
     this.track('image', channel);
-    if (!PRODUCTS.some((p) => p.tmpl === tmplId)) throw new OdooRpcError('business', 'not_found');
+    if (!productsOf(channel).some((p) => p.tmpl === tmplId)) throw new OdooRpcError('business', 'not_found');
     const png = await sharp({ create: { width: Math.min(size, 64), height: Math.min(size, 64), channels: 3, background: { r: 200, g: 120, b: (tmplId * 37) % 255 } } })
       .png()
       .toBuffer();
@@ -275,7 +362,7 @@ export class MockOdooOnline implements OdooOnlineApi {
   }
 
   private compute(channel: string, outlet: string, lines: QuoteLineIn[], promoCodes: readonly string[] = [], pickupSlot: string | null = null): QuoteResult {
-    if (outlet !== 'TOKO-01') throw new OdooRpcError('business', 'not_found');
+    if (!this.hasOutlet(channel, outlet)) throw new OdooRpcError('business', 'not_found');
     if (lines.length === 0 || lines.length > 50) throw new OdooRpcError('business', 'invalid_input');
     if (promoCodes.length > 3) throw new OdooRpcError('business', 'invalid_input');
     // G22 B-4: identitas baris (product_id, PTAV terurut) — ganda → invalid_input
@@ -283,7 +370,7 @@ export class MockOdooOnline implements OdooOnlineApi {
     if (new Set(identities).size !== identities.length) throw new OdooRpcError('business', 'invalid_input');
     const attrIssues: QuoteResult['issues'] = [];
     const out: QuoteResult['lines'] = lines.map((l) => {
-      const p = PRODUCTS.find((x) => x.id === l.product_id);
+      const p = productsOf(channel).find((x) => x.id === l.product_id);
       if (!p) throw new OdooRpcError('business', 'not_found');
       const ptav = [...(l.attribute_value_ids ?? [])].sort((a, b) => a - b);
       const attrs = this.attributes.get(p.id) ?? [];
@@ -395,7 +482,8 @@ export class MockOdooOnline implements OdooOnlineApi {
   }
 
   // ───────────── G23 §15.4: slot ambil pre-order (DEMO: 09:00–17:00 WIB, 60 menit, kapasitas 3, min 4 jam, 7 hari) ─────────────
-  readonly slotChannels = new Set<string>(['PB', 'BCF', 'WTZ']);
+  // SMD (23 Nov 2026): pickup supermarket + pre-order slot di semua outlet demo.
+  readonly slotChannels = new Set<string>(['PB', 'BCF', 'WTZ', 'SMD']);
   slotCapacity = 3;
   /** jumlah order per `${channel}|${slot}` (meniru hitungan Odoo; order batal tidak dikurangi di stub). */
   readonly slotUsed = new Map<string, number>();
@@ -418,7 +506,7 @@ export class MockOdooOnline implements OdooOnlineApi {
 
   async slots(channel: string, outlet: string, date: string): Promise<SlotsResult> {
     this.track('slots', channel);
-    if (outlet !== 'TOKO-01' || !this.slotChannels.has(channel)) throw new OdooRpcError('business', 'not_found');
+    if (!this.hasOutlet(channel, outlet) || !this.slotChannels.has(channel)) throw new OdooRpcError('business', 'not_found');
     const iso = (ms: number): string => new Date(ms).toISOString().replace('.000Z', 'Z');
     const starts = this.slotStarts(date).filter((t) => t >= this.now() + 4 * 3600_000);
     return {
@@ -701,8 +789,8 @@ export class MockOdooOnline implements OdooOnlineApi {
       return { state: 'applied' };
     }
     const o = this.get(ref);
-    // Hanya PT PPN (GL, BCR) dan hanya bila efn_pii aktif (L-63)
-    if (!this.invoicePiiActive || !['GL', 'BCR'].includes(MOCK_CHANNELS[o.channel]?.company ?? '')) {
+    // Hanya PT PPN (GL, BCR, SMD — Odoo: efn_business_type retail) dan hanya bila efn_pii aktif (L-63)
+    if (!this.invoicePiiActive || !['GL', 'BCR', 'SMD'].includes(MOCK_CHANNELS[o.channel]?.company ?? '')) {
       throw new OdooRpcError('business', 'invoice_not_available');
     }
     if (o.state !== 'placed') throw new OdooRpcError('business', 'invalid_state');

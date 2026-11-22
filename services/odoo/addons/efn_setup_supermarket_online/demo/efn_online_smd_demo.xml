@@ -1,0 +1,161 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- DEMO kanal online SMD (keputusan user 23 Nov 2026). Semua nilai = PLACEHOLDER PILOT sampai Ops/Finance menjawab
+     (pertanyaan di README). Pola = kanal GL efn_setup_online/demo/efn_online_demo.xml, ditulis ulang tanpa satu pun
+     xmlid efn_setup_online / brand lain.
+       - Kode kanal = kode PT = SMD (docs/04 §12.1); brand_code SMD (^[A-Z][A-Z0-9]{1,9}$). channel_code event <= 8.
+       - Ritel PPN: tanpa fiscal position outlet (pajak = taxes_id produk = PPN company SMD dari l10n_id, tax_ST4
+         "PPN 11%" efektif; tarif PLACEHOLDER Q-SM5). require_outlet_fiscal_position mati.
+       - Pickup saja: fulfilment_delivery mati (constraint E-28), TANPA dine-in/QR meja/reservasi.
+       - Mode confirm (stok dicadangkan saat checkout) -> wajib max_order_amount > 0 + max_line_qty (L-41/SEC-131).
+       - Batas bayar Odoo 70 menit (BFF 60 + 10, G19 W-02).
+       - payment_modes hanya gateway (qris, va, ewallet): pesanan online wajib lunas sebelum diproses (K25-07);
+         'counter' dibekukan; 'bank_transfer' butuh efn_online_transfer + rekening PT (tidak dipasang).
+       - L-37/SEC-101: satu user teknis per kanal (efn_online_smd), Internal User + grup kanal, satu company, TANPA API
+         key (dibuat lewat runbook docs/runbooks/odoo-online-api-key.md; secret BFF odoo_api_key_online_smd).
+       - Outlet = 5 gudang TOKO efn_setup_supermarket (SMD01..SMD05), BUKAN DC SMDDC. Kode outlet online = kode gudang
+         (<= 16 karakter huruf besar, Q-SM43 / docs/04 §28.6); ruang nama tetap efn.online.outlet (§28.13.8a).
+       - Slot pre-order (efn_online_slot, generik ritel): kalender jam ambil per zona waktu (SMD05 Denpasar = WITA).
+     noupdate="1": perubahan pengguna tidak ditimpa saat upgrade modul di DB demo. -->
+<odoo noupdate="1">
+    <record id="cash_rounding_smd_idr_1" model="account.cash.rounding">
+        <field name="name">Rupiah bulat SMD (DEMO, Q-ON6)</field>
+        <field name="rounding">1.0</field>
+        <field name="strategy">biggest_tax</field>
+        <field name="rounding_method">HALF-UP</field>
+    </record>
+    <!-- ADR-019 A1: jurnal bank "Titipan Online - Holding" milik PT SMD. Akun default dibuat otomatis Odoo; pemetaan ke
+         akun piutang dana titipan = keputusan Finance (Q-2), tanpa kode akun di data. -->
+    <record id="journal_titipan_smd" model="account.journal">
+        <field name="name">Titipan Online - Holding</field>
+        <field name="code">TTPO</field>
+        <field name="type">bank</field>
+        <field name="company_id" ref="efn_setup_supermarket.company_smd"/>
+    </record>
+    <record id="pricelist_online_smd" model="product.pricelist">
+        <field name="name">Online Supermarket Demo (DEMO)</field>
+        <field name="currency_id" ref="base.IDR"/>
+        <field name="company_id" ref="efn_setup_supermarket.company_smd"/>
+    </record>
+    <record id="user_online_smd" model="res.users">
+        <field name="name">Kanal online SMD (user teknis)</field>
+        <field name="login">efn_online_smd</field>
+        <field name="company_id" ref="efn_setup_supermarket.company_smd"/>
+        <field name="company_ids" eval="[Command.set([ref('efn_setup_supermarket.company_smd')])]"/>
+        <field name="group_ids" eval="[Command.set([ref('base.group_user'), ref('efn_online_order.group_online_channel')])]"/>
+    </record>
+    <record id="channel_smd" model="efn.online.channel">
+        <field name="name">Super-App Supermarket Demo</field>
+        <field name="code">SMD</field>
+        <field name="brand_code">SMD</field>
+        <field name="sequence">60</field>
+        <field name="company_id" ref="efn_setup_supermarket.company_smd"/>
+        <field name="pricelist_id" ref="pricelist_online_smd"/>
+        <field name="partner_id" ref="partner_superapp_smd"/>
+        <field name="team_id" ref="team_superapp_smd"/>
+        <field name="cash_rounding_id" ref="cash_rounding_smd_idr_1"/>
+        <field name="journal_titipan_id" ref="journal_titipan_smd"/>
+        <field name="payment_timeout_minutes">70</field>
+        <field name="payment_modes">qris,va,ewallet</field>
+        <field name="stock_check">free_qty</field>
+        <!-- PLACEHOLDER pilot (sama dengan GL): Rp5.000.000 / 20 unit per baris. -->
+        <field name="stock_hold_mode">confirm</field>
+        <field name="max_order_amount">5000000</field>
+        <field name="max_line_qty">20</field>
+        <field name="fulfilment_pickup" eval="True"/>
+        <field name="fulfilment_delivery" eval="False"/>
+        <field name="user_ids" eval="[Command.set([ref('user_online_smd')])]"/>
+    </record>
+
+    <!-- Jam ambil PLACEHOLDER 09:00-20:00 setiap hari (Q-SMO2). resource.calendar.attendance 19.0: dayofweek '0'..'6',
+         day_period wajib (morning/lunch/afternoon/full_day) [V source 19.0]. -->
+    <record id="calendar_pickup_smd_wib" model="resource.calendar">
+        <field name="name">Jam ambil online SMD - WIB (PLACEHOLDER)</field>
+        <field name="tz">Asia/Jakarta</field>
+        <field name="company_id" ref="efn_setup_supermarket.company_smd"/>
+        <field name="attendance_ids" eval="[Command.clear()] + [Command.create({'name': 'Ambil online', 'dayofweek': str(d), 'hour_from': 9.0, 'hour_to': 20.0, 'day_period': 'full_day'}) for d in range(7)]"/>
+    </record>
+    <record id="calendar_pickup_smd_wita" model="resource.calendar">
+        <field name="name">Jam ambil online SMD - WITA (PLACEHOLDER)</field>
+        <field name="tz">Asia/Makassar</field>
+        <field name="company_id" ref="efn_setup_supermarket.company_smd"/>
+        <field name="attendance_ids" eval="[Command.clear()] + [Command.create({'name': 'Ambil online', 'dayofweek': str(d), 'hour_from': 9.0, 'hour_to': 20.0, 'day_period': 'full_day'}) for d in range(7)]"/>
+    </record>
+
+    <!-- 5 outlet pickup. prep_minutes 30 (siapkan belanjaan); slot 60 menit, 10 pesanan/slot, minimal 120 menit
+         sebelum ambil, maks 7 hari ke depan = PLACEHOLDER (Q-SMO3). -->
+    <record id="outlet_smd01" model="efn.online.outlet">
+        <field name="channel_id" ref="channel_smd"/>
+        <field name="code">SMD01</field>
+        <field name="public_name">SMD Jakarta (DEMO)</field>
+        <field name="sequence">10</field>
+        <field name="warehouse_id" ref="efn_setup_supermarket.warehouse_smd01"/>
+        <field name="pickup_enabled" eval="True"/>
+        <field name="prep_minutes">30</field>
+        <field name="resource_calendar_id" ref="calendar_pickup_smd_wib"/>
+        <field name="slot_enabled" eval="True"/>
+        <field name="slot_minutes">60</field>
+        <field name="slot_capacity">10</field>
+        <field name="slot_lead_minutes">120</field>
+        <field name="slot_horizon_days">7</field>
+    </record>
+    <record id="outlet_smd02" model="efn.online.outlet">
+        <field name="channel_id" ref="channel_smd"/>
+        <field name="code">SMD02</field>
+        <field name="public_name">SMD Bandung (DEMO)</field>
+        <field name="sequence">20</field>
+        <field name="warehouse_id" ref="efn_setup_supermarket.warehouse_smd02"/>
+        <field name="pickup_enabled" eval="True"/>
+        <field name="prep_minutes">30</field>
+        <field name="resource_calendar_id" ref="calendar_pickup_smd_wib"/>
+        <field name="slot_enabled" eval="True"/>
+        <field name="slot_minutes">60</field>
+        <field name="slot_capacity">10</field>
+        <field name="slot_lead_minutes">120</field>
+        <field name="slot_horizon_days">7</field>
+    </record>
+    <record id="outlet_smd03" model="efn.online.outlet">
+        <field name="channel_id" ref="channel_smd"/>
+        <field name="code">SMD03</field>
+        <field name="public_name">SMD Tangerang (DEMO)</field>
+        <field name="sequence">30</field>
+        <field name="warehouse_id" ref="efn_setup_supermarket.warehouse_smd03"/>
+        <field name="pickup_enabled" eval="True"/>
+        <field name="prep_minutes">30</field>
+        <field name="resource_calendar_id" ref="calendar_pickup_smd_wib"/>
+        <field name="slot_enabled" eval="True"/>
+        <field name="slot_minutes">60</field>
+        <field name="slot_capacity">10</field>
+        <field name="slot_lead_minutes">120</field>
+        <field name="slot_horizon_days">7</field>
+    </record>
+    <record id="outlet_smd04" model="efn.online.outlet">
+        <field name="channel_id" ref="channel_smd"/>
+        <field name="code">SMD04</field>
+        <field name="public_name">SMD Surabaya (DEMO)</field>
+        <field name="sequence">40</field>
+        <field name="warehouse_id" ref="efn_setup_supermarket.warehouse_smd04"/>
+        <field name="pickup_enabled" eval="True"/>
+        <field name="prep_minutes">30</field>
+        <field name="resource_calendar_id" ref="calendar_pickup_smd_wib"/>
+        <field name="slot_enabled" eval="True"/>
+        <field name="slot_minutes">60</field>
+        <field name="slot_capacity">10</field>
+        <field name="slot_lead_minutes">120</field>
+        <field name="slot_horizon_days">7</field>
+    </record>
+    <record id="outlet_smd05" model="efn.online.outlet">
+        <field name="channel_id" ref="channel_smd"/>
+        <field name="code">SMD05</field>
+        <field name="public_name">SMD Denpasar (DEMO)</field>
+        <field name="sequence">50</field>
+        <field name="warehouse_id" ref="efn_setup_supermarket.warehouse_smd05"/>
+        <field name="pickup_enabled" eval="True"/>
+        <field name="prep_minutes">30</field>
+        <field name="resource_calendar_id" ref="calendar_pickup_smd_wita"/>
+        <field name="slot_enabled" eval="True"/>
+        <field name="slot_minutes">60</field>
+        <field name="slot_capacity">10</field>
+        <field name="slot_lead_minutes">120</field>
+        <field name="slot_horizon_days">7</field>
+    </record>
+</odoo>

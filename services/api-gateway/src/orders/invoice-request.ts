@@ -12,8 +12,12 @@ import { InvoiceBuyerProfile } from '../odoo-rpc/odoo-online.types';
  * outbox, Redis, maupun log. Diteruskan sekali ke Odoo `efn_online_set_invoice_party` lalu dilepas.
  */
 export const INVOICE_REQUEST_KEYS = ['buyer_type', 'tax_id', 'name', 'address', 'email'] as const;
-/** §13.5: hanya kanal PT PPN. PT F&B (PB, BCF, WTZ §16.2, IMD/CUP G43; PB1) dan PT lain → `422 invoice_not_available`. */
-export const INVOICE_COMPANIES: readonly string[] = ['GL', 'BCR'];
+/**
+ * §13.5: hanya kanal PT PPN. PT F&B (PB, BCF, WTZ §16.2, IMD/CUP G43; PB1) dan PT lain → `422 invoice_not_available`.
+ * `SMD` (PT Supermarket Demo, retail PPN; kanal online 23 Nov 2026, ADR-045 Proposed) ikut — sama dengan guard Odoo
+ * `_efn_invoice_party_available` (`efn_business_type == retail`). Usulan revisi teks §13.5 di laporan bff 23 Nov 2026.
+ */
+export const INVOICE_COMPANIES: readonly string[] = ['GL', 'BCR', 'SMD'];
 
 // Selaras dengan Odoo `efn_online_common.EMAIL_RE` (lokal ≤ 64, TLD ≥ 2): tanpa ini email lolos BFF tetapi ditolak Odoo
 // (invalid_input) sehingga faktur atas nama diam-diam jatuh ke CS.

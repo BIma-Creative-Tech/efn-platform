@@ -1,0 +1,12 @@
+# Override kanal online SMD (PT Supermarket Demo; pickup di toko + pre-order; keputusan user 23 Nov 2026, kode kanal =
+# kode PT pola G20 L-48; tanpa QR meja/reservasi).
+# Pola docker-compose.online-wtz.yml: API key Odoo kanal ini (`odoo_api_key_online_smd`, user teknis efn_online_smd) HANYA
+# di-mount ke BFF saat ONLINE_CHANNELS memuat SMD (scripts/deploy.sh). Selama kanal mati (default) file ini TIDAK
+# disertakan. Pembuatan & rotasi key: docs/runbooks/odoo-online-api-key.md (efn-rotate-online-key --channel=SMD).
+# CI (job infra) dan scripts/check-encryption.sh menyertakan file ini saat membandingkan secrets / least privilege.
+services:
+  api-gateway:
+    environment:
+      ODOO_API_KEY_ONLINE_SMD_FILE: /run/secrets/odoo_api_key_online_smd
+    secrets:
+      - odoo_api_key_online_smd
