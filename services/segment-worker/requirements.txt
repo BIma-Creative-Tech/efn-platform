@@ -6,7 +6,7 @@
 # certifi MPL-2.0; transitif (lz4 BSD-3, zstandard BSD-3, pytz MIT, idna BSD-3, charset-normalizer MIT) di-resolve
 # pip-compile. Tanpa numpy/pandas/statsforecast: logika segmen = Python murni.
 # ClickHouse HTTPS 8443 (sama dengan services/etl & forecast-worker).
-clickhouse-connect==0.8.9
+clickhouse-connect==1.12.0
 # HTTPS + mTLS ke BFF internal & odoo-rpc-gateway.
 requests==2.34.2
 urllib3==2.8.0
