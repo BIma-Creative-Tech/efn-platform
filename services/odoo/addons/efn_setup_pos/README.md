@@ -15,7 +15,7 @@ Modul konfigurasi untuk POS **retail (PT Retail)** dan **restoran (PT F&B)** di 
 | `pos_config_defaults.xml` | `ir.default` pos.config baru: `restrict_price_control = True`, `manual_discount = False` | `pos_config.py` |
 | `pos_retail_defaults.xml` (G13) | `ir.default`: `order_edit_tracking = True` (void baris pada order tersinkron dicatat), `set_maximum_difference = True` + `amount_authorized_diff = 0` (setiap selisih kas penutupan butuh supervisor); `ir.config_parameter point_of_sale.limited_product_count = 20000` (**PLACEHOLDER**, default CE 5000; produk di luar batas tidak bisa di-scan saat offline) | `pos_config.py` (`get_limited_product_count`), `closing_popup.js`, pos_hr `closing_popup.js` |
 | `pos_audit_filters.xml` | 8 filter tersimpan: **label harga produk timbang (barcode `23`, SEC-63, 13c — dikelompokkan per produk untuk membandingkan harga satuan dengan harga jual)**, diskon baris tanpa program, harga manual, harga manual non-timbang (G13), baris negatif non-promo (E-24: dinonaktifkan & diganti versi tanpa baris "Poin EFN" bila `efn_pos_loyalty_ledger` terpasang), **refund tanpa struk** (G13), **order refund per kasir** (G13), **order diedit/void baris** (G13) | `ir.filters`; `pos.order(.line)` |
-| `pos_payment_method_data.xml` | *Kartu Debit/Kredit (EDC manual)* per PT ber-POS: GL (`_rtl`), PB (`_fnb`), **BCR**, **BCF** (G20 W-32, 19.0.1.11.0). Tunai dibuat otomatis per outlet. QRIS `id_qr` tidak dikonfigurasi (pakai `efn_pos_payment_gateway`) | `pos_payment_method.py` |
+| `pos_payment_method_data.xml` | *Kartu Debit/Kredit (EDC manual)* per PT ber-POS: GL (`_rtl`), PB (`_fnb`), **BCR**, **BCF** (G20 W-32, 19.0.1.11.0), WTZ, **IMD/CUP** (G54). Tunai per outlet dibuat wizard G54. QRIS `id_qr` tidak dikonfigurasi (pakai `efn_pos_payment_gateway`; QRIS manual cek mutasi = `pos_payment_method_qris_manual_data.xml`, G54) | `pos_payment_method.py` |
 | `barcode_nomenclature_data.xml` (G13) | Nomenklatur **EFN Retail (IDR)**, dipasang ke PT ritel GL dan (G20) BCR — asumsi format label timbangan sama (Q-25): `23.....{NNNNN}` harga Rupiah bulat, `21.....{NNDDD}` berat kg, `042` pelanggan, `041` karyawan, `043\|044` kupon, `.*` produk. **Tanpa** aturan diskon `22{NN}` (vektor fraud: memberi diskon tanpa cek peran/`manual_discount`) dan tanpa aturan lot `10` (salah baca EAN impor) | `barcodes`, `point_of_sale`/`stock`/`pos_loyalty` `default_barcode_patterns.xml`, `product_screen.js` |
 | `barcode_hardening_data.xml` (13c, **noupdate=0**) | SEC-63: setiap `barcode.rule` bertipe `discount` di **semua** nomenklatur (termasuk default `point_of_sale.barcode_rule_discount` `22{NN}` yang dipakai PT F&B/EFN/FARM dan aturan buatan admin) diubah menjadi aturan **produk** berawalan `22` → barcode `22..` hanya dicari sebagai barcode produk, tidak pernah memberi diskon. Dijalankan ulang setiap install/upgrade modul (berlaku juga untuk DB yang sudah memasang modul). Record tidak dihapus (record noupdate `point_of_sale` yang dihapus dibuat ulang saat upgrade) | `barcodes/models/barcode_rule.py` (tanpa field `active`), `product_screen.js` `_barcodeDiscountAction` |
 | `pos_fnb_defaults.xml` (G14, noupdate) | Preset master `pos_restaurant.pos_delivery_preset` → `available_in_self = False` (pesan-antar lewat Super-App/BFF, alamat pelanggan tidak dikumpulkan di halaman self-order); `pos_restaurant.pos_takeout_preset` → `use_timing = False` (slot bawaan memakai kalender demo Odoo Selasa–Sabtu milik main company) | `pos_restaurant/data/scenarios/restaurant_preset.xml` (data manifest), `pos_self_order/data/preset_data.xml`, `pos_preset.py` |
@@ -34,6 +34,45 @@ Modul konfigurasi untuk POS **retail (PT Retail)** dan **restoran (PT F&B)** di 
 (`outstanding_account_id` metode). Wajib agar porsi Poin EFN pesanan online (W-12) berjurnal di Odoo 19; tanpa akun,
 `efn_online_order` menolak penukaran poin online. Akun yang sudah diganti Finance tidak ditimpa. Test:
 `tests/test_g18_config.py::TestEfnPointsPaymentMethodData`.
+
+## G54 — Wizard "Lengkapi konfigurasi POS" (19.0.1.15.0)
+Spesifikasi: `docs/fit-gap/G54_G55_G61_ODOO_SETUP.md` §G54 (efn-odoo-functional). ADR-001, ADR-027, ADR-031, ADR-042
+(semua *Proposed*). Risiko dimitigasi: R-O02 (migrasi: 32 `pos.config` PB hasil importer ESB tanpa metode bayar tidak bisa
+"Open Register"), R-O06 (kas per outlet, akun selisih kas terisi).
+
+**Tujuan.** `pos.config` hasil `efn_legacy_history` (`pos_config_plan`, `payment_method_ids=()`) dilengkapi lewat langkah
+standar CE 19 (tanpa model akuntansi/POS baru): *Point of Sale → Configuration → Lengkapi konfigurasi POS*, atau pilih POS
+di list/form → *Action → Lengkapi konfigurasi POS* (`wizard/efn_pos_setup_wizard.py`, model transient
+`efn.pos.setup.wizard` + `efn.pos.setup.wizard.line`, ACL & record rule multi-company di `security/`).
+
+| Mode | Hak (dicek server) | Perilaku |
+|---|---|---|
+| **Cek** (default) | `point_of_sale.group_pos_manager` | Laporan per POS P01..P19 (prasyarat `open_ui` + penutupan sesi CE 19) + peringatan W-01 preset/FP dine-in F&B (usulan default: dine-in bila outlet punya meja, else bawa pulang; Q-18/Q-G54-3), W-02 header struk kosong, W-03 `pos_hr` tanpa karyawan, W-04 repartisi PB1 tanpa akun (company), C-09 jumlah menu tanpa pajak. **Tidak menulis** (hanya baris hasil wizard) |
+| **Apply** | + `account.group_account_manager` | Per company: C-01 akun piutang PoS/selisih kas company (hanya yang kosong, dari CoA `l10n_id`), C-07 akun outstanding metode bank EDC/QRIS yang kosong, C-09 pajak penjualan default company ke produk menu POS tanpa pajak (PB: PB1 10 % PLACEHOLDER; SC/PB1 dine-in tetap lewat fiscal position preset). Per POS (savepoint sendiri; gagal = `blocked`, POS lain lanjut): C-02 jurnal sesi/invoice, C-03 sequence (hanya bila 0 order), C-04 **tunai per outlet** (jurnal `Kas <POS>` kode `<brand>C..`, metode `Tunai <POS>`; metode tunai bersama dilepas), C-05 EDC, C-06 QRIS manual, C-08 Poin EFN **hanya** bila `efn_loyalty_redeem_enabled`. Lalu cek ulang (C-10). POS bersesi terbuka dilewati (P15) |
+
+Idempoten: setiap langkah mencari dulu; apply kedua tidak membuat record baru (identitas = tautan metode↔POS, bukan kode).
+Kode jurnal kas (§3.1, `account.journal.code` maks 5, unik per company): brand 2 huruf `PBC01..PBC99`, 3 huruf
+`IMDC1..IMDC9`, `IMDCA..IMDCZ`; brand ≥ 4 huruf/kosong = `blocked` (buat manual). Akun kas per outlet dibuat CE (prefix
+kas `l10n_id`) — default Q-G54-2 "per outlet"; satu akun bersama = keputusan Finance.
+
+**Data baru (noupdate, dibuat saat `-u` karena xmlid baru, tanpa migrasi):** EDC `pos_payment_method_edc_imd/_cup`;
+Poin EFN IMD/CUP (`account_points_liability_*`, `journal_points_*`, `pos_payment_method_points_*`, akun 21990091
+PLACEHOLDER Q-F18-3); preset `preset_imd_/preset_cup_` `dine_in` + `takeaway`; **QRIS manual**
+`data/pos_payment_method_qris_manual_data.xml` per GL/PB/BCR/BCF/WTZ/IMD/CUP (jurnal bank "QRIS (manual)" kode `QRIS` +
+metode "QRIS (manual, cek mutasi)", `payment_method_type=none` — Q-G54-1; bukan `qr_code` yang mewajibkan rekening jurnal
+dan secret provider). **SMD tidak mendapat data apa pun** (independensi supermarket); wizard tetap bisa dipakai untuk SMD
+(EDC/QRIS → `warning`).
+
+**Cara uji manual.** (1) Company PB → wizard mode Cek tanpa memilih POS → semua POS impor `blocked` P07. (2) Mode Apply →
+ringkasan "N dari N siap dibuka"; tiap POS punya Tunai eksklusif + EDC + QRIS manual. (3) Login kasir PB → *Open Register* →
+buka & tutup sesi kosong. (4) Jalankan Apply lagi → tidak ada baris `fixed`. Test: `tests/test_g54_pos_setup_wizard.py`.
+
+**Batasan / [B].** `pos.config` CE 19 tanpa chatter → jejak apply = baris wizard + log INFO (id saja), bukan
+`message_post`. `pos_hr`: `pos.config.write` dapat membuat `hr.employee` untuk user POS Manager pertama tanpa karyawan di
+company itu (perilaku CE) — periksa setelah apply. P02 (negara fiskal) hanya dicek, tidak diperbaiki. Kode jurnal `QRIS`
+bentrok dengan jurnal yang sudah ada di suatu PT akan menggagalkan `-u` (unik per company) — cek
+`SELECT company_id FROM account_journal WHERE code='QRIS'` sebelum upgrade efn-prod. Preset tidak dipasang otomatis
+(keputusan Q-18 per outlet). Referensi OCA/Cybrosys: tidak ada (API CE standar).
 
 ## Demo (`demo/`, hanya DB demo)
 - `pos_demo.xml` (F&B): kategori stasiun dapur, 2 printer ePOS (IP placeholder), denah meja.

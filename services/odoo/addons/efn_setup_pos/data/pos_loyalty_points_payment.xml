@@ -132,6 +132,53 @@
         <field name="outstanding_account_id" ref="account_points_liability_wtz"/>
         <field name="efn_is_loyalty_points" eval="True"/>
     </record>
+    <!-- ===== G54 (docs/fit-gap/G54_G55_G61_ODOO_SETUP.md §4): PT Im Donut (IMD) & PT Curry Up (CUP), pola _fnb.
+         Dibuat saat -u di DB lama (xmlid baru); pos_loyalty_points_link.xml (noupdate=0) mengisi akun baris metode. -->
+    <record id="account_points_liability_imd" model="account.account">
+        <field name="name">Liabilitas / Kliring Poin EFN (PLACEHOLDER Q-F18-3)</field>
+        <field name="code">21990091</field>
+        <field name="account_type">liability_current</field>
+        <field name="reconcile" eval="False"/>
+        <field name="company_ids" eval="[(6, 0, [ref('efn_setup_company.company_imd')])]"/>
+    </record>
+    <record id="journal_points_imd" model="account.journal">
+        <field name="name">Poin EFN</field>
+        <field name="code">PEFN</field>
+        <field name="type">bank</field>
+        <field name="company_id" ref="efn_setup_company.company_imd"/>
+    </record>
+    <record id="pos_payment_method_points_imd" model="pos.payment.method">
+        <field name="name">Poin EFN</field>
+        <field name="company_id" ref="efn_setup_company.company_imd"/>
+        <field name="journal_id" ref="journal_points_imd"/>
+        <field name="payment_method_type">none</field>
+        <field name="split_transactions" eval="False"/>
+        <field name="outstanding_account_id" ref="account_points_liability_imd"/>
+        <field name="efn_is_loyalty_points" eval="True"/>
+    </record>
+
+    <record id="account_points_liability_cup" model="account.account">
+        <field name="name">Liabilitas / Kliring Poin EFN (PLACEHOLDER Q-F18-3)</field>
+        <field name="code">21990091</field>
+        <field name="account_type">liability_current</field>
+        <field name="reconcile" eval="False"/>
+        <field name="company_ids" eval="[(6, 0, [ref('efn_setup_company.company_cup')])]"/>
+    </record>
+    <record id="journal_points_cup" model="account.journal">
+        <field name="name">Poin EFN</field>
+        <field name="code">PEFN</field>
+        <field name="type">bank</field>
+        <field name="company_id" ref="efn_setup_company.company_cup"/>
+    </record>
+    <record id="pos_payment_method_points_cup" model="pos.payment.method">
+        <field name="name">Poin EFN</field>
+        <field name="company_id" ref="efn_setup_company.company_cup"/>
+        <field name="journal_id" ref="journal_points_cup"/>
+        <field name="payment_method_type">none</field>
+        <field name="split_transactions" eval="False"/>
+        <field name="outstanding_account_id" ref="account_points_liability_cup"/>
+        <field name="efn_is_loyalty_points" eval="True"/>
+    </record>
     <!-- Holding & Farming tidak punya POS -> tidak dibuat. -->
     <!-- G22 L-79: akun pembayaran baris metode masuk/keluar jurnal Poin EFN tiap PT diisi di
          data/pos_loyalty_points_link.xml (noupdate=0, setiap install/upgrade; file ini noupdate=1 sehingga record di

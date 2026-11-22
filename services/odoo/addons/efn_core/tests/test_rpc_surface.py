@@ -544,6 +544,13 @@ RPC_ALLOWLIST = {
         "efn.mgm.policy.outbox",
         "action_efn_retry",
     ): "G31: super() ke efn.loyalty.policy.outbox (Loyalty/Accounting Manager + check_access + company + state failed)",
+    # G56 efn_web_home: tanpa argumen; hanya data env.user + env.company dengan hak user (menu = load_menus user itu;
+    # sudo hanya nama pintasan milik user sendiri + metadata kategori modul terpasang). Tanpa data PT lain.
+    ("res.users", "efn_home_bootstrap"): "G56: tanpa argumen; env.user + env.company saja, hak user pemanggil",
+    # G54 efn_setup_pos (SEC-G54-01): wizard transient, ACL hanya POS manager + record rule company; action_run
+    # memanggil _efn_check_access (company diizinkan + POS manager; apply juga Accounting manager) sebelum sudo.
+    ("efn.pos.setup.wizard", "action_run"): "_efn_check_access",
+    ("efn.pos.setup.wizard", "default_get"): "G54: baca pos.config dari context dengan hak user, tanpa sudo",
 }
 
 MODEL_BASES = {"Model", "AbstractModel", "TransientModel"}

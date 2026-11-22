@@ -60,4 +60,41 @@
         <field name="service_at">counter</field>
         <field name="available_in_self" eval="False"/>
     </record>
+
+    <!-- G54 (docs/fit-gap/G54_G55_G61_ODOO_SETUP.md §4, Q-G54-3 default): preset PT Im Donut (IMD) & PT Curry Up (CUP).
+         Bawa pulang = FP non-dine-in; makan di tempat = FP dine-in (dipakai sebagai default hanya untuk outlet bermeja,
+         wizard G54 memberi peringatan, tidak memasang). Pasang HANYA di pos.config PT masing-masing (preset tanpa
+         company_id). -->
+    <record id="preset_imd_dine_in" model="pos.preset">
+        <field name="name">Makan di tempat (Im Donut)</field>
+        <field name="color">1</field>
+        <field name="identification">none</field>
+        <field name="fiscal_position_id" ref="efn_setup_company.fiscal_position_imd_dine_in"/>
+        <field name="service_at">table</field>
+        <field name="available_in_self" eval="False"/>
+    </record>
+    <record id="preset_imd_takeaway" model="pos.preset">
+        <field name="name">Bawa pulang (Im Donut)</field>
+        <field name="color">3</field>
+        <field name="identification">none</field>
+        <field name="fiscal_position_id" ref="efn_setup_company.fiscal_position_imd_non_dine_in"/>
+        <field name="service_at">counter</field>
+        <field name="available_in_self" eval="False"/>
+    </record>
+    <record id="preset_cup_dine_in" model="pos.preset">
+        <field name="name">Makan di tempat (Curry Up)</field>
+        <field name="color">1</field>
+        <field name="identification">none</field>
+        <field name="fiscal_position_id" ref="efn_setup_company.fiscal_position_cup_dine_in"/>
+        <field name="service_at">table</field>
+        <field name="available_in_self" eval="False"/>
+    </record>
+    <record id="preset_cup_takeaway" model="pos.preset">
+        <field name="name">Bawa pulang (Curry Up)</field>
+        <field name="color">3</field>
+        <field name="identification">none</field>
+        <field name="fiscal_position_id" ref="efn_setup_company.fiscal_position_cup_non_dine_in"/>
+        <field name="service_at">counter</field>
+        <field name="available_in_self" eval="False"/>
+    </record>
 </odoo>
