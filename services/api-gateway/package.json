@@ -17,7 +17,7 @@
     "@fastify/helmet": "^13.2.0",
     "@fastify/multipart": "^10.1.8",
     "@nestjs/common": "^11.2.7",
-    "@nestjs/config": "^4.0.4",
+    "@nestjs/config": "^12.1.1",
     "@nestjs/core": "^11.2.7",
     "@nestjs/platform-fastify": "^11.2.7",
     "@nestjs/terminus": "^11.1.1",
