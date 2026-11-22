@@ -50,6 +50,29 @@ Drinks 28.000, Dips 8.000. Import mengisi **harga placeholder per kategori** (`B
 `import_odoo.py`). Harga yang sudah diubah manual di Odoo dipertahankan (`price_kept`). **Wajib diganti dari master
 harga resmi sebelum demo ke pihak luar.**
 
+## Foto produk DEMO supermarket SMD (23 Nov 2026)
+
+Katalog SMD fiktif (`scripts/dev/seed_demo_supermarket.py`) tidak punya foto. `fetch_smd_images.py` mencari foto stok
+generik per nama dasar produk (251 nama → kata kunci Inggris di `QUERIES`; alkohol/non-halal tidak dicari) lalu
+`smd_images_odoo_shell.py` memasangnya ke `product.template.image_1920` + kredit di `efn_online_description`.
+
+- Sumber: Pixabay API (`PIXABAY_API_KEY`, gratis setelah daftar; Content License = komersial tanpa atribusi) atau
+  Pexels (`PEXELS_API_KEY`), cadangan Openverse/Wikimedia CC0/PDM. **Shutterstock/stok berbayar tidak dipakai**
+  (hanya lewat API resmi + langganan EFN; scraping = pelanggaran hak cipta/ToS). Key hanya dari env, tidak disimpan.
+- Hanya kata kunci produk generik yang dikirim ke luar (tanpa data pribadi). Foto diunduh, dipotong persegi, maks 1024 px.
+- **Review visual wajib** (contact sheet): pencarian stok kadang meleset (run pertama 69/251 salah, mis. "Ikan
+  Tenggiri" → kucing). Perbaiki kata kunci lalu `--only "Nama A,Nama B" --refresh`. Kandidat bertag merek/alkohol dibuang.
+
+```bash
+PIXABAY_API_KEY=... python scripts/brand-catalog/fetch_smd_images.py --out /tmp/smdimg   # ±5 menit
+docker cp /tmp/smdimg efn-prod-odoo-1:/tmp/smdimg
+MSYS_NO_PATHCONV=1 docker exec -i -e EFN_SMD_IMG_DIR=/tmp/smdimg efn-prod-odoo-1 \
+  odoo shell -c /etc/odoo/odoo.conf -d efn_odoo --no-http < scripts/brand-catalog/smd_images_odoo_shell.py
+```
+
+Foto yang diganti manual di Odoo (tanpa kredit "Foto:") dipertahankan kecuali `EFN_SMD_IMG_FORCE=1`. BFF menyalin
+foto baru ke bucket `catalog` pada siklus sinkron katalog berikutnya (5 menit).
+
 ## Batas / belum
 
 - Produk masuk Odoo + kanal online PT. Kanal `PB`/`BCR`/`BCF`/`WTZ` di demo **nonaktif**, jadi produk baru tampil di Super-App
