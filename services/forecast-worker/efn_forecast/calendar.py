@@ -26,8 +26,9 @@ ALL_KINDS = ("weekend", "payday", *UPSERT_KINDS)
 SOURCES = ("lib", "manual")
 MAX_NAME = 64
 _LEBARAN_RE = re.compile(r"idul\s*fitri|eid\s*al[-\s]*fitr", re.IGNORECASE)
-# Bucket hari relatif terhadap 1 Syawal (ADR-046 §3.2: days_to_lebaran −14..+7).
-LEBARAN_BUCKETS: tuple[tuple[int, int], ...] = ((-14, -8), (-7, -4), (-3, -1), (0, 2), (3, 7))
+# Bucket hari relatif terhadap 1 Syawal (ADR-046 §3.2: days_to_lebaran −14..+7; G46d: + pasca-Lebaran +8..+21,
+# karena penjualan PB pekan ke-2-3 setelah Lebaran 2026 turun ±15 % dan tidak tertangkap bucket lain).
+LEBARAN_BUCKETS: tuple[tuple[int, int], ...] = ((-14, -8), (-7, -4), (-3, -1), (0, 2), (3, 7), (8, 21))
 RAMADAN_DAYS = 30
 
 

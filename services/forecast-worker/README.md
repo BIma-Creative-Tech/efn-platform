@@ -27,7 +27,7 @@ censoring OOS (tidak ada snapshot stok Odoo sebelum cutover).
 - **Penyesuaian kalender multiplikatif** (diestimasi pada agregat gudang × kategori → fallback gudang → PT, disusutkan
   ke 1 sebesar n/(n+5)): akhir pekan (configurable), hari dalam pekan, **minggu gajian** (7 hari terakhir + 7 hari
   pertama bulan, configurable), libur nasional, cuti bersama, `custom`, Ramadan (30 hari sebelum 1 Syawal atau entri
-  manual), 5 bucket Lebaran (H−14..H−8, H−7..H−4, H−3..H−1, H..H+2, H+3..H+7). 1 Syawal dari libur "Idul Fitri"
+  manual), 6 bucket Lebaran (H−14..H−8, H−7..H−4, H−3..H−1, H..H+2, H+3..H+7, pasca H+8..H+21). 1 Syawal dari libur "Idul Fitri"
   library/Odoo; override: entri manual `lebaran_window`, env `FORECAST_LEBARAN_DATES`.
 - **Data tertinggal** (histori ESB/legacy yang masuk berkala): histori berakhir di hari terakhir yang punya penjualan
   (gudang terpilih), bukan hari ini; horizon diperpanjang sebanyak selisih hari lalu dipotong, jadi tanggal baris tetap
@@ -126,8 +126,23 @@ dikirim ke Odoo). Angka hanya agregat; data klien tidak ada di repo.
 | Mar–Apr (memuat Lebaran) | lama | 167 s | 0,774 | 0,644 | 0,781 |
 | Mar–Apr (memuat Lebaran) | baru | 36 s | 0,694 | 0,644 | 0,781 |
 
-AutoARIMA dengan setelan lama tidak selesai dalam 5,5 jam (1 proses). Holdout Lebaran masih kalah dari mean56 karena
-histori belum memuat Lebaran sebelumnya: faktor Lebaran tidak bisa diestimasi (butuh histori ≥ 1 Lebaran, mis. 24 bulan).
+AutoARIMA dengan setelan lama tidak selesai dalam 5,5 jam (1 proses).
+
+### Histori 22 bulan (G46d, 22 Nov 2026)
+Histori diperpanjang sampai memuat satu Lebaran sebelumnya (±22 bulan, 4 jobs):
+
+| Holdout | Konfigurasi | WAPE | mean56 |
+|---|---|---|---|
+| Mar–Apr (memuat Lebaran) | histori 150 hari | 0,695 | 0,644 |
+| Mar–Apr (memuat Lebaran) | histori 22 bulan, 5 bucket | 0,715 | 0,644 |
+| Mar–Apr (memuat Lebaran) | histori 22 bulan, + bucket pasca H+8..H+21 | **0,694** | 0,644 |
+| Okt–Nov | histori 22 bulan, + bucket pasca | 0,550 | 0,665 |
+
+Pola Lebaran brand uji berbeda antartahun (tahun pertama akhir Ramadan & Lebaran ±+33 %, tahun kedua ±0 % lalu
+−15 % pada pekan ke-2–3 setelah Lebaran), sehingga satu Lebaran di histori belum cukup: holdout Lebaran tetap kalah
+dari mean56. Dicoba dan **tidak** dipakai: penyusutan faktor Lebaran per jumlah kejadian (memperburuk: 0,710–0,715)
+dan penyusutan faktor Ramadan (0,688, selisih kecil). Planner sebaiknya meninjau proposal min/max di sekitar Lebaran
+sampai histori memuat ≥ 2 Lebaran.
 
 ## Belum
 - **Tuning**: bobot penyusutan faktor, ambang intermiten, kandidat model, AutoARIMA dengan regressor eksogen (ADR §3.3
