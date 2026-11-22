@@ -86,7 +86,8 @@ def run_all(kind: str, companies: tuple[str, ...], dry_run: bool, env: dict[str,
             report = batch(kind, company, dry_run, env)
             ok = ok and report.status in ("ok", "dry_run")
         except Exception as exc:  # konfigurasi/secret salah -> log, PT berikutnya tetap jalan
-            log.error("batch %s %s tidak dapat dimulai: %s", kind, company, type(exc).__name__)
+            # format awal dipertahankan: dicocokkan alert Loki EfnForecastRunFailed (loki-rules/efn-forecast.yml)
+            log.error("batch %s tidak dapat dimulai: %s company=%s", kind, type(exc).__name__, company)
             ok = False
     return ok
 

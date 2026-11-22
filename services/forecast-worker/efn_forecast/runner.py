@@ -274,7 +274,7 @@ def run_batch(
         )
         if odoo is None:
             report = _with_duration(report, clock() - started)
-            _log_report(report)
+            _log_report(report, company)
             return report
         odoo.run_open(open_payload)
         opened = True
@@ -287,7 +287,7 @@ def run_batch(
         validate_run_close(close_payload)
         odoo.run_close(close_payload)
         report = _with_duration(replace(report, rejected=rejected), clock() - started)
-        _log_report(report)
+        _log_report(report, company)
         return report
     except Exception as exc:
         code = _code(exc)
@@ -305,7 +305,7 @@ def run_batch(
             duration_s=round(clock() - started, 1),
             error=code,
         )
-        _log_report(report)
+        _log_report(report, company)
         return report
 
 
@@ -365,11 +365,11 @@ def _with_duration(report: RunReport, duration: float) -> RunReport:
     return replace(report, duration_s=round(duration, 1))
 
 
-def _log_report(r: RunReport) -> None:
+def _log_report(r: RunReport, company: str) -> None:
     log.info(
         'EFN_FORECAST_RUN {"run_id":"%s","kind":"%s","status":"%s","series":%d,"failed_series":%d,"lines":%d,'
         '"chunks":%d,"rejected":%d,"rejected_local":%d,"wape":%s,"wape_mean56":%s,"wape_naive":%s,'
-        '"duration_s":%.1f,"error":"%s"}',
+        '"duration_s":%.1f,"error":"%s","company":"%s"}',
         r.run_id,
         r.kind,
         r.status,
@@ -384,6 +384,7 @@ def _log_report(r: RunReport) -> None:
         _num(r.wape_seasonal_naive),
         r.duration_s,
         r.error,
+        company,
     )
 
 

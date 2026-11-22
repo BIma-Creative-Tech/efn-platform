@@ -104,7 +104,7 @@ ESB, `docs/04` §28.2a). PT dijalankan berurutan pada jadwal yang sama; batch sa
 
 | Rahasia | Cara | Frekuensi |
 |---|---|---|
-| `odoo_api_key_forecast_smd` | Buat key baru (§3 langkah 2–3) → recreate worker → setelah run berikut `ok`, hapus key lama di Odoo (*Account Security*). Dugaan bocor: hapus key lama **dulu**, lalu pasang baru. | Sebelum kedaluwarsa (≤ 35 hari) — manual. Pengingat otomatis: alert `EfnForecastApiKeyExpiringSoon` (sisa < 7 hari, §4a). `efn-rotate-online-key` belum mendukung `FORECAST-*`. |
+| `odoo_api_key_forecast_<pt>` (smd, pb) | Buat key baru (§3 langkah 2–3) → recreate worker → setelah run berikut `ok`, hapus key lama di Odoo (*Account Security*). Dugaan bocor: hapus key lama **dulu**, lalu pasang baru. | Sebelum kedaluwarsa (≤ 35 hari) — manual. Pengingat otomatis: alert `EfnForecastApiKeyExpiringSoon` (sisa < 7 hari, §4a). `efn-rotate-online-key` belum mendukung `FORECAST-*`. |
 | `tls_forecast_worker_crt/_key` | Otomatis: `gen-pki.sh` menerbitkan ulang leaf bila < 30 hari (deploy.sh / `make secrets`). Manual: `bash scripts/gen-pki.sh forecast-worker` lalu recreate worker. | 90 hari (leaf) |
 | `clickhouse_password_forecast` | Tulis nilai baru (`openssl rand -base64 36`), jalankan ulang `clickhouse-init` (ALTER USER), recreate worker. Staging/prod: GitHub Environment `CLICKHOUSE_PASSWORD_FORECAST`. | Sesuai `secret-rotation.md` |
 
@@ -114,6 +114,9 @@ Key bot forecast tidak dirotasi otomatis. Skrip host `efn-forecast-key-status` (
 lewat `odoo shell`: id + tanggal kedaluwarsa, **tanpa** nilai key) menulis metrik textfile node-exporter
 `efn_forecast_api_key_*` setiap hari 07:30 WIB. Deret per PT hanya ditulis bila `.env` deploy memuat
 `FORECAST_ENABLED=true`, sehingga env yang mematikan forecast tidak mendapat alert.
+PT yang diperiksa = `FORECAST_COMPANIES` di `.env` (kosong = SMD) yang dikenal skrip (G46d: SMD, PB). **Pasang ulang skrip
+ini setiap kali PT forecast bertambah** (mis. PB, G46d); versi lama yang menemui PT tak dikenal menandai run gagal
+(`EfnForecastApiKeyCheckFailed`), bukan diam-diam melewatinya.
 
 Pasang sekali per host staging/prod (Superadmin, root):
 

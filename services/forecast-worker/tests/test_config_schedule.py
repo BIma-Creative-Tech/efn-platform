@@ -198,6 +198,6 @@ def test_run_all_continues_after_company_failure(
     monkeypatch.setattr(cli, "batch", fake_batch)
     assert run_all("daily", ("SMD", "PB"), False, {}) is False
     assert calls == [("daily", "SMD"), ("daily", "PB")]  # PB tetap jalan walau SMD gagal
-    assert "batch daily SMD tidak dapat dimulai: RuntimeError" in caplog.text
+    assert "batch daily tidak dapat dimulai: RuntimeError company=SMD" in caplog.text  # pola alert Loki tetap cocok
     assert run_all("daily", ("PB",), False, {}) is True
     assert run_all("daily", ("PB", "XX"), False, {}) is False  # run_close failed = gagal

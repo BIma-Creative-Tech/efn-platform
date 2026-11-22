@@ -229,6 +229,17 @@ if [[ "${FORECAST_ENABLED:-false}" == true ]]; then
       die "FORECAST_ENABLED=true tetapi API key forecast ${co} tidak ada/placeholder (docs/runbooks/forecast-worker.md#api-key)"
     fi
   done
+  # SEC-G46d-01: overlay me-mount key SEMUA PT allowlist; key nyata PT yang tidak dijalankan = kredensial tak terpakai
+  # dan tidak dipantau efn-forecast-key-status -> production ditolak, staging peringatan. Kosongkan ke `disabled`.
+  for co in "${EFN_FORECAST_COMPANY_CODES[@]}"; do
+    [[ ",${FORECAST_COMPANIES:-SMD}," == *",${co},"* ]] && continue
+    f="$SECRETS_DIR/odoo_api_key_forecast_$(tr '[:upper:]' '[:lower:]' <<< "$co").txt"
+    if [[ -s "$f" ]] && ! grep -qx 'disabled' "$f"; then
+      msg="API key forecast ${co} nyata tetapi ${co} tidak di FORECAST_COMPANIES - cabut key di Odoo dan isi file dengan 'disabled' (runbook forecast-worker.md#rotasi)"
+      [[ "$APP_ENV" == production ]] && die "$msg"
+      echo "PERINGATAN: $msg" >&2
+    fi
+  done
 fi
 
 echo "==> Secret turunan (member_hash_pepper = HKDF(otp_pepper), token metrik MinIO)"

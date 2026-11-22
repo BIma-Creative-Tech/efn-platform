@@ -53,17 +53,21 @@ if [[ -f "$envf" && ! -L "$envf" ]]; then
   if [[ "$(sed -nE 's/^FORECAST_ENABLED=(true|false)$/\1/p' "$envf" | tail -n1)" == true ]]; then enabled=true; fi
   fc_raw=$(sed -nE 's/^FORECAST_COMPANIES=([A-Z,]{0,80})$/\1/p' "$envf" | tail -n1)
 fi
-# Hanya PT yang dijalankan worker DAN ada di allowlist (nilai .env tidak dipercaya mentah).
+# Hanya PT yang dijalankan worker DAN ada di allowlist (nilai .env tidak dipercaya mentah). PT di luar allowlist =
+# skrip host versi lama (dipasang manual) -> run gagal agar EfnForecastApiKeyCheckFailed menyala (SEC-G46d-03).
+now=$(date +%s)
+ok=1
 companies=()
 IFS=, read -r -a fc_req <<< "${fc_raw:-SMD}"
 for co in "${fc_req[@]}"; do
+  known=0
   for allowed in "${EFN_FORECAST_COMPANIES[@]}"; do
-    [[ "$co" == "$allowed" ]] && { companies+=("$co"); break; }
+    [[ "$co" == "$allowed" ]] && { companies+=("$co"); known=1; break; }
   done
+  if (( known == 0 )) && [[ "$enabled" == true ]]; then
+    log "PT ${co} di FORECAST_COMPANIES tidak dikenal skrip ini - pasang ulang efn-forecast-key-status (runbook §4a)"; ok=0
+  fi
 done
-
-now=$(date +%s)
-ok=1
 body_exp=""
 body_act=""
 body_noexp=""

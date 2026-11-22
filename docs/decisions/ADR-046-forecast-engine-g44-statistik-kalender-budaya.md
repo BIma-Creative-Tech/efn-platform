@@ -190,7 +190,8 @@ Keputusan pemilik proyek 22 Nov 2026 (status ADR tetap Proposed):
 - **Satu worker, beberapa PT bergiliran** (`FORECAST_COMPANIES=SMD,PB`, default `SMD`). Ditolak: satu container per PT,
   karena gateway `odoo_forecast` `maxconn 1` (batch akan saling antre), dan gerbang network/secret/alert yang
   mengasumsikan satu service harus diduplikasi. Least privilege tetap per PT: user teknis `efn_forecast_<pt>` + API key
-  sendiri, tepat satu company; konsekuensinya satu container memegang key semua PT di daftar. Batch satu PT gagal
+  sendiri, tepat satu company; konsekuensinya satu container me-mount key SEMUA PT allowlist overlay (key PT yang
+  tidak di `FORECAST_COMPANIES` wajib `disabled`: production ditolak deploy, SEC-G46d-01). Batch satu PT gagal
   tidak menghentikan PT berikutnya.
 - **Data tertinggal**: histori berakhir di hari terakhir yang punya penjualan (maks. 14 hari, lebih → run gagal
   `stale_sales`), agar histori ESB yang masuk berkala tidak dibaca sebagai permintaan nol (PR #139).
