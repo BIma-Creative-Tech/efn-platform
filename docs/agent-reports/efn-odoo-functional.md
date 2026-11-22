@@ -1186,3 +1186,36 @@ Konsumsi:
 - status impor G43 per brand;
 - lisensi `openupgradelib`;
 - tidak ada referensi Cybrosys yang relevan (tidak dicari lebih jauh).
+
+## 23 Nov 2026 — G54 / G55 / G61 (kesiapan POS, menu Finance/Accounting, kategori produk)
+
+Worktree `efn-platform-odoo`, branch `feat/odoo-completion`. Dokumen saja:
+`docs/fit-gap/G54_G55_G61_ODOO_SETUP.md`. Diverifikasi di source CE 19 lokal (subset) + GitHub `odoo/odoo@19.0` (base).
+Tidak ada referensi OCA/Cybrosys yang diperlukan.
+
+Rekomendasi untuk efn-odoo-engineer:
+- **G54 (tambah)** di `efn_setup_pos`:
+  - wizard `efn.pos.setup.wizard` dengan mode check/apply, per company, idempoten, apply butuh
+    `account.group_account_manager`;
+  - tunai per config: jurnal `<brand>C<nn>` (kode ≤ 5), akun kas otomatis 1111xxxx, loss/profit dari company;
+  - link EDC + QRIS manual (data baru, `payment_method_type=none`);
+  - Poin EFN hanya untuk config redeem;
+  - PB1 default di menu tanpa pajak;
+  - data EDC/Poin IMD/CUP + preset IMD/CUP.
+- **G55 (tambah)** modul `efn_setup_menu` (depends `account`, `mrp`; **tidak** ke `efn_account_reports`):
+  - `account.menu_finance` diberi label "Finance";
+  - root baru "Accounting" (grup readonly + manager) menampung entries/review/reporting/configuration;
+  - label diterapkan untuk semua bahasa terpasang lewat satu method kecil `ir.ui.menu._efn_apply_menu_labels`
+    (dipanggil `<function>` noupdate=0). `update_field_translations` menolak bahasa yang belum aktif.
+  - Upgrade `account`/`mrp` ikut memicu upgrade modul ini (`button_upgrade` rekursif).
+- **G61 (ubah)**:
+  - satu CSV pemetaan `scripts/migration/efn_mig/category_role_map.csv`, dipakai efn_mig (importer memiliki
+    `categ_id`/flag, jadi impor ulang akan mengembalikan struktur lama bila efn_mig tidak diubah) **dan** skrip
+    `g61_recategorize.py` (dry-run default);
+  - pohon bersama tanpa prefiks merek; SMD tidak disentuh;
+  - mengubah `type`/`is_storable` aman saat 0 move.
+- **Hapus/sederhanakan:** tidak ada. Kategori ESB lama yang kosong dihapus oleh skrip.
+
+Pertanyaan klien: Q-G54-1..3, Q-G55-1..2, Q-G61-1..2, Q-ESB16 (tabel di akhir dokumen fit-gap).
+Belum terverifikasi: daftar di akhir dokumen fit-gap (terjemahan id CE, menu modul non-subset di efn-prod,
+`_run_average_batch` tanpa move, `stock_landed_costs`).
