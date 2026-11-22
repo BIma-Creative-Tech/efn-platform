@@ -48,6 +48,19 @@ groups:
           description: "Probe https://insight-web:3443/api/health gagal 15 menit. Manajemen/planner tidak bisa membuka dashboard; Odoo dan POS tidak terdampak."
           runbook_url: https://github.com/efn/efn-platform/blob/main/docs/runbooks/insight-web.md#6-troubleshooting
 
+      # G62 (docs/04 §29, ADR-050): halaman masuk staf. Bukan jalur transaksi; staf/kasir tetap bisa membuka erp.
+      # langsung -> warning jam kerja, `for` 15 menit agar recreate/deploy tidak memicu.
+      - alert: EfnLoginGatewayDown
+        expr: probe_success{job="probe-login"} == 0
+        for: 15m
+        labels:
+          severity: warning
+          team: ops
+        annotations:
+          summary: "Halaman masuk staf (login-gateway) tidak sehat"
+          description: "Probe https://login-gateway:3443/healthz gagal 15 menit. Staf tidak bisa memakai login.<domain>; ERP (erp.<domain>/web/login) dan POS tidak terdampak."
+          runbook_url: https://github.com/efn/efn-platform/blob/main/docs/runbooks/login-gateway.md#5-troubleshooting
+
       # G42 C6 (docs/04 §26.13): token SSO Odoo -> insight-web hanya toleran selisih jam 30 dtk (host bisa berbeda,
       # K25-02). Host tidak tersinkron NTP atau selisih > 10 dtk = login Insight mulai gagal (401 expired) dan cap waktu
       # log/audit tidak bisa dicocokkan. Metrik timex bawaan node-exporter.

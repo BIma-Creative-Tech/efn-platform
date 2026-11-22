@@ -34,6 +34,7 @@ updates:
       - /services/api-gateway
       - /services/superapp-web
       - /services/insight-web
+      - /services/login-gateway     # G62 (ADR-050)
       - /services/ai-ocr-worker
       - /services/etl
       - /services/text2sql
@@ -104,6 +105,20 @@ updates:
         update-types: [minor, patch]
         patterns: ["*"]
       insight-web-security:
+        applies-to: security-updates
+        patterns: ["*"]
+  # G62 (docs/04 §29, ADR-050): halaman masuk staf
+  - package-ecosystem: npm
+    directory: /services/login-gateway
+    schedule: { interval: weekly, day: monday, time: "03:00", timezone: Asia/Jakarta }
+    open-pull-requests-limit: 2
+    cooldown: { default-days: 7, semver-major-days: 14 }
+    groups:
+      login-gateway-minor-patch:
+        applies-to: version-updates
+        update-types: [minor, patch]
+        patterns: ["*"]
+      login-gateway-security:
         applies-to: security-updates
         patterns: ["*"]
   # G50 (ADR-044 Proposed): WA tidak resmi. Baileys di-pin EXACT (§3.11): PR Dependabot = usulan, wajib review manual

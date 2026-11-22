@@ -1,0 +1,7 @@
+# Artefak build/tooling Next.js & TypeScript (dibuat ulang; tidak di-commit)
+next-env.d.ts
+tsconfig.tsbuildinfo
+*.tsbuildinfo
+node_modules
+.next
+coverage

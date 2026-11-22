@@ -227,6 +227,15 @@ services:
       # Origin Odoo yang diizinkan untuk POST /sso (C1) harus persis origin halaman form Odoo dev (dengan port).
       EFN_INSIGHT_ODOO_URL: https://erp.efn.local:9443
 
+  # G62 (docs/04 §29, ADR-050): halaman masuk staf. Image produksi (target runtime); rebuild: `docker compose ... build
+  # login-gateway` lalu `up -d login-gateway` (sidecar ikut restart, depends_on restart: true). Akses:
+  # https://login.efn.local:9443 (hosts -> 127.0.0.1). Tujuan redirect = host wg-https dev (port 9443).
+  login-gateway:
+    image: ${EFN_STACK:-efn}/login-gateway:dev
+    environment:
+      LOGIN_GATEWAY_ERP_URL: ${LOGIN_GATEWAY_ERP_URL:-https://erp.efn.local:9443/web/login}
+      LOGIN_GATEWAY_INSIGHT_URL: ${LOGIN_GATEWAY_INSIGHT_URL:-https://insight.efn.local:9443/}
+
   clickhouse:
     ports: ["127.0.0.1:18443:8443", "127.0.0.1:9440:9440"]    # https (host 18443: 8443 dipakai odoo), native TLS
 

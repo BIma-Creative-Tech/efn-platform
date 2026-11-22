@@ -1,5 +1,29 @@
 # Laporan Agent: efn-devsecops-engineer
 
+## G62 infra login-gateway (23 Nov 2026, worktree `efn-platform-odoo`, branch `feat/odoo-completion`, belum di-commit) — ADR-050
+
+- **Compose:** `login-gateway` (profil `core`, image `${IMAGE_LOGIN_GATEWAY:-ghcr.io/${EFN_STACK}/login-gateway:dev}`, target
+  `runtime`, 127.0.0.1:3005, read_only, tmpfs `/tmp` + `/app/.next/cache`, cap_drop ALL, 256M, healthcheck `/healthz`,
+  TANPA secret) + `login-gateway-tls` (ghostunnel :3443 → :3005, CN traefik/blackbox-exporter, status 6077,
+  `depends_on ... restart: true`). Network baru `login-ingress` (oktet 22): traefik + blackbox-exporter + login-gateway.
+  Router `login` wg-https, `internal-only` + `secure-headers-insight` + `ratelimit-login` (baru), serversTransport
+  `efn-login-gateway`. `ACME_DOMAINS` + `login.` (base + overlay wa-unofficial). Dev overlay: URL :9443; prod: replika 1.
+- **Keputusan:** profil `core` (pintu masuk ERP tidak bergantung stack data); `internal-only` (kasir outlet juga masuk ERP);
+  URL tujuan bisa ditimpa `.env` (`${LOGIN_GATEWAY_*_URL:-...}`) untuk gladi lokal non-443 karena
+  `docker-compose.prodlocal-urls.yml` tidak ada di git.
+- **PKI/secret:** `gen-pki.sh` `login-gateway|server`, `secrets.list` + compose `tls_login_gateway_crt/_key`.
+- **Observability:** job `probe-login`, alert `EfnLoginGatewayDown` (warning, 15m) → runbook `login-gateway.md#5`.
+- **Gerbang/CI:** `check-encryption.sh` §6b4b + `login-ingress` di regex nama network; `build-push.yml` (scan-pr + build,
+  target runtime); rantai rilis `IMAGE_LOGIN_GATEWAY` (deploy.yml, `efn-deploy`, `deploy.sh`, `test-efn-deploy.sh` SVCS);
+  dependabot docker + npm. `ci.yml` (job node) sudah diisi frontend.
+- **Dokumen:** runbook `docs/runbooks/login-gateway.md`, README runbook, `internal-pki.md` (G62), `docs/04` §29, `.env.example`.
+- **Belum terverifikasi:** tidak menjalankan `docker compose config`, `check-encryption.sh`, promtool, shellcheck, maupun
+  `test-efn-deploy.sh` (aturan sesi: tanpa docker). Nested default `${A:-https://erp.${B:-x}/...}` diasumsikan didukung
+  compose v2 (pola sama dengan `image:` yang sudah ada). `depends_on.restart` butuh Compose ≥ 2.17. Dockerfile
+  `services/login-gateway` belum ada saat ditulis (frontend paralel): harus target `runtime`, USER non-root, node tersedia
+  untuk healthcheck. Staging/prod: terbitkan ulang intermediate + pasang ulang wrapper `efn-deploy` (12 image) sebelum
+  rilis; stack lokal yang sedang jalan akan mendapat CA dev baru saat `gen-secrets.sh` → `up -d --force-recreate`.
+
 ## K25-06 identitas stack (20 Nov 2026, worktree efn-platform-k2506, branch feat/k25-06-stack-name, belum di-commit) — compose jalan dengan nama project & subnet apa pun
 
 Pemicu: gladi prod lokal `efn-prod` (lead menambal `sed`): label/konfigurasi memakai nama network `efn_*`, subnet tetap

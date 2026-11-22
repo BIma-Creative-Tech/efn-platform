@@ -77,6 +77,9 @@ PKI_SERVICES=(
   "ocr-worker|both"
   "text2sql|both"       # G38: server HTTPS 8443 (Odoo -> text2sql) + klien mTLS ke ollama-tls (docs/04 §23)
   "insight-web|server"  # G42: sidecar insight-web-tls :3443 (Traefik/blackbox -> insight-web, docs/04 §26.11)
+  # G62 (docs/04 §29, ADR-050): sidecar login-gateway-tls :3443 (Traefik/blackbox -> login-gateway). Service baru ->
+  # staging/prod: intermediate WAJIB diterbitkan ulang (runbook internal-pki#service-baru); dev/CI: CA dev dibuat ulang.
+  "login-gateway|server"
   # G44 (docs/04 §28.2): klien mTLS ke odoo-rpc-gateway (CN forecast-worker; haproxy.cfg acl cn_forecast). Tanpa
   # listener. Service baru -> staging/prod: intermediate WAJIB diterbitkan ulang (runbook internal-pki#service-baru).
   # Terbitkan/perbarui hanya leaf ini: `bash scripts/gen-pki.sh forecast-worker`.

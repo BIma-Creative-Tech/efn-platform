@@ -69,13 +69,14 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        service: [odoo, api-gateway, superapp-web, insight-web, ai-ocr-worker, etl, text2sql, esb-extract, forecast-worker, esb-migrate,
-                  segment-worker, wa-unofficial, postgres, minio, metabase]
+        service: [odoo, api-gateway, superapp-web, insight-web, login-gateway, ai-ocr-worker, etl, text2sql, esb-extract, forecast-worker,
+                  esb-migrate, segment-worker, wa-unofficial, postgres, minio, metabase]
         include:
           - { service: odoo, context: services/odoo }
           - { service: api-gateway, context: services/api-gateway }
           - { service: superapp-web, context: services/superapp-web }
           - { service: insight-web, context: services/insight-web }   # G42 dashboard Insight (docs/04 §26)
+          - { service: login-gateway, context: services/login-gateway }   # G62 halaman masuk staf (docs/04 §29, ADR-050)
           - { service: segment-worker, context: services/segment-worker }   # G50 segmen perilaku (docs/04 §28.7)
           - { service: wa-unofficial, context: services/wa-unofficial }     # G50 WA tidak resmi (ADR-044)
           - { service: ai-ocr-worker, context: services/ai-ocr-worker }
@@ -99,7 +100,7 @@ jobs:
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8  # v6.19.2
         with:
           context: ${{ matrix.context }}
-          target: ${{ (matrix.service == 'api-gateway' || matrix.service == 'superapp-web' || matrix.service == 'insight-web') && 'runtime' || '' }}
+          target: ${{ (matrix.service == 'api-gateway' || matrix.service == 'superapp-web' || matrix.service == 'insight-web' || matrix.service == 'login-gateway') && 'runtime' || '' }}
           load: true
           tags: local/${{ matrix.service }}:scan
           cache-from: type=gha,scope=${{ matrix.service }}
@@ -165,8 +166,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        service: [odoo, api-gateway, superapp-web, insight-web, ai-ocr-worker, etl, text2sql, esb-extract, forecast-worker, esb-migrate,
-                  segment-worker, wa-unofficial, postgres, minio, metabase]
+        service: [odoo, api-gateway, superapp-web, insight-web, login-gateway, ai-ocr-worker, etl, text2sql, esb-extract, forecast-worker,
+                  esb-migrate, segment-worker, wa-unofficial, postgres, minio, metabase]
         include:
           - { service: odoo, context: services/odoo }
           - { service: api-gateway, context: services/api-gateway }
@@ -181,6 +182,8 @@ jobs:
           - { service: forecast-worker, context: services/forecast-worker }
           # G42 (docs/04 §26): ikut rantai rilis bertanda tangan (deploy.yml / efn-deploy IMAGE_INSIGHT_WEB)
           - { service: insight-web, context: services/insight-web }
+          # G62 (docs/04 §29, ADR-050): ikut rantai rilis bertanda tangan (deploy.yml / efn-deploy IMAGE_LOGIN_GATEWAY)
+          - { service: login-gateway, context: services/login-gateway }
           - { service: ai-ocr-worker, context: services/ai-ocr-worker }
           - { service: etl, context: services/etl }
           - { service: text2sql, context: services/text2sql }   # G38 Text-to-SQL (docs/04 §23)
@@ -244,7 +247,7 @@ jobs:
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8  # v6.19.2
         with:
           context: ${{ matrix.context }}
-          target: ${{ (matrix.service == 'api-gateway' || matrix.service == 'superapp-web' || matrix.service == 'insight-web') && 'runtime' || '' }}
+          target: ${{ (matrix.service == 'api-gateway' || matrix.service == 'superapp-web' || matrix.service == 'insight-web' || matrix.service == 'login-gateway') && 'runtime' || '' }}
           outputs: type=image,name=${{ env.IMAGE_REPO }},push-by-digest=true,name-canonical=true,push=true
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha,scope=${{ matrix.service }}

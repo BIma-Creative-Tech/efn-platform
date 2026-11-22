@@ -39,6 +39,13 @@ http:
       certificates:
         - certFile: /run/secrets/tls_traefik_crt
           keyFile: /run/secrets/tls_traefik_key
+    # G62 (docs/04 §29, ADR-050): sidecar login-gateway-tls (--allow-cn=traefik), network login-ingress
+    efn-login-gateway:
+      serverName: login-gateway
+      rootCAs: [/run/secrets/efn_ca_crt]
+      certificates:
+        - certFile: /run/secrets/tls_traefik_crt
+          keyFile: /run/secrets/tls_traefik_key
     # G50 (docs/04 §28.9, ADR-044): server admin HTTPS wa-unofficial :8443, dijangkau lewat relay TCP wa-admin-relay
     # (network wa-ingress, SEC-G50-06; overlay docker-compose.wa-unofficial.yml). serverName = sertifikat wa-unofficial
     # (relay TLS passthrough). Tidak dipakai bila overlay tidak aktif.

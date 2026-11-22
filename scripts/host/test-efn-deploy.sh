@@ -97,7 +97,7 @@ EOF
 }
 write_conf
 
-SVCS=(postgres odoo api-gateway superapp-web insight-web ai-ocr-worker etl text2sql minio metabase forecast-worker)
+SVCS=(postgres odoo api-gateway superapp-web insight-web login-gateway ai-ocr-worker etl text2sql minio metabase forecast-worker)
 dg() { printf '%s' "$1" | sha256sum | cut -d' ' -f1; }
 : > /etc/fake-cosign/signed
 for s in "${SVCS[@]}"; do echo "${PREFIX}${s}@sha256:$(dg "$s-1")" >> /etc/fake-cosign/signed; done
