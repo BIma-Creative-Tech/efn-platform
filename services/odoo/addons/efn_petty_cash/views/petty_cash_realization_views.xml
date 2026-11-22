@@ -1,0 +1,133 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="view_efn_petty_cash_realization_form" model="ir.ui.view">
+        <field name="name">efn.petty.cash.realization.form</field>
+        <field name="model">efn.petty.cash.realization</field>
+        <field name="arch" type="xml">
+            <form>
+                <header>
+                    <button name="action_submit" type="object" string="Ajukan" class="btn-primary"
+                            invisible="state != 'draft'"/>
+                    <button name="action_post" type="object" string="Posting" class="btn-primary"
+                            invisible="state != 'submitted'" groups="efn_petty_cash.group_petty_cash_finance"/>
+                    <button name="action_reset_to_draft" type="object" string="Kembali ke Draft"
+                            invisible="state not in ('submitted', 'cancelled')"/>
+                    <button name="action_cancel" type="object" string="Batalkan"
+                            invisible="state in ('posted', 'cancelled')"/>
+                    <field name="state" widget="statusbar" statusbar_visible="draft,submitted,posted"/>
+                </header>
+                <sheet>
+                    <div class="oe_button_box" name="button_box">
+                        <button name="action_view_bills" type="object" class="oe_stat_button" icon="fa-book"
+                                invisible="bill_count == 0" groups="efn_petty_cash.group_petty_cash_finance">
+                            <field name="bill_count" widget="statinfo" string="Entri Jurnal"/>
+                        </button>
+                    </div>
+                    <div class="oe_title">
+                        <h1><field name="name" readonly="1"/></h1>
+                    </div>
+                    <group>
+                        <group>
+                            <field name="fund_id" readonly="state != 'draft'" invisible="request_id"
+                                   options="{'no_create': True}"/>
+                            <field name="request_id" readonly="state != 'draft'" invisible="fund_id"
+                                   options="{'no_create': True}"/>
+                            <field name="holder_partner_id"/>
+                            <field name="advance_type_id"/>
+                        </group>
+                        <group>
+                            <field name="date" readonly="state != 'draft'"/>
+                            <field name="amount_total"/>
+                            <field name="replenish_request_id" invisible="not replenish_request_id"/>
+                            <field name="currency_id" invisible="1"/>
+                            <field name="company_id" invisible="1"/>
+                        </group>
+                    </group>
+                    <notebook>
+                        <page string="Baris" name="lines">
+                            <field name="line_ids" readonly="state != 'draft'">
+                                <list editable="bottom">
+                                    <field name="sequence" widget="handle"/>
+                                    <field name="line_type"/>
+                                    <field name="name"/>
+                                    <field name="partner_id" required="line_type == 'third_party'"
+                                           readonly="line_type != 'third_party'"/>
+                                    <field name="product_id" optional="hide"/>
+                                    <field name="account_id"/>
+                                    <field name="quantity" optional="hide"/>
+                                    <field name="price_unit"/>
+                                    <field name="tax_ids" widget="many2many_tags" optional="show"/>
+                                    <field name="price_total" sum="Total"/>
+                                    <field name="attachment_ids" widget="many2many_binary" string="Nota/Bukti"/>
+                                    <field name="currency_id" column_invisible="1"/>
+                                    <field name="company_id" column_invisible="1"/>
+                                </list>
+                            </field>
+                            <p class="text-muted">
+                                Baris pihak ketiga wajib vendor + nota pemasok dan menjadi tagihan vendor (PPN masukan)
+                                yang dilunasi dari uang muka. Baris beban dijurnal Dr Beban / Cr Uang Muka.
+                            </p>
+                        </page>
+                        <page string="Empat Mata" name="four_eyes">
+                            <group>
+                                <field name="maker_id"/>
+                                <field name="editor_ids" widget="many2many_tags"/>
+                                <field name="posted_by_id"/>
+                                <field name="posted_at"/>
+                            </group>
+                        </page>
+                    </notebook>
+                </sheet>
+                <chatter/>
+            </form>
+        </field>
+    </record>
+
+    <record id="view_efn_petty_cash_realization_list" model="ir.ui.view">
+        <field name="name">efn.petty.cash.realization.list</field>
+        <field name="model">efn.petty.cash.realization</field>
+        <field name="arch" type="xml">
+            <list decoration-success="state == 'posted'" decoration-muted="state == 'cancelled'">
+                <field name="name"/>
+                <field name="fund_id" optional="show"/>
+                <field name="request_id" optional="show"/>
+                <field name="holder_partner_id"/>
+                <field name="date"/>
+                <field name="currency_id" column_invisible="1"/>
+                <field name="amount_total" sum="Total"/>
+                <field name="company_id" groups="base.group_multi_company" optional="hide"/>
+                <field name="state" widget="badge"/>
+            </list>
+        </field>
+    </record>
+
+    <record id="view_efn_petty_cash_realization_search" model="ir.ui.view">
+        <field name="name">efn.petty.cash.realization.search</field>
+        <field name="model">efn.petty.cash.realization</field>
+        <field name="arch" type="xml">
+            <search>
+                <field name="name"/>
+                <field name="fund_id"/>
+                <field name="request_id"/>
+                <field name="holder_partner_id"/>
+                <filter name="mine" string="Milik Saya"
+                        domain="['|', ('holder_user_id', '=', uid), ('maker_id', '=', uid)]"/>
+                <separator/>
+                <filter name="draft" string="Draft" domain="[('state', '=', 'draft')]"/>
+                <filter name="submitted" string="Diajukan" domain="[('state', '=', 'submitted')]"/>
+                <filter name="posted" string="Diposting" domain="[('state', '=', 'posted')]"/>
+                <group>
+                    <filter name="group_fund" string="Dana" context="{'group_by': 'fund_id'}"/>
+                    <filter name="group_state" string="Status" context="{'group_by': 'state'}"/>
+                </group>
+            </search>
+        </field>
+    </record>
+
+    <record id="action_efn_petty_cash_realization" model="ir.actions.act_window">
+        <field name="name">Realisasi</field>
+        <field name="res_model">efn.petty.cash.realization</field>
+        <field name="view_mode">list,form</field>
+        <field name="search_view_id" ref="view_efn_petty_cash_realization_search"/>
+    </record>
+</odoo>

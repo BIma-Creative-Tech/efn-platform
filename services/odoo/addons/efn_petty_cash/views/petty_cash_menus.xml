@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- G57 §2.4. Root sendiri karena kustodian outlet tidak punya grup akuntansi (tidak melihat root Finance).
+     Pintasan Finance di efn_setup_menu.menu_efn_cash_bank (Finance > Kas & Bank). Tindak lanjut: daftarkan root ini ke
+     efn_web_home ROOT_MENU_GROUPS kelompok "finance". -->
+<odoo>
+    <menuitem id="menu_efn_petty_cash_root"
+              name="Kas Kecil"
+              sequence="57"
+              web_icon="account,static/description/icon.png"
+              groups="efn_petty_cash.group_petty_cash_user,account.group_account_readonly"/>
+
+    <menuitem id="menu_efn_petty_cash_funds" name="Dana Kas Kecil" parent="menu_efn_petty_cash_root"
+              action="action_efn_petty_cash_fund" sequence="5" groups="efn_petty_cash.group_petty_cash_user,account.group_account_readonly"/>
+    <menuitem id="menu_efn_petty_cash_requests" name="Pengajuan" parent="menu_efn_petty_cash_root"
+              action="action_efn_petty_cash_request" sequence="10" groups="efn_petty_cash.group_petty_cash_user,account.group_account_readonly"/>
+    <menuitem id="menu_efn_petty_cash_realizations" name="Realisasi" parent="menu_efn_petty_cash_root"
+              action="action_efn_petty_cash_realization" sequence="20" groups="efn_petty_cash.group_petty_cash_user,account.group_account_readonly"/>
+    <menuitem id="menu_efn_petty_cash_to_approve" name="Menunggu Persetujuan" parent="menu_efn_petty_cash_root"
+              action="action_efn_petty_cash_request_to_approve" sequence="25" groups="efn_petty_cash.group_petty_cash_approver"/>
+
+    <menuitem id="menu_efn_petty_cash_reporting" name="Laporan" parent="menu_efn_petty_cash_root" sequence="30"
+              groups="efn_petty_cash.group_petty_cash_finance,account.group_account_readonly"/>
+    <menuitem id="menu_efn_petty_cash_report_statement" name="Kartu Uang Muka" parent="menu_efn_petty_cash_reporting"
+              action="action_efn_petty_cash_report_statement" sequence="10"/>
+    <menuitem id="menu_efn_petty_cash_report_outstanding" name="Outstanding" parent="menu_efn_petty_cash_reporting"
+              action="action_efn_petty_cash_report_outstanding" sequence="20"/>
+    <menuitem id="menu_efn_petty_cash_report_aging" name="Aging" parent="menu_efn_petty_cash_reporting"
+              action="action_efn_petty_cash_report_aging" sequence="30"/>
+
+    <menuitem id="menu_efn_petty_cash_config" name="Konfigurasi" parent="menu_efn_petty_cash_root" sequence="90"
+              groups="efn_petty_cash.group_petty_cash_finance"/>
+    <menuitem id="menu_efn_petty_cash_config_types" name="Jenis" parent="menu_efn_petty_cash_config"
+              action="action_efn_petty_cash_type" sequence="10"/>
+    <menuitem id="menu_efn_petty_cash_config_funds" name="Dana Kas Kecil" parent="menu_efn_petty_cash_config"
+              action="action_efn_petty_cash_fund" sequence="20"/>
+
+    <menuitem id="menu_efn_petty_cash_finance_shortcut" name="Kas Kecil &amp; Uang Muka"
+              parent="efn_setup_menu.menu_efn_cash_bank" action="action_efn_petty_cash_request" sequence="40"
+              groups="efn_petty_cash.group_petty_cash_finance"/>
+</odoo>

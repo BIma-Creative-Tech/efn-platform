@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Q-G57-3 / G61 A6: LVA tetap DIBEBANKAN (63110120). Kelompok ini hanya contoh (demo) bila Finance memutuskan
+     kapitalisasi: auto_create='no', tanpa kategori, umur PLACEHOLDER 36 bulan (rentang 12-48). Langkah aktivasi di
+     README. -->
+<odoo>
+    <record id="demo_asset_group_lva" model="efn.account.asset.group">
+        <field name="name">LVA (contoh, tidak aktif)</field>
+        <field name="code">LVA</field>
+        <field name="company_id" ref="base.main_company"/>
+        <field name="default_useful_life_months">36</field>
+        <field name="auto_create">no</field>
+    </record>
+</odoo>

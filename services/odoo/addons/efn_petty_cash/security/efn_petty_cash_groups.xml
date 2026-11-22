@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- G57 §2.5. Tidak diberikan otomatis ke siapa pun (K-PC3: post_init_hook sumber yang memberi grup ke semua user
+     internal DIBUANG; tanpa user_ids admin). Grup diberikan lewat efn_setup_role / admin.
+     Finance meng-imply account.group_account_invoice karena pencairan/posting membuat entri jurnal dengan hak user
+     (tanpa sudo); Finance TIDAK meng-imply Penyetuju (empat mata, SOD-PC1 di efn_setup_role = tindak lanjut). -->
+<odoo>
+    <record id="res_groups_privilege_efn_petty_cash" model="res.groups.privilege">
+        <field name="name">EFN Kas Kecil</field>
+        <field name="category_id" ref="base.module_category_accounting"/>
+    </record>
+
+    <record id="group_petty_cash_user" model="res.groups">
+        <field name="name">Pemohon &amp; Kustodian</field>
+        <field name="comment">Kas Kecil: membuat pengajuan uang muka dan realisasi miliknya sendiri; melihat dana kas kecil yang dipegangnya.</field>
+        <field name="privilege_id" ref="res_groups_privilege_efn_petty_cash"/>
+        <field name="implied_ids" eval="[Command.link(ref('base.group_user'))]"/>
+    </record>
+
+    <record id="group_petty_cash_approver" model="res.groups">
+        <field name="name">Penyetuju</field>
+        <field name="comment">Kas Kecil: menyetujui/menolak pengajuan orang lain di company-nya (empat mata).</field>
+        <field name="privilege_id" ref="res_groups_privilege_efn_petty_cash"/>
+        <field name="implied_ids" eval="[Command.link(ref('group_petty_cash_user'))]"/>
+    </record>
+
+    <record id="group_petty_cash_finance" model="res.groups">
+        <field name="name">Finance</field>
+        <field name="comment">Kas Kecil: konfigurasi jenis/dana, pencairan, posting realisasi, pengembalian, settle, tutup dana, laporan.</field>
+        <field name="privilege_id" ref="res_groups_privilege_efn_petty_cash"/>
+        <field name="implied_ids" eval="[Command.link(ref('group_petty_cash_user')), Command.link(ref('account.group_account_invoice'))]"/>
+    </record>
+
+    <!-- Melewati plafon jenis (bukan plafon imprest fund). Tidak diberikan ke siapa pun secara default. -->
+    <record id="group_petty_cash_limit_override" model="res.groups">
+        <field name="name">Lewati Plafon Uang Muka</field>
+        <field name="privilege_id" ref="res_groups_privilege_efn_petty_cash"/>
+    </record>
+</odoo>

@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- G57 §2.5: pengganti pdp.audited.mixin sumber. Nilai lama/baru dicatat efn_audit (hook base). -->
+<odoo noupdate="1">
+    <record id="audit_rule_efn_petty_cash_type" model="efn.audit.rule">
+        <field name="name">EFN - Jenis Kas Kecil (akun, jurnal, plafon)</field>
+        <field name="model_id" ref="model_efn_petty_cash_type"/>
+        <field name="log_create" eval="True"/>
+        <field name="log_write" eval="True"/>
+        <field name="log_unlink" eval="True"/>
+        <field name="capture_unlink_values" eval="True"/>
+        <field name="tracked_field_ids" eval="[Command.set([
+            ref('field_efn_petty_cash_type__advance_account_id'),
+            ref('field_efn_petty_cash_type__bank_out_journal_id'),
+            ref('field_efn_petty_cash_type__payment_journal_id'),
+            ref('field_efn_petty_cash_type__expense_journal_id'),
+            ref('field_efn_petty_cash_type__limit_enforcement'),
+            ref('field_efn_petty_cash_type__limit_per_request'),
+            ref('field_efn_petty_cash_type__limit_outstanding'),
+            ref('field_efn_petty_cash_type__max_open_requests'),
+            ref('field_efn_petty_cash_type__block_when_overdue'),
+            ref('field_efn_petty_cash_type__allow_third_party'),
+        ])]"/>
+    </record>
+    <record id="audit_rule_efn_petty_cash_fund" model="efn.audit.rule">
+        <field name="name">EFN - Dana Kas Kecil (plafon, kustodian, status)</field>
+        <field name="model_id" ref="model_efn_petty_cash_fund"/>
+        <field name="log_create" eval="True"/>
+        <field name="log_write" eval="True"/>
+        <field name="log_unlink" eval="True"/>
+        <field name="capture_unlink_values" eval="True"/>
+        <field name="tracked_field_ids" eval="[Command.set([
+            ref('field_efn_petty_cash_fund__type_id'),
+            ref('field_efn_petty_cash_fund__float_amount'),
+            ref('field_efn_petty_cash_fund__limit_per_transaction'),
+            ref('field_efn_petty_cash_fund__holder_partner_id'),
+            ref('field_efn_petty_cash_fund__holder_user_id'),
+            ref('field_efn_petty_cash_fund__state'),
+        ])]"/>
+    </record>
+    <record id="audit_rule_efn_petty_cash_request" model="efn.audit.rule">
+        <field name="name">EFN - Pengajuan Kas Kecil (jumlah, status, pemegang)</field>
+        <field name="model_id" ref="model_efn_petty_cash_request"/>
+        <field name="log_create" eval="True"/>
+        <field name="log_write" eval="True"/>
+        <field name="log_unlink" eval="True"/>
+        <field name="capture_unlink_values" eval="True"/>
+        <field name="tracked_field_ids" eval="[Command.set([
+            ref('field_efn_petty_cash_request__amount_requested'),
+            ref('field_efn_petty_cash_request__state'),
+            ref('field_efn_petty_cash_request__holder_partner_id'),
+            ref('field_efn_petty_cash_request__holder_user_id'),
+            ref('field_efn_petty_cash_request__approved_by_id'),
+            ref('field_efn_petty_cash_request__disbursed_by_id'),
+        ])]"/>
+    </record>
+</odoo>

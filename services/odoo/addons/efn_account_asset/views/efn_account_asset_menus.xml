@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- G57 §1.5: induk = menu CE yang dipindah G55 ke efn_setup_menu.menu_accounting_root (account.menu_finance_entries
+     "Jurnal & Penutupan", account.menu_finance_reports, account.menu_finance_configuration) -> tanpa depends
+     efn_setup_menu. Root "Assets" sumber di bawah Finance tidak dipakai. -->
+<odoo>
+    <menuitem id="menu_efn_asset_section" name="Aset Tetap" parent="account.menu_finance_entries" sequence="15"
+              groups="efn_account_asset.group_asset_user"/>
+    <menuitem id="menu_efn_asset_register" name="Daftar Aset" parent="menu_efn_asset_section" sequence="10"
+              action="action_efn_asset"/>
+    <menuitem id="menu_efn_asset_post" name="Posting Penyusutan" parent="menu_efn_asset_section" sequence="20"
+              action="action_efn_asset_post_wizard" groups="efn_account_asset.group_asset_manager"/>
+    <menuitem id="menu_efn_asset_revaluation" name="Revaluasi" parent="menu_efn_asset_section" sequence="30"
+              action="action_efn_asset_revaluation"/>
+    <menuitem id="menu_efn_asset_partial" name="Pelepasan Sebagian" parent="menu_efn_asset_section" sequence="40"
+              action="action_efn_asset_partial_disposal"/>
+
+    <menuitem id="menu_efn_asset_report" name="Laporan Daftar Aset" parent="account.menu_finance_reports"
+              sequence="30" action="action_efn_asset_register_wizard" groups="efn_account_asset.group_asset_user"/>
+
+    <menuitem id="menu_efn_asset_config" name="Aset Tetap" parent="account.menu_finance_configuration" sequence="50"
+              groups="efn_account_asset.group_asset_manager"/>
+    <menuitem id="menu_efn_asset_groups" name="Kelompok Aset" parent="menu_efn_asset_config" sequence="10"
+              action="action_efn_asset_group"/>
+    <menuitem id="menu_efn_asset_locations" name="Lokasi Aset" parent="menu_efn_asset_config" sequence="20"
+              action="action_efn_asset_location"/>
+</odoo>

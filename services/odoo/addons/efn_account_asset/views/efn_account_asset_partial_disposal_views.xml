@@ -1,0 +1,67 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="view_efn_asset_partial_disposal_list" model="ir.ui.view">
+        <field name="name">efn.account.asset.partial.disposal.list</field>
+        <field name="model">efn.account.asset.partial.disposal</field>
+        <field name="arch" type="xml">
+            <list string="Pelepasan Sebagian" create="false" edit="false" delete="false">
+                <field name="name"/>
+                <field name="asset_id"/>
+                <field name="disposal_date"/>
+                <field name="reason"/>
+                <field name="quantity"/>
+                <field name="quantity_before"/>
+                <field name="quantity_after"/>
+                <field name="cost_removed"/>
+                <field name="accumulated_removed"/>
+                <field name="net_book_value_removed"/>
+                <field name="proceeds"/>
+                <field name="gain_loss"/>
+                <field name="move_id"/>
+                <field name="currency_id" column_invisible="True"/>
+            </list>
+        </field>
+    </record>
+
+    <record id="view_efn_asset_partial_disposal_form" model="ir.ui.view">
+        <field name="name">efn.account.asset.partial.disposal.form</field>
+        <field name="model">efn.account.asset.partial.disposal</field>
+        <field name="arch" type="xml">
+            <form string="Pelepasan Sebagian" create="false" edit="false" delete="false">
+                <sheet>
+                    <div class="oe_title">
+                        <h1><field name="name"/></h1>
+                    </div>
+                    <group>
+                        <group>
+                            <field name="asset_id"/>
+                            <field name="disposal_date"/>
+                            <field name="reason"/>
+                            <field name="quantity"/>
+                            <field name="quantity_before"/>
+                            <field name="quantity_after"/>
+                        </group>
+                        <group>
+                            <field name="cost_removed"/>
+                            <field name="accumulated_removed"/>
+                            <field name="net_book_value_removed"/>
+                            <field name="proceeds"/>
+                            <field name="gain_loss"/>
+                            <field name="move_id"/>
+                            <field name="currency_id" invisible="1"/>
+                        </group>
+                    </group>
+                    <group string="Catatan">
+                        <field name="note" nolabel="1" colspan="2"/>
+                    </group>
+                </sheet>
+            </form>
+        </field>
+    </record>
+
+    <record id="action_efn_asset_partial_disposal" model="ir.actions.act_window">
+        <field name="name">Pelepasan Sebagian</field>
+        <field name="res_model">efn.account.asset.partial.disposal</field>
+        <field name="view_mode">list,form</field>
+    </record>
+</odoo>

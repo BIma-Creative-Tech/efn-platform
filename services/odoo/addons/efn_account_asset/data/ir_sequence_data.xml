@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- G57 §1.6: kode aset FA/<tahun>/<5 digit>; satu sequence lintas PT (keunikan per PT via constraint). -->
+<odoo noupdate="1">
+    <record id="seq_efn_account_asset" model="ir.sequence">
+        <field name="name">Kode Aset Tetap EFN</field>
+        <field name="code">efn.account.asset</field>
+        <field name="prefix">FA/%(year)s/</field>
+        <field name="padding">5</field>
+        <field name="number_increment">1</field>
+        <field name="implementation">standard</field>
+        <field name="company_id" eval="False"/>
+    </record>
+</odoo>

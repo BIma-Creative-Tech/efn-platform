@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- G57 §1.6: grup Aset Tetap. Tanpa user_ids default (admin pun tidak otomatis); pemetaan persona (Staf Finance ->
+     Pengguna, Finance Manager -> Manager) = tindak lanjut efn_setup_role. Manager memposting jurnal dengan hak
+     akuntansinya sendiri (tidak ada sudo untuk jurnal), jadi persona Manager juga perlu grup Accounting. -->
+<odoo>
+    <record id="module_category_efn_asset" model="ir.module.category">
+        <field name="name">EFN Aset Tetap</field>
+        <field name="sequence">60</field>
+    </record>
+
+    <record id="res_groups_privilege_efn_asset" model="res.groups.privilege">
+        <field name="name">Aset Tetap</field>
+        <field name="category_id" ref="module_category_efn_asset"/>
+        <field name="sequence">10</field>
+    </record>
+
+    <record id="group_asset_user" model="res.groups">
+        <field name="name">Pengguna</field>
+        <field name="comment">Aset / Pengguna: baca semua aset PT yang diizinkan, buat dan ubah aset draft.</field>
+        <field name="privilege_id" ref="res_groups_privilege_efn_asset"/>
+    </record>
+
+    <record id="group_asset_manager" model="res.groups">
+        <field name="name">Manager</field>
+        <field name="comment">Aset / Manager: konfirmasi, disposal, revaluasi, pelepasan sebagian, posting penyusutan, konfigurasi kelompok dan lokasi.</field>
+        <field name="privilege_id" ref="res_groups_privilege_efn_asset"/>
+        <field name="implied_ids" eval="[Command.link(ref('group_asset_user'))]"/>
+    </record>
+</odoo>
