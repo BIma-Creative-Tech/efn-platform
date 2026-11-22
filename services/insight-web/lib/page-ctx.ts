@@ -18,8 +18,12 @@ export type SearchParams = Promise<Record<string, string | string[] | undefined>
 
 export async function pageCtx(
   searchParams: SearchParams,
+  opts: { home?: boolean } = {},
 ): Promise<{ ctx: Ctx; adjusted: boolean; raw: Record<string, string | string[] | undefined>; sel: PtSelection }> {
   const session = await requireSession();
+  // G52 (§28.15.9): sesi ber-cabang (kepala toko F&B) tidak boleh memakai halaman F&B tingkat PT. Beranda `/` (home) dialihkan ke
+  // /fnb/store; halaman lain -> tidak-berwenang (lapis kedua setelah proxy.ts; lapis ketiga = row policy kelas PT).
+  if (session.brs.length > 0) redirect(opts.home ? '/fnb/store' : '/tidak-berwenang');
   const esb = esbCodesOf(session.codes);
   const allowed = smdAllowed(session, getConfig().smEnabled);
   // Sesi tanpa PT F&B dialihkan, kecuali exec ber-SMD (docs/04 §28.14.1): SMD terpilih bawaan, tanpa query ESB.

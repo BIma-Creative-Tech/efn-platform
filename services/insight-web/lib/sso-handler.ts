@@ -22,6 +22,8 @@ export interface SsoDeps {
   sessionKey: string | null;
   /** INSIGHT_ACCEPT_EIT1; tidak diisi = true. */
   acceptEit1?: boolean;
+  /** INSIGHT_ACCEPT_EIT2; tidak diisi = true. */
+  acceptEit2?: boolean;
   nowMs: () => number;
   jti: JtiCache;
   limiter: RateLimiter;
@@ -121,8 +123,9 @@ export async function handleSso(req: Request, d: SsoDeps): Promise<Response> {
   }
 
   const nowSec = Math.floor(d.nowMs() / 1000);
-  // eit2 selalu; eit1 hanya bila INSIGHT_ACCEPT_EIT1 (default true agar urutan deploy aman, §28.13.5).
-  const res = verifyAnySsoToken(form.get('t'), d.ssoKey, nowSec, (jti) => d.jti.has(jti, d.nowMs()), d.acceptEit1 ?? true);
+  // eit3 selalu; eit2 hanya bila INSIGHT_ACCEPT_EIT2 (§28.15.5); eit1 hanya bila INSIGHT_ACCEPT_EIT1 (§28.13.5). Default true
+  // agar urutan deploy aman.
+  const res = verifyAnySsoToken(form.get('t'), d.ssoKey, nowSec, (jti) => d.jti.has(jti, d.nowMs()), d.acceptEit1 ?? true, d.acceptEit2 ?? true);
   if (!res.ok) {
     log('warn', 'sso', { code: res.code, ms: ms() });
     return generic();
@@ -131,7 +134,7 @@ export async function handleSso(req: Request, d: SsoDeps): Promise<Response> {
   d.jti.add(res.payload.jti, d.nowMs());
   const cookie = setCookieHeader(createSessionValue(res.payload, d.sessionKey, nowSec));
   // Log: versi + peran (tanpa wids/cats, tanpa token/nama; §28.13.5). Peran bukan data pribadi.
-  log('info', 'sso', { code: 'ok', sub: res.payload.sub, jti: res.payload.jti, v: res.payload.v, roles: res.payload.roles.join(','), ms: ms() });
+  log('info', 'sso', { code: 'ok', sub: res.payload.sub, jti: res.payload.jti, v: res.payload.v, roles: res.payload.roles.join(','), ...(res.payload.v === 3 ? { brs_n: res.payload.brs.length } : {}), ms: ms() });
   return new Response(null, {
     status: 303,
     headers: { ...BASE_HEADERS, Location: '/', 'Set-Cookie': cookie },

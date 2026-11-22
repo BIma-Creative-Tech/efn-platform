@@ -18,7 +18,7 @@ from odoo.addons.efn_insight.lib import insight_token as it
 CTRL = "odoo.addons.efn_insight.controllers.main"
 TEST_KEY = "0123456789abcdef" * 4  # sintetis, 64 hex  # gitleaks:allow (kunci uji palsu)
 URL = "https://insight.test"
-TOKEN_RE = re.compile(r'value="(eit[12]\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]{43})"')
+TOKEN_RE = re.compile(r'value="(eit[123]\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]{43})"')
 
 
 @tagged("efn", "post_install", "-at_install")
@@ -79,6 +79,31 @@ class TestInsightSso(HttpCase):
             company_ids=[Command.set([cls.efn.id])],
         )
         cls.plain = new_test_user(cls.env, login="efn_ins_plain", groups="base.group_user", company_id=cls.pb.id)
+        # G52: kepala toko F&B PB dengan dua cabang ESB (id sintetis: "pb:91012" < "pb:9107" urutan ASCII).
+        Branch = cls.env["efn.insight.esb.branch"]
+        Branch.with_context(active_test=False).search([("esb_branch_id", ">=", 9000)]).unlink()
+        cls.branches = Branch.create(
+            [
+                {"company_id": cls.pb.id, "esb_brand": "pb", "esb_branch_id": 9107, "name": "PB uji 9107"},
+                {"company_id": cls.pb.id, "esb_brand": "pb", "esb_branch_id": 91012, "name": "PB uji 91012"},
+            ]
+        )
+        store_groups = "base.group_user,efn_insight.group_insight_store"
+        cls.store = new_test_user(
+            cls.env,
+            login="efn_ins_store",
+            groups=store_groups,
+            company_id=cls.pb.id,
+            company_ids=[Command.set([cls.pb.id, cls.bcf.id])],
+        )
+        cls.store.sudo().efn_insight_esb_branch_ids = [Command.set(cls.branches.ids)]
+        cls.store_none = new_test_user(
+            cls.env,
+            login="efn_ins_store_none",
+            groups=store_groups,
+            company_id=cls.pb.id,
+            company_ids=[Command.set([cls.pb.id])],
+        )
 
     # ------------------------------------------------------------------ helper
     def _env(self, **overrides):
@@ -88,9 +113,11 @@ class TestInsightSso(HttpCase):
             "EFN_INSIGHT_SSO_KEY_FILE": self.key_file,
             "APP_ENV": "production",
             "EFN_ALLOW_PLAINTEXT": "false",
-            # G47: default eit2, bagian SM mati (test SM ada di efn_insight_sm).
+            # G47: test lama memakai eit2 eksplisit, bagian SM mati (test SM ada di efn_insight_sm). G52: test eit3
+            # menimpa EFN_INSIGHT_TOKEN_VERSION; persona F&B mati kecuali disebut.
             "EFN_INSIGHT_TOKEN_VERSION": "2",
             "INSIGHT_SM_ENABLED": "false",
+            "INSIGHT_FNB_PERSONA_ENABLED": "false",
         }
         values.update(overrides)
         return patch.dict(os.environ, values)
@@ -107,6 +134,8 @@ class TestInsightSso(HttpCase):
         return match.group(1)
 
     def _verify(self, token):
+        if token.startswith("eit3."):
+            return it.verify_token_v3(token, TEST_KEY, now=int(time.time()))
         if token.startswith("eit2."):
             return it.verify_token_v2(token, TEST_KEY, now=int(time.time()))
         return it.verify_token(token, TEST_KEY, now=int(time.time()))
@@ -114,6 +143,7 @@ class TestInsightSso(HttpCase):
     def _assert_no_token(self, text):
         self.assertNotIn("eit1.", text)
         self.assertNotIn("eit2.", text)
+        self.assertNotIn("eit3.", text)
         self.assertNotIn('name="t"', text)
 
     def _log_count(self):
@@ -220,17 +250,76 @@ class TestInsightSso(HttpCase):
         # Bagian SM diabaikan walau INSIGHT_SM_ENABLED=true.
         token = self._token(self._open("efn_ins_user", EFN_INSIGHT_TOKEN_VERSION="1", INSIGHT_SM_ENABLED="true"))
         self.assertTrue(token.startswith("eit1."))
-        for value in ("2", "3", "", "v1", " 2 "):
+        # G52 (docs/04 §28.15.4 butir 8): `2` = eit2, nilai lain -> eit3.
+        for value, prefix in (("2", "eit2."), (" 2 ", "eit2."), ("3", "eit3."), ("", "eit3."), ("v1", "eit3.")):
             with self.subTest(value=value):
                 token = self._token(self._open("efn_ins_user", EFN_INSIGHT_TOKEN_VERSION=value))
-                self.assertTrue(token.startswith("eit2."))
+                self.assertTrue(token.startswith(prefix))
 
-    def test_token_version_unset_defaults_to_eit2(self):
+    def test_token_version_unset_defaults_to_eit3(self):
         self.authenticate("efn_ins_user", "efn_ins_user")
         with self._env():
             os.environ.pop("EFN_INSIGHT_TOKEN_VERSION", None)
             response = self.url_open("/efn/insight/open", allow_redirects=False)
-        self.assertTrue(self._token(response).startswith("eit2."))
+        token = self._token(response)
+        self.assertTrue(token.startswith("eit3."))
+        payload = self._verify(token)
+        self.assertEqual(set(payload), it.PAYLOAD_KEYS_V3)
+        self.assertEqual((payload["v"], payload["roles"], payload["brs"]), (3, ["user"], []))
+        entry = self.env["ir.logging"].sudo().search([("name", "=", "efn_insight")], order="id desc", limit=1)
+        self.assertIn(" v=3 ", entry.message)
+        self.assertIn("wids_n=0 cats_n=0 brs_n=0", entry.message)
+
+    # ------------------------------------------------------------------ G52: kepala toko F&B (docs/04 §28.15.4)
+    def test_store_fnb_token_has_branches(self):
+        response = self._open("efn_ins_store", EFN_INSIGHT_TOKEN_VERSION="3", INSIGHT_FNB_PERSONA_ENABLED="true")
+        token = self._token(response)
+        self.assertTrue(token.startswith("eit3."))
+        payload = self._verify(token)
+        self.assertEqual(payload["codes"], ["PB"], "BCF di company_ids tidak ikut: hanya PT dari cabang")
+        self.assertEqual(payload["cids"], [self.pb.id])
+        self.assertEqual(payload["roles"], ["store", "user"])
+        self.assertEqual(payload["brs"], ["pb:91012", "pb:9107"])
+        entry = self.env["ir.logging"].sudo().search([("name", "=", "efn_insight")], order="id desc", limit=1)
+        self.assertIn("brs_n=2", entry.message)
+        self.assertNotIn("pb:", entry.message, "daftar cabang tidak dicatat (L-249)")
+
+    def test_store_fnb_revoked_without_flag_or_on_rollback(self):
+        # L-241: kepala toko store-only tidak pernah lagi mendapat PT penuh (flag mati, eit2, maupun eit1).
+        for env in (
+            {"EFN_INSIGHT_TOKEN_VERSION": "3", "INSIGHT_FNB_PERSONA_ENABLED": "false"},
+            {"EFN_INSIGHT_TOKEN_VERSION": "2", "INSIGHT_FNB_PERSONA_ENABLED": "true"},
+            {"EFN_INSIGHT_TOKEN_VERSION": "1", "INSIGHT_FNB_PERSONA_ENABLED": "true"},
+        ):
+            with self.subTest(env=env):
+                response = self._open("efn_ins_store", **env)
+                self.assertEqual(response.status_code, 200)
+                self.assertIn('data-efn-insight-state="no_company"', response.text)
+                self._assert_no_token(response.text)
+
+    def test_store_fnb_without_branch_info_page(self):
+        before = self._log_count()
+        response = self._open("efn_ins_store_none", EFN_INSIGHT_TOKEN_VERSION="3", INSIGHT_FNB_PERSONA_ENABLED="true")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('data-efn-insight-state="no_branch"', response.text)
+        self.assertIn("belum ditautkan ke cabang ESB", response.text)
+        self._assert_no_token(response.text)
+        self.assertEqual(self._log_count(), before)
+
+    def test_persona_conflict_info_page_not_500(self):
+        # SEC-G52-02: exec + store + marketing melanggar T5 -> halaman info (fail closed), bukan HTTP 500.
+        new_test_user(
+            self.env,
+            login="efn_ins_combo",
+            groups="base.group_user,efn_insight.group_insight_exec,efn_insight.group_insight_store,"
+            "efn_insight.group_insight_marketing",
+            company_id=self.pb.id,
+            company_ids=[Command.set([self.pb.id])],
+        )
+        response = self._open("efn_ins_combo", EFN_INSIGHT_TOKEN_VERSION="3", INSIGHT_FNB_PERSONA_ENABLED="true")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('data-efn-insight-state="persona_conflict"', response.text)
+        self._assert_no_token(response.text)
 
     def test_sm_enabled_without_sm_module_scope_is_esb_only(self):
         # Hook dasar efn_insight = cakupan SM kosong; bila efn_insight_sm terpasang, user ini tetap tanpa persona.

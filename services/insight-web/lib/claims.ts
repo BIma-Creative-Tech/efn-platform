@@ -156,6 +156,61 @@ export function scopeConsistent(c: {
   return true;
 }
 
+// ---------------------------------------------------------------- v3 (eit3/eis3, docs/04 §28.15.4-§28.15.5, G52)
+
+/** Persona yang punya halaman F&B (§28.15.4). IDENTIK dengan Odoo `insight_token.py`. */
+export const FNB_PERSONAS = ['exec', 'marketing', 'store'] as const;
+/** Akun ESB yang sah di klaim `brs` (= KNOWN_BRANDS esb-extract). */
+export const ESB_BRANDS = ['bacha', 'cup', 'imd', 'pb', 'wtz'] as const;
+export const MAX_BRS = 50;
+/** `<esb_brand>:<branch_id>`; branch_id 1..4294967295 (batas atas diperiksa terpisah). */
+export const BRS_ITEM_RE = /^(bacha|cup|imd|pb|wtz):[1-9][0-9]{0,9}$/;
+
+/** brs: string unik, urut naik ASCII, 0..50 butir, tiap butir cocok BRS_ITEM_RE dan branch_id <= 4294967295. */
+export function parseBrs(v: unknown): string[] | null {
+  if (!Array.isArray(v) || v.length > MAX_BRS) return null;
+  for (const x of v) {
+    if (typeof x !== 'string' || !BRS_ITEM_RE.test(x)) return null;
+    if (Number(x.slice(x.indexOf(':') + 1)) > 4_294_967_295) return null;
+  }
+  const a = v as string[];
+  return strictlyAscending(a) ? a : null;
+}
+
+/**
+ * Aturan konsistensi v3 T1..T7 (§28.15.5; diperiksa pembuat DAN penerima; gagal = `bad_claims`). T8 (ukuran payload) dijamin
+ * regex token/cookie. `P = roles ∩ PERSONAS`, `ESB = codes ∩ ESB_CODES`, `SM = codes ∩ SM_CODES`.
+ */
+export function scopeConsistentV3(c: {
+  codes: readonly string[];
+  roles: readonly string[];
+  wids: readonly number[];
+  cats: readonly number[];
+  brs: readonly string[];
+}): boolean {
+  const p = new Set(personasOf(c.roles));
+  const hasP = p.size > 0;
+  const hasSm = smCodesOf(c.codes).length > 0;
+  const hasEsb = esbCodesOf(c.codes).length > 0;
+  // T1
+  if ((c.wids.length > 0) !== hasSm) return false;
+  if (hasSm && !hasP) return false;
+  // T2
+  if (hasSm && c.wids.includes(0) !== c.roles.some((r) => PT_LEVEL_PERSONAS.has(r))) return false;
+  // T3
+  if ((p.has('category') || p.has('dc')) && !hasSm) return false;
+  // T4
+  if (hasP && !hasSm && !hasEsb) return false;
+  // T5 (L-245)
+  if (p.has('store') && Array.from(p).some((r) => r !== 'exec' && r !== 'store')) return false;
+  // T6
+  const branchScoped = p.has('store') && !p.has('exec') && !c.roles.includes('all_brands') && hasEsb;
+  if ((c.brs.length > 0) !== branchScoped) return false;
+  // T7
+  if (c.cats.length > 0 && !p.has('category')) return false;
+  return true;
+}
+
 const CONTROL_RE = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu;
 
 /**

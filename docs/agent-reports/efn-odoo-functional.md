@@ -1048,3 +1048,141 @@ Keputusan pemilik proyek: Q-G47-2 = outlet menerima barang dua langkah. Detail d
 - C-3 menjadi wajib.
 
 **Belum dijalankan:** install (butuh `efn_insight_sm`), migrasi, dan semua test.
+
+## 22 Nov 2026 — Insight F&B persona & scope cabang ESB
+
+Worktree `efn-platform-nav`, branch `feat/insight-nav-dual-menu`. Analisis/desain saja: tidak ada kode addon, tidak ada
+modul `efn_setup_*` baru. Keputusan pemilik proyek 22 Nov (final): halaman persona F&B (ESB) `/exec`, `/store`,
+`/marketing`; (1) grup persona yang sama untuk F&B dan SMD, dipindah dari `efn_insight_sm` ke `efn_insight`;
+(2) kepala toko F&B dibatasi ke cabang ESB yang dipegangnya (klaim token + predikat cabang di row policy ClickHouse).
+Legenda: [V] = diverifikasi di source (repo ini atau odoo/odoo 19.0), [R] = rekomendasi, [B] = belum terverifikasi.
+
+### Fakta yang diperiksa
+- Cakupan ESB: `efn_insight/controllers/main.py:89-107` (`_insight_scope`). `all_brands` = 6 kode; lainnya = PT
+  ber-kode ESB di `res_company_users_rel`, `roles=["user"]`. **Tidak ada pembatasan cabang**: siapa pun dengan
+  `group_insight_user` + PT PB melihat semua cabang PB [V]. `merge_scope` di `main.py:110-119` [V].
+- Grup persona: `efn_insight_sm/security/efn_insight_sm_security.xml:10-89` (6 privilege + 6 grup; semua
+  `implied_ids` → `efn_insight.group_insight_user`) [V]. Peta persona → xmlid di
+  `efn_insight_sm/models/res_users.py:11-17`. Hook (`:40-84`) mengembalikan kosong tanpa PT SM aktif (`:52-53`). store
+  dibuang bila dipegang bersama persona PT selain exec (`:65-66`, SEC-G47-01) [V].
+- Token: `insight_token.py:51-54` (`SM_CODES`, `PERSONAS` 5, `ORG_PERSONAS` 4), `:265`
+  `bool(wids) == bool(personas) == bool(codes ∩ SM_CODES)` [V]. Artinya persona apa pun **tanpa** kode SM saat ini
+  ditolak validator. Persona F&B butuh revisi kontrak §28.13.4.
+- Referensi lain ke `efn_insight_sm.group_insight_*` (53 kemunculan, 12 file) [V]:
+  - `efn_role/models/role_policy.py:40-44` (xmlid sensitif);
+  - `efn_role/tests/test_g47.py`;
+  - `efn_insight_sm/tests/common.py`;
+  - `efn_setup_supermarket/demo/res_users_insight_demo.xml` + test;
+  - docs/04, G47 fit-gap, README.
+- Cabang ESB **tidak ada sebagai record Odoo** [V]:
+  - `efn_dwh.dim_esb_branch` (`12-g41-esb.sql:80-94`) berkunci `(brand, branch_id)`. `branch_id` hanya unik per akun
+    ESB (`:157`), mis. Bacha melayani BCF + BCR.
+  - Di Odoo, `esb_branch_id` hanya ada sebagai `Integer` histori di `efn.legacy.flow.daily` (`efn_legacy_history/models/efn_legacy_flow_daily.py:50`)
+    dan `efn.legacy.sales.daily` (`efn_legacy_sales_daily.py:39`).
+  - G43 memetakan cabang toko → `stock.warehouse` + `pos.config` (xmlid `efn_mig_esb.<brand>_<company>_branch_*`,
+    entitas `branch_wh/branch_loc/branch_pos` di `scripts/migration/efn_mig/xmlid.py:18`). Salinannya di
+    `map_esb_odoo` (`14-g43-migration.sql:197-211`). Pemetaan ini **hanya ada untuk brand yang sudah dimigrasi**.
+  - Cabang Warehouse/Storage dipetakan ke `stock.location`, bukan ke gudang (G43 fit-gap §2 baris 76).
+  - Eksekusi impor per brand di DB mana pun [B].
+- CE 19 [V]:
+  - `sale_stock/models/res_users.py`: `property_warehouse_id` (M2o `stock.warehouse`, `company_dependent`,
+    `check_company`) termasuk `SELF_WRITEABLE_FIELDS`. Field ini adalah gudang default yang bisa diubah user sendiri,
+    jadi **tidak sah sebagai batas akses**.
+  - `stock/models/res_users.py` dan `point_of_sale/models/res_users.py` tidak mendefinisikan field user→gudang/POS.
+- `efn_audit` `CONTROL_SPECS["res.users"]` (`audit_policy.py:98-110`) melewati field yang modulnya belum terpasang [V].
+  Field baru cukup ditambahkan namanya.
+
+### 1. Fit-gap "cabang ESB yang dipegang user"
+
+| Opsi | Penilaian |
+|---|---|
+| Standar CE: `company_ids` | Granularitas PT saja. Tidak cukup |
+| Standar CE: `property_warehouse_id` | Bisa ditulis user sendiri (self-writeable) dan hanya satu gudang. Ditolak |
+| M2M ke `stock.warehouse` / `pos.config` ber-xmlid `efn_mig_esb.*` | Hanya brand yang sudah dimigrasi G43. Cabang storage → lokasi; gudang bisa tidak 1:1 dengan cabang. Gagal untuk brand yang masih ESB. Ditolak |
+| M2M ke `res.partner` | Tidak ada partner per cabang. Ditolak |
+| Field Char/int list di `res.users` | Tanpa integritas, nama, company rule, atau validasi. `branch_id` bentrok antar-brand. Ditolak |
+| **Model kecil `efn.insight.esb.branch` + M2M di `res.users`** | Tidak bergantung pada status migrasi; multi-company; bisa diaudit. **Direkomendasikan** [R] |
+
+Spesifikasi untuk engineer (modul **`efn_insight`**: inti F&B, tanpa dependency SM; `depends` tetap `efn_core`) [R]:
+- **Model `efn.insight.esb.branch`**, field:
+  - `company_id` (M2o `res.company`, wajib; domain `efn_brand_code ∈ ESB_CODES`);
+  - `esb_brand` (Char/Selection akun ESB: pb, wtz, bacha, imd, cup);
+  - `esb_branch_id` (Integer > 0, ≤ UInt32);
+  - `name`, `branch_code`, `is_store` (Boolean), `active`.
+- **Constraint** `UNIQUE(esb_brand, esb_branch_id)`. `company_id` = `dim_esb_branch.company_code` (sumber tunggal
+  pemetaan PT, G43 §2).
+- **Klaim** dibentuk dari `company_id.efn_brand_code` + `esb_branch_id`. Pasangan `(company_code, branch_id)` unik,
+  karena PT adalah fungsi dari cabang.
+- **Field `res.users.efn_insight_esb_branch_ids`** (M2M; tabel relasi eksplisit, mis. `efn_res_users_insight_esb_branch_rel`):
+  - domain `company_id in company_ids`;
+  - **jangan** dimasukkan ke `SELF_WRITEABLE_FIELDS`;
+  - halaman form user hanya untuk `base.group_erp_manager` (pola `efn_insight_categ_ids`).
+- **Keamanan:**
+  - ACL model: baca + tulis `base.group_erp_manager`, tanpa akses untuk `group_insight_user`. Scope dihitung `sudo`
+    hanya untuk id milik user.
+  - Record rule `[('company_id', 'in', company_ids)]`.
+- **Audit:**
+  - tambahkan `efn_insight_esb_branch_ids` ke `CONTROL_SPECS["res.users"]`;
+  - model cabang ikut dilacak: perubahan `company_id`/`esb_branch_id` = perubahan hak.
+- **Pemeliharaan:**
+  - menu Settings → Users & Companies → "Cabang ESB (Insight)";
+  - diisi lewat **impor CSV standar Odoo** dari ekspor `v_esb_branch_list` (langkah runbook `esb-extract`). Volume
+    puluhan baris.
+  - Odoo **tidak** membaca ClickHouse, dan esb-extract **tidak** menulis ke Odoo: tanpa kredensial baru.
+  - Cabang yang salah/tidak ada di CH → row policy tidak mengembalikan baris (fail closed).
+- **Pasca-cutover:** sumber data toko pindah ke POS Odoo (warehouse). Kaitan opsional `warehouse_id` ditunda
+  (YAGNI). Catatan: `efn_outlet_warehouse_ids` ada di `efn_assortment` (modul G44 supermarket), jadi F&B **tidak
+  boleh** memakainya. Saat dibutuhkan, field netral perlu dibuat (keputusan architect).
+
+### 2. Relokasi grup persona
+**Dipindah kelima grup persona beserta privilege-nya** [R]:
+- Konstanta `PERSONAS` sudah ada di inti (`insight_token.py:52`), jadi peta persona → grup cukup satu, di
+  `efn_insight` (konstanta `PERSONA_GROUPS`, diimpor `efn_insight_sm`).
+- `kpi_admin` + model KPI tetap di `efn_insight_sm`.
+- **F&B memakai exec, store, marketing.** dc dan category tetap khusus SMD: diabaikan oleh scope F&B, dengan
+  deskripsi privilege "(supermarket)".
+
+Rencana migrasi (xmlid lama dipertahankan sebagai record yang sama; id grup dan keanggotaan user tidak berubah):
+1. `efn_insight` 19.0.3.0.0 `migrations/19.0.3.0.0/pre-migrate.py`: `UPDATE ir_model_data SET module='efn_insight'
+   WHERE module='efn_insight_sm' AND model IN ('res.groups','res.groups.privilege') AND name IN (5 grup + 5
+   privilege)`. Lalu XML grup/privilege dipindah ke `efn_insight/security/` dengan nama xmlid yang **sama**
+   (`group_insight_exec`, …, `res_groups_privilege_insight_sm_*`; ganti label saja, mis. "Insight: Direksi").
+2. **SQL yang sama (idempoten)** dipasang juga di `efn_insight_sm` 19.0.2.0.0 pre-migrate. Alasannya, bila operator
+   menjalankan `-u efn_insight_sm` saja, `_process_end` akan menghapus record yang tidak lagi dideklarasikan modul
+   itu, beserta keanggotaan user [B: perilaku runtime, uji wajib].
+3. Ganti semua referensi menjadi `efn_insight.group_insight_*`: `efn_role` SENSITIVE (`role_policy.py:40-43`; store
+   tetap tidak sensitif), test `efn_role`/`efn_insight_sm`, demo + test `efn_setup_supermarket`, docs/04 §28.13.2.
+4. Test migrasi: user demo SMD tetap memegang persona yang sama (id grup sama) setelah upgrade. DB F&B tanpa
+   `efn_insight_sm` mendapat grup baru dari install biasa.
+- Referensi pola: OCA `openupgradelib` `rename_xmlids` (konsep saja, bukan dependency; lisensi [B]). Ditolak:
+  "grup baru + implied_ids ke grup lama" (dua grup per persona, widget privilege Odoo 19 rawan menghapus salah satu).
+
+Konsumsi:
+- Hook SM tidak berubah perilakunya. Ia hanya mengimpor `PERSONA_GROUPS` dari inti dan tetap memakai filter PT SM
+  (`res_users.py:50-53`).
+- Inti menambah scope F&B (bukan hook):
+  - persona ∩ {exec, marketing, store} untuk PT ESB di `company_ids`;
+  - store → `brs` = cabang dari `efn_insight_esb_branch_ids` yang PT-nya aktif di `company_ids`.
+
+### Untuk efn-architect / lead (revisi kontrak §26/§28.13 sebelum kode)
+1. **Klaim baru** `brs`: list string `"<CODE>:<branch_id>"` terurut, maks ±50. Aturan `:265` dipecah per domain:
+   wids ⇔ persona ∧ kode SM; brs ⇔ store F&B ∧ kode ESB.
+2. **Least privilege:**
+   - user store F&B **tanpa** exec/marketing/all_brands harus kehilangan cakupan ESB penuh dari `company_ids`
+     (sekarang `roles=["user"]` membuka semua cabang). Predikat cabang di semua view `efn_insight.v_esb_*`;
+   - view tanpa `branch_id` → tolak untuk scope store-only;
+   - view mutasi `origin_branch_id`/`dest_branch_id` (`19-insight-review.sql`) → aturan eksplisit.
+3. **Kombinasi persona:** store + exec → exec menutup (seperti `STORE_COVERING_PERSONAS`). store + marketing → analog
+   SEC-G47-01, perlu keputusan.
+
+### Pertanyaan klien
+- **Q-INS-F1:** grup persona berlaku untuk semua PT di `company_ids`. Contohnya, exec di SMD sekaligus store di PB
+  **tidak bisa** dinyatakan. Diterima? Default: ya. Bila tidak, pakai akun terpisah.
+- **Q-INS-F2:** daftar kepala toko F&B → cabang (siapa pengelola impor CSV)? Default: admin TI per PT.
+- **Q-INS-F3:** apakah kepala toko F&B boleh melihat HPP/margin cabangnya? Default: tidak (sama dengan SMD).
+
+### Belum terverifikasi
+- Perilaku `_process_end` saat pindah modul xmlid (uji upgrade);
+- status impor G43 per brand;
+- lisensi `openupgradelib`;
+- tidak ada referensi Cybrosys yang relevan (tidak dicari lebih jauh).

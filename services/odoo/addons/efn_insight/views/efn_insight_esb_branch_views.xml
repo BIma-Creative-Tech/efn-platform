@@ -1,0 +1,107 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- G52 (docs/04 §28.15.3, L-240): pemeliharaan cabang ESB + penugasan kepala toko F&B. Diisi lewat impor CSV standar
+     Odoo (kolom esb_brand,esb_branch_id,name,branch_code,is_store,active,company_id) dari ekspor
+     efn_dwh.v_esb_branch_list (runbook esb-extract). Hanya base.group_erp_manager (ACL + menu). -->
+<odoo>
+    <record id="efn_insight_esb_branch_view_list" model="ir.ui.view">
+        <field name="name">efn.insight.esb.branch.list</field>
+        <field name="model">efn.insight.esb.branch</field>
+        <field name="arch" type="xml">
+            <list decoration-muted="not active or not is_store">
+                <field name="company_id" groups="base.group_multi_company"/>
+                <field name="esb_brand"/>
+                <field name="esb_branch_id"/>
+                <field name="name"/>
+                <field name="branch_code" optional="show"/>
+                <field name="is_store"/>
+                <field name="active" widget="boolean_toggle"/>
+            </list>
+        </field>
+    </record>
+
+    <record id="efn_insight_esb_branch_view_form" model="ir.ui.view">
+        <field name="name">efn.insight.esb.branch.form</field>
+        <field name="model">efn.insight.esb.branch</field>
+        <field name="arch" type="xml">
+            <form>
+                <sheet>
+                    <widget name="web_ribbon" title="Diarsipkan" bg_color="text-bg-danger" invisible="active"/>
+                    <group>
+                        <group>
+                            <field name="esb_brand"/>
+                            <field name="esb_branch_id"/>
+                            <field name="name"/>
+                            <field name="branch_code"/>
+                        </group>
+                        <group>
+                            <field name="company_id"/>
+                            <field name="is_store"/>
+                            <field name="active" invisible="1"/>
+                        </group>
+                    </group>
+                    <p class="text-muted">
+                        Kepala toko F&amp;B (persona "Insight: Kepala toko" tanpa Direksi/Marketing) hanya melihat cabang
+                        yang ditautkan di form user, tab "Insight". Mengarsipkan cabang = mencabut hak atas cabang itu.
+                    </p>
+                </sheet>
+            </form>
+        </field>
+    </record>
+
+    <record id="efn_insight_esb_branch_view_search" model="ir.ui.view">
+        <field name="name">efn.insight.esb.branch.search</field>
+        <field name="model">efn.insight.esb.branch</field>
+        <field name="arch" type="xml">
+            <search>
+                <field name="name"/>
+                <field name="esb_branch_id"/>
+                <field name="branch_code"/>
+                <field name="company_id" groups="base.group_multi_company"/>
+                <filter name="store" string="Cabang toko" domain="[('is_store', '=', True)]"/>
+                <filter name="archived" string="Diarsipkan" domain="[('active', '=', False)]"/>
+                <separator/>
+                <filter name="group_brand" string="Akun ESB" context="{'group_by': 'esb_brand'}"/>
+                <filter name="group_company" string="PT" context="{'group_by': 'company_id'}"/>
+            </search>
+        </field>
+    </record>
+
+    <record id="action_efn_insight_esb_branch" model="ir.actions.act_window">
+        <field name="name">Cabang ESB (Insight)</field>
+        <field name="res_model">efn.insight.esb.branch</field>
+        <field name="view_mode">list,form</field>
+        <field name="search_view_id" ref="efn_insight_esb_branch_view_search"/>
+        <field name="help" type="html">
+            <p>Cabang ESB untuk cakupan kepala toko F&amp;B di Dashboard Insight.</p>
+            <p>Isi lewat <b>Impor</b> CSV dengan kolom <code>esb_brand,esb_branch_id,name,branch_code,is_store,active,company_id</code>
+                dari ekspor <code>efn_dwh.v_esb_branch_list</code>. Cabang yang salah atau tidak ada di data ESB
+                menghasilkan 0 baris di Insight (gagal tertutup).</p>
+        </field>
+    </record>
+
+    <!-- Settings > Users & Companies (base.menu_users, terverifikasi odoo/odoo 19.0 base_menus.xml). -->
+    <menuitem id="menu_efn_insight_esb_branch" name="Cabang ESB (Insight)" parent="base.menu_users"
+              action="action_efn_insight_esb_branch" sequence="40" groups="base.group_erp_manager"/>
+
+    <!-- Form user: tab Insight (pola efn_insight_sm). Field ber-groups base.group_erp_manager. -->
+    <record id="view_users_form_efn_insight" model="ir.ui.view">
+        <field name="name">res.users.form.efn.insight</field>
+        <field name="model">res.users</field>
+        <field name="inherit_id" ref="base.view_users_form"/>
+        <field name="arch" type="xml">
+            <xpath expr="//notebook" position="inside">
+                <page string="Insight" name="efn_insight" groups="base.group_erp_manager">
+                    <group>
+                        <field name="company_ids" invisible="1" widget="many2many_tags"/>
+                        <field name="efn_insight_esb_branch_ids" widget="many2many_tags"/>
+                    </group>
+                    <p class="text-muted">
+                        Hanya untuk persona "Insight: Kepala toko" di brand F&amp;B. Kepala toko tanpa Direksi/Marketing
+                        hanya melihat cabang ini (maks 50); tanpa cabang, Insight menampilkan "belum ditautkan ke cabang
+                        ESB". Persona diatur di bagian hak akses "EFN Dashboard Insight".
+                    </p>
+                </page>
+            </xpath>
+        </field>
+    </record>
+</odoo>

@@ -3,14 +3,10 @@
 from odoo import Command
 from odoo.tests import new_test_user
 
-PERSONA = {
-    "exec": "efn_insight_sm.group_insight_exec",
-    "category": "efn_insight_sm.group_insight_category",
-    "store": "efn_insight_sm.group_insight_store",
-    "dc": "efn_insight_sm.group_insight_dc",
-    "marketing": "efn_insight_sm.group_insight_marketing",
-    "kpi_admin": "efn_insight_sm.group_insight_kpi_admin",
-}
+from odoo.addons.efn_insight.models.res_users import PERSONA_GROUPS
+
+# G52 (docs/04 §28.15.2): grup persona milik efn_insight; kpi_admin tetap di modul ini.
+PERSONA = {**PERSONA_GROUPS, "kpi_admin": "efn_insight_sm.group_insight_kpi_admin"}
 
 
 def widget_roundtrip(user):

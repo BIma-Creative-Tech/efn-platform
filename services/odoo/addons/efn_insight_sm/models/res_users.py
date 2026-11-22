@@ -1,20 +1,15 @@
-"""Persona & cakupan supermarket untuk token eit2 (G47, docs/04 §28.13.2-§28.13.3, fit-gap G47 §3, §7.2).
+"""Persona & cakupan supermarket untuk token eit2/eit3 (G47 + G52, docs/04 §28.13.2-§28.13.3, §28.15.2-§28.15.4,
+fit-gap G47 §3, §7.2).
 
-Menimpa hook privat `res.users._efn_insight_sm_scope()` milik `efn_insight` (bukan metode publik, SEC-58).
+Menimpa hook privat `res.users._efn_insight_sm_scope()` milik `efn_insight` (bukan metode publik, SEC-58). G52: grup
+persona dan peta `PERSONA_GROUPS` milik `efn_insight` (dipakai lewat `_efn_insight_personas()`); controller mengirim
+G' (aturan store lintas domain L-245) sebagai `personas`.
 """
 
 from odoo import fields, models
 
 from odoo.addons.efn_insight.lib.insight_token import ORG_PERSONAS, SM_CODES
 
-# Persona -> grup (docs/04 §28.13.2). Satu privilege per grup (fit-gap G47 §2.1: widget Odoo 19).
-PERSONA_GROUPS = {
-    "category": "efn_insight_sm.group_insight_category",
-    "dc": "efn_insight_sm.group_insight_dc",
-    "exec": "efn_insight_sm.group_insight_exec",
-    "marketing": "efn_insight_sm.group_insight_marketing",
-    "store": "efn_insight_sm.group_insight_store",
-}
 # Persona PT yang diizinkan row policy di SEMUA view yang mengizinkan store (insight-sm-policy.sh SM_POLICY_VIEWS).
 # SEC-G51-01: hanya exec; category tidak ada di v_sm_payment_daily (G51), jadi category + store tidak menerbitkan
 # store.
@@ -37,10 +32,11 @@ class ResUsers(models.Model):
         help="Hanya untuk persona Insight SM: Category manager/buyer. Default filter kategori di Insight (maks 50).",
     )
 
-    def _efn_insight_sm_scope(self):
-        """docs/04 §28.13.3 butir 2. Dipanggil controller hanya bila INSIGHT_SM_ENABLED = "true"."""
-        res = super()._efn_insight_sm_scope()
-        held = {persona for persona, xmlid in PERSONA_GROUPS.items() if self.has_group(xmlid)}
+    def _efn_insight_sm_scope(self, personas=None):
+        """docs/04 §28.13.3 butir 2 dengan G' (§28.15.4 butir 1). Dipanggil controller hanya bila INSIGHT_SM_ENABLED =
+        "true". `personas` None = persona dari grup user (PERSONA_GROUPS efn_insight)."""
+        res = super()._efn_insight_sm_scope(personas=personas)
+        held = set(self._efn_insight_personas() if personas is None else personas)
         if not held:
             return res
         # SMC: company di tabel relasi user (bukan switcher), aktif, kode SM. Pola _insight_scope §26.2.

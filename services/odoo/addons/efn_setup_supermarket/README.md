@@ -194,10 +194,11 @@ Semua dampak di bawah dibaca dari kode. Butir yang ditandai [test] dikunci test 
 
 ## Persona EFN Insight (G47, demo)
 
-Grup persona dan field kategori adalah milik `efn_insight_sm`, yang sedang dibangun efn-odoo-engineer secara paralel.
+Field kategori dan `kpi_admin` milik `efn_insight_sm`; sejak G52 (docs/04 §28.15.2) grup persona milik `efn_insight`
+(xmlid name dan id grup tetap, keanggotaan user demo lama tidak berubah).
 
 **xmlid yang dipakai:**
-- persona: `efn_insight_sm.group_insight_{exec,category,store,dc,marketing}`;
+- persona: `efn_insight.group_insight_{exec,category,store,dc,marketing}` (sebelum G52: `efn_insight_sm.*`);
 - kpi_admin: `efn_insight_sm.group_insight_kpi_admin` (hanya diuji tidak diberikan);
 - field: `res.users.efn_insight_categ_ids`.
 

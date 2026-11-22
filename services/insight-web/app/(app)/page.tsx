@@ -75,7 +75,7 @@ function rankSpec(id: string, tab: string, rows: Row[], from: string, to: string
 }
 
 export default async function SummaryPage({ searchParams }: { searchParams: SearchParams }) {
-  const { ctx, adjusted, sel } = await pageCtx(searchParams);
+  const { ctx, adjusted, sel } = await pageCtx(searchParams, { home: true });
   const { from, to } = ctx.filters;
   const esbOn = sel.esb;
   const smdOn = smdActive(sel, ctx.filters, null);

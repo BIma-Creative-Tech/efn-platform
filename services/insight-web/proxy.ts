@@ -11,9 +11,18 @@ import { buildCsp } from './lib/csp';
 import { authenticate } from './lib/gate';
 import { getConfig, getKey } from './lib/runtime';
 import { SESSION_COOKIE, clearCookieHeader } from './lib/session';
+import { FNB_DENIAL_PATH, fnbRouteDenial } from './lib/fnb-personas';
 import { DENIAL_PATH, smRouteDenial } from './lib/sm-personas';
 
-const PUBLIC_PATHS = new Set(['/belum-aktif', '/sesi-berakhir', '/keluar', '/sm-belum-aktif', '/tidak-berwenang', '/buka-ulang']);
+const PUBLIC_PATHS = new Set([
+  '/belum-aktif',
+  '/sesi-berakhir',
+  '/keluar',
+  '/sm-belum-aktif',
+  '/fnb-belum-aktif',
+  '/tidak-berwenang',
+  '/buka-ulang',
+]);
 
 // Rewrite internal ke halaman publik (URL di browser tetap). Redirect dengan Location relatif membuat proxy Next 16
 // melempar `TypeError: Invalid URL` (500, ditemukan uji E2E G42); URL absolut dari request.url akan memuat host
@@ -57,6 +66,7 @@ export function proxy(request: NextRequest): NextResponse {
       getKey('session'),
       Math.floor(Date.now() / 1000),
       cfg.acceptEit1,
+      cfg.acceptEit2,
     );
     if (auth.status === 'disabled' || auth.status === 'misconfigured') {
       return rewriteTo(request, '/belum-aktif', csp, nonce, false);
@@ -66,6 +76,9 @@ export function proxy(request: NextRequest): NextResponse {
     // Lapis pertama akses persona (lapis kedua di halaman: lib/sm-page.ts). Rewrite = status 200 + halaman ramah.
     const denial = smRouteDenial(path, auth.session, cfg.smEnabled);
     if (denial) return rewriteTo(request, DENIAL_PATH[denial], csp, nonce, false);
+    // G52 (§28.15.9): rute /fnb/* + penutupan halaman F&B lain untuk sesi ber-cabang. Tidak membaca INSIGHT_SM_ENABLED.
+    const fnbDenial = fnbRouteDenial(path, auth.session, cfg.fnbEnabled);
+    if (fnbDenial) return rewriteTo(request, FNB_DENIAL_PATH[fnbDenial], csp, nonce, false);
   }
 
   const requestHeaders = new Headers(request.headers);

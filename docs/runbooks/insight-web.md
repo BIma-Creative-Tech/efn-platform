@@ -210,6 +210,21 @@ bersamaan; satu halaman 9–13 query, antrean maks 200, tunggu maks 20 dtk). Cli
 `insight_scope_key` clickhouse-init ≠ insight-web (§4.3 belum lengkap), row policy belum terpasang (clickhouse-init
 gagal), atau mart ESB belum terisi (cek halaman *Kualitas data* / runbook esb-extract.md §5).
 
+### Rilis G52 (persona F&B, token `eit3`; docs/04 §28.15.14) — urutan wajib
+1. Rilis `clickhouse-init` + insight-web **bersamaan**. Fallback `SQL_efn_sig` v1 dihapus, jadi insight-web lama yang
+   bertemu policy baru (atau sebaliknya) membuat semua blok ESB kosong.
+2. Upgrade Odoo **dua modul sekaligus**: `odoo -d efn_odoo --no-http --stop-after-init -u efn_insight,efn_insight_sm`.
+   Jangan `-u efn_insight_sm` saja. Uji upgrade lokal 22 Nov 2026 (DB dari `origin/main`, admin anggota exec + store):
+   - Dua modul sekaligus: id grup dan keanggotaan tetap, xmlid pindah ke `efn_insight`.
+   - `efn_insight_sm` saja: keanggotaan tetap, tetapi `efn_insight` tertinggal di 19.0.2.0.0 dan registry gagal
+     (`Model efn.insight.esb.branch has no table`). Pulihkan dengan menjalankan perintah langkah 2.
+3. Segera setelah langkah 2, rotasi `insight_session_key` (§4.2) agar cookie `eis2` lama tidak berlaku lagi
+   (SEC-G52-03). Tanpa rotasi, kepala toko yang kini store-only masih membawa cakupan PT penuh sampai sesinya
+   kedaluwarsa (paling lama 2 jam). Setelah itu set `INSIGHT_ACCEPT_EIT2=false`.
+4. `INSIGHT_FNB_PERSONA_ENABLED` tetap `false` sampai pemetaan cabang ESB per kepala toko terisi (Odoo: Pengaturan →
+   Pengguna & Perusahaan → *Cabang ESB (Insight)*, impor CSV dari `efn_insight.v_esb_branch_list`). Di production, flag ini butuh izin
+   Superadmin (`EFN_GATED_FEATURES`).
+
 ## 7. Data pribadi & retensi
 
 - Cookie memuat `sub` (id user Odoo) + nama tampilan (≤ 64 karakter), tanpa email/login/telepon; tidak ada sesi di

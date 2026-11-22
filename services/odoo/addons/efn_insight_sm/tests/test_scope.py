@@ -84,6 +84,16 @@ class TestInsightSmScope(TransactionCase):
                 self.assertEqual(scope["personas"], [persona])
                 self.assertEqual(self._token_payload(user)["roles"], [persona, "user"])
 
+    def test_hook_uses_g_prime_from_controller(self):
+        # G52 (docs/04 §28.15.4 butir 1): controller mengirim G'; hook memakai itu, bukan grup user.
+        user = self.make_user("efn_sm_scope_gprime", ["marketing", "store"])
+        user.sudo().efn_outlet_warehouse_ids = [Command.set([self.outlet1.id])]
+        g_prime, suppressed = it.suppress_store(user._efn_insight_personas())
+        self.assertEqual((set(g_prime), suppressed), ({"marketing"}, True))
+        scope = user.with_user(user)._efn_insight_sm_scope(personas=g_prime)
+        self.assertEqual(scope["personas"], ["marketing"])
+        self.assertEqual(user.with_user(user)._efn_insight_sm_scope(personas=frozenset())["personas"], [])
+
     def test_category_cats(self):
         user = self.make_user("efn_sm_scope_cat", ["category"])
         user.sudo().efn_insight_categ_ids = [Command.set([self.categ_b.id, self.categ_a.id])]

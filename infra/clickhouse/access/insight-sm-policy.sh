@@ -4,7 +4,7 @@
 #
 #     . /init/access/insight-sm-policy.sh
 #
-# tepat SETELAH loop policy v_esb_* dan SEBELUM `unset INSIGHT_KEY INSIGHT_SIG` (butuh $INSIGHT_KEY tervalidasi hex >= 64
+# tepat SETELAH policy v_esb_* (insight-esb-policy.sh, G52) dan SEBELUM `unset INSIGHT_KEY` (butuh $INSIGHT_KEY tervalidasi hex >= 64
 # dan $CH = klien TLS admin). Policy dibuat dengan --log_queries=0 (SEC-191: kunci tidak masuk system.query_log).
 # Fail closed: kunci/kelas/persona tidak sah -> init gagal; daftar view di bawah = tabel §28.13.9 (satu sumber, diuji
 # services/etl/tests/test_insight_sm_access.py terhadap access/insight-sm-access.sql).

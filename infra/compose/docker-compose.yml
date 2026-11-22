@@ -978,10 +978,12 @@ services:
       # insight_sso_key) yang dibawa BROWSER ke insight-web (POST form). Odoo tidak pernah menghubungi insight-web (tanpa
       # network ke sana). Kill switch default false; URL wajib https (check-encryption.sh).
       INSIGHT_ENABLED: ${INSIGHT_ENABLED:-false}
-      # G47 (docs/04 §28.13.12): token SSO Insight: 2 = eit2, "1" = rollback eit1 (SEC-G47-02).
-      EFN_INSIGHT_TOKEN_VERSION: ${EFN_INSIGHT_TOKEN_VERSION:-2}
+      # G52 (docs/04 §28.15.10): token SSO Insight default 3 = eit3; "2" = rollback eit2, "1" = rollback eit1 (SEC-G47-02).
+      EFN_INSIGHT_TOKEN_VERSION: ${EFN_INSIGHT_TOKEN_VERSION:-3}
       # G47 (docs/04 §28.13.12): bagian supermarket token eit2; hanya "true" persis. Satu saklar dengan insight-web.
       INSIGHT_SM_ENABLED: ${INSIGHT_SM_ENABLED:-false}
+      # G52 (docs/04 §28.15.10): persona F&B (Eksekutif/Toko/Marketing); hanya "true" persis, default false. Satu saklar dengan insight-web.
+      INSIGHT_FNB_PERSONA_ENABLED: ${INSIGHT_FNB_PERSONA_ENABLED:-false}
       EFN_INSIGHT_URL: https://insight.${TRAEFIK_DOMAIN:-efn.local}
       EFN_INSIGHT_SSO_KEY_FILE: /run/secrets/insight_sso_key
     # Kunci PII Odoo (odoo_pii_*) TIDAK di base: overlay docker-compose.pii.yml (production, L-59) / dev compose.
@@ -1824,8 +1826,12 @@ services:
       INSIGHT_ENABLED: ${INSIGHT_ENABLED:-false}
       # G47: INSIGHT_ACCEPT_EIT1=false setelah semua Odoo menerbitkan eit2 (tutup jalur downgrade, SEC-G47-02).
       INSIGHT_ACCEPT_EIT1: ${INSIGHT_ACCEPT_EIT1:-true}
+      # G52 (docs/04 §28.15.10): eit2/eis2 diterima selama true (rollout); set false setelah Odoo 19.0.3.0.0 di semua env.
+      INSIGHT_ACCEPT_EIT2: ${INSIGHT_ACCEPT_EIT2:-true}
       # G47 (docs/04 §28.13.12): halaman/query supermarket; hanya "true" persis, default false (satu saklar dengan Odoo).
       INSIGHT_SM_ENABLED: ${INSIGHT_SM_ENABLED:-false}
+      # G52 (docs/04 §28.15.10): halaman /fnb/*; hanya "true" persis, default false (satu saklar dengan Odoo).
+      INSIGHT_FNB_PERSONA_ENABLED: ${INSIGHT_FNB_PERSONA_ENABLED:-false}
       # ClickHouse HTTPS terverifikasi CA internal (NODE_EXTRA_CA_CERTS); APP_ENV=production menolak non-https.
       CH_URL: https://clickhouse:8443
       CH_USER: efn_insight

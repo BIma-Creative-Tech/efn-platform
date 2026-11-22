@@ -4,6 +4,7 @@
  * halaman (lapis kedua), dan layout.
  */
 import { esbCodesOf, isPersona, personasOf, smCodesOf, type Persona } from './claims';
+import { FNB_NAV, fnbNavItems, isBranchScoped } from './fnb-personas';
 import { FNB_ITEMS, NAV, SHARED_HREFS, SUMMARY_ITEMS, type NavItem } from './page-filters';
 
 export const PERSONA_ROUTES: Readonly<Record<Persona, string>> = {
@@ -52,20 +53,22 @@ export const DENIAL_PATH: Readonly<Record<SmDenial, string>> = {
 };
 
 export interface SmSessionLike {
-  v: 1 | 2;
+  v: 1 | 2 | 3;
   roles: readonly string[];
   codes: readonly string[];
 }
 
 /**
  * Keputusan akses halaman persona (null = boleh). Urutan: flag INSIGHT_SM_ENABLED -> sesi eis1 (tanpa wids/persona; minta
- * buka ulang dari Odoo) -> persona ada di `roles`. Q-INS-S9 (exec membuka halaman persona lain): default TIDAK.
+ * buka ulang dari Odoo) -> kode SM ada (G52: sesi F&B berpersona, mis. kepala toko F&B, bukan sesi supermarket) -> persona
+ * ada di `roles`. Q-INS-S9 (exec membuka halaman persona lain): default TIDAK.
  */
 export function smRouteDenial(pathname: string, session: SmSessionLike, smEnabled: boolean): SmDenial | null {
   const persona = personaOfPath(pathname);
   if (persona === null) return null;
   if (!smEnabled) return 'sm-belum-aktif';
-  if (session.v !== 2) return 'buka-ulang';
+  if (session.v < 2) return 'buka-ulang';
+  if (smCodesOf(session.codes).length === 0) return 'tidak-berwenang';
   return session.roles.includes(persona) ? null : 'tidak-berwenang';
 }
 
@@ -95,10 +98,10 @@ export function homePath(s: { codes: readonly string[]; roles: readonly string[]
  * di server), layout (chip + daftar cabang), dan halaman. Menggantikan chip tautan `smFilterLinks` (PR #133).
  */
 export function smdAllowed(
-  s: { v: 1 | 2; codes: readonly string[]; roles: readonly string[] },
+  s: { v: 1 | 2 | 3; codes: readonly string[]; roles: readonly string[] },
   smEnabled: boolean,
 ): boolean {
-  return s.v === 2 && execSmd(s, smEnabled);
+  return s.v >= 2 && execSmd(s, smEnabled);
 }
 
 /** Syarat inti (tanpa versi sesi; eis1 tidak pernah membawa kode SM): flag SM, persona exec, kode SM. */
@@ -130,21 +133,33 @@ const SM_ORDER: readonly Persona[] = ['exec', 'store', 'dc', 'category', 'market
  * Sesi exec ber-SMD + PT F&B: halaman bersama tampil di dua grup, dibedakan `scope` (tautan F&B tanpa SMD, tautan Supermarket
  * `pt=SMD`). Eksekutif/Toko/Marketing versi F&B menyusul (gelombang terpisah). Grup kosong disembunyikan.
  */
-export function navGroups(s: { codes: readonly string[]; roles: readonly string[] }, smEnabled: boolean): NavGroup[] {
+export function navGroups(
+  s: { codes: readonly string[]; roles: readonly string[]; v?: number; brs?: readonly string[] },
+  smEnabled: boolean,
+  fnbEnabled = false,
+): NavGroup[] {
   const esb = hasEsbAccess(s);
+  // G52 (§28.15.9): sesi ber-cabang (kepala toko F&B) hanya melihat grup F&B berisi "Toko"; Ringkasan dan grup lain disembunyikan.
+  // Flag F&B mati -> tidak ada menu sama sekali (halamannya pun ditolak proxy).
+  if (isBranchScoped(s)) {
+    return fnbEnabled && esb ? [{ id: 'fnb', title: 'Food & Beverage', items: [FNB_NAV.store] }] : [];
+  }
   const smd = execSmd(s, smEnabled);
   const groups: NavGroup[] = [];
 
   if (esb || smd) groups.push({ id: 'summary', title: 'Ringkasan', items: SUMMARY_ITEMS });
 
   if (esb) {
-    const items = FNB_ITEMS.map((i): NavItem => (smd && SHARED_HREFS.includes(i.href) ? { ...i, scope: 'esb' } : i));
+    // G52: item persona F&B (Eksekutif, Toko, Marketing) di urutan teratas grup F&B bila flag aktif dan sesi memilikinya.
+    const persona = fnbEnabled ? fnbNavItems(s) : [];
+    const items = [...persona, ...FNB_ITEMS.map((i): NavItem => (smd && SHARED_HREFS.includes(i.href) ? { ...i, scope: 'esb' } : i))];
     groups.push(smd ? { id: 'fnb', title: 'Food & Beverage', items, esbCodes: esbCodesOf(s.codes).sort() } : { id: 'fnb', title: 'Food & Beverage', items });
   } else if (smd) {
     groups.push({ id: 'fnb', title: 'Food & Beverage', items: [{ ...NAV.distribution, label: 'Distribusi CK / DC' }] });
   }
 
-  const have = new Set(sessionPersonas(s.roles));
+  // Menu persona SM hanya untuk sesi yang punya kode SM (G52: sesi F&B berpersona tidak mendapat menu supermarket).
+  const have = new Set(smCodesOf(s.codes).length > 0 ? sessionPersonas(s.roles) : []);
   const smItems: NavItem[] = smEnabled
     ? SM_ORDER.filter((p) => have.has(p)).map((p) => ({ href: PERSONA_ROUTES[p], label: NAV_LABEL[p].label, icon: NAV_LABEL[p].icon }))
     : [];

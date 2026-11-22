@@ -139,7 +139,8 @@ export interface KpiProps {
   label: string;
   value: number | null;
   fmt: ValueFmt;
-  delta?: { value: number | null; kind: 'pct' | 'pp'; goodWhen: 'up' | 'down' | 'neutral' };
+  /** `compareLabel`: pembanding yang dibacakan pembaca layar (bawaan "periode lalu"; F&B memakai "tahun lalu"/"minggu lalu"). */
+  delta?: { value: number | null; kind: 'pct' | 'pp'; goodWhen: 'up' | 'down' | 'neutral'; compareLabel?: string };
   spark?: number[];
   status?: Status;
   info?: ReactNode;
@@ -159,7 +160,7 @@ export function KpiTile({ label, value, fmt, delta, spark, status, info, note, p
       <dd>
         <span className="kpi-value">{value === null ? 'n/a' : fmtValue(fmt, value)}</span>
         {status && status !== 'neutral' ? <StatusPill status={status} /> : null}
-        {delta ? <DeltaBadge value={delta.value} kind={delta.kind} goodWhen={delta.goodWhen} /> : null}
+        {delta ? <DeltaBadge value={delta.value} kind={delta.kind} goodWhen={delta.goodWhen} compareLabel={delta.compareLabel} /> : null}
         {note ? <span className="kpi-note">{note}</span> : null}
         {parts && parts.length > 0 ? (
           <ul className="kpi-parts" aria-label={`Rincian per segmen: ${label}`}>

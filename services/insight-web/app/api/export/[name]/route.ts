@@ -43,6 +43,8 @@ export async function GET(req: Request, ctx: { params: Promise<{ name: string }>
   // Ekspor ESB hanya untuk sesi yang punya kode ESB (SMD-saja: tidak ada data ESB; G47).
   const esb = esbCodesOf(auth.session.codes);
   if (esb.length === 0) return empty(403);
+  // G52: tabel ekspor ini tingkat PT; sesi ber-cabang (kepala toko F&B) ditolak (row policy kelas PT juga mengembalikan 0 baris).
+  if (auth.session.brs.length > 0) return empty(403);
   const { filters, prev } = parseFilters(new URL(req.url).searchParams, esb, new Date());
   const c: Ctx = { session: auth.session, filters, prev, pool: 'export' };
   const audit = { table: name, query: TABLE_QUERIES[name], pt: filters.pt.join(','), from: filters.from, to: filters.to, sub: auth.session.sub };

@@ -2,10 +2,10 @@
  * Setting cakupan ClickHouse (docs/04 §26.7, pola text2sql §23.3, kunci BERBEDA = insight_scope_key):
  *   SQL_efn_cids = cids urut naik dipisah koma (boleh kosong untuk all_brands tanpa company)
  *   SQL_efn_codes = kode PT urut naik dipisah koma
- *   SQL_efn_sig  = hex huruf kecil SHA256(key + "|" + cids + "|" + codes); key = byte ASCII string hex (bukan hex-decode)
+ *   key = byte ASCII string hex (bukan hex-decode). Tanda tangan view ESB: lihat `scopeSettings` (sig3, §28.15.6).
  * Dihitung dari cookie sesi terverifikasi; tidak pernah dari input browser.
  */
-import { ESB_CODES, PERSONAS, SM_CODES, personasOf, smCodesOf } from './claims';
+import { ESB_CODES, PERSONAS, SM_CODES, parseBrs, personasOf, smCodesOf } from './claims';
 import { sha256Hex } from './hmac';
 import type { Session } from './session';
 
@@ -56,13 +56,20 @@ export function scopeSettingsSm(
   };
 }
 
+/**
+ * Setting cakupan view ESB `efn_insight.v_esb_*` (docs/04 §28.15.6, G52; menggantikan `SQL_efn_sig` v1 untuk Insight):
+ *   SQL_efn_brs  = `brs` sesi digabung koma, urutan token (boleh string kosong)
+ *   SQL_efn_sig3 = lower(hex(SHA256(KEY + "|" + cids + "|" + codes + "|" + brs)))   KEY = byte ASCII string hex
+ * `codes` = codes ∩ ESB_CODES. Format `brs` dijaga ulang di sini (regex yang sama dengan row policy; urut naik ASCII).
+ */
 export interface ScopeSettings {
   SQL_efn_cids: string;
   SQL_efn_codes: string;
-  SQL_efn_sig: string;
+  SQL_efn_brs: string;
+  SQL_efn_sig3: string;
 }
 
-export function scopeSettings(cids: readonly number[], codes: readonly string[], key: string): ScopeSettings {
+export function scopeSettings(cids: readonly number[], codes: readonly string[], brs: readonly string[], key: string): ScopeSettings {
   const allowed: ReadonlySet<string> = new Set(ESB_CODES);
   for (const c of codes) {
     if (!allowed.has(c)) throw new Error('scope: kode PT tidak dikenal');
@@ -70,11 +77,14 @@ export function scopeSettings(cids: readonly number[], codes: readonly string[],
   for (const id of cids) {
     if (!Number.isSafeInteger(id) || id <= 0) throw new Error('scope: company id tidak valid');
   }
+  if (parseBrs(brs) === null) throw new Error('scope: cabang tidak valid');
   const cidsStr = Array.from(new Set(cids)).sort((a, b) => a - b).join(',');
   const codesStr = Array.from(new Set(codes)).sort().join(',');
+  const brsStr = brs.join(',');
   return {
     SQL_efn_cids: cidsStr,
     SQL_efn_codes: codesStr,
-    SQL_efn_sig: sha256Hex(`${key}|${cidsStr}|${codesStr}`),
+    SQL_efn_brs: brsStr,
+    SQL_efn_sig3: sha256Hex(`${key}|${cidsStr}|${codesStr}|${brsStr}`),
   };
 }

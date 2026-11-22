@@ -105,9 +105,14 @@ CONTROL_SPECS = {
             "share",
             "efn_outlet_warehouse_ids",
             "efn_insight_categ_ids",
+            # G52 (docs/04 §28.15.3): cabang ESB kepala toko F&B (efn_insight, klaim brs Insight).
+            "efn_insight_esb_branch_ids",
         ),
         None,
     ),
+    # G52 (docs/04 §28.15.3): pemetaan cabang ESB -> PT = hak akses kepala toko F&B. Model belum terpasang -> dilewati
+    # (`_efn_get_rule`: model tidak ada di env). Log tidak ikut GC (PROTECTED_LOG_MODELS).
+    "efn.insight.esb.branch": (("company_id", "esb_brand", "esb_branch_id", "is_store", "active"), None),
     # Grup: anggota, implikasi dua arah, rule/menu/ACL terkait, nama. None = semua field memenuhi syarat
     # (o2m `model_access` tidak ikut — perubahannya tercatat di ir.model.access sendiri).
     "res.groups": (None, None),

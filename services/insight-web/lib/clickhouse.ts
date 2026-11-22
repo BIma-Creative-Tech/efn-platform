@@ -143,7 +143,7 @@ async function execute<T>(
  */
 export async function chQuery<T>(
   name: QueryName,
-  session: Pick<Session, 'cids' | 'codes' | 'sub'>,
+  session: Pick<Session, 'cids' | 'codes' | 'brs' | 'sub'>,
   bag: ParamBag,
   pool: ChPool = 'page',
 ): Promise<T[]> {
@@ -153,7 +153,7 @@ export async function chQuery<T>(
     (scopeKey) => {
       const esb = esbCodesOf(session.codes);
       if (esb.length === 0) throw new ParamError('sesi tanpa kode ESB');
-      return buildChSearchParams(name, scopeSettings(session.cids, esb, scopeKey), bag);
+      return buildChSearchParams(name, scopeSettings(session.cids, esb, session.brs, scopeKey), bag);
     },
     session,
     pool,

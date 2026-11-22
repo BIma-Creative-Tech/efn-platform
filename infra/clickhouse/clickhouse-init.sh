@@ -422,13 +422,14 @@ echo "CREATE ROW POLICY OR REPLACE efn_t2s_scope ON efn_t2s.v_loyalty_daily USIN
   | $CH --log_queries=0 --multiquery
 unset SIG
 
-# G42 (kontrak G42 §B): row policy cakupan PT pada SETIAP view efn_insight (semua ber-company_code). insight-web
-# mengirim SQL_efn_cids / SQL_efn_codes / SQL_efn_sig dengan format SAMA dengan text2sql, tetapi kunci = secret
-# insight_scope_key (hex, BEDA dari text2sql_scope_key -> tanda tangan satu service tidak berlaku di service lain).
-# Predikat hanya company_code (kode ESB: PB/WTZ/BCF/BCR/IMD/CUP; IMD/CUP = company Odoo sejak G43, tetapi scope tetap per kode ESB) + tanda tangan;
-# cids tetap ikut ditandatangani. `company_code != ''` = defense in depth (C4 §26.13: splitByChar(',', '') = [''] akan
-# mencocokkan baris tanpa PT bila codes kosong ber-sig sah). WAJIB seperti text2sql_scope_key: secret hilang/tidak
-# valid = init gagal.
+# G42 (kontrak G42 §B) + G52 (docs/04 §28.15.6-§28.15.7, L-243): row policy cakupan pada SETIAP view efn_insight
+# (semua ber-company_code). Kunci = secret insight_scope_key (hex, BEDA dari text2sql_scope_key -> tanda tangan satu
+# service tidak berlaku di service lain). View ESB: insight-web mengirim SQL_efn_cids / SQL_efn_codes / SQL_efn_brs /
+# SQL_efn_sig3 = SHA256(kunci|cids|codes|brs) (G52 menggantikan SQL_efn_sig v1 untuk insight; text2sql tidak berubah).
+# Predikat company_code (kode ESB: PB/WTZ/BCF/BCR/IMD/CUP; IMD/CUP = company Odoo sejak G43, tetapi scope tetap per kode
+# ESB) + tanda tangan + kelas PT (brs wajib kosong) atau BR (cabang "<brand>:<branch_id>" ∈ brs); cids tetap ikut
+# ditandatangani. `company_code != ''` = defense in depth (C4 §26.13: splitByChar(',', '') = [''] akan mencocokkan baris
+# tanpa PT bila codes kosong ber-sig sah). WAJIB seperti text2sql_scope_key: secret hilang/tidak valid = init gagal.
 # Kunci = string hex apa adanya (byte ASCII, bukan hex-decode; `$(cat)` membuang newline akhir), [0-9a-fA-F] >= 64
 # karakter (docs/04 §26.7/§26.10) -- divalidasi sebelum disisipkan ke DDL (charset hex = aman sebagai literal SQL).
 INSIGHT_KEY="$(cat /run/secrets/insight_scope_key)"
@@ -438,16 +439,18 @@ esac
 [ "${#INSIGHT_KEY}" -ge 64 ] || { echo "clickhouse-init: insight_scope_key terlalu pendek (min 64 hex)" >&2; exit 1; }
 [ "$INSIGHT_KEY" != "$SCOPE_KEY" ] || { echo "clickhouse-init: insight_scope_key tidak boleh sama dengan text2sql_scope_key" >&2; exit 1; }
 unset SCOPE_KEY
-INSIGHT_SIG="getSetting('SQL_efn_sig') = lower(hex(SHA256(concat('${INSIGHT_KEY}', '|', getSetting('SQL_efn_cids'), '|', getSetting('SQL_efn_codes')))))"
-# Daftar = semua view di insight-access.sql (diuji test_insight_access.py) + diverifikasi ke system.tables di bawah.
-for v in v_esb_sales_daily v_esb_sales_branch_daily v_esb_payment_daily v_esb_flow_daily v_esb_menu_mix \
-         v_esb_data_quality v_esb_branch_list v_esb_product_list v_esb_movement_daily v_esb_coverage; do
-  echo "CREATE ROW POLICY OR REPLACE efn_insight_scope ON efn_insight.${v} USING company_code != '' AND ${FMT} AND ${CODES} AND ${INSIGHT_SIG} TO insight_reader;"
-done | $CH --log_queries=0 --multiquery
+# G52 (§28.15.7): 14 policy ESB (9 kelas PT + 5 kelas BR). Daftar view + predikat = access/insight-esb-policy.sh (satu
+# sumber, juga dimuat harness E1-E9); jumlah dikunci di sini dan di test_insight_access.py (diubah bersama). Semua view
+# efn_insight diverifikasi punya policy ke system.row_policies di bawah.
+# shellcheck disable=SC2034  # dibaca file yang di-source di bawah
+ESB_POLICY_EXPECTED=14
+# shellcheck source=/dev/null  # file di-mount saat runtime (/init/access)
+. /init/access/insight-esb-policy.sh
+unset ESB_POLICY_EXPECTED
 # G47 (docs/04 §28.13.7, L-188): row policy efn_insight_scope untuk v_sm_* (butuh $INSIGHT_KEY tervalidasi di atas).
 # shellcheck source=/dev/null  # file di-mount saat runtime (/init/access)
 . /init/access/insight-sm-policy.sh
-unset INSIGHT_KEY INSIGHT_SIG
+unset INSIGHT_KEY
 # Fail closed: view efn_insight tanpa row policy = semua PT terbaca (grant efn_insight.* wildcard). Bila ada, cabut
 # grant role lalu gagalkan init.
 INSIGHT_MISSING="$($CH --query "SELECT name FROM system.tables WHERE database = 'efn_insight' AND name NOT IN

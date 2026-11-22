@@ -42,6 +42,30 @@ perubahan filter, dan "Coba lagi"; `.shell` diberi `inert` sehingga menu/halaman
 Suspense: commit = semua query selesai) atau transisi selesai; batas aman 90 dtk. Muat awal memakai `app/loading.tsx` (layar penuh). Visual: batang
 animasi yang bereaksi ke kursor/sentuhan, tahapan, detik berjalan, progres perkiraan, tip; `prefers-reduced-motion` mematikan animasi.
 
+## Persona F&B: Eksekutif, Toko, Marketing (G52, docs/04 §28.15; ADR-040, ADR-041 §3.6, Proposed)
+Tiga halaman F&B dari data ESB di grup sidebar Food & Beverage (item teratas), aktif hanya bila **`INSIGHT_FNB_PERSONA_ENABLED=true`** (flag terpisah dari
+`INSIGHT_SM_ENABLED`; `lib/fnb-personas.ts fnbRouteDenial` tidak membaca flag SM).
+
+| Rute | Persona | Isi | Query (`lib/queries.ts`) |
+|---|---|---|---|
+| `/fnb/exec` | `exec` | margin kotor (net - HPP), YoY, margin 13 bulan, perbandingan brand/PT, biaya MDR, peringkat cabang | `fexec_*` (6) |
+| `/fnb/store` | `store` | penjualan hari acuan vs minggu lalu, tren 7 hari, menu terlaris, metode bayar, kiriman CK diterima; **tanpa HPP/margin/MDR** | `fstore_*` (6) |
+| `/fnb/marketing` | `marketing` | diskon (nilai, % dari kotor, per menu/cabang), kanal pembayaran (GoFood/Grab/... dari nama metode, `lib/channels.ts`), takeaway vs dine-in berlabel **perkiraan** | `fmkt_*` (6) |
+
+- **Token/sesi v3**: `eit3`/`eis3` (14/10 kunci, klaim `brs` = `<esb_brand>:<branch_id>`, urut ASCII), aturan T1..T7 di `lib/claims.ts scopeConsistentV3` (cermin Odoo),
+  T8 = regex 3000. `INSIGHT_ACCEPT_EIT2` (default `true` selama rollout; set `false` setelah Odoo 19.0.3.0.0 di semua env) mengatur penerimaan `eit2` di `/sso` **dan**
+  cookie `eis2`; sesi `eis2`/`eis1` bermakna `brs = []` dan halaman `/fnb/*` mengarahkannya ke `/buka-ulang`.
+- **Cakupan ClickHouse**: `scopeSettings(cids, codes, brs, key)` -> `SQL_efn_cids`, `SQL_efn_codes`, `SQL_efn_brs`, `SQL_efn_sig3` (SHA256 `KEY|cids|codes|brs`); `SQL_efn_sig`
+  tidak lagi dikirim Insight. **Satu rilis dengan `clickhouse-init`** (policy sig3): insight-web lama gagal tertutup terhadap view ESB baru.
+- **Kepala toko ber-cabang** (`brs` tidak kosong): hanya `/fnb/store` (+ `/glosarium`); `/` dialihkan ke `/fnb/store` (`pageCtx({home:true})`); `/sales`, `/payments`, `/flow`,
+  `/distribution`, `/forecast`, `/data-quality` dan ekspor CSV -> tidak-berwenang/403; layout tanpa FilterBar/kesegaran tingkat PT; pilihan `branch` dipotong ke `brs`;
+  menu SM tidak muncul (butuh kode SM). Chip "Kepala toko · <nama cabang>" / "· N cabang".
+- Halaman Toko memegang hari (`?day=`, bawaan = hari terakhir yang punya penjualan <= kemarin WIB, `lib/fnb-store.ts`) dan cabang (`?branch=`) lewat form GET tanpa JS.
+- Alias keluaran query G52 yang bentrok dengan nama kolom view diberi sufiks (`net_sum`, `cogs_sum`, `amount_sum`, `mdr_sum`, `method`, ...) karena alias = kolom memicu
+  alias siklik ClickHouse; kontrak §28.15.9 hanya meringkas keluaran. Parameter baru: `yoy_from`, `yoy_to`, `m_from`, `ref_day` (semua `Date`).
+- YoY: "n/a" + catatan bila `first_day` penjualan PT > awal rentang tahun lalu (`fexec_yoy_coverage`, `lib/fnb-vm.ts yoyStatus`); gagal memuat cakupan juga "n/a".
+- Halaman penolakan baru `/fnb-belum-aktif`; `smRouteDenial` kini juga menolak sesi tanpa kode SM (kepala toko F&B tidak boleh membuka `/store` supermarket).
+
 ## Filter (URL, divalidasi server; tidak valid -> bawaan + pemberitahuan)
 **Perilaku (21 Nov 2026): filter langsung berlaku**, tanpa tombol Terapkan. Chip brand ("Semua" eksplisit) dan preset tanggal memakai `router.push` seketika;
 tanggal kustom (setelah kedua tanggal sah) dan pilihan ganda cabang/kategori/produk di-debounce 400-500 ms. Rentang tanggal yang dipilih ditulis eksplisit ke URL dan
@@ -63,6 +87,8 @@ Halaman Penjualan juga memakai `sort` (`net|qty|margin`) dan `rank` (`top|bottom
 | `NODE_EXTRA_CA_CERTS` | `/run/secrets/efn_ca_crt` |
 | `PORT` / `HOSTNAME` | `3002` / `127.0.0.1` (sidecar `insight-web-tls`) |
 | `EFN_ALLOW_PLAINTEXT` | hanya dev non-production (http ke ClickHouse/Odoo) |
+| `INSIGHT_FNB_PERSONA_ENABLED` | `false`; aktif hanya string persis `true` (G52, §28.15.10). Production `false` sampai pemetaan cabang dimuat + QA/security G52 lulus |
+| `INSIGHT_ACCEPT_EIT2` | `true` (rollout G52); bila diset hanya `true` persis yang menerima `eit2`/`eis2`. Set `false` setelah Odoo 19.0.3.0.0 di semua env |
 | `INSIGHT_CH_MAX_CONCURRENCY` | `12` (1..24): semaphore query **halaman** ke ClickHouse |
 | `INSIGHT_CH_EXPORT_CONCURRENCY` | `3` (1..8): semaphore **ekspor CSV**, terpisah dari semaphore halaman (SEC-189). Gabungan <= 24 = `max_concurrent_queries_for_user` |
 
@@ -107,6 +133,11 @@ KPI agregat (`flow_summary`, `exec_sell_through`, `dist_kpi`) sengaja tidak difi
 `dq_status_board` dari katalog data-engineer **tidak dipakai** (papan status dihitung dari tabel temuan); `pay_mdr` digabung ke `pay_by_method`; `sales_menu_daily` belum dibuat.
 Ke-36 query dijalankan terhadap ClickHouse 24.8 oleh lead (18 Nov 2026, uji row policy + katalog).
 
+Query G52 (18; **belum dijalankan terhadap ClickHouse 24.8**, view `efn_insight.v_esb_store_*` belum ada sampai `21-g52-insight-fnb.sql` masuk): `fexec_kpi`,
+`fexec_margin_monthly`, `fexec_pt_compare`, `fexec_mdr_cost`, `fexec_branch_rank`, `fexec_yoy_coverage`, `fstore_kpi`, `fstore_daily_vs_lastweek`, `fstore_top_menu`,
+`fstore_payment_mix`, `fstore_ck_receipts`, `fstore_branch_list`, `fmkt_discount_kpi`, `fmkt_discount_trend`, `fmkt_discount_menu`, `fmkt_discount_branch`,
+`fmkt_channel_mix`, `fmkt_takeaway_share`. Query `fstore_*` tidak boleh memuat `cogs`/`mdr` (diuji statis di `tests/fnb-queries.test.ts`).
+
 ## Dev
 ```
 docker run --rm -v "$(pwd -W)":/app -w /app node:22-alpine sh -c "npm install && npm test && npm run lint && npm run typecheck && npm run build"
@@ -115,5 +146,7 @@ Dev lokal membutuhkan ClickHouse (profil `data`) dan secret; tanpa itu halaman m
 Cookie `__Host-` + `Secure` hanya diterima browser di `https://` atau `http://localhost`.
 
 ## Belum dibangun / belum diverifikasi
+G52 (22 Nov 2026): kode ditulis tanpa dijalankan (tanpa Node di host): Vitest, lint, typecheck, build, dan SQL 18 query belum dijalankan; payload_b64/sig_b64 vektor D..G
+belum dicocokkan dengan builder Odoo; ekspor CSV halaman F&B persona belum dibuat (C3); UX/a11y halaman baru belum diuji di browser/pembaca layar.
 Lihat `docs/agent-reports/efn-frontend-engineer.md` dan `efn-qa-engineer.md` (G42). Ringkas: Vitest + lint + typecheck + build + E2E SSO->halaman (31/31) sudah
 dijalankan lead; CSP + ECharts SVG belum diuji di browser nyata / pembaca layar; panel samping menu (drawer), heatmap diverging distribusi, ekspor CSV per kartu chart, fokus-trap drawer mobile, Sankey (diganti bar bertahap).

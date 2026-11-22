@@ -97,6 +97,38 @@ class TestInsightSmSso(HttpCase):
         response = self._open("efn_sm_sso_exec", EFN_INSIGHT_TOKEN_VERSION="1")
         self.assertIn('data-efn-insight-state="no_company"', response.text)
 
+    # ------------------------------------------------------------------ G52 (eit3, docs/04 §28.15.4-§28.15.5)
+    def _payload_v3(self, response):
+        self.assertEqual(response.status_code, 200)
+        match = re.search(r'value="(eit3\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]{43})"', response.text)
+        self.assertTrue(match, "halaman form harus berisi token eit3")
+        return it.verify_token_v3(match.group(1), TEST_KEY, now=int(time.time()))
+
+    def test_v3_store_smd_outlet(self):
+        # Kepala toko SMD (tanpa PT ESB): brs kosong, wids outlet (T1/T6).
+        for fnb in ("true", "false"):
+            with self.subTest(fnb=fnb):
+                payload = self._payload_v3(
+                    self._open("efn_sm_sso_store", EFN_INSIGHT_TOKEN_VERSION="3", INSIGHT_FNB_PERSONA_ENABLED=fnb)
+                )
+                self.assertEqual(payload["roles"], ["store", "user"])
+                self.assertEqual((payload["wids"], payload["brs"]), ([self.outlet1.id], []))
+
+    def test_v3_exec_smd(self):
+        payload = self._payload_v3(
+            self._open("efn_sm_sso_exec", EFN_INSIGHT_TOKEN_VERSION="3", INSIGHT_FNB_PERSONA_ENABLED="true")
+        )
+        self.assertEqual(payload["roles"], ["exec", "user"])
+        self.assertEqual(payload["wids"], [0, *self.smd_wh_ids])
+
+    def test_v3_store_without_outlet_no_esb_is_no_outlet(self):
+        # Tanpa PT ESB, kepala toko SMD tanpa outlet tetap melihat pesan outlet (bukan no_branch).
+        response = self._open(
+            "efn_sm_sso_store_none", EFN_INSIGHT_TOKEN_VERSION="3", INSIGHT_FNB_PERSONA_ENABLED="true"
+        )
+        self.assertIn('data-efn-insight-state="no_outlet"', response.text)
+        self.assertNotIn('name="t"', response.text)
+
     def test_category_cats_and_scope_too_large(self):
         categs = self.env["product.category"].create([{"name": f"Uji SM SSO {i}"} for i in range(51)])
         self.cat_user.sudo().efn_insight_categ_ids = [Command.set(categs[:2].ids)]

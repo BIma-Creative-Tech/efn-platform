@@ -3170,3 +3170,57 @@ stock_account 19 tanpa SVL, `stock_move.value` saat done, jurnal `force_period_d
 - `stock.scrap.origin` dan `location_id` tersimpan seperti diberikan; `pos.order.config_id` tersimpan (search_read).
 - ETL: mart DC purchase tidak punya kolom tanggal terima → "10% terlambat" hanya terlihat di Odoo (`effective_date`).
 - Kategori dengan valuasi real-time (bila ada) → jurnal bertanggal histori; tidak dicek di DB demo.
+
+---
+
+# G52 — Insight F&B persona, cabang ESB, token `eit3` (22 Nov 2026) — BELUM DIJALANKAN
+
+Worktree `efn-platform-nav`, branch `feat/insight-nav-dual-menu`. Kontrak `docs/04` §28.15.2–§28.15.5 (v21.1,
+L-237..L-249), ADR-041 §3.6 (Proposed), fit-gap efn-odoo-functional "22 Nov 2026". Tanpa shell di sesi ini: **tidak
+ada test yang dijalankan**; lead menjalankan `--test-tags efn_insight,efn_insight_sm,efn_role,efn_audit,efn_setup_supermarket`
+di container Odoo 19 + uji upgrade DB demo SMD.
+
+## Modul & file
+- `efn_insight` 19.0.2.0.0 → **19.0.3.0.0**: `__manifest__.py`; `lib/insight_token.py` (konstanta `FNB_PERSONAS`,
+  `ESB_BRANDS`, `BRAND_COMPANY_CODES`, `MAX_BRS`, `PAYLOAD_KEYS_V3`; `suppress_store`, `is_store_only_fnb`,
+  `validate_claims_v3` T1–T7, `build_payload_v3`, `encode_token_v3` (T8), `verify_token_v3`; `validate_claims_v2`
+  direfaktor ke `_validate_common` tanpa perubahan perilaku); `lib/persona_xmlids.py` (SQL relokasi idempoten);
+  `migrations/19.0.3.0.0/pre-migrate.py`; `models/efn_insight_esb_branch.py` (baru); `models/res_users.py`
+  (`PERSONA_GROUPS`, field `efn_insight_esb_branch_ids`, `_efn_insight_personas`, hook `personas=`);
+  `controllers/main.py` (`_esb_scope`, `_user_branches`, `merge_scope_v3`, `_token_v3`, `_fnb_enabled`,
+  versi 1|2|3 default 3, info `no_branch`, audit `brs_n`); `security/efn_insight_security.xml` (+5 privilege + 5 grup
+  persona, record rule cabang); `security/ir.model.access.csv` (baru); `views/efn_insight_esb_branch_views.xml` (baru:
+  list/form/search/action, menu Settings → Users & Companies, tab "Insight" di form user); `README.md`;
+  tests `vectors_g52.json`, `test_insight_token_v3.py`, `test_insight_g52.py` (baru), `test_insight_sso.py`, `__init__.py`.
+- `efn_insight_sm` 19.0.1.0.0 → **19.0.2.0.0**: `__manifest__.py`; `security/efn_insight_sm_security.xml` (5 grup +
+  5 privilege dihapus, kpi_admin tetap); `migrations/19.0.2.0.0/pre-migrate.py`; `models/res_users.py` (hook
+  `personas=None`, persona via `_efn_insight_personas`; `STORE_COVERING_PERSONAS` tetap); `README.md`; tests
+  `common.py` (PERSONA dari `PERSONA_GROUPS`), `test_scope.py` (+G'), `test_sm_sso.py` (+3 test eit3).
+- `efn_role` 19.0.1.2.2 → **19.0.1.2.3**: `models/role_policy.py`, `tests/test_g47.py`, `README.md`.
+- `efn_audit` 19.0.1.4.0 → **19.0.1.5.0**: `models/audit_policy.py` (`CONTROL_SPECS`: field user + model cabang),
+  `tests/test_audit_g52.py` (baru), `tests/__init__.py`, `README.md`.
+- `efn_setup_supermarket` (versi tetap): `demo/res_users_insight_demo.xml`, `tests/test_setup_supermarket.py`,
+  `README.md` (xmlid → `efn_insight.*`).
+
+## Penyimpangan / tafsiran (mohon dikonfirmasi lead)
+1. `no_branch` hanya bila user punya PT ESB di `company_ids`; kepala toko SMD-only tetap `no_outlet`/`no_company`.
+2. Pencabutan store-only juga di jalur `eit1` (kontrak hanya menyebut `eit2`).
+3. Kode galat Odoo rinci `bad_brs` (N9–N11); insight-web memetakan ke `bad_claims` (dicatat di JSON `odoo_error`).
+4. N12 di JSON memakai base D dengan `brs=[]` agar hanya T3 yang dilanggar (dengan `brs` D, T6 juga gagal).
+5. `esb_branch_id` = `fields.Integer` (PG int4): > 2147483647 ditolak DB, bukan constraint 1..4294967295.
+6. Hook SM menerima G' tetapi tetap menerapkan `STORE_COVERING_PERSONAS` (idempoten; dibaca test ETL).
+7. Audit model cabang lewat `CONTROL_SPECS` (mekanisme yang sudah ada, model belum terpasang = dilewati).
+
+## Vektor (untuk insight-web)
+`services/odoo/addons/efn_insight/tests/vectors_g52.json`: D–G literal kontrak, N6–N14, input sig3 D/E. `payload_b64`,
+`sig_b64`, `sig3_hex` = `null` (tanpa runtime). Test mencetak `EFN_G52_VECTOR …` ke log; lead mengisi JSON + docs/04,
+setelah itu test Odoo meng-assert byte-exact otomatis. Frontend wajib memakai input identik dari file ini.
+
+## Belum diverifikasi / titik rawan test
+- Semua test (tidak dijalankan). Titik rawan: `registry.clear_all_caches()` + simulasi rename di `test_insight_g52`;
+  `load()` CSV (konversi Selection/Boolean/m2o-by-name); IntegrityError unik di savepoint; arsip PT PB di test
+  (aturan Odoo 19 "PT default user tidak bisa diarsipkan" — user test memakai company_id BCF).
+- Perilaku nyata `_process_end` Odoo 19 saat upgrade `-u efn_insight,efn_insight_sm` dan `-u efn_insight_sm` saja
+  (wajib uji upgrade DB demo SMD: id grup + anggota tetap).
+- Field duplikat `company_ids` (invisible) di tab Insight form user diterima validator view 19.0.
+- Langkah runbook impor CSV `docs/runbooks/esb-extract.md` dan revisi docs/04 nilai vektor: belum (di luar cakupan).

@@ -75,7 +75,8 @@ export function buildChSearchParams(name: QueryName, scope: ScopeSettings, bag: 
   const sp = new URLSearchParams(CH_FIXED_SETTINGS);
   sp.set('SQL_efn_cids', scope.SQL_efn_cids);
   sp.set('SQL_efn_codes', scope.SQL_efn_codes);
-  sp.set('SQL_efn_sig', scope.SQL_efn_sig);
+  sp.set('SQL_efn_brs', scope.SQL_efn_brs);
+  sp.set('SQL_efn_sig3', scope.SQL_efn_sig3);
   for (const p of def.params) {
     const v = bag[p];
     if (v === undefined) throw new ParamError(`parameter wajib hilang: ${p}`);

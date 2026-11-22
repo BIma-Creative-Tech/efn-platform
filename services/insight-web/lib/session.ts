@@ -13,6 +13,7 @@ import {
   isInt,
   isRecord,
   isSub,
+  parseBrs,
   parseCats,
   parseCids,
   parseCodes,
@@ -23,24 +24,30 @@ import {
   parseWids,
   cidsMatchRole,
   scopeConsistent,
+  scopeConsistentV3,
   type Code,
   type Role,
 } from './claims';
 import { hmacSha256B64Url, verifyHmacB64Url } from './hmac';
-import type { SsoPayload, SsoPayloadV2 } from './token';
+import type { SsoPayload, SsoPayloadV2, SsoPayloadV3 } from './token';
 
 export const SESSION_COOKIE = '__Host-eis';
 // 2 jam (keputusan pemilik proyek 21 Nov 2026, SEC-G47-03; sebelumnya 8 jam L-119): pencabutan cakupan lebih cepat.
 export const SESSION_TTL_SEC = 7200;
 export const SESSION_VALUE_RE = /^eis1\.[A-Za-z0-9_-]{16,2048}\.[A-Za-z0-9_-]{43}$/;
 export const SESSION_VALUE_RE_V2 = /^eis2\.[A-Za-z0-9_-]{16,3000}\.[A-Za-z0-9_-]{43}$/;
+export const SESSION_VALUE_RE_V3 = /^eis3\.[A-Za-z0-9_-]{16,3000}\.[A-Za-z0-9_-]{43}$/;
 const IAT_SKEW = 30;
 const SESSION_KEYS = ['cids', 'codes', 'exp', 'iat', 'name', 'roles', 'sub'] as const;
 const SESSION_KEYS_V2 = ['cats', 'cids', 'codes', 'exp', 'iat', 'name', 'roles', 'sub', 'wids'] as const;
+/** eis3 = tepat 10 kunci (§28.15.5): urutan wajib brs, cats, cids, codes, exp, iat, name, roles, sub, wids. */
+const SESSION_KEYS_V3 = ['brs', 'cats', 'cids', 'codes', 'exp', 'iat', 'name', 'roles', 'sub', 'wids'] as const;
 
 export interface Session {
-  /** 1 = eis1 (hanya ESB), 2 = eis2 (ESB + supermarket). Diturunkan dari prefix cookie, bukan dari payload. */
-  v: 1 | 2;
+  /** 1 = eis1 (hanya ESB), 2 = eis2 (ESB + supermarket), 3 = eis3 (+ cabang ESB, G52). Diturunkan dari prefix cookie. */
+  v: 1 | 2 | 3;
+  /** Cabang ESB yang boleh dilihat (`<esb_brand>:<branch_id>`, urut ASCII). [] = tanpa pembatasan cabang (selalu untuk eis1/eis2). */
+  brs: string[];
   cids: number[];
   codes: Code[];
   exp: number;
@@ -54,8 +61,24 @@ export interface Session {
   cats: number[];
 }
 
-export function createSessionValue(p: SsoPayload | SsoPayloadV2, key: string, nowSec: number): string {
+export function createSessionValue(p: SsoPayload | SsoPayloadV2 | SsoPayloadV3, key: string, nowSec: number): string {
   // Urutan sisipan = urut abjad (kontrak: byte-exact JSON.stringify).
+  if (p.v === 3) {
+    const payload = {
+      brs: p.brs,
+      cats: p.cats,
+      cids: p.cids,
+      codes: p.codes,
+      exp: nowSec + SESSION_TTL_SEC,
+      iat: nowSec,
+      name: p.name,
+      roles: p.roles,
+      sub: p.sub,
+      wids: p.wids,
+    };
+    const b64 = Buffer.from(JSON.stringify(payload), 'utf8').toString('base64url');
+    return `eis3.${b64}.${hmacSha256B64Url(key, `eis3.${b64}`)}`;
+  }
   if (p.v === 2) {
     const payload = {
       cats: p.cats,
@@ -97,9 +120,14 @@ function timeOk(iat: number, exp: number, nowSec: number): boolean {
   return !(iat > nowSec + IAT_SKEW || nowSec >= exp || exp - iat < 1 || exp - iat > SESSION_TTL_SEC);
 }
 
-export function verifySessionValue(value: unknown, key: string, nowSec: number, acceptV1 = true): Session | null {
+/**
+ * `acceptV1` = INSIGHT_ACCEPT_EIT1, `acceptV2` = INSIGHT_ACCEPT_EIT2 (§28.15.5; default true selama rollout G52). Sesi eis3
+ * selalu diterima. Sesi eis1/eis2 tidak pernah membawa cabang (`brs = []`).
+ */
+export function verifySessionValue(value: unknown, key: string, nowSec: number, acceptV1 = true, acceptV2 = true): Session | null {
   if (typeof value !== 'string') return null;
-  if (value.startsWith('eis2.')) return verifyV2(value, key, nowSec);
+  if (value.startsWith('eis3.')) return verifyV3(value, key, nowSec);
+  if (value.startsWith('eis2.')) return acceptV2 ? verifyV2(value, key, nowSec) : null;
   if (value.startsWith('eis1.')) return acceptV1 ? verifyV1(value, key, nowSec) : null;
   return null;
 }
@@ -121,7 +149,31 @@ function verifyV1(value: string, key: string, nowSec: number): Session | null {
   if (name === null || roles === null || cids === null || codes === null) return null;
   if (!cidsMatchRole(cids, roles)) return null;
   if (!timeOk(iat, exp, nowSec)) return null;
-  return { v: 1, cids, codes, exp, iat, name, roles, sub, wids: [], cats: [] };
+  return { v: 1, brs: [], cids, codes, exp, iat, name, roles, sub, wids: [], cats: [] };
+}
+
+function verifyV3(value: string, key: string, nowSec: number): Session | null {
+  if (!SESSION_VALUE_RE_V3.test(value)) return null;
+  const [, payloadB64, sigB64] = value.split('.');
+  if (!verifyHmacB64Url(key, `eis3.${payloadB64}`, sigB64)) return null;
+  const raw = parseJson(payloadB64);
+  if (!raw || !hasExactKeys(raw, SESSION_KEYS_V3)) return null;
+  const sub: unknown = raw.sub;
+  const iat: unknown = raw.iat;
+  const exp: unknown = raw.exp;
+  if (!isSub(sub) || !isInt(iat) || !isInt(exp)) return null;
+  const name = parseName(raw.name);
+  const roles = parseRolesV2(raw.roles);
+  const cids = parseCids(raw.cids);
+  const codes = parseCodesV2(raw.codes);
+  const wids = parseWids(raw.wids);
+  const cats = parseCats(raw.cats);
+  const brs = parseBrs(raw.brs);
+  if (name === null || roles === null || cids === null || codes === null || wids === null || cats === null || brs === null) return null;
+  if (!cidsMatchRole(cids, roles)) return null;
+  if (!scopeConsistentV3({ codes, roles, wids, cats, brs })) return null;
+  if (!timeOk(iat, exp, nowSec)) return null;
+  return { v: 3, brs, cids, codes, exp, iat, name, roles, sub, wids, cats };
 }
 
 function verifyV2(value: string, key: string, nowSec: number): Session | null {
@@ -144,7 +196,7 @@ function verifyV2(value: string, key: string, nowSec: number): Session | null {
   if (!cidsMatchRole(cids, roles)) return null;
   if (!scopeConsistent({ codes, roles, wids, cats })) return null;
   if (!timeOk(iat, exp, nowSec)) return null;
-  return { v: 2, cids, codes, exp, iat, name, roles, sub, wids, cats };
+  return { v: 2, brs: [], cids, codes, exp, iat, name, roles, sub, wids, cats };
 }
 
 const ATTRS = 'Path=/; HttpOnly; Secure; SameSite=Lax';

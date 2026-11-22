@@ -14,6 +14,10 @@ export const PAGE_FILTERS: Record<string, readonly FilterKey[]> = {
   '/data-quality': ['pt'],
   '/forecast': [],
   '/glosarium': [],
+  // G52 (§28.15.9): Eksekutif dan Marketing F&B memakai filter global; Toko memegang hari dan cabang sendiri di halamannya.
+  '/fnb/exec': ['date', 'pt', 'branch'],
+  '/fnb/marketing': ['date', 'pt', 'branch'],
+  '/fnb/store': [],
 };
 
 /**
@@ -28,7 +32,16 @@ export const DATE_NA_REASON: Record<string, string> = {
   '/data-quality': 'halaman ini menampilkan status terkini (kesegaran dan temuan terakhir), bukan angka per periode.',
   '/forecast': 'forecast memakai 8 minggu terakhir untuk evaluasi dan 14 hari ke depan untuk prediksi.',
   '/store': 'halaman ini memakai minggu berjalan (Senin s.d. hari ini) dibanding minggu lalu.',
+  '/fnb/store': 'halaman ini memakai satu hari (pilih di halaman) dibanding hari yang sama minggu lalu.',
 };
+
+/**
+ * Halaman persona F&B (`/fnb/*`, G52) hanya memakai data ESB: SMD (dan cabang `sm:`) tidak boleh ditawarkan walau sesi exec ber-SMD;
+ * server (`fnbRangePage`) memang menolak `pt=SMD` ("filter tidak valid"). Mengembalikan kode yang boleh dipilih di toolbar.
+ */
+export function selectableCodes(pathname: string, sessionCodes: readonly string[]): string[] {
+  return pathname.startsWith('/fnb/') ? sessionCodes.filter((c) => c !== 'SMD') : [...sessionCodes];
+}
 
 export function appliesTo(pathname: string, key: FilterKey, smdAllowed = false): boolean {
   if (smdAllowed && (SMD_ONLY_FILTERS[pathname] ?? []).includes(key)) return true;

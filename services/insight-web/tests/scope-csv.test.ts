@@ -6,46 +6,48 @@ import { scopeSettings } from '@/lib/scope';
 
 const sha = (s: string) => createHash('sha256').update(s, 'utf8').digest('hex');
 
-describe('scopeSettings (format = services/text2sql tests/test_scope.py)', () => {
-  it('vektor text2sql: kunci "ab"*16, cids [3,1,3], codes [PB,BCR]', () => {
+// Vektor sig3 kanonik G52 (§28.15.6): lihat juga tests/scope-sig3.test.ts.
+describe('scopeSettings (sig3, docs/04 §28.15.6)', () => {
+  it('kunci "ab"*16, cids [3,1,3], codes [PB,BCR], tanpa cabang', () => {
     const key = 'ab'.repeat(16);
-    const s = scopeSettings([3, 1, 3], ['PB', 'BCR'], key);
+    const s = scopeSettings([3, 1, 3], ['PB', 'BCR'], [], key);
     expect(s.SQL_efn_cids).toBe('1,3');
     expect(s.SQL_efn_codes).toBe('BCR,PB');
-    expect(s.SQL_efn_sig).toBe(sha(`${key}|1,3|BCR,PB`));
-    expect(s.SQL_efn_sig).toMatch(/^[0-9a-f]{64}$/);
+    expect(s.SQL_efn_brs).toBe('');
+    expect(s.SQL_efn_sig3).toBe(sha(`${key}|1,3|BCR,PB|`));
+    expect(s.SQL_efn_sig3).toMatch(/^[0-9a-f]{64}$/);
   });
 
   it('kunci = byte ASCII string hex (bukan hex-decode)', () => {
     const key = 'ab'.repeat(32);
-    const asHexBytes = createHash('sha256').update(Buffer.concat([Buffer.from(key, 'hex'), Buffer.from('|1|PB')])).digest('hex');
-    const s = scopeSettings([1], ['PB'], key);
-    expect(s.SQL_efn_sig).toBe(sha(`${key}|1|PB`));
-    expect(s.SQL_efn_sig).not.toBe(asHexBytes);
+    const asHexBytes = createHash('sha256').update(Buffer.concat([Buffer.from(key, 'hex'), Buffer.from('|1|PB|')])).digest('hex');
+    const s = scopeSettings([1], ['PB'], [], key);
+    expect(s.SQL_efn_sig3).toBe(sha(`${key}|1|PB|`));
+    expect(s.SQL_efn_sig3).not.toBe(asHexBytes);
   });
 
   it('all_brands tanpa company: cids kosong, tetap ditandatangani', () => {
     const key = 'cd'.repeat(32);
-    const s = scopeSettings([], ['BCF', 'BCR', 'CUP', 'IMD', 'PB', 'WTZ'], key);
+    const s = scopeSettings([], ['BCF', 'BCR', 'CUP', 'IMD', 'PB', 'WTZ'], [], key);
     expect(s.SQL_efn_cids).toBe('');
-    expect(s.SQL_efn_sig).toBe(sha(`${key}||BCF,BCR,CUP,IMD,PB,WTZ`));
+    expect(s.SQL_efn_sig3).toBe(sha(`${key}||BCF,BCR,CUP,IMD,PB,WTZ|`));
   });
 
   it('urutan numerik untuk cids (10 > 9)', () => {
-    expect(scopeSettings([10, 9, 2], ['PB'], 'a'.repeat(64)).SQL_efn_cids).toBe('2,9,10');
+    expect(scopeSettings([10, 9, 2], ['PB'], [], 'a'.repeat(64)).SQL_efn_cids).toBe('2,9,10');
   });
 
   it('sig bergantung pada kunci dan cakupan', () => {
-    const a = scopeSettings([1], ['PB'], 'a'.repeat(64)).SQL_efn_sig;
-    expect(a).not.toBe(scopeSettings([1, 2], ['PB'], 'a'.repeat(64)).SQL_efn_sig);
-    expect(a).not.toBe(scopeSettings([1], ['PB'], 'b'.repeat(64)).SQL_efn_sig);
+    const a = scopeSettings([1], ['PB'], [], 'a'.repeat(64)).SQL_efn_sig3;
+    expect(a).not.toBe(scopeSettings([1, 2], ['PB'], [], 'a'.repeat(64)).SQL_efn_sig3);
+    expect(a).not.toBe(scopeSettings([1], ['PB'], [], 'b'.repeat(64)).SQL_efn_sig3);
   });
 
   it('kode/id tidak valid ditolak', () => {
-    expect(() => scopeSettings([1], ['XX'], 'a'.repeat(64))).toThrow();
-    expect(() => scopeSettings([1], ["PB'; DROP"], 'a'.repeat(64))).toThrow();
-    expect(() => scopeSettings([0], ['PB'], 'a'.repeat(64))).toThrow();
-    expect(() => scopeSettings([1.5], ['PB'], 'a'.repeat(64))).toThrow();
+    expect(() => scopeSettings([1], ['XX'], [], 'a'.repeat(64))).toThrow();
+    expect(() => scopeSettings([1], ["PB'; DROP"], [], 'a'.repeat(64))).toThrow();
+    expect(() => scopeSettings([0], ['PB'], [], 'a'.repeat(64))).toThrow();
+    expect(() => scopeSettings([1.5], ['PB'], [], 'a'.repeat(64))).toThrow();
   });
 });
 

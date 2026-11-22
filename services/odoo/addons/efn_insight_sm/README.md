@@ -1,7 +1,18 @@
 # efn_insight_sm — Insight Supermarket: persona, cakupan outlet, definisi KPI per PT (G47)
 
-**Versi:** 19.0.1.0.0 · **Lisensi:** LGPL-3 · **Depends:** `stock`, `efn_insight`, `efn_assortment`, `efn_audit`
+**Versi:** 19.0.2.0.0 · **Lisensi:** LGPL-3 · **Depends:** `stock`, `efn_insight`, `efn_assortment`, `efn_audit`
 (CE + modul EFN; tanpa modul pihak ketiga — ADR-031) · **auto_install:** ya
+
+## G52 (19.0.2.0.0; docs/04 §28.15.2, L-239, ADR-041 §3.6 Proposed)
+- Kelima **grup persona** (`group_insight_{exec,category,store,dc,marketing}`) beserta privilege-nya **dipindah ke
+  `efn_insight`** dengan nama xmlid tetap: `efn_insight.group_insight_*`. Id grup dan keanggotaan user tidak berubah.
+  `migrations/19.0.2.0.0/pre-migrate.py` menjalankan SQL relokasi yang sama dengan `efn_insight` 19.0.3.0.0
+  (idempoten) agar upgrade modul ini saja tidak menghapus grup lewat `_process_end`. **Upgrade wajib
+  `-u efn_insight,efn_insight_sm` satu perintah.**
+- `group_insight_kpi_admin`, privilege-nya, dan `efn.insight.sm.kpi` tetap di sini.
+- Hook `_efn_insight_sm_scope(personas=None)` menerima G' dari controller (aturan store lintas domain L-245); `None`
+  = persona dari grup (`efn_insight` `PERSONA_GROUPS`). `STORE_COVERING_PERSONAS` tetap (dibaca test ETL).
+- Bagian "Tujuan" butir 1 di bawah menggambarkan keadaan G47; sejak G52 grup persona milik `efn_insight`.
 
 ## Tujuan
 Modul jembatan (L-187) untuk EFN Insight supermarket per persona:

@@ -20,6 +20,10 @@ export interface InsightConfig {
   smEnabled: boolean;
   /** INSIGHT_ACCEPT_EIT1 (§28.13.5): default true bila tidak diset; bila diset hanya "true" persis yang menerima eit1/eis1. */
   acceptEit1: boolean;
+  /** INSIGHT_ACCEPT_EIT2 (§28.15.5): default true (rollout G52); diset false setelah Odoo 19.0.3.0.0 di semua env. Hanya "true" persis yang menerima bila diset. */
+  acceptEit2: boolean;
+  /** INSIGHT_FNB_PERSONA_ENABLED (§28.15.10): aktif hanya string persis "true"; default false. TIDAK bergantung INSIGHT_SM_ENABLED. */
+  fnbEnabled: boolean;
   production: boolean;
   allowPlaintext: boolean;
   chUrl: string;
@@ -74,6 +78,8 @@ export function parseConfig(env: Env): InsightConfig {
     enabled: env.INSIGHT_ENABLED === 'true',
     smEnabled: env.INSIGHT_SM_ENABLED === 'true',
     acceptEit1: env.INSIGHT_ACCEPT_EIT1 === undefined || env.INSIGHT_ACCEPT_EIT1.trim() === '' ? true : env.INSIGHT_ACCEPT_EIT1 === 'true',
+    acceptEit2: env.INSIGHT_ACCEPT_EIT2 === undefined || env.INSIGHT_ACCEPT_EIT2.trim() === '' ? true : env.INSIGHT_ACCEPT_EIT2 === 'true',
+    fnbEnabled: env.INSIGHT_FNB_PERSONA_ENABLED === 'true',
     production,
     allowPlaintext,
     chUrl: ch ? `${ch.origin}${ch.pathname.replace(/\/+$/, '')}` : '',
