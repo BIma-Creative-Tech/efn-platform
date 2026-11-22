@@ -28,6 +28,8 @@
 #
 # Secret (semua lewat /run/secrets, tidak ada di env):
 #   odoo_api_key_forecast_smd     host:disabled (dibuat di Odoo, runbook §3; worker menolak `disabled`)
+#   odoo_api_key_forecast_pb      host:disabled (G46d, ADR-046 amandemen 22 Nov 2026; dipakai hanya bila PB ada di
+#                                 FORECAST_COMPANIES; key placeholder = batch PB gagal di-log, PT lain tetap jalan)
 #   tls_forecast_worker_crt/_key  pki (gen-pki.sh profil client, CN forecast-worker)
 #   clickhouse_password_forecast  random (juga di-mount clickhouse-init di base untuk CREATE USER)
 #   efn_ca_crt                    bundle CA internal (verifikasi ClickHouse & odoo-rpc-gateway)
@@ -53,7 +55,8 @@ services:
         condition: service_completed_successfully
     # Non-root eksplisit (nobody). Kode di image milik root dan hanya dibaca; tulisan hanya ke tmpfs /tmp.
     user: "65534:65534"
-    command: ["python", "-m", "efn_forecast", "run", "--company", "SMD"]
+    # G46d: daftar PT dijalankan bergiliran pada jadwal yang sama (gateway odoo_forecast maxconn 1 -> tidak paralel).
+    command: ["python", "-m", "efn_forecast", "run", "--company", "${FORECAST_COMPANIES:-SMD}"]
     environment:
       APP_ENV: ${APP_ENV:-production}
       # Kill switch §28.10 (default false di SEMUA env; production boleh true setelah backtest G44 lulus + user teknis
@@ -82,6 +85,9 @@ services:
       ODOO_RPC_TIMEOUT_SECONDS: ${FORECAST_ODOO_RPC_TIMEOUT_SECONDS:-25}
       # Satu key = satu user teknis efn_forecast_<pt> = satu company (§28.2). PT baru = secret + env + mount baru.
       ODOO_API_KEY_FORECAST_SMD_FILE: /run/secrets/odoo_api_key_forecast_smd
+      ODOO_API_KEY_FORECAST_PB_FILE: /run/secrets/odoo_api_key_forecast_pb
+      # Gudang agregat (Σ ramalan outlet) per PT; kode dicocokkan per PT. PB: P004 Central Kitchen (K25-12).
+      FORECAST_DC_CODES: ${FORECAST_DC_CODES:-SMDDC}
       # ClickHouse HTTPS 8443, CA internal, user efn_forecast_reader (SELECT efn_forecast.* saja; tanpa INSERT).
       CH_HOST: clickhouse
       CH_PORT: "8443"
@@ -96,6 +102,7 @@ services:
       HOME: /tmp
     secrets:
       - odoo_api_key_forecast_smd
+      - odoo_api_key_forecast_pb
       - tls_forecast_worker_crt
       - tls_forecast_worker_key
       - clickhouse_password_forecast
@@ -146,5 +153,6 @@ networks:
 
 secrets:
   odoo_api_key_forecast_smd: { file: ../../secrets/odoo_api_key_forecast_smd.txt }
+  odoo_api_key_forecast_pb: { file: ../../secrets/odoo_api_key_forecast_pb.txt }
   tls_forecast_worker_crt: { file: ../../secrets/tls_forecast_worker_crt.txt }
   tls_forecast_worker_key: { file: ../../secrets/tls_forecast_worker_key.txt }

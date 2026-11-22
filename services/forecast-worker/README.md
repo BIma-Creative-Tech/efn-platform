@@ -60,10 +60,14 @@ python -m efn_forecast run --company SMD --dry-run             # satu batch, tan
 python -m efn_forecast run --company SMD --once [--kind weekly_minmax]   # butuh FORECAST_ENABLED=true
 python -m efn_forecast seed-calendar --company SMD [--dry-run]
 python -m efn_forecast run --company SMD --as-of 2026-09-28 --out /out/asof.json   # G51 A6: hitung saja, tanpa RPC
+python -m efn_forecast run --company SMD,PB --once             # G46d: beberapa PT bergiliran (compose: FORECAST_COMPANIES)
 ```
 `--as-of` (G51 A6, hanya demo): batch daily seolah Minggu sebelumnya 23:00 WIB, payload tervalidasi ditulis ke file
 lalu dimuat oleh `scripts/dev/load_forecast_asof.py` (odoo shell, run `ok` nonaktif, tanpa usulan replenishment).
 Runbook: `docs/runbooks/demo-supermarket-seed.md` §8. Tanpa `--as-of` perilaku tidak berubah.
+Beberapa PT (G46d, ADR-046 amandemen 22 Nov 2026): `--company SMD,PB` menjalankan batch per PT berurutan; key per PT
+(`ODOO_API_KEY_FORECAST_<PT>_FILE`); PT yang gagal (mis. key placeholder) di-log dan PT berikutnya tetap jalan; exit 1
+bila ada yang gagal. `--as-of` hanya satu PT.
 
 ## Konfigurasi (env; secret hanya lewat `*_FILE`)
 | Env | Default |

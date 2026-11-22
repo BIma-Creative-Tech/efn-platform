@@ -40,7 +40,7 @@
 #           (egress/internal/data), tanpa read_only/cap_drop ALL; insight-web-tls --allow-cn selain traefik/blackbox-exporter;
 #           CH_URL / EFN_INSIGHT_ODOO_URL / EFN_INSIGHT_URL bukan https://; INSIGHT_ENABLED bukan boolean, atau bukan
 #           default false di render prod (insight-web + odoo)
-#   - (G44) odoo_api_key_forecast_* selain smd atau di luar forecast-worker; clickhouse_password_forecast di luar
+#   - (G44) odoo_api_key_forecast_* selain smd|pb atau di luar forecast-worker; clickhouse_password_forecast di luar
 #           clickhouse-init/forecast-worker (atau tidak di clickhouse-init); tls_forecast_worker_* di luar forecast-worker;
 #           network forecast-ch selain clickhouse/forecast-worker, forecast-rpc selain odoo-rpc-gateway/forecast-worker;
 #           forecast-worker di network lain, root, tanpa read_only/cap_drop ALL, ODOO_RPC_URL bukan
@@ -495,7 +495,7 @@ check_compose() {
       <<< "$json" > /dev/null \
     || err "[$label] odoo: EFN_INSIGHT_URL wajib https:// dan INSIGHT_ENABLED boolean (docs/04 §26.2)"
   # 6b5) G44 (docs/04 §28.2/§28.10, ADR-046): forecast-worker (overlay docker-compose.forecast.yml). API key Odoo forecast
-  #      per PT HANYA forecast-worker dan hanya PT yang punya user teknis (smd); clickhouse_password_forecast hanya
+  #      per PT HANYA forecast-worker dan hanya PT yang punya user teknis (smd, pb); clickhouse_password_forecast hanya
   #      clickhouse-init + forecast-worker (clickhouse-init WAJIB me-mount-nya); kunci klien mTLS hanya forecast-worker;
   #      network forecast-ch hanya clickhouse + forecast-worker, forecast-rpc hanya odoo-rpc-gateway + forecast-worker;
   #      forecast-worker hanya di kedua network itu, non-root, read_only, cap_drop ALL, Odoo hanya lewat
@@ -503,7 +503,7 @@ check_compose() {
   local fsec
   while IFS= read -r fsec; do
     [[ -z "$fsec" ]] && continue
-    [[ "$fsec" =~ ^odoo_api_key_forecast_(smd)$ ]] || err "[$label] secret $fsec bukan PT forecast (smd, docs/04 §28.2)"
+    [[ "$fsec" =~ ^odoo_api_key_forecast_(smd|pb)$ ]] || err "[$label] secret $fsec bukan PT forecast (smd|pb, docs/04 §28.2)"
     jq -e --arg s "$fsec" '[.services | to_entries[] | select([.value.secrets[]? | (.source // .)] | index($s) != null)
             | .key] - ["forecast-worker"] | length == 0' <<< "$json" > /dev/null \
       || err "[$label] secret $fsec di-mount ke service selain forecast-worker (least privilege, docs/04 §28.10)"

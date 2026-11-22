@@ -883,6 +883,14 @@ done
 if [[ -n "$CHI_FN" && $chi_ok -eq 1 ]]; then ok "275yf SEC-223 clickhouse-init private_cidr_ok: /24../32 privat diterima, /16../23 + publik + injeksi ditolak"
 else bad "275yf SEC-223 clickhouse-init private_cidr_ok"; fi
 u "275z G44 EFN_FORECAST_COMPANY_CODES subset EFN_COMPANY_CODES" 0 efn_validate_company_lists
+# G46d (ADR-046 amandemen 22 Nov 2026): daftar PT forecast bergiliran = subset unik EFN_FORECAST_COMPANY_CODES
+vc "275za G46d FORECAST_COMPANIES=SMD,PB diterima" 0 staging FORECAST_COMPANIES=SMD,PB
+vc "275zb G46d FORECAST_COMPANIES=PB diterima" 0 staging FORECAST_COMPANIES=PB
+vc "275zc G46d FORECAST_COMPANIES=SMD,GL ditolak (GL tanpa user teknis forecast)" 1 staging FORECAST_COMPANIES=SMD,GL
+vc "275zd G46d FORECAST_COMPANIES=PB,PB ditolak (duplikat)" 1 staging FORECAST_COMPANIES=PB,PB
+vc "275ze G46d FORECAST_COMPANIES injeksi ditolak" 1 staging "FORECAST_COMPANIES=SMD;id"
+vc "275zf G46d FORECAST_DC_CODES=SMDDC,P004 diterima" 0 staging FORECAST_DC_CODES=SMDDC,P004
+vc "275zg G46d FORECAST_DC_CODES spasi ditolak" 1 staging "FORECAST_DC_CODES=SMDDC, P004"
 
 # G44 (SEC-42): daftar image rantai rilis SAMA di efn-deploy (IMAGE_VARS), deploy.sh (cek digest + .env) dan deploy.yml
 # (cosign verify + manifest). Image yang lupa di salah satu = rilis gagal di host / tidak terverifikasi.

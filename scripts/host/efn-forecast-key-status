@@ -10,9 +10,10 @@
 #   install -o root -g root -m 0644 scripts/host/systemd/efn-forecast-key-status.{service,timer} /etc/systemd/system/
 #   systemctl daemon-reload && systemctl enable --now efn-forecast-key-status.timer
 #
-# PT yang diperiksa: EFN_FORECAST_COMPANIES (allowlist; PT baru = tambah di sini + secrets.list + overlay) HANYA bila
-# $COMPOSE_DIR/.env (ditulis deploy.sh) memuat FORECAST_ENABLED=true. Forecast mati -> metrik per PT tidak ditulis
-# (tidak ada alert pengingat untuk key yang tidak dipakai).
+# PT yang diperiksa: FORECAST_COMPANIES di $COMPOSE_DIR/.env (ditulis deploy.sh; kosong = SMD, G46d) yang ADA di
+# allowlist EFN_FORECAST_COMPANIES (PT baru = tambah di sini + secrets.list + overlay), HANYA bila .env memuat
+# FORECAST_ENABLED=true. Forecast mati -> metrik per PT tidak ditulis (tidak ada alert pengingat untuk key yang tidak
+# dipakai); PT allowlist yang tidak dijalankan juga tidak diperiksa.
 # Metrik textfile node-exporter ($TEXTFILE_DIR/efn_forecast_api_key.prom; alert-rules.yml grup efn-forecast-key):
 #   efn_forecast_api_key_expiry_timestamp_seconds{company}  kedaluwarsa key aktif TERBARU (0 = tidak ada key aktif)
 #   efn_forecast_api_key_active_keys{company}               jumlah key belum kedaluwarsa
@@ -30,7 +31,7 @@ COMPOSE_DIR=/opt/efn/compose
 TEXTFILE_DIR=/var/lib/efn/node-exporter
 ODOO_DB=efn_odoo
 COMPOSE_PROJECT=efn
-EFN_FORECAST_COMPANIES=(SMD)
+EFN_FORECAST_COMPANIES=(SMD PB)
 
 log() {
   logger -t "$TAG" -- "$*" 2> /dev/null || true
@@ -50,7 +51,16 @@ if [[ -f "$envf" && ! -L "$envf" ]]; then
   read -r e_uid e_mode < <(stat -c '%u %a' -- "$envf")
   [[ "$e_uid" == 0 && $((8#$e_mode & 8#022)) -eq 0 ]] || die "$envf harus milik root dan tidak dapat ditulis grup/lainnya"
   if [[ "$(sed -nE 's/^FORECAST_ENABLED=(true|false)$/\1/p' "$envf" | tail -n1)" == true ]]; then enabled=true; fi
+  fc_raw=$(sed -nE 's/^FORECAST_COMPANIES=([A-Z,]{0,80})$/\1/p' "$envf" | tail -n1)
 fi
+# Hanya PT yang dijalankan worker DAN ada di allowlist (nilai .env tidak dipercaya mentah).
+companies=()
+IFS=, read -r -a fc_req <<< "${fc_raw:-SMD}"
+for co in "${fc_req[@]}"; do
+  for allowed in "${EFN_FORECAST_COMPANIES[@]}"; do
+    [[ "$co" == "$allowed" ]] && { companies+=("$co"); break; }
+  done
+done
 
 now=$(date +%s)
 ok=1
@@ -76,7 +86,7 @@ else:
         say("KEY", r.id, int(exp.replace(tzinfo=datetime.timezone.utc).timestamp()) if exp else 0)
     say("OK", 1 if U.active else 0)
 PYEOF
-    for co in "${EFN_FORECAST_COMPANIES[@]}"; do
+    for co in "${companies[@]}"; do
       [[ "$co" =~ ^[A-Z]{2,8}$ ]] || die "kode PT tidak valid di skrip: $co"
       login="efn_forecast_${co,,}"
       out=$(printf '%s\n' "$PY" | docker exec -i -e "EFN_LOGIN=$login" "$cid" \

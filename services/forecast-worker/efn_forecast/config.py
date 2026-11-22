@@ -78,6 +78,18 @@ def company_code(value: str) -> str:
     return code
 
 
+MAX_COMPANIES = 8
+
+
+def company_codes(value: str) -> tuple[str, ...]:
+    """Daftar PT `SMD,PB` (G46d): satu worker menjalankan batch per PT bergiliran (gateway maxconn 1). Tiap PT punya
+    user teknis + API key sendiri (`odoo_api_key_forecast_<pt>`)."""
+    codes = tuple(dict.fromkeys(company_code(p) for p in (value or "").split(",") if p.strip()))
+    if not 1 <= len(codes) <= MAX_COMPANIES:
+        raise RuntimeError(f"daftar PT wajib 1..{MAX_COMPANIES} kode (mis. SMD,PB)")
+    return codes
+
+
 def forecast_enabled(env: Mapping[str, str] | None = None) -> bool:
     """Kill switch §28.10 (default false). Dibaca sebelum konfigurasi lain: mode idle tidak butuh secret."""
     return _bool(os.environ if env is None else env, "FORECAST_ENABLED", False)
