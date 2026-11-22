@@ -18,7 +18,7 @@ from urllib.parse import urlsplit
 
 from efn_forecast.calendar import CalendarConfig
 from efn_forecast.contract import MAX_ITEMS, MAX_QTY_PER_LINE
-from efn_forecast.models import CANDIDATE_MODELS, DEFAULT_MODELS
+from efn_forecast.models import CANDIDATE_MODELS, DEFAULT_ETS_MODEL, DEFAULT_MODELS, ETS_MODEL_RE
 from efn_forecast.pipeline import MinMaxConfig, PipelineConfig
 from efn_forecast.schedule import parse_cron
 from efn_forecast.tls import TlsConfigError, ca_file, is_production, plaintext_allowed, require_readable_file
@@ -92,6 +92,7 @@ class Params:
     minmax: MinMaxConfig = field(default_factory=MinMaxConfig)
     history_days: int = 800
     stock_days: int = 400
+    ets_model: str = DEFAULT_ETS_MODEL
     chunk_size: int = MAX_ITEMS
     daily_cron: str = "30 23 * * *"
     tz: str = "Asia/Jakarta"
@@ -113,6 +114,9 @@ class Params:
         candidates = _list(e, "FORECAST_MODELS", ",".join(DEFAULT_MODELS))
         if not candidates or any(c not in CANDIDATE_MODELS for c in candidates):
             raise RuntimeError(f"FORECAST_MODELS: pilihan {', '.join(CANDIDATE_MODELS)}")
+        ets_model = _str(e, "FORECAST_ETS_MODEL", DEFAULT_ETS_MODEL).upper()
+        if not ETS_MODEL_RE.fullmatch(ets_model):
+            raise RuntimeError("FORECAST_ETS_MODEL: 3 huruf galat[AMZ] tren[NAZ] musim[NAMZ], mis. ZNZ atau ZZZ")
         weekend = tuple(sorted({int(x) for x in _list(e, "FORECAST_WEEKEND_DAYS", "5,6")}))
         if not weekend or any(d < 0 or d > 6 for d in weekend):
             raise RuntimeError("FORECAST_WEEKEND_DAYS: daftar 0..6 (0=Senin)")
@@ -154,6 +158,7 @@ class Params:
                 review_days=_int(e, "FORECAST_MINMAX_REVIEW_DAYS", 7, 1, 60),
             ),
             history_days=_int(e, "FORECAST_HISTORY_DAYS", 800, 56, 3000),
+            ets_model=ets_model,
             stock_days=_int(e, "FORECAST_STOCK_DAYS", 400, 0, 3000),
             chunk_size=_int(e, "FORECAST_CHUNK_SIZE", MAX_ITEMS, 1, MAX_ITEMS),
             daily_cron=cron,

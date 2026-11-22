@@ -12,6 +12,7 @@ seri sendiri)
 
 from __future__ import annotations
 
+import re
 from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Protocol
@@ -24,6 +25,17 @@ CANDIDATE_MODELS = ("AutoETS", "AutoARIMA")
 # AutoETS CV 4 = WAPE 0,6496 dalam 91 s; AutoARIMA CV 1 = WAPE 0,6499 dalam 1.156 s.
 # AutoARIMA tetap bisa dipilih lewat FORECAST_MODELS.
 DEFAULT_MODELS = ("AutoETS",)
+# G46c: ruang model AutoETS (galat/tren/musim; Z = dipilih otomatis, N = tanpa). Default ZNZ = tanpa tren.
+# Benchmark data nyata PB histori 1 tahun (21 Nov 2026, 300 seri reguler, holdout 28 hari): ZZZ 0,170 dtk/seri
+# WAPE 0,496; ZNZ 0,021 dtk/seri (8x lebih cepat) WAPE 0,491. Tren linier/teredam diekstrapolasi 28 hari cenderung
+# over-forecast saat penjualan turun. FORECAST_ETS_MODEL=ZZZ mengembalikan perilaku lama.
+DEFAULT_ETS_MODEL = "ZNZ"
+ETS_MODEL_RE = re.compile(r"[AMZ][NAZ][NAMZ]")
+# G46c: AutoARIMA dipercepat (benchmark yang sama): default statsforecast pada 365 hari 4,06 dtk/seri WAPE 0,539;
+# orde kecil + approximation (CSS) + 182 hari terakhir 0,74 dtk/seri (5,5x lebih cepat) WAPE 0,535. Tetap lebih
+# lambat dan tidak lebih akurat dari AutoETS ZNZ -> AutoARIMA bukan default (FORECAST_MODELS).
+ARIMA_FIT_DAYS = 182
+ARIMA_FAST = {"max_p": 2, "max_q": 2, "max_P": 1, "max_Q": 1, "max_order": 4, "approximation": True}
 Z80 = 1.2815515655446004  # kuantil normal 0,9 -> interval 80 % = p10..p90
 CV2_LUMPY = 0.49
 
@@ -107,19 +119,22 @@ def select_model(
 class StatsforecastRunner:
     """Adapter statsforecast (Nixtla, Apache-2.0). Import lambat (numba JIT) -> hanya saat dipakai."""
 
-    def __init__(self, season_length: int = 7) -> None:
+    def __init__(self, season_length: int = 7, ets_model: str = DEFAULT_ETS_MODEL) -> None:
+        if not ETS_MODEL_RE.fullmatch(ets_model):
+            raise ValueError(f"model ETS tidak valid: {ets_model}")
         self.season_length = season_length
+        self.ets_model = ets_model
 
     def fit_predict(self, name: str, y: np.ndarray, h: int) -> tuple[np.ndarray, np.ndarray | None]:
         from statsforecast.models import ADIDA, AutoARIMA, AutoETS, CrostonOptimized
 
         series = np.asarray(y, dtype=float)
         if name in ("AutoETS", "AutoARIMA"):
-            model = (
-                AutoETS(season_length=self.season_length)
-                if name == "AutoETS"
-                else AutoARIMA(season_length=self.season_length)
-            )
+            if name == "AutoETS":
+                model = AutoETS(season_length=self.season_length, model=self.ets_model)
+            else:
+                series = series[-ARIMA_FIT_DAYS:]
+                model = AutoARIMA(season_length=self.season_length, **ARIMA_FAST)
             out = model.forecast(y=series, h=h, level=[80])
             mean = np.asarray(out["mean"], dtype=float)
             sigma = (np.asarray(out["hi-80"], dtype=float) - np.asarray(out["lo-80"], dtype=float)) / (2 * Z80)

@@ -13,6 +13,7 @@ from efn_forecast.pipeline import (
     PipelineConfig,
     SeriesForecast,
     aggregate_dc,
+    backtest,
     build_panel,
     forecast_lines,
     forecast_panel,
@@ -41,7 +42,8 @@ def test_build_panel_censors_oos_and_adds_new_sku() -> None:
     assert s1.y.dtype == np.float32 and float(s1.y.sum()) == 4.0 * 28
     assert np.flatnonzero(s1.censored).tolist() == [20, 21]  # stok habis -> bukan permintaan nol
     assert not by_key[(2, 5)].censored.any() and float(by_key[(2, 5)].y.sum()) == 0.0
-    assert truncate(panel, START + timedelta(days=9)).series[0].y.shape == (10,)
+    cut = truncate(panel, START + timedelta(days=9))
+    assert cut.series[0].y.shape == (10,) and len(cut.series) == 1  # SKU tanpa jual s.d. titik potong dibuang
     with pytest.raises(ValueError):
         build_panel(end, START, [], [], {}, {})
 
@@ -58,12 +60,14 @@ def test_category_mean_and_failed_series_fallback() -> None:
     assert fc[1].model == fc[2].model == "AutoETS"
     assert fc[4].model == "category_mean" and fc[3].model == "category_mean"
     assert float(np.mean(fc[4].yhat)) == pytest.approx(15.0, rel=0.05)  # rata-rata per SKU kategori
-    # short: bobot 10/56 seri sendiri (6) + 46/56 kategori (15)
-    assert float(np.mean(fc[3].yhat)) == pytest.approx(10 / 56 * 6 + 46 / 56 * 15, rel=0.05)
+    # short: level seri sendiri (rata-rata 14 hari terakhir sejak jual pertama), tidak ditarik ke kategori (15)
+    assert float(np.mean(fc[3].yhat)) == pytest.approx(6.0, rel=0.05)
     assert result.failed_series == 0 and result.model_counts["category_mean"] == 2
     failing = forecast_panel(panel, [], CalendarConfig(), cfg, FakeRunner({"AutoETS"}))
     assert failing.failed_series == 2 and all(f.model == "category_mean" for f in failing.forecasts)
     assert all(np.all(f.yhat >= 0) and np.all(f.sigma >= 0) for f in failing.forecasts)
+    by_pid = {f.product_id: f for f in failing.forecasts}
+    assert float(np.mean(by_pid[2].yhat)) == pytest.approx(20.0, rel=0.05)  # seri gagal -> level seri sendiri
 
 
 def _fc(wh: int, code: str, pid: int, level: float, sigma: float = 1.0, model: str = "AutoETS") -> SeriesForecast:
@@ -173,3 +177,28 @@ def test_inactive_series_zero_not_sent_but_counted_in_backtest() -> None:
     assert 2 not in {ln["product_id"] for ln in mm}
     off = forecast_panel(panel, [], CalendarConfig(), replace(cfg, inactive_days=0), FakeRunner())
     assert all(f.model != "inactive" for f in off.forecasts)
+
+
+def test_short_series_level_skips_censored_days() -> None:
+    """G46c: level seri pendek = rata-rata mentah hari valid terakhir; hari OOS (tersensor) tidak menurunkan level."""
+    end = START + timedelta(days=99)
+    days = [end - timedelta(days=i) for i in range(12)]  # 12 hari terakhir -> short
+    sales = [(2, 1, d, 10.0) for d in days[2:]]  # 2 hari terakhir: stok habis, tanpa jual
+    stock = [(2, 1, d, 5.0) for d in days[2:]] + [(2, 1, d, 0.0) for d in days[:2]]
+    panel = build_panel(START, end, sales, stock, {1: "A"}, {2: "SMD01"})
+    cfg = PipelineConfig(candidates=("AutoETS",), cv_windows=0, horizon_days=7)
+    fc = forecast_panel(panel, [], CalendarConfig(), cfg, FakeRunner()).forecasts[0]
+    assert fc.model == "category_mean" and float(np.mean(fc.yhat)) == pytest.approx(10.0)
+
+
+def test_backtest_scores_products_launched_in_holdout_as_zero() -> None:
+    """G46c: produk yang baru terjual di masa holdout tidak diramal (run nyata belum mengenalnya) -> ramalan 0, aktual
+    tetap masuk penyebut WAPE."""
+    end = START + timedelta(days=99)
+    sales = [(2, 1, START + timedelta(days=i), 10.0) for i in range(100)]
+    sales += [(2, 2, end - timedelta(days=i), 5.0) for i in range(7)]  # baru jual 7 hari terakhir (holdout)
+    panel = build_panel(START, end, sales, [], {1: "A", 2: "A"}, {2: "SMD01"})
+    cfg = PipelineConfig(candidates=("AutoETS",), cv_windows=0)
+    bt = backtest(panel, [], CalendarConfig(), cfg, FakeRunner(), days=28)
+    assert bt.series == 2
+    assert bt.wape == pytest.approx(35.0 / (280.0 + 35.0))  # seri 1 tepat; seri 2 = 0 vs 35

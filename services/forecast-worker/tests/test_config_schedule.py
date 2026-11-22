@@ -48,6 +48,7 @@ def test_params_defaults_match_contract() -> None:
     assert p.calendar.payday_tail_days == p.calendar.payday_head_days == 7 and p.calendar.weekend_days == (5, 6)
     assert p.daily_cron == "30 23 * * *" and p.tz == "Asia/Jakarta" and p.dc_codes == ("SMDDC",)
     assert p.production is True and p.pipeline.candidates == ("AutoETS",)
+    assert p.ets_model == "ZNZ" and Params.from_env({"FORECAST_ETS_MODEL": "zzz"}).ets_model == "ZZZ"
 
 
 @pytest.mark.parametrize(
@@ -57,6 +58,8 @@ def test_params_defaults_match_contract() -> None:
         {"FORECAST_CHUNK_SIZE": "0"},
         {"FORECAST_HORIZON_DAYS": "abc"},
         {"FORECAST_MODELS": "Prophet"},
+        {"FORECAST_ETS_MODEL": "ZMZ"},  # tren multiplikatif tidak diizinkan
+        {"FORECAST_ETS_MODEL": "ZZ"},
         {"FORECAST_WEEKEND_DAYS": "7"},
         {"FORECAST_DAILY_CRON": "30 23 * *"},
         {"FORECAST_DAILY_CRON": "61 23 * * *"},
