@@ -20,6 +20,8 @@ export const BRAND_PANEL_COPY: Record<Exclude<BrandId, 'efn'>, BrandPanelCopy> =
   bacha: { kind: 'Kopi & butik', line: 'Kopi arabika pilihan, dari butik hingga kafe.' },
   grandlucky: { kind: 'Supermarket', line: 'Belanja segar harian, lokal hingga impor.' },
   wetzels: { kind: 'Pretzel', line: 'Pretzel hangat, bitz, dan lemonade; paket katering untuk acara.' },
+  // Supermarket demo: punya situs sendiri (`supermarket.`), sengaja TIDAK di SUPERAPP_BRANDS (holding) selama demo.
+  supermarket: { kind: 'Supermarket', line: 'Belanja segar harian, ambil di toko.' },
 };
 
 export interface BrandGroup {

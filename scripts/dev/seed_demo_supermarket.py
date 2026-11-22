@@ -37,6 +37,11 @@ terakhir histori (default 90):
        a3   = scrap outlet 1-3/outlet/hari (tag Kedaluwarsa / Rusak / Kualitas)
   14 a4 = pos.payment untuk order histori DEMO yang belum punya pembayaran (tunai / QRIS / debit / kredit)
 A5 (umur simpan) sudah diisi tahap 2 (``expiration_time``), tidak ada tahap baru.
+
+Tahap 15 (23 Nov 2026, dijalankan setelah tahap 2 di semua mode): bila efn_setup_supermarket_online + demo terpasang,
+produk SMD diberi kategori online (pos.category sesuai kind) dan dipublikasikan ke kanal SMD
+(``efn_online_channel_ids`` + ``efn_online_description`` bila kosong), KECUALI alkohol (tanpa verifikasi usia online).
+Tanpa modul itu tahap ini dilewati.
 Parameter G51: SMD_SEED_PARTS=all|g48|g51|<daftar flow,a7,a3,a4>, SMD_SEED_E2E_DAYS=90, SMD_SEED_E2E_SKUS=30.
 """
 
@@ -2506,10 +2511,82 @@ def stage_payments():
     say(f"pos.payment: baru {created}, order sudah berbayar {len(paid)}")
 
 
+# ---------------------------------------------------------------- tahap 15: publikasi kanal online SMD
+# Keputusan user 23 Nov 2026 (modul efn_setup_supermarket_online). Hanya bila modul + data demonya terpasang; selain itu
+# dilewati tanpa mengubah apa pun. Idempoten: hanya menulis field yang belum sesuai.
+ONLINE_MODULE = "efn_setup_supermarket_online"
+# kind -> sufiks xmlid pos.category (data/pos_category_data.xml). Kategori online = pos_categ_ids[:1] di katalog.
+ONLINE_POS_CATEG = {
+    "veg": "vegetable",
+    "fruit": "fruit",
+    "meat": "meat",
+    "fish": "fish",
+    "bakery": "bakery",
+    "dairy": "dairy_chilled",
+    "frozen": "frozen",
+    "dry": "dry_grocery",
+    "bev": "beverage",
+    "snack": "snack",
+    "personal": "personal_care",
+    "household": "household",
+    "imported": "imported_premium",
+}
+# Alkohol TIDAK dipublikasikan online: kanal online belum punya verifikasi usia (21+) saat checkout/ambil, dan izin
+# jual alkohol hanya di outlet ber-capability alcohol_license. Produk alkohol yang sudah dipublikasikan manual tidak
+# dicabut (keputusan pengguna dihormati).
+ONLINE_EXCLUDED_KINDS = ("alcohol",)
+# SEC-01 (review 23 Nov 2026): kecualikan juga per CAPABILITY terlindungi, bukan hanya per jenis. Produk non-halal belum
+# punya penanda/label "tidak halal" di katalog online (UU 33/2014 jo PP 39/2021) -> tidak dipublikasikan sampai
+# keputusan Legal (Q-SMO5).
+ONLINE_EXCLUDED_CAPS = ("alcohol_license", "non_halal_allowed")
+
+
+def stage_online(products):
+    channel = env.ref(f"{ONLINE_MODULE}.channel_smd", raise_if_not_found=False)
+    if not channel:
+        summary["online"] = f"dilewati ({ONLINE_MODULE} + data demo belum terpasang)"
+        say(summary["online"])
+        return
+    if channel.company_id != company:
+        abort(f"kanal {channel.code} milik company {channel.company_id.name}, bukan {company.name}")
+    pos_categs = {k: env.ref(f"{ONLINE_MODULE}.pos_categ_smd_{s}") for k, s in ONLINE_POS_CATEG.items()}
+    published = categorized = described = excluded = 0
+    for code in sorted(products):
+        info = meta.get(code)
+        if not info:
+            continue
+        tmpl = products[code].product_tmpl_id
+        vals = {}
+        target = pos_categs.get(info["kind"])
+        if target and tmpl.pos_categ_ids != target:
+            vals["pos_categ_ids"] = [Command.set(target.ids)]
+            categorized += 1
+        if info["kind"] in ONLINE_EXCLUDED_KINDS or set(info.get("caps") or ()) & set(ONLINE_EXCLUDED_CAPS):
+            excluded += 1
+        else:
+            if channel not in tmpl.efn_online_channel_ids:
+                vals["efn_online_channel_ids"] = [Command.link(channel.id)]
+                published += 1
+            if not tmpl.efn_online_description:
+                label = target.name if target else "Supermarket"
+                vals["efn_online_description"] = (
+                    f"{info['name']} ({label}). Data contoh fiktif, bukan produk atau merek nyata."
+                )
+                described += 1
+        if vals:
+            tmpl.write(vals)
+    summary["online"] = (
+        f"kanal {channel.code}: baru dipublikasikan {published}, kategori online diisi {categorized}, "
+        f"deskripsi {described}, tidak dipublikasikan (alkohol) {excluded}"
+    )
+    say(summary["online"])
+
+
 # ---------------------------------------------------------------- eksekusi
 _started = monotonic()
 suppliers = run_stage("1 supplier", stage_suppliers)
 products = run_stage("2 produk", stage_products)
+run_stage("15 publikasi kanal online SMD", stage_online, products)
 if RUN_G48:
     run_stage("3 supplierinfo", stage_supplierinfo, products, suppliers)
     allowed = run_stage("4 assortment + jadwal supplier", stage_assortment, products, suppliers)

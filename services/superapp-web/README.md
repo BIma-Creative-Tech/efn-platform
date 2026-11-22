@@ -33,8 +33,9 @@
 | `grandlucky` | `grandlucky.efn.local` | `grandlucky.` | `mart.` | GL | `GL` |
 | `parisbaguette` | `parisbaguette.efn.local` | `parisbaguette.` | `kitchen.` | PB | `PB` |
 | `bacha` | `bacha.efn.local` | `bacha.` | — | BCR (butik) + BCF (kafe) | `BACHA` |
+| `supermarket` | `supermarket.efn.local` | `supermarket.` | — | SMD (supermarket demo) | `SMD` |
 
-- **Hosts file** (lihat README root): `127.0.0.1 app.efn.local grandlucky.efn.local parisbaguette.efn.local bacha.efn.local`.
+- **Hosts file** (lihat README root): `127.0.0.1 app.efn.local grandlucky.efn.local parisbaguette.efn.local bacha.efn.local wetzels.efn.local supermarket.efn.local`. Tanpa hosts file: `http://localhost:3001/?brand=supermarket`.
 - **Tanpa hosts file (dev saja):** buka `http://localhost:3001/?brand=bacha` — proxy menyimpan cookie `efn_dev_brand` sehingga halaman lain tetap memakai brand itu; kembali dengan `?brand=efn`. Diabaikan saat `NODE_ENV=production`.
 - Host/subdomain tak dikenal → `efn` (bukan error). `brandCode` hanya membatasi kanal di UI; BFF tidak mempercayai domain (L-33 diperbarui 20 Okt 2026). Akibatnya **kanal Odoo tanpa `brand_code` hanya tampil di domain holding** — isi `brand_code` kanal (GL/PB/BACHA) agar katalog muncul di domain brand.
 - Logo: teks bergaya (`logoText`). Logo SVG resmi dari tim brand → `public/brands/<id>/logo.svg` lalu isi `logoSrc` (hanya path same-origin yang lolos `safeLogoSrc`).
@@ -99,6 +100,20 @@ Desain & aturan: `docs/design/landing-pages.md`. Brand dengan entri di `lib/land
 | `components/landing/*` | `Landing` (server), `PhotoStory` + `Rail` (klien, framer-motion) |
 
 Foto produk, etalase, gerai, menit siap, dan metode bayar diambil dari katalog BFF (foto lewat proxy same-origin `/api/catalog/images/:sha`); katalog mati → landing tetap tampil tanpa foto/etalase. Warna PB = warna resmi situs (navy `#002663`, putih, `#aebcd3`, kuning `#fcb134`) dengan `scheme: 'dark'` → seluruh halaman PB ikut tema gelap via `html[data-scheme='dark']`. `prefers-reduced-motion` → gerakan mati; tanpa gerakan otomatis (semua dipicu scroll/pointer).
+
+## Situs supermarket (tenant `supermarket`, PT SMD; 23 Nov 2026)
+
+Keputusan pemilik proyek 23 Nov 2026: fitur situs brand lain yang relevan untuk ritel (katalog + cari, pickup, pre-order slot, poin, wishlist/notify-me/price alert, Pantau Harga, banner promo, inbox, pesanan & kode ambil) **tanpa** dine-in/QR meja/reservasi (`tableService: false` → menu & mode pesan itu tidak muncul). Kontrak: docs/04 §12.1 (v21.3), §13.5, §28.8. ADR (Proposed): ADR-034, ADR-019, ADR-045. Kanal mati sampai `SMD` ada di `ONLINE_CHANNELS` BFF; katalog gagal → landing tetap tampil tanpa angka/foto.
+
+| Path | Isi |
+|---|---|
+| `lib/supermarket.ts` | Data murni: lorong (nama = kategori POS Odoo `efn_setup_supermarket_online`), skala φ, ringkasan toko pickup |
+| `components/supermarket/SupermarketLanding.tsx` | Landing: hero 1.618fr:1fr + cari, marquee lorong, bento 8 kolom (bentang 5+3), rak produk 1:1.618, alur pickup + pemilih mode, angka katalog, fitur member, toko, penutup |
+| `components/supermarket/HeroStage.tsx` | Kartu kaca melayang + parallax pointer (framer-motion); foto katalog asli atau ikon lorong |
+| `components/supermarket/supermarket.module.css` | Token φ, glassmorphism (fallback tanpa `backdrop-filter`), animasi; semua mati di `prefers-reduced-motion` |
+| `app/globals.css` (`html[data-brand='supermarket']`) | Header kaca menempel, latar mesh, kartu kaca & tombol pil di semua halaman dalam |
+
+Risiko dimitigasi: R-T14 (halaman dalam tetap komponen bersama, hanya token/CSS), tanpa aset/font eksternal (CSP), klaim layanan tidak ditulis manual (menit siap, toko, jumlah produk dari katalog). Belum: nama/logo brand final (Q-SM1; kini logo teks placeholder), foto produk SMD (seed tanpa gambar → ikon lorong), uji visual dengan katalog nyata.
 
 ## Kampanye supermarket: consent tracking, event perilaku, wishlist, notify-me, price alert (G50)
 

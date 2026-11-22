@@ -639,7 +639,7 @@ if [[ "${EFN_ODOO_PII_ENABLED:-false}" == true ]]; then
 fi
 # G17/G19/G20 (docs/04 §12.1): API key kanal selain GL (base) hanya di-mount bila kanal ada di ONLINE_CHANNELS: satu
 # overlay per kanal docker-compose.online-<kode huruf kecil>.yml (PB -> online-pb, BCR -> online-bcr, BCF -> online-bcf,
-# WTZ -> online-wtz, G24).
+# WTZ -> online-wtz, G24; SMD -> online-smd, 23 Nov 2026 - default ONLINE_CHANNELS=GL tidak memuat SMD).
 # Kode di luar EFN_ONLINE_CHANNEL_CODES (termasuk RTL/FNB/RTL-GL.. lama) atau kanal tanpa overlay = konfigurasi salah ->
 # gagal (BFF akan menolak kanal tanpa key; lebih baik berhenti di sini).
 efn_validate_online_channels "${ONLINE_CHANNELS:-$EFN_ONLINE_BASE_CHANNEL}" || die "ONLINE_CHANNELS tidak valid (G20)"

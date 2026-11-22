@@ -1,0 +1,74 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Kategori katalog online SMD (keputusan 23 Nov 2026; nama dipakai situs Super-App untuk landing -> JANGAN DIUBAH).
+     Katalog efn_online_order mengirim product.template.pos_categ_ids[:1] (bukan product.category) [V repo,
+     efn_online_channel.py efn_online_catalog]. Pemetaan produk -> kategori diisi seed demo
+     (scripts/dev/seed_demo_supermarket.py tahap 15) / tim Ops untuk katalog nyata.
+
+     pos.category CE 19 TIDAK punya company_id [V source 19.0 point_of_sale/models/pos_category.py]: kategori ini
+     global di DB. Dampak lintas brand:
+       - Kanal online lain tidak terpengaruh: katalog kanal hanya memuat produk kanal itu (company kanal).
+       - POS brand lain (GL/PB/...) tanpa "Restrict categories" (limit_categories) memuat SEMUA pos.category
+         (_load_pos_data_domain hanya memfilter bila limit_categories) [V source]; apakah kategori tanpa produk
+         ditampilkan di bar kategori POS = BELUM TERVERIFIKASI. Mitigasi tanpa kode: aktifkan limit_categories di
+         pos.config brand lain bila kategori SMD mengganggu (README).
+       - Nama tidak bentrok dengan pos.category demo efn_setup_pos (Dapur Panas, Bar Minuman, Bakery / Pastry, Bar
+         Kopi, Fresh (Timbang) (DEMO)) [V repo]; kategori yang dibuat skrip brand-catalog per brand = belum diperiksa
+         di DB (nama sama hanya duplikat label, record berbeda; tidak memengaruhi katalog SMD).
+     Tanpa parent: kategori tingkat-1 (parent_id null di katalog) sesuai landing situs.
+     Alkohol SENGAJA tidak punya kategori online (tidak dipublikasikan: verifikasi usia belum ada di kanal online).
+
+     noupdate="0" (sengaja): nama = kontrak dengan situs; upgrade modul mengembalikan nama/urutan bila diubah di UI. -->
+<odoo>
+    <record id="pos_categ_smd_vegetable" model="pos.category">
+        <field name="name">Sayur</field>
+        <field name="sequence">110</field>
+    </record>
+    <record id="pos_categ_smd_fruit" model="pos.category">
+        <field name="name">Buah</field>
+        <field name="sequence">120</field>
+    </record>
+    <record id="pos_categ_smd_meat" model="pos.category">
+        <field name="name">Daging</field>
+        <field name="sequence">130</field>
+    </record>
+    <record id="pos_categ_smd_fish" model="pos.category">
+        <field name="name">Ikan &amp; Seafood</field>
+        <field name="sequence">140</field>
+    </record>
+    <record id="pos_categ_smd_bakery" model="pos.category">
+        <field name="name">Bakery</field>
+        <field name="sequence">150</field>
+    </record>
+    <record id="pos_categ_smd_dairy_chilled" model="pos.category">
+        <field name="name">Dairy &amp; Chilled</field>
+        <field name="sequence">160</field>
+    </record>
+    <record id="pos_categ_smd_frozen" model="pos.category">
+        <field name="name">Frozen</field>
+        <field name="sequence">170</field>
+    </record>
+    <record id="pos_categ_smd_dry_grocery" model="pos.category">
+        <field name="name">Dry Grocery</field>
+        <field name="sequence">180</field>
+    </record>
+    <record id="pos_categ_smd_beverage" model="pos.category">
+        <field name="name">Minuman</field>
+        <field name="sequence">190</field>
+    </record>
+    <record id="pos_categ_smd_snack" model="pos.category">
+        <field name="name">Snack</field>
+        <field name="sequence">200</field>
+    </record>
+    <record id="pos_categ_smd_personal_care" model="pos.category">
+        <field name="name">Personal Care</field>
+        <field name="sequence">210</field>
+    </record>
+    <record id="pos_categ_smd_household" model="pos.category">
+        <field name="name">Household</field>
+        <field name="sequence">220</field>
+    </record>
+    <record id="pos_categ_smd_imported_premium" model="pos.category">
+        <field name="name">Impor Premium</field>
+        <field name="sequence">230</field>
+    </record>
+</odoo>

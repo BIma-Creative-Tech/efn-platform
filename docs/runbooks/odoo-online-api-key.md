@@ -23,7 +23,7 @@ checkout berhenti). Audiens: on-call IT EFN + Superadmin.
   lain milik user teknis (mis. `base.group_user`) punya durasi lebih besar, batas efektifnya ikut lebih besar — jangan
   beri durasi di grup umum. Membuat key lewat `sudo()`/admin **melewati** batas ini — skrip selalu `with_user(<user teknis>)`.
 - Satu key = satu user teknis = **satu kanal** (L-37). G20 (docs/04 §12.1, L-48): kode kanal = kode PT; pemetaan
-  kode → nama = huruf kecil. Hanya lima kode ini yang diterima (G24 §16.1: + `WTZ`) (`EFN_ONLINE_CHANNEL_CODES` di
+  kode → nama = huruf kecil. Hanya enam kode ini yang diterima (G24 §16.1: + `WTZ`; 23 Nov 2026: + `SMD`) (`EFN_ONLINE_CHANNEL_CODES` di
   `scripts/lib/deploy-validate.sh`, `ALLOWED_CHANNELS` di `efn-rotate-online-key`, cek `check-encryption.sh`):
 
   | Kanal (= PT) | User teknis | Secret Docker | Env BFF | Overlay compose |
@@ -33,6 +33,7 @@ checkout berhenti). Audiens: on-call IT EFN + Superadmin.
   | `BCR` (Bacha Coffee Retail) | `efn_online_bcr` | `odoo_api_key_online_bcr` | `ODOO_API_KEY_ONLINE_BCR_FILE` | `docker-compose.online-bcr.yml` |
   | `BCF` (Bacha Coffee F&B) | `efn_online_bcf` | `odoo_api_key_online_bcf` | `ODOO_API_KEY_ONLINE_BCF_FILE` | `docker-compose.online-bcf.yml` |
   | `WTZ` (PT Wetzel's Pretzels, G24) | `efn_online_wtz` | `odoo_api_key_online_wtz` | `ODOO_API_KEY_ONLINE_WTZ_FILE` | `docker-compose.online-wtz.yml` |
+  | `SMD` (PT Supermarket Demo, 23 Nov 2026) | `efn_online_smd` | `odoo_api_key_online_smd` | `ODOO_API_KEY_ONLINE_SMD_FILE` | `docker-compose.online-smd.yml` |
 
   Kode G17/G19 (`RTL`, `FNB`, `RTL-GL`, `RTL-BACHA`, `FNB-PB`, `FNB-BACHA`) **ditolak** deploy dan skrip rotasi;
   cutover: [§8](#migrasi-g20).
@@ -65,7 +66,7 @@ install -o root -g root -m 0644 scripts/host/systemd/efn-rotate-online-key.servi
   scripts/host/systemd/efn-rotate-online-key.timer /etc/systemd/system/
 # 2) (opsional) /etc/efn/online-key-rotation.conf root:root 0644 - default: KEY_DAYS=30 ROTATE_BEFORE_DAYS=10
 #    OVERLAP_SECONDS=3600 (lihat header skrip; nilai divalidasi, kunci di luar allowlist ditolak)
-#    G20: CHANNELS=GL,PB (kanal yang dirotasi timer; hanya GL/PB/BCR/BCF). Kosong -> ONLINE_CHANNELS dari
+#    G20: CHANNELS=GL,PB (kanal yang dirotasi timer; hanya GL/PB/BCR/BCF/WTZ/SMD + QR-/BOOKING-/PROMO-<PT>). Kosong -> ONLINE_CHANNELS dari
 #    /opt/efn/compose/.env (= kanal yang di-deploy; disarankan, satu sumber kebenaran).
 # 3) key pertama per kanal (menggantikan placeholder; kanal Odoo harus AKTIF - verifikasi memanggil katalog kanal)
 sudo efn-rotate-online-key --channel=GL              # kanal sudah di ONLINE_CHANNELS (secret di-mount)
@@ -80,7 +81,7 @@ systemctl daemon-reload && systemctl enable --now efn-rotate-online-key.timer
 `enable --now efn-rotate-online-key.timer`. Jangan menjalankan keduanya untuk kanal yang sama: kunci per kanal membuat
 salah satunya gagal "sedang berjalan" (alert palsu). Unit `@.service/@.timer` tetap ada untuk kebutuhan khusus.
 
-## 1b. Mengaktifkan kanal PT (PB / BCR / BCF / WTZ) {#kanal-baru}
+## 1b. Mengaktifkan kanal PT (PB / BCR / BCF / WTZ / SMD) {#kanal-baru}
 
 Urutan (Superadmin + efn-odoo-functional; contoh `PB`). Prinsip: kunci dibuat dan **terbukti bekerja** sebelum kanal
 masuk `ONLINE_CHANNELS`, karena deploy dengan `ONLINE_ENABLED=true` menolak kanal yang key-nya masih placeholder.
@@ -111,6 +112,16 @@ demo Odoo `WTZ` nonaktif dengan outlet kios `WTZ-01` (FP non-dine-in). Aktivasi 
 deploy.sh mewajibkannya). DB Odoo lama yang di-upgrade ke `efn_setup_company` 19.0.1.8.0 membuat company WTZ + CoA
 `l10n_id` + pajak PB1/SC otomatis; data demo kanal/outlet WTZ hanya ada di DB ber-demo (`efn_setup_online` demo).
 
+**Kanal SMD (keputusan user 23 Nov 2026, supermarket web):** PT Supermarket Demo mendapat kanal online sendiri (kode
+kanal = kode PT, pola G20 L-48), web tenant `supermarket` (`https://supermarket.<domain>`, router Traefik `web` di
+`infra/compose/docker-compose.yml`; dev: tambahkan `supermarket.efn.local` ke hosts file, sertifikat edge dev
+`*.efn.local` sudah mencakupnya). Hanya **pickup di toko + pre-order**: **tidak ada** `QR-SMD`/`BOOKING-SMD`/`PROMO-SMD`
+(ditolak allowlist). Kanal **mati secara default**: `ONLINE_CHANNELS` default tetap `GL`, overlay
+`docker-compose.online-smd.yml` hanya ikut bila `SMD` dimasukkan eksplisit. Aktivasi = langkah 1–6 di atas dengan `SMD`
+(user teknis `efn_online_smd`, `sudo efn-rotate-online-key --channel=SMD --bootstrap`). Platform Postgres wajib sudah
+menjalankan `19-platform-g44.sql` (CHECK kode PT + SMD; deploy.sh mewajibkannya). Batas daftar `CHANNELS` skrip rotasi
+dinaikkan 8 → 16 kode (6 kanal + QR/BOOKING/PROMO = 11 kode untuk `--all`).
+
 **PT/kanal baru di luar tabel di atas** (mis. entitas ke-8): butuh perubahan repo dulu — baris `scripts/secrets.list`
 (`host:disabled`), secret top-level `infra/compose/docker-compose.yml`, overlay `docker-compose.online-<kode>.yml`
 (pola file yang ada), kode di `EFN_ONLINE_CHANNEL_CODES` (`scripts/lib/deploy-validate.sh`) **dan** `ALLOWED_CHANNELS`
@@ -131,7 +142,7 @@ Migrasi dari pemasangan G17 (key manual via `gh secret set`): langkah 3 membuat 
 **G19/G20 — semua kanal:** `efn-rotate-online-key.timer` (harian, `Persistent=true`) → `efn-rotate-online-key --all`:
 daftar kanal dari `CHANNELS` (konfigurasi) atau `ONLINE_CHANNELS` deploy (kosong = `GL`); setiap kode divalidasi
 `^[A-Z][A-Z0-9-]{1,15}$` (tanpa `/ . _` spasi → tidak ada path traversal/injeksi nama secret), wajib salah satu
-`GL PB BCR BCF` (G20), unik. Setiap kanal
+`GL PB BCR BCF` (G20; + `WTZ` G24, `SMD` 23 Nov 2026, serta `QR-*`/`BOOKING-*`/`PROMO-*` per PT), unik, maks 16. Setiap kanal
 dijalankan sebagai **proses anak terpisah, berurutan** (`--channel=<KANAL> --no-wait`): kegagalan satu kanal tidak
 menghentikan kanal lain, kode keluar induk 0 (semua OK) / 1 (≥ 1 kanal gagal) / 3 (≥ 1 ROLLBACK GAGAL). Kanal yang
 dirotasi tidak menunggu overlap sendiri; induk menunggu **sekali** sampai overlap terlama lewat, lalu menjalankan
@@ -165,7 +176,7 @@ Jejak: journald `efn-rotate-online-key` (hanya root, `_UID 0`) → `promtail-jou
 `ROLLBACK OK|GAGAL`, `DICABUT`, `KEY LAMA DITOLAK`, `SELESAI rc=`. **Nilai key tidak pernah dicetak** (stdout/stderr/
 journald/argv); stderr `odoo shell` yang dilog disaring (hex ≥ 32 → `[REDACTED]`).
 
-Rotasi darurat (dugaan kebocoran): `sudo efn-rotate-online-key --channel=<GL|PB|BCR|BCF> --force --overlap-seconds=0`, lalu
+Rotasi darurat (dugaan kebocoran): `sudo efn-rotate-online-key --channel=<GL|PB|BCR|BCF|WTZ|SMD> --force --overlap-seconds=0`, lalu
 perlakukan sebagai insiden ([security-incident.md](security-incident.md)).
 
 ## 3. Metrik & alert (R-T15) {#metrik-masa-berlaku}

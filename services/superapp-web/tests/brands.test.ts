@@ -110,16 +110,19 @@ describe('isBrandId / getBrandById', () => {
       if (b.brandCode !== null) expect([...channelsOfBrandCode(b.brandCode)]).toEqual(b.companies);
     }
   });
-  it('G44 §12.1: PT SMD dikenal sebagai kode PT, tetapi tanpa kanal online/tenant/tema (fitur tidak dinyalakan)', async () => {
+  it('SMD (keputusan user 23 Nov 2026): tenant `supermarket`, kanal online SMD ritel/PPN, tanpa layanan meja', async () => {
     const { allPpnCompanies, channelsOfBrandCode } = await import('../lib/brands');
-    expect(COMPANIES.SMD).toEqual({ code: 'SMD', displayName: 'PT Supermarket Demo', businessType: null, tableService: false });
-    expect(channelsOfBrandCode('SMD')).toEqual([]);
-    for (const b of Object.values(BRANDS)) expect(b.companies).not.toContain('SMD');
-    expect(resolveBrandIdFromHost('smd.efn.local')).toBe('efn'); // tanpa tenant -> default
-    expect(resolveBrandIdFromHost('supermarket.efn.local')).toBe('efn');
-    // belum ada kanal online -> tidak memenuhi syarat faktur PPN online (businessType null)
-    expect(allPpnCompanies(['SMD'])).toBe(false);
-    expect(allPpnCompanies(['GL', 'SMD'])).toBe(false);
+    expect(COMPANIES.SMD).toEqual({ code: 'SMD', displayName: 'PT Supermarket Demo', businessType: 'retail', tableService: false });
+    expect(channelsOfBrandCode('SMD')).toEqual(['SMD']);
+    expect(BRANDS.supermarket.companies).toEqual(['SMD']);
+    expect(BRANDS.supermarket.brandCode).toBe('SMD');
+    // Supermarket demo tidak ikut katalog holding `app.`.
+    expect(BRANDS.efn.companies).not.toContain('SMD');
+    expect(resolveBrandIdFromHost('supermarket.efn.local')).toBe('supermarket');
+    expect(resolveBrandIdFromHost('supermarket.contoh-produksi.co.id')).toBe('supermarket');
+    expect(resolveBrandIdFromHost('smd.efn.local')).toBe('efn'); // bukan alias
+    expect(allPpnCompanies(['SMD'])).toBe(true);
+    expect(allPpnCompanies(['GL', 'SMD'])).toBe(true);
   });
 });
 
@@ -199,6 +202,7 @@ describe('font per brand = font situs resmi (G24, diukur 24 Okt 2026)', () => {
     ['wetzels', 'Londrina Solid', 'Londrina Solid', 'Roboto'],
     ['grandlucky', 'Lato', 'Lato', 'Lato'],
     ['efn', 'Fraunces Variable', 'Fraunces Variable', 'Geist Variable'],
+    ['supermarket', 'Fraunces Variable', 'Fraunces Variable', 'Geist Variable'],
   ] as const)('%s: display %s, heading %s, body %s', (id, display, heading, body) => {
     const t = BRANDS[id].theme;
     expect(first(t.fontDisplay)).toBe(display);

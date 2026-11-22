@@ -216,13 +216,13 @@ describe('G19 §11.3: kanal per brand', () => {
     expect(await off.svc.channels('WTZ')).toEqual([]);
   });
 
-  it('G44 §12.1: PT SMD belum punya kanal online → tidak tampil tanpa ONLINE_CHANNELS eksplisit; kode PT SMD dikenali (bukan fail-closed)', async () => {
+  it('G44 §12.1 + kanal SMD 23 Nov 2026: kanal SMD mati default → tidak tampil tanpa ONLINE_CHANNELS eksplisit; kode PT SMD dikenali (bukan fail-closed)', async () => {
     const smd = { code: 'SMD', brand: 'SMD', company: 'SMD' };
     // default deploy: SMD tidak di ONLINE_CHANNELS → walau ada salinan katalog, kanal tidak tampil
     const off = brandSetup([...ROWS, smd], { ONLINE_CHANNELS: 'GL,PB,BCR,BCF' });
     expect(await off.svc.channels('SMD')).toEqual([]);
     expect((await off.svc.channels()).map((c) => c.channel_code)).toEqual(['GL', 'PB', 'BCR', 'BCF']);
-    // hanya bila operator menyalakan eksplisit (di luar G44), company_code SMD lolos validasi COMPANY_CODES
+    // hanya bila operator menyalakan eksplisit lewat ONLINE_CHANNELS, company_code SMD lolos validasi COMPANY_CODES
     const on = brandSetup([smd]);
     expect((await on.svc.channels()).map((c) => [c.channel_code, c.company_code])).toEqual([['SMD', 'SMD']]);
   });
