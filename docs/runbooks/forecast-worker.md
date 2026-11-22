@@ -15,15 +15,15 @@ Superadmin.
 | Hal | Nilai |
 |---|---|
 | Service compose | `forecast-worker` (profil `data`, overlay `docker-compose.forecast.yml`) |
-| Perintah | `python -m efn_forecast run --company SMD` (loop internal, jadwal `FORECAST_DAILY_CRON`, zona `FORECAST_TZ`) |
+| Perintah | `python -m efn_forecast run --company ${FORECAST_COMPANIES:-SMD}` (G46d: daftar PT bergiliran, mis. `SMD,PB`; loop internal, jadwal `FORECAST_DAILY_CRON`, zona `FORECAST_TZ`) |
 | Kill switch | `FORECAST_ENABLED` (default `false`; `false` = proses hidup tetapi idle) |
 | Baca | ClickHouse `clickhouse:8443` HTTPS, user `efn_forecast_reader` (role `forecast_reader`, `SELECT efn_forecast.*` saja; SEC-215: login hanya dari `CH_FORECAST_READER_HOST_CIDR` = subnet `forecast-ch` 172.30.11.0/24; database `efn_forecast` hanya boleh berisi 6 view allowlist, objek lain → clickhouse-init mencabut grant dan gagal) |
 | Image | `IMAGE_FORECAST_WORKER` (staging/prod: digest bertanda tangan dari manifest rilis); dependency dari `requirements.lock` ber-hash (SEC-214, [python-dependency-lock.md](python-dependency-lock.md)) |
 | Alert | Loki `EfnForecastRunFailed`, `EfnForecastOdooAuthFailure`, `EfnForecastRunStale` (`loki-rules/efn-forecast.yml`); Prometheus `EfnForecastApiKey*` (`alert-rules.yml` grup `efn-forecast-key`) |
 | Tulis | Odoo hanya lewat `https://odoo-rpc-gateway:8443/json/2/...` (mTLS CN `forecast-worker`) |
 | Path RPC | #25 `efn.forecast.calendar/efn_forecast_calendar_upsert`, #26 `efn.forecast.run/efn_forecast_run_open`, #27 `efn.forecast.daily/efn_forecast_ingest`, #28 `efn.demand.forecast.line/efn_minmax_ingest`, #29 `efn.forecast.run/efn_forecast_run_close` |
-| User teknis Odoo | `efn_forecast_smd` = grup `efn_demand_forecast.group_forecast_bot`, **tepat satu company** (SMD) |
-| Secret | `odoo_api_key_forecast_smd` (`host:disabled`), `tls_forecast_worker_crt/_key` (`pki`, profil client), `clickhouse_password_forecast` (`random`, juga di clickhouse-init), `efn_ca_crt` |
+| User teknis Odoo | `efn_forecast_<pt>` per PT (`efn_forecast_smd`, `efn_forecast_pb`) = grup `efn_demand_forecast.group_forecast_bot`, **tepat satu company** |
+| Secret | `odoo_api_key_forecast_smd`, `odoo_api_key_forecast_pb` (`host:disabled`; hanya PT di `FORECAST_COMPANIES` yang wajib nyata), `tls_forecast_worker_crt/_key` (`pki`, profil client), `clickhouse_password_forecast` (`random`, juga di clickhouse-init), `efn_ca_crt` |
 | Network | `forecast-ch` (clickhouse ↔ worker), `forecast-rpc` (odoo-rpc-gateway ↔ worker). Tanpa `data`/`internal`/`egress` |
 | Hardening | `user 65534`, `read_only`, `tmpfs /tmp 256m`, `cap_drop ALL`, `no-new-privileges`, memori `FORECAST_MEMORY_LIMIT` (default 1536M), CPU `FORECAST_CPUS` (default 2) |
 | Gateway | backend terpisah `odoo_forecast` `maxconn 1`, antrean maks. 4 × 10 s → `503 X-EFN-Gateway-Error: unavailable`; body ≤ 512 KiB |
@@ -72,7 +72,7 @@ staging (K25-06: tanpa berbagi secret antar-env). Production: lihat §8 (belum d
 Dampak: tidak ada run baru → Odoo tidak membuat usulan baru; reorder rule dan proyeksi run aktif terakhir tetap dipakai
 (§28.2, L-147). Sakelar per gudang `efn_forecast_engine=v1` di Odoo mengembalikan gudang ke forecast v1.
 
-## 3. User teknis & API key Odoo `efn_forecast_smd` {#api-key}
+## 3. User teknis & API key Odoo `efn_forecast_<pt>` {#api-key}
 
 Dilakukan Superadmin di Odoo (belum ada modul setup / rotasi otomatis):
 
@@ -92,6 +92,11 @@ Dilakukan Superadmin di Odoo (belum ada modul setup / rotasi otomatis):
    docker compose ... up -d --force-recreate forecast-worker
    ```
 
+PT lain (G46d, saat ini PB): langkah sama dengan login `efn_forecast_pb`, company hanya PT PB, nama key
+`efn-forecast-PB-<YYYYMMDD>`, secret `odoo_api_key_forecast_pb.txt`; lalu `.env` `FORECAST_COMPANIES=SMD,PB` dan
+`FORECAST_DC_CODES=SMDDC,P004` (P004 = Central Kitchen PB). PB juga butuh `ETL_ENABLE_FORECAST_LEGACY=true` (histori
+ESB, `docs/04` §28.2a). PT dijalankan berurutan pada jadwal yang sama; batch satu PT gagal tidak menghentikan PT lain.
+
 4. Uji: log worker memuat `calendar_upsert ok` / `run_open ok` (tanpa nilai key). 401 = key salah/kedaluwarsa,
    403 `company_mismatch` = company user salah, 403 dengan header `X-EFN-Gateway-Deny` = gateway (§5).
 
@@ -99,7 +104,7 @@ Dilakukan Superadmin di Odoo (belum ada modul setup / rotasi otomatis):
 
 | Rahasia | Cara | Frekuensi |
 |---|---|---|
-| `odoo_api_key_forecast_smd` | Buat key baru (§3 langkah 2–3) → recreate worker → setelah run berikut `ok`, hapus key lama di Odoo (*Account Security*). Dugaan bocor: hapus key lama **dulu**, lalu pasang baru. | Sebelum kedaluwarsa (≤ 35 hari) — manual. Pengingat otomatis: alert `EfnForecastApiKeyExpiringSoon` (sisa < 7 hari, §4a). `efn-rotate-online-key` belum mendukung `FORECAST-*`. |
+| `odoo_api_key_forecast_<pt>` (smd, pb) | Buat key baru (§3 langkah 2–3) → recreate worker → setelah run berikut `ok`, hapus key lama di Odoo (*Account Security*). Dugaan bocor: hapus key lama **dulu**, lalu pasang baru. | Sebelum kedaluwarsa (≤ 35 hari) — manual. Pengingat otomatis: alert `EfnForecastApiKeyExpiringSoon` (sisa < 7 hari, §4a). `efn-rotate-online-key` belum mendukung `FORECAST-*`. |
 | `tls_forecast_worker_crt/_key` | Otomatis: `gen-pki.sh` menerbitkan ulang leaf bila < 30 hari (deploy.sh / `make secrets`). Manual: `bash scripts/gen-pki.sh forecast-worker` lalu recreate worker. | 90 hari (leaf) |
 | `clickhouse_password_forecast` | Tulis nilai baru (`openssl rand -base64 36`), jalankan ulang `clickhouse-init` (ALTER USER), recreate worker. Staging/prod: GitHub Environment `CLICKHOUSE_PASSWORD_FORECAST`. | Sesuai `secret-rotation.md` |
 
@@ -109,6 +114,9 @@ Key bot forecast tidak dirotasi otomatis. Skrip host `efn-forecast-key-status` (
 lewat `odoo shell`: id + tanggal kedaluwarsa, **tanpa** nilai key) menulis metrik textfile node-exporter
 `efn_forecast_api_key_*` setiap hari 07:30 WIB. Deret per PT hanya ditulis bila `.env` deploy memuat
 `FORECAST_ENABLED=true`, sehingga env yang mematikan forecast tidak mendapat alert.
+PT yang diperiksa = `FORECAST_COMPANIES` di `.env` (kosong = SMD) yang dikenal skrip (G46d: SMD, PB). **Pasang ulang skrip
+ini setiap kali PT forecast bertambah** (mis. PB, G46d); versi lama yang menemui PT tak dikenal menandai run gagal
+(`EfnForecastApiKeyCheckFailed`), bukan diam-diam melewatinya.
 
 Pasang sekali per host staging/prod (Superadmin, root):
 

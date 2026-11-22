@@ -6,6 +6,7 @@
     python -m efn_forecast run --company SMD --once --kind weekly_minmax
     python -m efn_forecast seed-calendar --company SMD [--dry-run]
     python -m efn_forecast run --company SMD --as-of 2026-09-28 --out /out/asof.json   # G51 A6, tanpa RPC
+    python -m efn_forecast run --company SMD,PB          # G46d: beberapa PT bergiliran (as-of: satu PT saja)
 
 Loop: FORECAST_ENABLED=false -> proses tetap hidup (idle, tanpa memanggil ClickHouse/Odoo, tanpa butuh secret) agar
 `restart: unless-stopped` tidak berputar. Batch gagal -> run_close failed, log, tunggu jadwal berikutnya (tidak
@@ -25,7 +26,7 @@ from pathlib import Path
 from typing import Any
 
 from efn_forecast import asof
-from efn_forecast.config import ClickHouseSettings, OdooSettings, Params, company_code, forecast_enabled
+from efn_forecast.config import ClickHouseSettings, OdooSettings, Params, company_codes, forecast_enabled
 from efn_forecast.models import StatsforecastRunner
 from efn_forecast.odoo import OdooForecastClient, RequestsTransport
 from efn_forecast.runner import RunReport, run_batch, seed_calendar
@@ -77,7 +78,21 @@ def batch_as_of(company: str, as_of: date, out: Path, env: dict[str, str]) -> Ru
     return report
 
 
-def serve(company: str, env: dict[str, str], stop: threading.Event) -> int:
+def run_all(kind: str, companies: tuple[str, ...], dry_run: bool, env: dict[str, str]) -> bool:
+    """Batch `kind` untuk tiap PT berurutan; PT yang gagal tidak menghentikan PT berikutnya. True = semua sukses."""
+    ok = True
+    for company in companies:
+        try:
+            report = batch(kind, company, dry_run, env)
+            ok = ok and report.status in ("ok", "dry_run")
+        except Exception as exc:  # konfigurasi/secret salah -> log, PT berikutnya tetap jalan
+            # format awal dipertahankan: dicocokkan alert Loki EfnForecastRunFailed (loki-rules/efn-forecast.yml)
+            log.error("batch %s tidak dapat dimulai: %s company=%s", kind, type(exc).__name__, company)
+            ok = False
+    return ok
+
+
+def serve(companies: tuple[str, ...], env: dict[str, str], stop: threading.Event) -> int:
     if not forecast_enabled(env):
         log.warning("FORECAST_ENABLED=false: forecast-worker idle (tidak memanggil ClickHouse/Odoo)")
         while not stop.wait(IDLE_SECONDS):
@@ -88,7 +103,7 @@ def serve(company: str, env: dict[str, str], stop: threading.Event) -> int:
     tz = zone(params.tz)
     log.info(
         "forecast-worker mulai: company=%s cron=%r tz=%s minmax_weekday=%d",
-        company,
+        ",".join(companies),
         params.daily_cron,
         params.tz,
         params.minmax_weekday,
@@ -100,10 +115,7 @@ def serve(company: str, env: dict[str, str], stop: threading.Event) -> int:
         if stop.wait(max((fire - datetime.now(UTC)).total_seconds(), 0)):
             break
         for kind in _kinds_for(fire, tz, params.minmax_weekday):
-            try:
-                batch(kind, company, False, env)
-            except Exception as exc:  # konfigurasi/secret salah -> log, coba lagi di jadwal berikutnya
-                log.error("batch %s tidak dapat dimulai: %s", kind, type(exc).__name__)
+            run_all(kind, companies, False, env)  # gagal -> sudah di-log; coba lagi di jadwal berikutnya
     log.info("forecast-worker berhenti")
     return 0
 
@@ -137,7 +149,7 @@ def main(argv: list[str] | None = None) -> int:
     seed.add_argument("--dry-run", action="store_true")
     args = parser.parse_args(argv)
     env = dict(os.environ)
-    company = company_code(args.company)
+    companies = company_codes(args.company)
 
     if args.cmd == "seed-calendar":
         if not args.dry_run and not forecast_enabled(env):
@@ -145,14 +157,16 @@ def main(argv: list[str] | None = None) -> int:
             return 2
         year = datetime.now(UTC).year
         params = Params.from_env(env)
-        n = seed_calendar(None if args.dry_run else _odoo(company, env), company, (year, year + 1), params)
-        log.info("seed kalender: %d entri (%s)", n, "dry-run" if args.dry_run else "terkirim")
+        for company in companies:
+            n = seed_calendar(None if args.dry_run else _odoo(company, env), company, (year, year + 1), params)
+            log.info("seed kalender %s: %d entri (%s)", company, n, "dry-run" if args.dry_run else "terkirim")
         return 0
 
     if args.as_of is not None or args.out is not None:
-        if not (args.as_of and args.out) or args.once or args.dry_run or args.kind != "daily":
-            log.error("--as-of wajib bersama --out, hanya kind daily, tanpa --once/--dry-run")
+        if not (args.as_of and args.out) or args.once or args.dry_run or args.kind != "daily" or len(companies) != 1:
+            log.error("--as-of wajib bersama --out, satu PT, hanya kind daily, tanpa --once/--dry-run")
             return 2
+        company = companies[0]
         try:
             as_of = asof.parse_as_of(args.as_of, datetime.now(UTC).astimezone(asof.WIB).date())
         except ValueError as exc:
@@ -165,8 +179,7 @@ def main(argv: list[str] | None = None) -> int:
         if not args.dry_run and not forecast_enabled(env):
             log.error("FORECAST_ENABLED=false: batch ditolak (gunakan --dry-run)")
             return 2
-        report = batch(args.kind, company, args.dry_run, env)
-        return 0 if report.status in ("ok", "dry_run") else 1
+        return 0 if run_all(args.kind, companies, args.dry_run, env) else 1
 
     stop = threading.Event()
 
@@ -175,7 +188,7 @@ def main(argv: list[str] | None = None) -> int:
 
     signal.signal(signal.SIGTERM, _stop)
     signal.signal(signal.SIGINT, _stop)
-    return serve(company, env, stop)
+    return serve(companies, env, stop)
 
 
 if __name__ == "__main__":

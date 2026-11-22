@@ -151,7 +151,7 @@ def test_daily_batch_sequence_chunks_and_dc_aggregate(caplog: pytest.LogCaptureF
     # backtest mati -> wape_backtest dihilangkan (Odoo menolak null)
     assert set(close["metrics"]) == {"series", "duration_s", "failed_series"}
     assert report.rejected == len(ingests)
-    assert "EFN_FORECAST_RUN" in caplog.text
+    assert "EFN_FORECAST_RUN" in caplog.text and '"company":"SMD"}' in caplog.text  # PT di alert Loki (SEC-G46d-02)
 
 
 def test_seed_calendar_payload_current_and_next_year() -> None:

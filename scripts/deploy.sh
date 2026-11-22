@@ -56,7 +56,8 @@
 #               CONSENT_PRIVACY_TEXT_SHA256 PRIVACY_CONSENT_ENFORCED (persetujuan Kebijakan Privasi, §18.3a).
 #               G44 (docs/04 §28.2/§28.10): FORECAST_ENABLED FORECAST_DAILY_CRON FORECAST_TZ FORECAST_HORIZON_DAYS
 #               FORECAST_CHUNK_SIZE FORECAST_ODOO_RPC_TIMEOUT_SECONDS FORECAST_MEMORY_LIMIT FORECAST_CPUS
-#               CH_FORECAST_READER_HOST_CIDR (true -> profil data + API key forecast host:* nyata per PT + overlay
+#               CH_FORECAST_READER_HOST_CIDR FORECAST_COMPANIES FORECAST_DC_CODES (G46d: daftar PT bergiliran, default
+#               SMD) (true -> profil data + API key forecast host:* nyata per PT di FORECAST_COMPANIES + overlay
 #               docker-compose.forecast.yml; production true hanya dengan EFN_ALLOW_FEATURE_ON).
 #               (true|false, default false; G21/G22 job ETL opsional, prasyarat dicek deploy-validate)
 set -euo pipefail
@@ -220,10 +221,23 @@ fi
 # Superadmin di Odoo, runbook forecast-worker.md §3). Placeholder `disabled` = worker menolak start -> lebih baik berhenti.
 if [[ "${FORECAST_ENABLED:-false}" == true ]]; then
   [[ ",${COMPOSE_PROFILES}," == *",data,"* ]] || die "FORECAST_ENABLED=true membutuhkan profil compose data (COMPOSE_PROFILES di deploy.conf)"
-  for co in "${EFN_FORECAST_COMPANY_CODES[@]}"; do
+  # G46d: hanya PT yang dijalankan (FORECAST_COMPANIES, sudah divalidasi subset EFN_FORECAST_COMPANY_CODES).
+  IFS=, read -r -a fc_run <<< "${FORECAST_COMPANIES:-SMD}"
+  for co in "${fc_run[@]}"; do
     f="$SECRETS_DIR/odoo_api_key_forecast_$(tr '[:upper:]' '[:lower:]' <<< "$co").txt"
     if [[ ! -s "$f" ]] || grep -qx 'disabled' "$f"; then
       die "FORECAST_ENABLED=true tetapi API key forecast ${co} tidak ada/placeholder (docs/runbooks/forecast-worker.md#api-key)"
+    fi
+  done
+  # SEC-G46d-01: overlay me-mount key SEMUA PT allowlist; key nyata PT yang tidak dijalankan = kredensial tak terpakai
+  # dan tidak dipantau efn-forecast-key-status -> production ditolak, staging peringatan. Kosongkan ke `disabled`.
+  for co in "${EFN_FORECAST_COMPANY_CODES[@]}"; do
+    [[ ",${FORECAST_COMPANIES:-SMD}," == *",${co},"* ]] && continue
+    f="$SECRETS_DIR/odoo_api_key_forecast_$(tr '[:upper:]' '[:lower:]' <<< "$co").txt"
+    if [[ -s "$f" ]] && ! grep -qx 'disabled' "$f"; then
+      msg="API key forecast ${co} nyata tetapi ${co} tidak di FORECAST_COMPANIES - cabut key di Odoo dan isi file dengan 'disabled' (runbook forecast-worker.md#rotasi)"
+      [[ "$APP_ENV" == production ]] && die "$msg"
+      echo "PERINGATAN: $msg" >&2
     fi
   done
 fi
@@ -568,6 +582,8 @@ DOTENV=(
   "FORECAST_MEMORY_LIMIT=${FORECAST_MEMORY_LIMIT:-}"
   "FORECAST_CPUS=${FORECAST_CPUS:-}"
   "CH_FORECAST_READER_HOST_CIDR=${CH_FORECAST_READER_HOST_CIDR:-}"   # SEC-215: kosong = 172.30.11.0/24 (forecast-ch)
+  "FORECAST_COMPANIES=${FORECAST_COMPANIES:-}"   # G46d: kosong = SMD (default compose)
+  "FORECAST_DC_CODES=${FORECAST_DC_CODES:-}"     # G46d: kosong = SMDDC
 )
 efn_write_dotenv "$COMPOSE_DIR/.env" "${DOTENV[@]}" || die "gagal menulis .env (SEC-50)"
 

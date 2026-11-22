@@ -3610,7 +3610,9 @@ Transport: `POST https://odoo-rpc-gateway:8443/json/2/<model>/<metode>` (pola §
 sertifikat klien CN **`forecast-worker`**; `Authorization: bearer <API key>` dari
 `/run/secrets/odoo_api_key_forecast_<kode PT huruf kecil>` (mis. `odoo_api_key_forecast_smd`). Satu key = satu user
 teknis `efn_forecast_<kode>` = grup `efn_demand_forecast.group_forecast_bot` = **tepat satu company**. Odoo menolak
-`company_code` ≠ company user (`403 company_mismatch`). Antar-mesin (K25-02): lewat WireGuard; gateway menambah
+`company_code` ≠ company user (`403 company_mismatch`). Satu worker menjalankan beberapa PT bergiliran
+(`FORECAST_COMPANIES`, default `SMD`; saat ini SMD dan PB, ADR-046 amandemen 22 Nov 2026), masing-masing dengan key
+sendiri. Antar-mesin (K25-02): lewat WireGuard; gateway menambah
 `forecast-worker` ke `allow-cn` hanya untuk path di bawah.
 
 Metode allowlist (nomor urut gateway ditetapkan saat implementasi, lanjutan daftar §18.1):

@@ -182,6 +182,22 @@ tertinggal ≤ 15 menit + durasi batch, sedangkan usulan harus konsisten dengan 
   akurasi yang diterima (mis. WAPE ≤ 30 % untuk SKU fast-moving).
 - **Q-SM28** (Category manager) Nilai awal per kategori: ambang near-expiry, sisa umur minimum saat terima, service level.
 
+## Amandemen 22 Nov 2026 — PB memakai worker v2 (G46d)
+Keputusan pemilik proyek 22 Nov 2026 (status ADR tetap Proposed):
+- **PB (Paris Baguette) menjadi PT kedua forecast-worker**, sebagai pilot F&B. Sumber histori = penjualan ESB
+  pra-cutover (`efn_legacy_sales_daily` → `fact_legacy_sales_daily`, `ETL_ENABLE_FORECAST_LEGACY=true`, §28.2a).
+  Gudang agregat = P004 Central Kitchen (Σ ramalan outlet, bahan rencana produksi CK, K25-12). Brand lain tetap v1.
+- **Satu worker, beberapa PT bergiliran** (`FORECAST_COMPANIES=SMD,PB`, default `SMD`). Ditolak: satu container per PT,
+  karena gateway `odoo_forecast` `maxconn 1` (batch akan saling antre), dan gerbang network/secret/alert yang
+  mengasumsikan satu service harus diduplikasi. Least privilege tetap per PT: user teknis `efn_forecast_<pt>` + API key
+  sendiri, tepat satu company; konsekuensinya satu container me-mount key SEMUA PT allowlist overlay (key PT yang
+  tidak di `FORECAST_COMPANIES` wajib `disabled`: production ditolak deploy, SEC-G46d-01). Batch satu PT gagal
+  tidak menghentikan PT berikutnya.
+- **Data tertinggal**: histori berakhir di hari terakhir yang punya penjualan (maks. 14 hari, lebih → run gagal
+  `stale_sales`), agar histori ESB yang masuk berkala tidak dibaca sebagai permintaan nol (PR #139).
+- Bukti (data nyata PB 17 Nov 2025–16 Nov 2026, efn-prod gladi): 7.773 seri, WAPE backtest 0,551 vs rata-rata 56 hari
+  0,666 vs seasonal naive 0,586; 133.224 baris diterima Odoo, 0 ditolak.
+
 ## 7. Kapan ditinjau ulang
 - Setelah 6 bulan data produksi (evaluasi opsi C).
 - Durasi batch harian > 2 jam atau RAM worker > 4 GB.

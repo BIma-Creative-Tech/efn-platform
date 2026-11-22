@@ -58,7 +58,8 @@ EFN_RELEASE_CONFIG_VARS=(ACME_EMAIL PAYMENT_PROVIDER PG_SUPERUSER WHATSAPP_ENABL
   EMAIL_ENABLED EMAIL_SMTP_HOST EMAIL_SMTP_PORT EMAIL_SMTP_TLS_MODE EMAIL_SMTP_USER EMAIL_FROM EMAIL_UNSUBSCRIBE_URL
   EMAIL_RATE_PER_MIN EMAIL_DPA_APPROVAL_REF WA_UNOFFICIAL_ENABLED WA_UNOFFICIAL_RISK_ACCEPTANCE_REF ETL_ENABLE_BEHAVIOR
   FORECAST_ENABLED FORECAST_DAILY_CRON FORECAST_TZ FORECAST_HORIZON_DAYS FORECAST_CHUNK_SIZE
-  FORECAST_ODOO_RPC_TIMEOUT_SECONDS FORECAST_MEMORY_LIMIT FORECAST_CPUS CH_FORECAST_READER_HOST_CIDR)
+  FORECAST_ODOO_RPC_TIMEOUT_SECONDS FORECAST_MEMORY_LIMIT FORECAST_CPUS CH_FORECAST_READER_HOST_CIDR
+  FORECAST_COMPANIES FORECAST_DC_CODES)
 # G22 (docs/04 §14.D.1, L-72 D-22-18): env yang DIHAPUS kontrak. Bukan konfigurasi rilis (kunci manifest tak dikenal =
 # ditolak efn-deploy); jalur manual `sudo -E bash deploy.sh` -> production DITOLAK, staging peringatan (BFF: gagal start
 # di production, warning di luar production).
@@ -97,7 +98,8 @@ EFN_PROMO_COMPANY_CODES=(PB)
 # G44 (docs/04 §28.2): PT yang punya user teknis forecast (efn_forecast_<pt>) + secret odoo_api_key_forecast_<pt> di
 # overlay infra/compose/docker-compose.forecast.yml. PT baru = tambah di sini + secrets.list + overlay (env + mount) +
 # EFN_FORECAST_COMPANIES di scripts/host/efn-forecast-key-status + check-encryption.sh (regex secret forecast).
-EFN_FORECAST_COMPANY_CODES=(SMD)
+# G46d (ADR-046 amandemen 22 Nov 2026): PB ditambahkan. PT yang benar-benar dijalankan = FORECAST_COMPANIES (subset).
+EFN_FORECAST_COMPANY_CODES=(SMD PB)
 # G21 AC-13 (docs/04 §13.2, ADR-036 §0): kunci PII Odoo produksi (scripts/secrets.list host:disabled [SA]) - di-mount ke
 # odoo oleh infra/compose/docker-compose.pii.yml hanya bila EFN_ODOO_PII_ENABLED=true (scripts/deploy.sh).
 EFN_ODOO_PII_KEY_NAMES=(odoo_pii_key_v1 odoo_pii_bidx_key odoo_pii_name_key)
@@ -595,6 +597,22 @@ efn_validate_forecast_config() {
   fi
   [[ -z "${FORECAST_CPUS:-}" || "$FORECAST_CPUS" =~ ^(0\.5|[1-4])$ ]] \
     || _efn_err "FORECAST_CPUS harus 0.5|1|2|3|4" || return 1
+  # G46d: daftar PT forecast bergiliran (subset unik EFN_FORECAST_COMPANY_CODES) + gudang agregat per PT (kode gudang =
+  # WAREHOUSE_RE services/forecast-worker/efn_forecast/contract.py).
+  if [[ -n "${FORECAST_COMPANIES:-}" ]]; then
+    local -a fcos=()
+    local -A fseen=()
+    local fco
+    IFS=, read -r -a fcos <<< "$FORECAST_COMPANIES"
+    (( ${#fcos[@]} >= 1 )) || _efn_err "FORECAST_COMPANIES kosong" || return 1
+    for fco in "${fcos[@]}"; do
+      efn_list_has "$fco" "${EFN_FORECAST_COMPANY_CODES[@]}" && [[ -z "${fseen[$fco]:-}" ]] \
+        || _efn_err "FORECAST_COMPANIES: '$fco' bukan PT forecast unik (${EFN_FORECAST_COMPANY_CODES[*]})" || return 1
+      fseen[$fco]=1
+    done
+  fi
+  [[ -z "${FORECAST_DC_CODES:-}" || "$FORECAST_DC_CODES" =~ ^[A-Za-z0-9_-]{1,16}(,[A-Za-z0-9_-]{1,16}){0,15}$ ]] \
+    || _efn_err "FORECAST_DC_CODES harus daftar kode gudang dipisah koma (mis. SMDDC,P004)" || return 1
   # SEC-215: HOST user ClickHouse efn_forecast_reader. CIDR privat kanonik /24../32 (clickhouse-init memvalidasi ulang).
   # SEC-223: /16../23 ditolak (172.30.0.0/16 = semua network EFN -> pembatasan HOST tidak berarti).
   if [[ -n "${CH_FORECAST_READER_HOST_CIDR:-}" ]]; then

@@ -6,8 +6,17 @@ from pathlib import Path
 
 import pytest
 
-from efn_forecast.__main__ import _kinds_for, serve
-from efn_forecast.config import ClickHouseSettings, OdooSettings, Params, company_code, forecast_enabled
+from efn_forecast import __main__ as cli
+from efn_forecast.__main__ import _kinds_for, run_all, serve
+from efn_forecast.config import (
+    ClickHouseSettings,
+    OdooSettings,
+    Params,
+    company_code,
+    company_codes,
+    forecast_enabled,
+)
+from efn_forecast.runner import RunReport
 from efn_forecast.schedule import WIB, next_fire, parse_cron, zone
 from efn_forecast.tls import TlsConfigError
 
@@ -164,4 +173,31 @@ def test_disabled_worker_idles_without_secrets() -> None:
     assert forecast_enabled({}) is False and forecast_enabled({"FORECAST_ENABLED": "true"}) is True
     stop = threading.Event()
     stop.set()
-    assert serve("SMD", {"FORECAST_ENABLED": "false"}, stop) == 0  # tidak butuh secret/ClickHouse/Odoo
+    assert serve(("SMD",), {"FORECAST_ENABLED": "false"}, stop) == 0  # tidak butuh secret/ClickHouse/Odoo
+
+
+def test_company_codes_list() -> None:
+    assert company_codes("SMD") == ("SMD",)
+    assert company_codes(" smd, PB ,SMD") == ("SMD", "PB")  # urutan dipertahankan, duplikat dibuang
+    for bad in ("", " , ", "SMD,P B", "SMD;PB", ",".join(f"P{c}" for c in "ABCDEFGHI")):
+        with pytest.raises(RuntimeError):
+            company_codes(bad)
+
+
+def test_run_all_continues_after_company_failure(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    calls: list[tuple[str, str]] = []
+
+    def fake_batch(kind: str, company: str, dry_run: bool, env: dict[str, str]) -> RunReport:
+        calls.append((kind, company))
+        if company == "SMD":
+            raise RuntimeError("ODOO_API_KEY_FORECAST_SMD_FILE kosong")
+        return RunReport("r", kind, "failed" if company == "XX" else "ok")
+
+    monkeypatch.setattr(cli, "batch", fake_batch)
+    assert run_all("daily", ("SMD", "PB"), False, {}) is False
+    assert calls == [("daily", "SMD"), ("daily", "PB")]  # PB tetap jalan walau SMD gagal
+    assert "batch daily tidak dapat dimulai: RuntimeError company=SMD" in caplog.text  # pola alert Loki tetap cocok
+    assert run_all("daily", ("PB",), False, {}) is True
+    assert run_all("daily", ("PB", "XX"), False, {}) is False  # run_close failed = gagal
