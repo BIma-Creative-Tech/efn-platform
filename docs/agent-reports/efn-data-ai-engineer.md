@@ -5,6 +5,44 @@ ADR terkait (semua `Proposed`): ADR-003, ADR-006, ADR-007, ADR-008, ADR-010, ADR
 
 **Tidak ada yang dijalankan.** Mesin penulis tidak punya Python; semua kode, test, dan SQL belum pernah dieksekusi. Validasi pertama terjadi di CI / oleh QA.
 
+## Gelombang 52 — sisi ClickHouse persona F&B: 4 view Toko, sig3 + kelas PT/BR, 14 policy (22 Nov 2026)
+
+Branch `feat/insight-nav-dual-menu` (worktree `efn-platform-nav`). Kontrak `docs/04` §28.15.6–§28.15.8 (v21.1,
+L-243/L-244); ADR-040, ADR-041 §3.6 (Proposed). **Tidak ada yang dijalankan** (tanpa shell/Python/ClickHouse).
+
+### File
+| File | Isi |
+|---|---|
+| `infra/clickhouse/init/21-g52-insight-fnb.sql` (baru) | `efn_dwh.v_esb_store_receipt_daily` (INVOKER): `v_esb_movement_daily WHERE kind = 'delivery'` INNER JOIN `dim_esb_branch FINAL` (`company_code != ''`, `is_store = 1`) pada `(brand, dest_branch_id)`; `company_code` = PT tujuan, `branch_id` = cabang tujuan |
+| `infra/clickhouse/access/insight-access.sql` | 4 wrapper `efn_insight.v_esb_store_{sales,menu,payment,receipt}_daily` (DEFINER, kolom persis §28.15.8; payment `WHERE branch_id != 0`); grant definer `efn_dwh.v_esb_store_receipt_daily` |
+| `infra/clickhouse/access/insight-esb-policy.sh` (baru) | manifest 14 view (9 PT + 5 BR) + `esb_policy_predicate KEY PT\|BR` (predikat persis §28.15.7) + pemasangan (`--log_queries=0`, cek jumlah = `ESB_POLICY_EXPECTED`); `ESB_POLICY_DEFINE_ONLY=1` untuk harness |
+| `infra/clickhouse/clickhouse-init.sh` | loop policy v1 + `INSIGHT_SIG` diganti `ESB_POLICY_EXPECTED=14` + source file di atas; cek fail-closed "setiap view efn_insight punya policy" tetap |
+| `infra/clickhouse/access/insight-sm-policy.sh` | komentar saja (urutan source) |
+| `services/esb-extract/tests/test_insight_access.py` | 14 view, regex wrapper menerima satu `WHERE`, `DDL21`, test policy membaca manifest |
+| `services/esb-extract/tests/test_insight_fnb_access.py` (baru) | kolom/sumber pasangan/tanpa cogs-mdr, receipt (E8 statis), klausa predikat persis, kelas, cermin Python predikat + E1–E7, E9 |
+| `services/esb-extract/tests/clickhouse/g52_row_policy_harness.sh` (baru) | uji perilaku ClickHouse 24.8 E1–E9 + kontrol positif, predikat & badan view diambil dari file produksi |
+
+### Keputusan / asumsi
+- Hanya `v_esb_store_receipt_daily` punya view `efn_dwh` baru (sesuai §28.15.8). Tiga view toko lain = wrapper atas
+  sumber pasangan (`v_esb_sales_branch_daily`, `v_esb_sales_daily`, `v_esb_payment_daily`); test menegaskan sumber sama
+  agar ikut dialihkan saat `20-esb-aggregates.sql` merge (konflik merge `insight-access.sql` diselesaikan dengan
+  mengalihkan wrapper toko ke tabel agregat yang sama). Tidak bergantung pada file 20.
+- Helper `fexec_*`/`fmkt_*` = named query insight-web (§28.15.9), bukan view; tidak ada view ClickHouse tambahan.
+- Tidak ada fallback `SQL_efn_sig` v1 untuk view ESB (kontrak: insight berhenti mengirimnya). Kompatibilitas rollout
+  eit2 = sesi `eis1/eis2` dikirim insight-web dengan `SQL_efn_brs=''` → kelas PT tetap jalan. insight-web lama gagal
+  tertutup → `clickhouse-init` + insight-web satu rilis (§28.15.10).
+- Konstanta 14 ada di `clickhouse-init.sh` (`ESB_POLICY_EXPECTED`) dan `test_insight_access.py`; manifest di file `.sh`
+  terpisah (pola `insight-sm-policy.sh`) supaya harness memakai predikat produksi.
+
+### Belum terverifikasi
+- Semua pytest + `ruff check`/`ruff format --check` (format ditulis manual gaya ruff) belum dijalankan.
+- Harness `g52_row_policy_harness.sh` belum pernah dijalankan (perintah contoh di header; butuh `clickhouse-init`).
+- DDL `21` + wrapper belum dieksekusi di ClickHouse 24.8 (resolusi alias `branch_id` vs `b.branch_id` di JOIN, row policy
+  di atas view dengan `WHERE`).
+- Performa: `v_esb_store_menu_daily` di atas `v_esb_sales_daily` yang lambat (sebelum agregat) dan
+  `v_esb_store_receipt_daily` di atas `v_esb_movement_daily` (pushdown `kind = 'delivery'` belum diukur).
+- Path filter CI job Python tidak mencakup `infra/clickhouse/**`: perubahan hanya di infra tidak memicu test ini.
+
 ## Review Insight — rekonsiliasi alur CK & cakupan data (21 Nov 2026)
 
 Branch `fix/insight-review`. ADR-040 & ADR-041 (Proposed), K25-02. Tidak ada Bash: **tidak ada yang dijalankan**

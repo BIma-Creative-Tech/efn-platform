@@ -154,8 +154,12 @@ RPC publik baru (terdaftar `efn_core/tests/test_rpc_surface.py` `RPC_ALLOWLIST`)
   `EFN_ROLE_KEEP_LAST_SUPERADMIN`. Superadmin yang sengaja menetapkan peran ke Superadmin lain tetap berlaku
   "nothing more, nothing less" selama masih ada Superadmin lain.
 
+## G52 (19.0.1.2.3; docs/04 §28.15.2)
+- Grup persona Insight pindah ke `efn_insight` (xmlid name dan id grup tetap): `SENSITIVE_GROUP_XMLIDS` kini
+  `efn_insight.group_insight_exec`, `_category`, `_dc`, `_marketing` + `efn_insight_sm.group_insight_kpi_admin`.
+
 ## G47 (19.0.1.2.2; docs/04 §28.13.2, fit-gap `docs/fit-gap/G47_INSIGHT_SM.md` §2.5)
-- `SENSITIVE_GROUP_XMLIDS` + `efn_insight_sm.group_insight_exec`, `_category`, `_dc`, `_marketing`, `_kpi_admin`
+- `SENSITIVE_GROUP_XMLIDS` + `efn_insight.group_insight_exec`, `_category`, `_dc`, `_marketing` (dipindah G52) + `efn_insight_sm.group_insight_kpi_admin`
   (persona Insight supermarket lintas toko + pengelola definisi KPI). Peran yang memuatnya tidak pernah disinkron
   dari jabatan; penetapan manual oleh Access Rights. `group_insight_store` sengaja **tidak** sensitif.
 - Keputusan pemilik proyek 21 Nov 2026 (Q-G47-1): `group_insight_kpi_admin` boleh diberikan ke siapa pun; **tidak ada**

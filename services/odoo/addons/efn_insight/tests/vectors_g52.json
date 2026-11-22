@@ -1,0 +1,52 @@
+{
+  "contract": "docs/04_SERVICE_CONTRACTS.md §28.15.5-§28.15.6 (G52, v21.1). Sintetis, bukan secret.",
+  "note": "Sumber tunggal vektor G52 untuk Odoo (tests/test_insight_token_v3.py) DAN insight-web (Vitest). payload_json = literal kontrak (JSON kanonik). Nilai diisi 22 Nov 2026 dari log test Odoo (prefix EFN_G52_VECTOR), identik dengan scripts/print-eit3-vectors.mjs (Node); kedua sisi meng-assert byte-exact.",
+  "key_spec": {"unit": "ab", "repeat": 32, "comment": "KEY = unit * repeat = string hex 64 karakter (sama dengan §26.3)"},
+  "now": 1795000010,
+  "token_vectors": {
+    "D": {
+      "label": "store F&B PB",
+      "prefix": "eit3",
+      "payload_json": "{\"aud\":\"insight-web\",\"brs\":[\"pb:12\",\"pb:7\"],\"cats\":[],\"cids\":[5],\"codes\":[\"PB\"],\"exp\":1795000060,\"iat\":1795000000,\"iss\":\"odoo\",\"jti\":\"0123456789abcdef0123456789abcd01\",\"name\":\"Andi Toko\",\"roles\":[\"store\",\"user\"],\"sub\":21,\"v\":3,\"wids\":[]}",
+      "payload_b64": "eyJhdWQiOiJpbnNpZ2h0LXdlYiIsImJycyI6WyJwYjoxMiIsInBiOjciXSwiY2F0cyI6W10sImNpZHMiOls1XSwiY29kZXMiOlsiUEIiXSwiZXhwIjoxNzk1MDAwMDYwLCJpYXQiOjE3OTUwMDAwMDAsImlzcyI6Im9kb28iLCJqdGkiOiIwMTIzNDU2Nzg5YWJjZGVmMDEyMzQ1Njc4OWFiY2QwMSIsIm5hbWUiOiJBbmRpIFRva28iLCJyb2xlcyI6WyJzdG9yZSIsInVzZXIiXSwic3ViIjoyMSwidiI6Mywid2lkcyI6W119",
+      "sig_b64": "K3j7k8kdp47V3RcoSOPeR0Nx3nSRz2x2SkZZnSq-MZ8"
+    },
+    "E": {
+      "label": "exec F&B + SMD",
+      "prefix": "eit3",
+      "payload_json": "{\"aud\":\"insight-web\",\"brs\":[],\"cats\":[],\"cids\":[3,5,11],\"codes\":[\"BCF\",\"PB\",\"SMD\"],\"exp\":1795000060,\"iat\":1795000000,\"iss\":\"odoo\",\"jti\":\"0123456789abcdef0123456789abcd02\",\"name\":\"Budi Uji\",\"roles\":[\"exec\",\"user\"],\"sub\":7,\"v\":3,\"wids\":[0,20,21,22,23,24,25]}",
+      "payload_b64": "eyJhdWQiOiJpbnNpZ2h0LXdlYiIsImJycyI6W10sImNhdHMiOltdLCJjaWRzIjpbMyw1LDExXSwiY29kZXMiOlsiQkNGIiwiUEIiLCJTTUQiXSwiZXhwIjoxNzk1MDAwMDYwLCJpYXQiOjE3OTUwMDAwMDAsImlzcyI6Im9kb28iLCJqdGkiOiIwMTIzNDU2Nzg5YWJjZGVmMDEyMzQ1Njc4OWFiY2QwMiIsIm5hbWUiOiJCdWRpIFVqaSIsInJvbGVzIjpbImV4ZWMiLCJ1c2VyIl0sInN1YiI6NywidiI6Mywid2lkcyI6WzAsMjAsMjEsMjIsMjMsMjQsMjVdfQ",
+      "sig_b64": "vk05HlyTOz3MWai9uJ0_CdXfNEFn7mAj1GuaXcHffpE"
+    },
+    "F": {
+      "label": "marketing F&B",
+      "prefix": "eit3",
+      "payload_json": "{\"aud\":\"insight-web\",\"brs\":[],\"cats\":[],\"cids\":[5,6],\"codes\":[\"PB\",\"WTZ\"],\"exp\":1795000060,\"iat\":1795000000,\"iss\":\"odoo\",\"jti\":\"0123456789abcdef0123456789abcd03\",\"name\":\"Maya Promo\",\"roles\":[\"marketing\",\"user\"],\"sub\":30,\"v\":3,\"wids\":[]}",
+      "payload_b64": "eyJhdWQiOiJpbnNpZ2h0LXdlYiIsImJycyI6W10sImNhdHMiOltdLCJjaWRzIjpbNSw2XSwiY29kZXMiOlsiUEIiLCJXVFoiXSwiZXhwIjoxNzk1MDAwMDYwLCJpYXQiOjE3OTUwMDAwMDAsImlzcyI6Im9kb28iLCJqdGkiOiIwMTIzNDU2Nzg5YWJjZGVmMDEyMzQ1Njc4OWFiY2QwMyIsIm5hbWUiOiJNYXlhIFByb21vIiwicm9sZXMiOlsibWFya2V0aW5nIiwidXNlciJdLCJzdWIiOjMwLCJ2IjozLCJ3aWRzIjpbXX0",
+      "sig_b64": "UnQtDnMznzz8hoYeNshIrPuz2DL80vgs2RP6QqfjaOc"
+    },
+    "G": {
+      "label": "store Bacha butik",
+      "prefix": "eit3",
+      "payload_json": "{\"aud\":\"insight-web\",\"brs\":[\"bacha:15\"],\"cats\":[],\"cids\":[4],\"codes\":[\"BCR\"],\"exp\":1795000060,\"iat\":1795000000,\"iss\":\"odoo\",\"jti\":\"0123456789abcdef0123456789abcd04\",\"name\":\"Sinta Toko\",\"roles\":[\"store\",\"user\"],\"sub\":31,\"v\":3,\"wids\":[]}",
+      "payload_b64": "eyJhdWQiOiJpbnNpZ2h0LXdlYiIsImJycyI6WyJiYWNoYToxNSJdLCJjYXRzIjpbXSwiY2lkcyI6WzRdLCJjb2RlcyI6WyJCQ1IiXSwiZXhwIjoxNzk1MDAwMDYwLCJpYXQiOjE3OTUwMDAwMDAsImlzcyI6Im9kb28iLCJqdGkiOiIwMTIzNDU2Nzg5YWJjZGVmMDEyMzQ1Njc4OWFiY2QwNCIsIm5hbWUiOiJTaW50YSBUb2tvIiwicm9sZXMiOlsic3RvcmUiLCJ1c2VyIl0sInN1YiI6MzEsInYiOjMsIndpZHMiOltdfQ",
+      "sig_b64": "fYpWUco4kwc9yYd3pL12J7E-awa1N0cUGWmHBj2mSGI"
+    }
+  },
+  "negative_vectors": {
+    "N6": {"base": "D", "prefix": "eit3", "override": {"roles": ["marketing", "store", "user"]}, "rule": "T5", "expect": "bad_claims", "odoo_error": "bad_claims"},
+    "N7": {"base": "D", "prefix": "eit3", "override": {"brs": []}, "rule": "T6", "expect": "bad_claims", "odoo_error": "bad_claims"},
+    "N8": {"base": "F", "prefix": "eit3", "override": {"brs": ["pb:7"]}, "rule": "T6", "expect": "bad_claims", "odoo_error": "bad_claims"},
+    "N9": {"base": "D", "prefix": "eit3", "override": {"brs": ["pb:07"]}, "rule": "format brs", "expect": "bad_claims", "odoo_error": "bad_brs"},
+    "N10": {"base": "D", "prefix": "eit3", "override": {"brs": ["PB:7"]}, "rule": "format brs", "expect": "bad_claims", "odoo_error": "bad_brs"},
+    "N11": {"base": "D", "prefix": "eit3", "override": {"brs": ["pb:7", "pb:12"]}, "rule": "urutan ASCII brs", "expect": "bad_claims", "odoo_error": "bad_brs"},
+    "N12": {"base": "D", "prefix": "eit3", "override": {"roles": ["dc", "user"], "codes": ["PB"], "wids": [], "brs": []}, "rule": "T3 (brs dikosongkan agar hanya T3 yang dilanggar)", "expect": "bad_claims", "odoo_error": "bad_claims"},
+    "N13": {"base": "D", "prefix": "eit2", "override": {}, "rule": "prefix eit2 dengan v=3 (payload 14 kunci)", "expect": "bad_claims (verifikator eit2) / bad_format (verifikator eit3)", "odoo_error": "bad_claims|bad_format"},
+    "N14": {"base": "E", "prefix": "eit3", "override": {"brs": ["pb:7"]}, "rule": "T6 (exec)", "expect": "bad_claims", "odoo_error": "bad_claims"}
+  },
+  "scope_vectors": {
+    "D": {"cids": "5", "codes": "PB", "brs": "pb:12,pb:7", "input_after_key": "|5|PB|pb:12,pb:7", "sig3_hex": "8de4bbe4183a0ae0626d9221ec1d9cd62850b8bde670cdf71d17e4679d1dd181"},
+    "E": {"cids": "3,5,11", "codes": "BCF,PB", "brs": "", "input_after_key": "|3,5,11|BCF,PB|", "sig3_hex": "ad10ccec05362ea92900d0a624e439f8e2dbaa5c930fb2515eedf63deaeba856"}
+  },
+  "sig3_formula": "lower(hex(SHA256(ASCII(key + '|' + cids + '|' + codes + '|' + brs)))); codes = codes ∩ ESB_CODES; key = string hex insight_scope_key apa adanya (bukan hex-decode)"
+}

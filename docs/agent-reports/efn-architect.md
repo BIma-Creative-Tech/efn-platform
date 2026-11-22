@@ -1389,3 +1389,41 @@ ditampilkan, karena basis pajaknya berbeda (Q-SM46).
 - **Belum terverifikasi:** semua runtime; worker `--as-of` (belum ada); backdate `stock.move.date` setelah `done` tanpa
   efek valuasi; `stock.move.value` scrap demo; `standard_price` jsonb; konsinyasi (`owner_id`) di demo; estimasi ±15–20
   hari = perkiraan architect, bukan dari builder.
+
+# G52 — Insight F&B persona (Eksekutif, Toko, Marketing dari ESB): kontrak §28.15 v21.1 + addendum ADR-041 §3.6 (2026-11-22)
+
+## Ringkasan (untuk manajemen)
+Keputusan pemilik proyek 22 Nov 2026 sudah masuk ke kontrak `docs/04` §28.15. Isinya tiga halaman F&B baru dari data
+ESB, grup persona yang sama dengan supermarket, dan kepala toko F&B yang hanya melihat cabangnya. Pembatasan cabang
+ditegakkan di Odoo, aplikasi, dan ClickHouse. Estimasi ±14–19 hari-engineer. Status: kontrak, belum dibangun.
+
+## File diubah (worktree `efn-platform-nav`, branch `feat/insight-nav-dual-menu`, tanpa kode)
+- `docs/04_SERVICE_CONTRACTS.md`: judul v21.1; §28.15 (28.15.1–28.15.16). Isinya: sidebar, relokasi grup, model cabang
+  ESB, aturan cakupan v3, token `eit3`/`eis3` (T1–T8, vektor D–G, negatif N6–N14), `SQL_efn_brs` + `SQL_efn_sig3`, policy
+  ESB kelas PT/BR (14, test E1–E9), 4 view `v_esb_store_*`, rute `/fnb/*` + 18 named query, flag, kombinasi persona,
+  L-237..L-249, Q-INS-F1..F4, risiko, rencana bangun per agent, estimasi.
+- `docs/decisions/ADR-041-insight-web-sso-odoo.md`: header + §3.6. Alasan: letak grup di §3.4 dibalik, dan cakupan ESB
+  per PT di §2.3 diperluas menjadi per cabang.
+
+## Penyimpangan dari usulan lead/fungsional
+- Klaim `brs` = `"<esb_brand>:<branch_id>"` (bukan `"<CODE>:<id>"`). Alasannya, kunci mart adalah `(brand, branch_id)`,
+  Bacha melayani BCF + BCR (`config.py:22-23`), dan formatnya sama dengan filter `branch` (`lib/filters.ts:66`).
+- Token naik ke `eit3`/`eis3`, karena validator `eit2` mewajibkan tepat 13 kunci.
+- Store + marketing **tidak** menerbitkan `store`. `roles` adalah satu himpunan lintas domain, jadi menambah `store`
+  membuka kembali SEC-G47-01 di `v_sm_payment_daily`.
+- Toko memakai view baru tanpa `cogs`/`mdr`, bukan view lama dengan predikat cabang, karena row policy tidak bisa
+  menyembunyikan kolom.
+
+## Keputusan yang butuh tanda tangan klien
+Q-INS-F1 (persona berlaku untuk semua PT user), Q-INS-F2 (pengelola pemetaan cabang), Q-INS-F3 (HPP untuk kepala toko,
+default tidak), dan Q-INS-F4 (daftar metode bayar kanal online). ADR-041 tetap Proposed.
+
+## Belum terverifikasi
+- `_process_end` Odoo 19 saat xmlid pindah modul.
+- Mekanisme audit record `efn.insight.esb.branch`.
+- Nilai nyata `payment_method` ESB.
+- Performa `v_esb_store_menu_daily` sebelum agregat `20-esb-aggregates.sql`.
+- Semua runtime.
+- Yang sudah dibaca dari repo: `controllers/main.py:89-119`, `lib/insight_token.py:47-59`, `lib/claims.ts`,
+  `lib/scope.ts`, `lib/sm-personas.ts`, `lib/queries.ts:123-198`, `clickhouse-init.sh:410-460`,
+  `insight-access.sql:79-126`, `12-g41-esb.sql`, `19-insight-review.sql`, laporan fungsional 22 Nov.

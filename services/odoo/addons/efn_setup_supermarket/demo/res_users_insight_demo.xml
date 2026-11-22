@@ -16,33 +16,35 @@
      diputuskan). Pemetaan nyata jabatan -> persona = Q-SM29.
      User baru: login placeholder, TANPA password, tanpa email/HP (pola res_users_demo.xml; auth_totp wajib saat
      diaktifkan admin). Grup ditambah dengan (4, id) agar idempoten dan tidak menghapus grup lain.
-     noupdate="1": untuk DB demo lama, migrations/19.0.3.0.0 menerapkan ulang file ini (mode init). -->
+     noupdate="1": untuk DB demo lama, migrations/19.0.3.0.0 menerapkan ulang file ini (mode init).
+     G52 (docs/04 §28.15.2): grup persona dimiliki efn_insight (xmlid name tetap, id grup sama; keanggotaan user demo
+     lama tidak berubah oleh relokasi), jadi ref di bawah = efn_insight.group_insight_*. -->
 <odoo noupdate="1">
     <!-- ===== Kepala toko -> persona store ===== -->
     <record id="user_smd01_store_head" model="res.users">
-        <field name="group_ids" eval="[Command.link(ref('efn_insight_sm.group_insight_store'))]"/>
+        <field name="group_ids" eval="[Command.link(ref('efn_insight.group_insight_store'))]"/>
     </record>
     <record id="user_smd02_store_head" model="res.users">
-        <field name="group_ids" eval="[Command.link(ref('efn_insight_sm.group_insight_store'))]"/>
+        <field name="group_ids" eval="[Command.link(ref('efn_insight.group_insight_store'))]"/>
     </record>
     <record id="user_smd03_store_head" model="res.users">
-        <field name="group_ids" eval="[Command.link(ref('efn_insight_sm.group_insight_store'))]"/>
+        <field name="group_ids" eval="[Command.link(ref('efn_insight.group_insight_store'))]"/>
     </record>
     <record id="user_smd04_store_head" model="res.users">
-        <field name="group_ids" eval="[Command.link(ref('efn_insight_sm.group_insight_store'))]"/>
+        <field name="group_ids" eval="[Command.link(ref('efn_insight.group_insight_store'))]"/>
     </record>
     <record id="user_smd05_store_head" model="res.users">
-        <field name="group_ids" eval="[Command.link(ref('efn_insight_sm.group_insight_store'))]"/>
+        <field name="group_ids" eval="[Command.link(ref('efn_insight.group_insight_store'))]"/>
     </record>
 
     <!-- ===== Buyer DC -> persona dc ===== -->
     <record id="user_smd_buyer_dc" model="res.users">
-        <field name="group_ids" eval="[Command.link(ref('efn_insight_sm.group_insight_dc'))]"/>
+        <field name="group_ids" eval="[Command.link(ref('efn_insight.group_insight_dc'))]"/>
     </record>
 
     <!-- ===== Category manager (markdown manager demo) -> persona category + kategori dikelola ===== -->
     <record id="user_smd_markdown_manager" model="res.users">
-        <field name="group_ids" eval="[Command.link(ref('efn_insight_sm.group_insight_category'))]"/>
+        <field name="group_ids" eval="[Command.link(ref('efn_insight.group_insight_category'))]"/>
         <field name="efn_insight_categ_ids" eval="[Command.set([
             ref('product_category_smd_fresh'),
             ref('product_category_smd_dairy_chilled'),
@@ -57,7 +59,7 @@
         <field name="company_id" ref="company_smd"/>
         <field name="company_ids" eval="[Command.set([ref('company_smd')])]"/>
         <field name="tz">Asia/Jakarta</field>
-        <field name="group_ids" eval="[Command.set([ref('base.group_user'), ref('efn_insight_sm.group_insight_exec')])]"/>
+        <field name="group_ids" eval="[Command.set([ref('base.group_user'), ref('efn_insight.group_insight_exec')])]"/>
     </record>
     <record id="user_smd_marketing" model="res.users">
         <field name="name">Marketing SMD (DEMO)</field>
@@ -65,6 +67,6 @@
         <field name="company_id" ref="company_smd"/>
         <field name="company_ids" eval="[Command.set([ref('company_smd')])]"/>
         <field name="tz">Asia/Jakarta</field>
-        <field name="group_ids" eval="[Command.set([ref('base.group_user'), ref('efn_insight_sm.group_insight_marketing')])]"/>
+        <field name="group_ids" eval="[Command.set([ref('base.group_user'), ref('efn_insight.group_insight_marketing')])]"/>
     </record>
 </odoo>

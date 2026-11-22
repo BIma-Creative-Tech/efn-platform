@@ -11,7 +11,7 @@ import { readCookie, SESSION_COOKIE, type Session } from './session';
 
 function stateFor(cookieValue: string | undefined): AuthState {
   const cfg = getConfig();
-  return authenticate(cookieValue, cfg.enabled, getKey('session'), Math.floor(Date.now() / 1000), cfg.acceptEit1);
+  return authenticate(cookieValue, cfg.enabled, getKey('session'), Math.floor(Date.now() / 1000), cfg.acceptEit1, cfg.acceptEit2);
 }
 
 /** Untuk halaman: redirect ke halaman informasi bila tidak sah. */

@@ -4,7 +4,8 @@
  * halaman (lapis kedua), dan layout.
  */
 import { esbCodesOf, isPersona, personasOf, smCodesOf, type Persona } from './claims';
-import { FNB_ITEMS, NAV, SUMMARY_ITEMS, type NavItem } from './page-filters';
+import { FNB_NAV, fnbNavItems, isBranchScoped } from './fnb-personas';
+import { FNB_ITEMS, NAV, SHARED_HREFS, SUMMARY_ITEMS, type NavItem } from './page-filters';
 
 export const PERSONA_ROUTES: Readonly<Record<Persona, string>> = {
   store: '/store',
@@ -52,20 +53,22 @@ export const DENIAL_PATH: Readonly<Record<SmDenial, string>> = {
 };
 
 export interface SmSessionLike {
-  v: 1 | 2;
+  v: 1 | 2 | 3;
   roles: readonly string[];
   codes: readonly string[];
 }
 
 /**
  * Keputusan akses halaman persona (null = boleh). Urutan: flag INSIGHT_SM_ENABLED -> sesi eis1 (tanpa wids/persona; minta
- * buka ulang dari Odoo) -> persona ada di `roles`. Q-INS-S9 (exec membuka halaman persona lain): default TIDAK.
+ * buka ulang dari Odoo) -> kode SM ada (G52: sesi F&B berpersona, mis. kepala toko F&B, bukan sesi supermarket) -> persona
+ * ada di `roles`. Q-INS-S9 (exec membuka halaman persona lain): default TIDAK.
  */
 export function smRouteDenial(pathname: string, session: SmSessionLike, smEnabled: boolean): SmDenial | null {
   const persona = personaOfPath(pathname);
   if (persona === null) return null;
   if (!smEnabled) return 'sm-belum-aktif';
-  if (session.v !== 2) return 'buka-ulang';
+  if (session.v < 2) return 'buka-ulang';
+  if (smCodesOf(session.codes).length === 0) return 'tidak-berwenang';
   return session.roles.includes(persona) ? null : 'tidak-berwenang';
 }
 
@@ -95,10 +98,10 @@ export function homePath(s: { codes: readonly string[]; roles: readonly string[]
  * di server), layout (chip + daftar cabang), dan halaman. Menggantikan chip tautan `smFilterLinks` (PR #133).
  */
 export function smdAllowed(
-  s: { v: 1 | 2; codes: readonly string[]; roles: readonly string[] },
+  s: { v: 1 | 2 | 3; codes: readonly string[]; roles: readonly string[] },
   smEnabled: boolean,
 ): boolean {
-  return s.v === 2 && execSmd(s, smEnabled);
+  return s.v >= 2 && execSmd(s, smEnabled);
 }
 
 /** Syarat inti (tanpa versi sesi; eis1 tidak pernah membawa kode SM): flag SM, persona exec, kode SM. */
@@ -114,37 +117,94 @@ export interface NavGroup {
   id: 'summary' | 'fnb' | 'sm';
   title: string;
   items: readonly NavItem[];
+  /** Kode ESB sesi (terurut) untuk tautan ber-scope `esb` saat `pt` kosong / hanya SMD. Hanya di grup F&B sesi exec ber-SMD. */
+  esbCodes?: readonly string[];
 }
 
 /** Urutan menu persona di grup Supermarket (keputusan pemilik proyek 21 Nov 2026): Eksekutif, Toko, DC, Kategori, Marketing. */
 const SM_ORDER: readonly Persona[] = ['exec', 'store', 'dc', 'category', 'marketing'];
 
 /**
- * Sidebar tiga grup yang bisa dilipat (keputusan pemilik proyek 21 Nov 2026, Usulan A):
- *  - Ringkasan (F&B + Supermarket): Ikhtisar, Penjualan, Pembayaran. Tampil bila ada PT F&B ATAU sesi exec ber-SMD.
- *  - Food & Beverage: Produksi vs Penjualan, Distribusi CK, Kualitas Data ESB. Hanya bila ada kode ESB; sesi exec ber-SMD
- *    tanpa PT F&B hanya mendapat Distribusi (isinya bagian DC supermarket, docs/04 §28.14.1).
- *  - Supermarket: menu persona (∈ roles; hanya bila INSIGHT_SM_ENABLED) + Forecast (hanya exec ber-SMD).
- * Aturan visibilitas = aturan sesi yang ada; grup kosong disembunyikan.
+ * Sidebar tiga grup yang bisa dilipat (keputusan pemilik proyek 21 Nov 2026 Usulan A, direvisi 22 Nov 2026):
+ *  - Ringkasan: Ikhtisar. Tampil bila ada PT F&B ATAU sesi exec ber-SMD.
+ *  - Food & Beverage: Penjualan, Pembayaran, Produksi vs Penjualan, Distribusi CK, Forecast, Kualitas Data ESB. Hanya bila ada
+ *    kode ESB; sesi exec ber-SMD tanpa PT F&B hanya mendapat Distribusi (isinya bagian DC supermarket, docs/04 §28.14.1).
+ *  - Supermarket: menu persona (∈ roles; hanya bila INSIGHT_SM_ENABLED) + Penjualan, Pembayaran, Forecast (hanya exec ber-SMD).
+ * Sesi exec ber-SMD + PT F&B: halaman bersama tampil di dua grup, dibedakan `scope` (tautan F&B tanpa SMD, tautan Supermarket
+ * `pt=SMD`). Eksekutif/Toko/Marketing versi F&B menyusul (gelombang terpisah). Grup kosong disembunyikan.
  */
-export function navGroups(s: { codes: readonly string[]; roles: readonly string[] }, smEnabled: boolean): NavGroup[] {
+export function navGroups(
+  s: { codes: readonly string[]; roles: readonly string[]; v?: number; brs?: readonly string[] },
+  smEnabled: boolean,
+  fnbEnabled = false,
+): NavGroup[] {
   const esb = hasEsbAccess(s);
+  // G52 (§28.15.9): sesi ber-cabang (kepala toko F&B) hanya melihat grup F&B berisi "Toko"; Ringkasan dan grup lain disembunyikan.
+  // Flag F&B mati -> tidak ada menu sama sekali (halamannya pun ditolak proxy).
+  if (isBranchScoped(s)) {
+    return fnbEnabled && esb ? [{ id: 'fnb', title: 'Food & Beverage', items: [FNB_NAV.store] }] : [];
+  }
   const smd = execSmd(s, smEnabled);
   const groups: NavGroup[] = [];
 
-  const summary: readonly NavItem[] = esb || smd ? SUMMARY_ITEMS : [];
-  if (summary.length > 0) groups.push({ id: 'summary', title: 'Ringkasan', items: summary });
+  if (esb || smd) groups.push({ id: 'summary', title: 'Ringkasan', items: SUMMARY_ITEMS });
 
-  const fnb: NavItem[] = esb ? [...FNB_ITEMS] : smd ? [{ ...NAV.distribution, label: 'Distribusi CK / DC' }] : [];
-  if (fnb.length > 0) groups.push({ id: 'fnb', title: 'Food & Beverage', items: fnb });
+  if (esb) {
+    // G52: item persona F&B (Eksekutif, Toko, Marketing) di urutan teratas grup F&B bila flag aktif dan sesi memilikinya.
+    const persona = fnbEnabled ? fnbNavItems(s) : [];
+    const items = [...persona, ...FNB_ITEMS.map((i): NavItem => (smd && SHARED_HREFS.includes(i.href) ? { ...i, scope: 'esb' } : i))];
+    groups.push(smd ? { id: 'fnb', title: 'Food & Beverage', items, esbCodes: esbCodesOf(s.codes).sort() } : { id: 'fnb', title: 'Food & Beverage', items });
+  } else if (smd) {
+    groups.push({ id: 'fnb', title: 'Food & Beverage', items: [{ ...NAV.distribution, label: 'Distribusi CK / DC' }] });
+  }
 
-  const have = new Set(sessionPersonas(s.roles));
+  // Menu persona SM hanya untuk sesi yang punya kode SM (G52: sesi F&B berpersona tidak mendapat menu supermarket).
+  const have = new Set(smCodesOf(s.codes).length > 0 ? sessionPersonas(s.roles) : []);
   const smItems: NavItem[] = smEnabled
     ? SM_ORDER.filter((p) => have.has(p)).map((p) => ({ href: PERSONA_ROUTES[p], label: NAV_LABEL[p].label, icon: NAV_LABEL[p].icon }))
     : [];
-  if (smd) smItems.push(NAV.forecast);
+  if (smd) smItems.push(...[NAV.sales, NAV.payments, NAV.forecast].map((i): NavItem => ({ ...i, scope: 'smd' })));
   if (smItems.length > 0) groups.push({ id: 'sm', title: 'Supermarket', items: smItems });
   return groups;
+}
+
+const csvParam = (q: URLSearchParams, k: string): string[] =>
+  (q.get(k) ?? '')
+    .split(',')
+    .map((x) => x.trim())
+    .filter((x) => x.length > 0);
+
+/**
+ * Query tautan menu ber-scope (murni; dipakai components/Chrome.tsx). `carry` = filter yang dibawa antar halaman F&B.
+ *  - `smd`: `pt=SMD`, cabang hanya `sm:<id>`, filter kategori/produk (ESB-saja) dibuang.
+ *  - `esb`: SMD dan cabang `sm:` dibuang; `pt` kosong -> semua kode ESB sesi (tanpa `pt` sesi exec juga memuat SMD).
+ */
+export function scopedQuery(scope: 'esb' | 'smd', carry: URLSearchParams, esbCodes: readonly string[]): URLSearchParams {
+  const q = new URLSearchParams(carry.toString());
+  const branch = csvParam(q, 'branch');
+  const keepBranch = scope === 'smd' ? branch.filter((b) => b.startsWith('sm:')) : branch.filter((b) => !b.startsWith('sm:'));
+  if (keepBranch.length > 0) q.set('branch', keepBranch.join(','));
+  else q.delete('branch');
+  if (scope === 'smd') {
+    q.set('pt', 'SMD');
+    q.delete('cat');
+    q.delete('product');
+    return q;
+  }
+  const pt = csvParam(q, 'pt').filter((c) => c.toUpperCase() !== 'SMD');
+  const next = pt.length > 0 ? pt : [...esbCodes];
+  if (next.length > 0) q.set('pt', next.join(','));
+  else q.delete('pt');
+  return q;
+}
+
+/** Item menu aktif: path sama; untuk item ber-scope, `smd` aktif hanya bila `pt` persis SMD, `esb` selain itu. */
+export function navItemActive(item: NavItem, pathname: string, sp: URLSearchParams): boolean {
+  if (pathname !== item.href) return false;
+  if (!item.scope) return true;
+  const pt = csvParam(sp, 'pt');
+  const onlySmd = pt.length > 0 && pt.every((c) => c.toUpperCase() === 'SMD');
+  return item.scope === 'smd' ? onlySmd : !onlySmd;
 }
 
 export interface WarehouseInfo {

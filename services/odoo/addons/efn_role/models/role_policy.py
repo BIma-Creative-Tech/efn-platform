@@ -34,13 +34,14 @@ SENSITIVE_GROUP_XMLIDS = (
     # SEC-193 (G42, ADR-041): akses dashboard Insight lintas SEMUA PT (termasuk IMD/CUP) -> penetapan manual, bukan
     # sinkron jabatan (Q-INS1). Dilewati bila efn_insight belum terpasang (xmlid_group_ids).
     "efn_insight.group_insight_all_brands",
-    # G47 (docs/04 §28.13.2, fit-gap G47 §2.5): persona Insight supermarket lintas toko + pengelola definisi KPI
-    # (Q-G47-1: boleh diberikan ke siapa pun, tetapi manual). Persona `group_insight_store` sengaja TIDAK sensitif
-    # (boleh dari jabatan bila jabatan -> outlet ditetapkan). Dilewati bila efn_insight_sm belum terpasang.
-    "efn_insight_sm.group_insight_exec",
-    "efn_insight_sm.group_insight_category",
-    "efn_insight_sm.group_insight_dc",
-    "efn_insight_sm.group_insight_marketing",
+    # G47 (docs/04 §28.13.2, fit-gap G47 §2.5) + G52 (§28.15.2: grup persona pindah ke efn_insight, xmlid name tetap):
+    # persona Insight lintas toko/PT + pengelola definisi KPI (Q-G47-1: boleh diberikan ke siapa pun, tetapi manual).
+    # Persona `group_insight_store` sengaja TIDAK sensitif (boleh dari jabatan bila jabatan -> outlet/cabang
+    # ditetapkan). Dilewati bila modul pemilik belum terpasang.
+    "efn_insight.group_insight_exec",
+    "efn_insight.group_insight_category",
+    "efn_insight.group_insight_dc",
+    "efn_insight.group_insight_marketing",
     "efn_insight_sm.group_insight_kpi_admin",
 )
 SENSITIVE_PARAM = "efn_role.sensitive_group_xmlids"

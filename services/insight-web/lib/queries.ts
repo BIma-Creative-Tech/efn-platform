@@ -24,7 +24,12 @@ export type ParamName =
   | 'sort'
   | 'product_key'
   | 'weekly'
-  | 'by_branch';
+  | 'by_branch'
+  // G52 (§28.15.9)
+  | 'yoy_from'
+  | 'yoy_to'
+  | 'm_from'
+  | 'ref_day';
 
 export type ChType = 'Date' | 'Array(String)' | 'String' | 'UInt8';
 
@@ -42,6 +47,10 @@ export const PARAM_TYPES: Record<ParamName, ChType> = {
   product_key: 'String',
   weekly: 'UInt8',
   by_branch: 'UInt8',
+  yoy_from: 'Date',
+  yoy_to: 'Date',
+  m_from: 'Date',
+  ref_day: 'Date',
 };
 
 export interface QueryDef {
@@ -60,6 +69,15 @@ const SALES_RANGE = 'sales_date BETWEEN {from:Date} AND {to:Date}';
 const SALES_RANGE_PREV = 'sales_date BETWEEN {prev_from:Date} AND {to:Date}';
 
 const SUPPLY = 'in_ck + in_other + store_prod + st_in - st_out';
+
+// G52 (§28.15.9): periode sekarang vs tahun lalu (sejajar kalender), dan hari acuan halaman Toko.
+const CUR = 'sales_date BETWEEN {from:Date} AND {to:Date}';
+const YOY = 'sales_date BETWEEN {yoy_from:Date} AND {yoy_to:Date}';
+const CUR_OR_YOY = `(${CUR} OR ${YOY})`;
+/** `gm` = net - cogs; persen terhadap net (net <= 0 -> NULL). Hanya dipakai di query Eksekutif (view kelas PT, memuat cogs). */
+const GM_PCT = (cond: string): string =>
+  `if(sumIf(net, ${cond}) <= 0, NULL, toFloat64(sumIf(net - cogs, ${cond})) / toFloat64(sumIf(net, ${cond})) * 100)`;
+const REF_WEEK_AGO = 'subtractDays({ref_day:Date}, 7)';
 
 // Cabang yang benar-benar menjual atau memproduksi (toko atau CK). HEAD OFFICE, gudang, KACS Damage/Expired, Temporary Variance,
 // dst. (`is_store = 0 AND is_ck = 0`) tidak menjual: dikeluarkan dari opsi filter Cabang dan dari peringkat/sell-through/outlier
@@ -660,6 +678,256 @@ WHERE ${PT} AND check_name = 'store_no_sales_h1'
 GROUP BY check_name, brand, item
 ORDER BY value_max DESC
 LIMIT 500`,
+  },
+
+  // ---------- G52: Eksekutif F&B (/fnb/exec; docs/04 §28.15.9; view kelas PT, memuat cogs/mdr) ----------
+  // Nama kolom keluaran: alias yang sama dengan kolom view memicu alias siklik di ClickHouse (lihat catatan di bawah),
+  // jadi `net`, `cogs`, `amount`, `mdr`, `payment_method` menjadi `net_sum`, `cogs_sum`, `amount_sum`, `mdr_sum`, `method`.
+  fexec_kpi: {
+    params: ['from', 'to', 'yoy_from', 'yoy_to', 'pt', 'branch'],
+    sql: `SELECT
+    toFloat64(sumIf(net, ${CUR}))          AS net_cur,
+    toFloat64(sumIf(net, ${YOY}))          AS net_yoy,
+    toFloat64(sumIf(cogs, ${CUR}))         AS cogs_cur,
+    toFloat64(sumIf(cogs, ${YOY}))         AS cogs_yoy,
+    toFloat64(sumIf(net - cogs, ${CUR}))   AS gm_cur,
+    toFloat64(sumIf(net - cogs, ${YOY}))   AS gm_yoy,
+    sumIf(trx_count, ${CUR})               AS trx_cur,
+    sumIf(trx_count, ${YOY})               AS trx_yoy
+FROM efn_insight.v_esb_sales_branch_daily
+WHERE ${CUR_OR_YOY}
+  AND ${PT}
+  AND ${BR}`,
+  },
+  fexec_margin_monthly: {
+    // 13 bulan berakhir di bulan `to` (m_from = awal bulan ke-13 mundur).
+    params: ['m_from', 'to', 'pt', 'branch'],
+    sql: `SELECT toStartOfMonth(sales_date) AS month, company_code,
+       toFloat64(sum(net)) AS net_sum, toFloat64(sum(cogs)) AS cogs_sum, toFloat64(sum(net) - sum(cogs)) AS gm
+FROM efn_insight.v_esb_sales_branch_daily
+WHERE sales_date BETWEEN {m_from:Date} AND {to:Date}
+  AND ${PT}
+  AND ${BR}
+GROUP BY month, company_code
+ORDER BY month, company_code
+LIMIT 500`,
+  },
+  fexec_pt_compare: {
+    params: ['from', 'to', 'yoy_from', 'yoy_to', 'pt', 'branch'],
+    sql: `SELECT brand, company_code,
+       toFloat64(sumIf(net, ${CUR}))        AS net_sum,
+       toFloat64(sumIf(cogs, ${CUR}))       AS cogs_sum,
+       toFloat64(sumIf(net - cogs, ${CUR})) AS gm,
+       ${GM_PCT(CUR)}                       AS gm_pct,
+       sumIf(trx_count, ${CUR})             AS trx,
+       toFloat64(sumIf(net, ${YOY}))        AS net_yoy
+FROM efn_insight.v_esb_sales_branch_daily
+WHERE ${CUR_OR_YOY}
+  AND ${PT}
+  AND ${BR}
+GROUP BY brand, company_code
+ORDER BY gm DESC
+LIMIT 50`,
+  },
+  fexec_mdr_cost: {
+    params: ['from', 'to', 'pt', 'branch'],
+    sql: `SELECT company_code, if(payment_method = '', 'Tidak diketahui', payment_method) AS method,
+       toFloat64(sum(amount)) AS amount_sum, toFloat64(sum(mdr)) AS mdr_sum,
+       if(sum(amount) <= 0, NULL, toFloat64(sum(mdr)) / toFloat64(sum(amount)) * 100) AS mdr_pct
+FROM efn_insight.v_esb_payment_daily
+WHERE ${SALES_RANGE}
+  AND ${PT}
+  AND ${BR}
+GROUP BY company_code, method
+ORDER BY mdr_sum DESC
+LIMIT 500`,
+  },
+  fexec_branch_rank: {
+    params: ['from', 'to', 'yoy_from', 'yoy_to', 'pt', 'branch'],
+    sql: `SELECT brand, company_code, branch_id, any(branch_name) AS branch_label,
+       toFloat64(sumIf(net, ${CUR}))        AS net_sum,
+       toFloat64(sumIf(net - cogs, ${CUR})) AS gm,
+       ${GM_PCT(CUR)}                       AS gm_pct,
+       toFloat64(sumIf(net, ${YOY}))        AS net_yoy,
+       if(sumIf(net, ${YOY}) <= 0, NULL,
+          (toFloat64(sumIf(net, ${CUR})) - toFloat64(sumIf(net, ${YOY}))) / toFloat64(sumIf(net, ${YOY})) * 100) AS growth_pct
+FROM efn_insight.v_esb_sales_branch_daily
+WHERE ${CUR_OR_YOY}
+  AND ${PT}
+  AND ${BR}
+  AND ${SALES_BRANCH}
+GROUP BY brand, company_code, branch_id
+ORDER BY gm DESC
+LIMIT 500`,
+  },
+  fexec_yoy_coverage: {
+    // Hari pertama data penjualan per PT: pembanding tahun lalu hanya bermakna bila first_day <= yoy_from.
+    params: ['pt'],
+    sql: `SELECT company_code, first_day
+FROM efn_insight.v_esb_coverage
+WHERE ${PT} AND entity = 'sales'
+ORDER BY company_code, first_day
+LIMIT 50`,
+  },
+
+  // ---------- G52: Toko F&B (/fnb/store; view kelas BR; TANPA cogs/mdr/net pembayaran: L-244, Q-INS-F3) ----------
+  fstore_kpi: {
+    params: ['ref_day', 'pt', 'branch'],
+    sql: `SELECT
+    toFloat64(sumIf(net, sales_date = {ref_day:Date}))          AS net_day,
+    toFloat64(sumIf(net, sales_date = ${REF_WEEK_AGO}))         AS net_day_lw,
+    sumIf(trx_count, sales_date = {ref_day:Date})               AS trx_day,
+    sumIf(trx_count, sales_date = ${REF_WEEK_AGO})              AS trx_day_lw,
+    if(sumIf(trx_count, sales_date = {ref_day:Date}) = 0, NULL,
+       toFloat64(sumIf(net, sales_date = {ref_day:Date})) / sumIf(trx_count, sales_date = {ref_day:Date})) AS avg_trx_day,
+    if(sumIf(trx_count, sales_date = ${REF_WEEK_AGO}) = 0, NULL,
+       toFloat64(sumIf(net, sales_date = ${REF_WEEK_AGO})) / sumIf(trx_count, sales_date = ${REF_WEEK_AGO})) AS avg_trx_lw
+FROM efn_insight.v_esb_store_sales_daily
+WHERE (sales_date = {ref_day:Date} OR sales_date = ${REF_WEEK_AGO})
+  AND ${PT}
+  AND ${BR}`,
+  },
+  fstore_daily_vs_lastweek: {
+    // 14 hari berakhir di ref_day: pekan ini (ref_day-6..ref_day) vs pekan lalu (ref_day-13..ref_day-7), dipisah di halaman.
+    params: ['ref_day', 'pt', 'branch'],
+    sql: `SELECT sales_date, brand, branch_id, toFloat64(sum(net)) AS net_sum, sum(trx_count) AS trx
+FROM efn_insight.v_esb_store_sales_daily
+WHERE sales_date BETWEEN subtractDays({ref_day:Date}, 13) AND {ref_day:Date}
+  AND ${PT}
+  AND ${BR}
+GROUP BY sales_date, brand, branch_id
+ORDER BY sales_date, brand, branch_id
+LIMIT 5000`,
+  },
+  fstore_top_menu: {
+    params: ['ref_day', 'pt', 'branch'],
+    sql: `SELECT brand, menu_code, any(menu_name) AS menu_label, any(menu_category) AS category,
+       toFloat64(sum(qty)) AS qty_sold, toFloat64(sum(net)) AS net_sales
+FROM efn_insight.v_esb_store_menu_daily
+WHERE sales_date = {ref_day:Date}
+  AND ${PT}
+  AND ${BR}
+GROUP BY brand, menu_code
+ORDER BY qty_sold DESC
+LIMIT 20`,
+  },
+  fstore_payment_mix: {
+    params: ['ref_day', 'pt', 'branch'],
+    sql: `SELECT payment_type, if(payment_method = '', 'Tidak diketahui', payment_method) AS method,
+       sum(payment_count) AS cnt, toFloat64(sum(amount)) AS amount_sum
+FROM efn_insight.v_esb_store_payment_daily
+WHERE sales_date = {ref_day:Date}
+  AND ${PT}
+  AND ${BR}
+GROUP BY payment_type, method
+ORDER BY amount_sum DESC
+LIMIT 100`,
+  },
+  fstore_ck_receipts: {
+    // Kiriman CK yang DITERIMA cabang tujuan: 7 hari berakhir di ref_day. qty tidak dijumlah lintas uom (uom ada di GROUP BY).
+    params: ['ref_day', 'pt', 'branch'],
+    sql: `SELECT day, branch_id, any(branch_name) AS branch_label, origin_branch_name, item_group, product_code,
+       any(product_name) AS product_label, uom, toFloat64(sum(qty)) AS qty_sum, sum(lines) AS lines_sum
+FROM efn_insight.v_esb_store_receipt_daily
+WHERE day BETWEEN subtractDays({ref_day:Date}, 6) AND {ref_day:Date}
+  AND ${PT}
+  AND ${BR}
+GROUP BY day, branch_id, origin_branch_name, item_group, product_code, uom
+ORDER BY day DESC, origin_branch_name, product_label
+LIMIT 500`,
+  },
+  fstore_branch_list: {
+    // Pemilih cabang: view kelas BR sehingga sesi ber-cabang hanya melihat cabangnya (tanpa makro BR: daftar utuh dalam cakupan).
+    params: ['pt'],
+    sql: `SELECT brand, company_code, branch_id, branch_name
+FROM efn_insight.v_esb_branch_list
+WHERE ${PT} AND is_store = 1 AND active = 1
+ORDER BY brand, branch_name
+LIMIT 500`,
+  },
+
+  // ---------- G52: Marketing F&B (/fnb/marketing) ----------
+  fmkt_discount_kpi: {
+    params: ['from', 'to', 'prev_from', 'prev_to', 'pt', 'branch'],
+    sql: `SELECT
+    toFloat64(sumIf(gross, sales_date >= {from:Date}))        AS gross_cur,
+    toFloat64(sumIf(gross, sales_date <= {prev_to:Date}))     AS gross_prev,
+    toFloat64(sumIf(discount, sales_date >= {from:Date}))     AS discount_cur,
+    toFloat64(sumIf(discount, sales_date <= {prev_to:Date}))  AS discount_prev,
+    toFloat64(sumIf(net, sales_date >= {from:Date}))          AS net_cur,
+    toFloat64(sumIf(net, sales_date <= {prev_to:Date}))       AS net_prev,
+    if(sumIf(gross, sales_date >= {from:Date}) <= 0, NULL,
+       toFloat64(sumIf(discount, sales_date >= {from:Date})) / toFloat64(sumIf(gross, sales_date >= {from:Date})) * 100) AS disc_pct,
+    if(sumIf(gross, sales_date <= {prev_to:Date}) <= 0, NULL,
+       toFloat64(sumIf(discount, sales_date <= {prev_to:Date})) / toFloat64(sumIf(gross, sales_date <= {prev_to:Date})) * 100) AS disc_pct_prev
+FROM efn_insight.v_esb_sales_branch_daily
+WHERE ${SALES_RANGE_PREV}
+  AND ${PT}
+  AND ${BR}`,
+  },
+  fmkt_discount_trend: {
+    params: ['from', 'to', 'pt', 'branch'],
+    sql: `SELECT sales_date, toFloat64(sum(gross)) AS gross_sum, toFloat64(sum(discount)) AS discount_sum
+FROM efn_insight.v_esb_sales_branch_daily
+WHERE ${SALES_RANGE}
+  AND ${PT}
+  AND ${BR}
+GROUP BY sales_date
+ORDER BY sales_date
+LIMIT 400`,
+  },
+  fmkt_discount_menu: {
+    params: ['from', 'to', 'pt', 'branch'],
+    sql: `SELECT brand, menu_code, any(menu_name) AS menu_label, any(menu_category) AS category,
+       toFloat64(sum(qty)) AS qty_sum, toFloat64(sum(gross)) AS gross_sum, toFloat64(sum(discount)) AS discount_sum,
+       if(sum(gross) <= 0, NULL, toFloat64(sum(discount)) / toFloat64(sum(gross)) * 100) AS disc_pct
+FROM efn_insight.v_esb_sales_daily
+WHERE ${SALES_RANGE}
+  AND ${PT}
+  AND ${BR}
+GROUP BY brand, menu_code
+HAVING discount_sum > 0
+ORDER BY discount_sum DESC
+LIMIT 100`,
+  },
+  fmkt_discount_branch: {
+    params: ['from', 'to', 'pt', 'branch'],
+    sql: `SELECT brand, company_code, branch_id, any(branch_name) AS branch_label,
+       toFloat64(sum(gross)) AS gross_sum, toFloat64(sum(discount)) AS discount_sum,
+       if(sum(gross) <= 0, NULL, toFloat64(sum(discount)) / toFloat64(sum(gross)) * 100) AS disc_pct
+FROM efn_insight.v_esb_sales_branch_daily
+WHERE ${SALES_RANGE}
+  AND ${PT}
+  AND ${BR}
+  AND ${SALES_BRANCH}
+GROUP BY brand, company_code, branch_id
+ORDER BY discount_sum DESC
+LIMIT 500`,
+  },
+  fmkt_channel_mix: {
+    // Pengelompokan kanal (GoFood/Grab/...) dilakukan di lib/channels.ts dari nama metode (Q-INS-F4), bukan di SQL.
+    params: ['from', 'to', 'pt', 'branch'],
+    sql: `SELECT payment_type, if(payment_method = '', 'Tidak diketahui', payment_method) AS method,
+       sum(payment_count) AS cnt, toFloat64(sum(amount)) AS amount_sum
+FROM efn_insight.v_esb_payment_daily
+WHERE ${SALES_RANGE}
+  AND ${PT}
+  AND ${BR}
+GROUP BY payment_type, method
+ORDER BY amount_sum DESC
+LIMIT 200`,
+  },
+  fmkt_takeaway_share: {
+    // is_takeaway ditebak dari nama menu ESB: selalu dilabeli "perkiraan" di UI.
+    params: ['from', 'to', 'pt', 'branch'],
+    sql: `SELECT is_takeaway, toFloat64(sum(qty)) AS qty_sum, toFloat64(sum(net)) AS net_sum
+FROM efn_insight.v_esb_sales_daily
+WHERE ${SALES_RANGE}
+  AND ${PT}
+  AND ${BR}
+GROUP BY is_takeaway
+ORDER BY is_takeaway
+LIMIT 2`,
   },
 } as const satisfies Record<string, QueryDef>;
 

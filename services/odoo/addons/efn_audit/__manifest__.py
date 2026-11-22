@@ -6,7 +6,9 @@
     ),
     # 19.0.1.4.0 (G47): CONTROL_SPECS res.users + efn_outlet_warehouse_ids / efn_insight_categ_ids (cakupan data);
     # group_manager di privilege sendiri (widget Odoo 19). Tanpa perubahan skema/keanggotaan grup.
-    "version": "19.0.1.4.0",
+    # 19.0.1.5.0 (G52, docs/04 §28.15.3): CONTROL_SPECS res.users + efn_insight_esb_branch_ids, model kontrol baru
+    # efn.insight.esb.branch (company_id, esb_brand, esb_branch_id, is_store, active). Tanpa perubahan skema.
+    "version": "19.0.1.5.0",
     "category": "EFN",
     "author": "Era Food and Nourishment",
     # LGPL-3. Tanpa dependency OCA/Cybrosys (ADR-031). OCA `auditlog` (AGPL-3) dan Cybrosys

@@ -23,6 +23,23 @@ export function addDays(iso: string, n: number): string {
   return new Date(toMs(iso) + n * DAY_MS).toISOString().slice(0, 10);
 }
 
+/** Tambah `n` tahun; 29 Feb pada tahun tujuan non-kabisat menjadi 28 Feb (bukan 1 Mar). */
+export function addYears(iso: string, n: number): string {
+  const m = ISO_RE.exec(iso);
+  if (!m) throw new Error('tanggal bukan ISO');
+  const y = Number(m[1]) + n;
+  const mo = Number(m[2]) - 1;
+  const lastDay = new Date(Date.UTC(y, mo + 1, 0)).getUTCDate();
+  return new Date(Date.UTC(y, mo, Math.min(Number(m[3]), lastDay))).toISOString().slice(0, 10);
+}
+
+/** Tanggal 1 pada bulan yang sama dengan `iso`, digeser `n` bulan (n boleh negatif). */
+export function startOfMonthShift(iso: string, n: number): string {
+  const m = ISO_RE.exec(iso);
+  if (!m) throw new Error('tanggal bukan ISO');
+  return new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1 + n, 1)).toISOString().slice(0, 10);
+}
+
 /** Selisih hari b - a. */
 export function diffDays(a: string, b: string): number {
   return Math.round((toMs(b) - toMs(a)) / DAY_MS);

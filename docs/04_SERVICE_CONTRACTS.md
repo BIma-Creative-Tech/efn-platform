@@ -1,5 +1,5 @@
 
-# KONTRAK ANTAR-SERVICE (v21.0 — 21 Nov 2026, G51 §28.14 SMD end-to-end: SMD sebagai filter halaman F&B Insight untuk persona `exec` (cabang `sm:<id>`, omzet termasuk PPN, basis campuran berlabel), view `v_sm_payment_daily`/`v_sm_product_sales_daily`/`v_sm_forecast_daily`/`v_sm_lot_stock` + `v_sm_product_list.shelf_life_days`, policy SM 33, store hanya bersama exec (SEC-G51-01), rekonstruksi stok `ETL_SM_STOCK_RECONSTRUCT_DAYS` (default 0), histori forecast as-of demo, seed A1–A7 demo saja, deploy `--renew-anon-volumes`, outlet online opsional, L-219..L-236, Q-SM46..Q-SM47 (terjawab 21 Nov) — dibangun G51; v20.5 — 21 Nov 2026, G47 review: L-216 store + marketing/dc, sesi Insight 2 jam L-217, kartu fase 2 L-218; v20.4 — 21 Nov 2026, G47 §28.13: koreksi fit-gap C-1..C-9 diserap dari kode (L-204..L-215), keputusan pemilik proyek 21 Nov: `kpi_admin` tanpa SoD kode, penerimaan outlet SMD dua langkah; v20.3 — 20 Nov 2026, G47 §28.13 Insight supermarket per persona: token `eit2`/`eis2` (`wids`, persona, `cats`), `SQL_efn_sig2`, row policy outlet + persona, mart `fact_replenishment`/`fact_dc_fill_rate`/`fact_dc_purchase_line`/`agg_sm_stock_daily`/`fact_lot_expiry`/`fact_campaign_result`, view `efn_insight.v_sm_*`, pemetaan `outlet_code` (Q-SM37), konfigurasi KPI per PT `efn.insight.sm.kpi` → `dim_sm_kpi_config`, Omzet termasuk PPN, L-186..L-203, Q-SM40..Q-SM45 — kontrak, belum dibangun; v20.2 dipakai PR #117 G50; v20.0 — 18 Nov 2026, Supermarket §28: forecast API worker→Odoo, usulan replenishment DC, assortment, event perilaku `POST /v1/events`, queue `behavior.event`/`promo.campaign.requested`/`notify.restock`/`notify.price_alert`/`notify.email`/`notify.wa_unofficial`, wishlist/notify-me/price alert, flag (ADR-044..048 Proposed, belum dibangun; §27 + L-127..L-143 dicadangkan G43); v18.0 — 18 Nov 2026, G42 §26 Insight web + SSO Odoo (token eit1 HMAC sekali pakai via POST form, cookie eis1, row policy `efn_insight_scope`, ADR-041 Proposed); v17.0 — 17 Nov 2026, G41 §25 ESB Core → datamart ClickHouse (esb-extract GET-only per brand, ADR-040 Proposed); v16.2 — 1 Nov 2026, G39 §24 asisten analisis "Analisis bertahap" (text2sql POST /v1/analyze: rencana ≤3 query → eksekusi per PT → ringkasan AI); v16.1 — 1 Nov 2026, G38 §23 Text-to-SQL "Tanya Data" (Odoo → text2sql → 9router/Ollama → ClickHouse per PT); v16.0 — 1 Nov 2026, G37 §22 gateway LLM 9router + fallback Ollama untuk OCR tahap 2 (K25-01, ADR-037); v15.1 — 31 Okt 2026, G33 §20.11 notifikasi reward MGM + layar referral Super-App; v15.0 — 30 Okt 2026, G32 §21 mart & dashboard waste/yield (K25-08); v14.1 — 30 Okt 2026, G31b §20.10 dasar MGM per baris (`excluded_categ_ids`); v14.0 — 30 Okt 2026, G31 §20 engine MGM: referral, akrual, settle, clawback; v13.0 — 29 Okt 2026, G30 §19 kebijakan MGM per PT (K25-10); v11.0 — 25 Okt 2026, G26 §17 pesanan online wajib lunas: VA, e-wallet, transfer + bukti, kiosk; v10.1 — 24 Okt 2026, G24 §16 entitas WTZ Wetzel's Pretzels; v10.0 — 21 Okt 2026, G23 §15 reservasi meja & pre-order berjadwal; v9.1 — 19 Okt 2026, G22 §14 sinkron r15 K1–K3 + L-82; v9.0 — 19 Okt 2026, G22 §14; v8.0 — G21 §13; v7.0 — G20 §12; v6.0 — G19 §11; v5.1 — 10 Okt 2026, privasi G18 L-21; v5.0 — 9 Okt 2026; §8 v3.x, §9 v4.x Fase 1, §10 v5.0 Fase 3 penjualan online; **§27 G43 v19.1** migrasi ESB → Odoo + arsip histori `efn_legacy_history`, ADR-042 Accepted)
+# KONTRAK ANTAR-SERVICE (v21.1 — 22 Nov 2026, G52 §28.15 Insight F&B persona dari data ESB: halaman `/fnb/exec`, `/fnb/store`, `/fnb/marketing` (query `fexec_*`/`fstore_*`/`fmkt_*`), sidebar Ringkasan = Ikhtisar + halaman bersama di grup F&B dan Supermarket, grup persona pindah ke `efn_insight` 19.0.3.0.0 (xmlid tetap), model `efn.insight.esb.branch` + `res.users.efn_insight_esb_branch_ids`, kepala toko F&B dibatasi cabang (klaim `brs` `"<brand>:<id>"`, pencabutan cakupan PT penuh tanpa bergantung flag), token `eit3`/`eis3`, `SQL_efn_brs` + `SQL_efn_sig3`, policy ESB kelas PT/BR (14), 4 view `v_esb_store_*`, flag `INSIGHT_FNB_PERSONA_ENABLED`/`INSIGHT_ACCEPT_EIT2`, L-237..L-249, Q-INS-F1..Q-INS-F4 — kontrak, belum dibangun; v21.0 — 21 Nov 2026, G51 §28.14 SMD end-to-end: SMD sebagai filter halaman F&B Insight untuk persona `exec` (cabang `sm:<id>`, omzet termasuk PPN, basis campuran berlabel), view `v_sm_payment_daily`/`v_sm_product_sales_daily`/`v_sm_forecast_daily`/`v_sm_lot_stock` + `v_sm_product_list.shelf_life_days`, policy SM 33, store hanya bersama exec (SEC-G51-01), rekonstruksi stok `ETL_SM_STOCK_RECONSTRUCT_DAYS` (default 0), histori forecast as-of demo, seed A1–A7 demo saja, deploy `--renew-anon-volumes`, outlet online opsional, L-219..L-236, Q-SM46..Q-SM47 (terjawab 21 Nov) — dibangun G51; v20.5 — 21 Nov 2026, G47 review: L-216 store + marketing/dc, sesi Insight 2 jam L-217, kartu fase 2 L-218; v20.4 — 21 Nov 2026, G47 §28.13: koreksi fit-gap C-1..C-9 diserap dari kode (L-204..L-215), keputusan pemilik proyek 21 Nov: `kpi_admin` tanpa SoD kode, penerimaan outlet SMD dua langkah; v20.3 — 20 Nov 2026, G47 §28.13 Insight supermarket per persona: token `eit2`/`eis2` (`wids`, persona, `cats`), `SQL_efn_sig2`, row policy outlet + persona, mart `fact_replenishment`/`fact_dc_fill_rate`/`fact_dc_purchase_line`/`agg_sm_stock_daily`/`fact_lot_expiry`/`fact_campaign_result`, view `efn_insight.v_sm_*`, pemetaan `outlet_code` (Q-SM37), konfigurasi KPI per PT `efn.insight.sm.kpi` → `dim_sm_kpi_config`, Omzet termasuk PPN, L-186..L-203, Q-SM40..Q-SM45 — kontrak, belum dibangun; v20.2 dipakai PR #117 G50; v20.0 — 18 Nov 2026, Supermarket §28: forecast API worker→Odoo, usulan replenishment DC, assortment, event perilaku `POST /v1/events`, queue `behavior.event`/`promo.campaign.requested`/`notify.restock`/`notify.price_alert`/`notify.email`/`notify.wa_unofficial`, wishlist/notify-me/price alert, flag (ADR-044..048 Proposed, belum dibangun; §27 + L-127..L-143 dicadangkan G43); v18.0 — 18 Nov 2026, G42 §26 Insight web + SSO Odoo (token eit1 HMAC sekali pakai via POST form, cookie eis1, row policy `efn_insight_scope`, ADR-041 Proposed); v17.0 — 17 Nov 2026, G41 §25 ESB Core → datamart ClickHouse (esb-extract GET-only per brand, ADR-040 Proposed); v16.2 — 1 Nov 2026, G39 §24 asisten analisis "Analisis bertahap" (text2sql POST /v1/analyze: rencana ≤3 query → eksekusi per PT → ringkasan AI); v16.1 — 1 Nov 2026, G38 §23 Text-to-SQL "Tanya Data" (Odoo → text2sql → 9router/Ollama → ClickHouse per PT); v16.0 — 1 Nov 2026, G37 §22 gateway LLM 9router + fallback Ollama untuk OCR tahap 2 (K25-01, ADR-037); v15.1 — 31 Okt 2026, G33 §20.11 notifikasi reward MGM + layar referral Super-App; v15.0 — 30 Okt 2026, G32 §21 mart & dashboard waste/yield (K25-08); v14.1 — 30 Okt 2026, G31b §20.10 dasar MGM per baris (`excluded_categ_ids`); v14.0 — 30 Okt 2026, G31 §20 engine MGM: referral, akrual, settle, clawback; v13.0 — 29 Okt 2026, G30 §19 kebijakan MGM per PT (K25-10); v11.0 — 25 Okt 2026, G26 §17 pesanan online wajib lunas: VA, e-wallet, transfer + bukti, kiosk; v10.1 — 24 Okt 2026, G24 §16 entitas WTZ Wetzel's Pretzels; v10.0 — 21 Okt 2026, G23 §15 reservasi meja & pre-order berjadwal; v9.1 — 19 Okt 2026, G22 §14 sinkron r15 K1–K3 + L-82; v9.0 — 19 Okt 2026, G22 §14; v8.0 — G21 §13; v7.0 — G20 §12; v6.0 — G19 §11; v5.1 — 10 Okt 2026, privasi G18 L-21; v5.0 — 9 Okt 2026; §8 v3.x, §9 v4.x Fase 1, §10 v5.0 Fase 3 penjualan online; **§27 G43 v19.1** migrasi ESB → Odoo + arsip histori `efn_legacy_history`, ADR-042 Accepted)
 
 Status: **Draft untuk Fase 0 / PoC**. Mengikuti rekomendasi ADR yang masih `Proposed`. Semua service (Odoo, BFF, Next.js, worker) wajib memakai nama, path, dan payload di dokumen ini. Perubahan kontrak = ubah dokumen ini dulu.
 
@@ -5387,3 +5387,382 @@ worker menerima `--as-of` (belum ada di kode, `runner.py` sudah memisahkan `as_o
 | insight-web: chip SMD, loader gabungan, 5 halaman, forecast, umur simpan, distribusi, label basis + Vitest | 5–6,5 | efn-frontend-engineer (+ efn-uiux-designer) |
 | QA + security | 1,5–2 | efn-qa-engineer, efn-security-reviewer |
 | **Total** | **±15–20** | |
+
+### 28.15 G52 — EFN Insight F&B persona: Eksekutif, Toko, Marketing dari data ESB (v21.1, 22 Nov 2026; ADR-040, ADR-041 §3.6, Proposed)
+
+> **Ringkasan manajemen.** Tiga halaman baru untuk brand F&B (data ESB): **Eksekutif** (margin kotor, perbandingan tahun
+> lalu, perbandingan brand/PT, biaya MDR, peringkat cabang), **Toko** (penjualan harian vs minggu lalu, menu terlaris,
+> metode bayar, kiriman CK yang diterima) dan **Marketing** (diskon, kanal pembayaran termasuk GoFood/Grab, porsi dine-in
+> vs takeaway berlabel "perkiraan"). Peran memakai grup Odoo yang sama dengan supermarket. **Kepala toko F&B hanya melihat
+> cabang yang ditugaskan kepadanya**, ditegakkan di Odoo, di aplikasi, dan di database analitik; saat ini siapa pun yang
+> punya akses PT melihat semua cabang PT itu, dan celah itu ditutup untuk akun kepala toko. Kepala toko tidak melihat HPP/
+> margin. Estimasi: **±14–19 hari-engineer** (±1,5–2 minggu kalender dengan 3 builder paralel). Keputusan klien yang
+> masih terbuka (default sudah diterapkan): Q-INS-F1..F4.
+
+Status: **kontrak, belum dibangun** (kecuali sidebar §28.15.1 yang sudah ada di branch `feat/insight-nav-dual-menu`,
+commit `0aab9ab`). Dasar: keputusan pemilik proyek 22 Nov 2026 (final, L-237..L-249) dan desain fit-gap
+`docs/agent-reports/efn-odoo-functional.md` bagian "22 Nov 2026 — Insight F&B persona & scope cabang ESB" (diadopsi,
+dengan satu penyimpangan: format klaim cabang, L-241). Penomoran: keputusan **L-237..L-249**, pertanyaan klien
+**Q-INS-F1..Q-INS-F4**. Bagian ini **meralat** §26.7 (setting & row policy view ESB), §28.13.2 (letak grup persona),
+§28.13.3 (aturan cakupan), §28.13.4–§28.13.5 (token `eit3`/`eis3` menggantikan `eit2`/`eis2` sebagai format terbit).
+
+#### 28.15.1 Sidebar Insight (L-237, sudah dibangun)
+`lib/sm-personas.ts` `navGroups`/`scopedQuery`/`navItemActive` (commit `0aab9ab`):
+- **Ringkasan** = Ikhtisar saja (`/`). Tampil bila ada kode ESB atau sesi exec ber-SMD (L-219).
+- **Food & Beverage** = Penjualan, Pembayaran, Produksi vs Penjualan, Distribusi CK, Forecast, Kualitas Data ESB; G52
+  menambah **Eksekutif, Toko, Marketing** di urutan teratas grup ini (§28.15.9).
+- **Supermarket** = menu persona SM (∈ `roles`, hanya bila `INSIGHT_SM_ENABLED`) + **Penjualan, Pembayaran, Forecast**
+  (salinan ber-`scope: 'smd'`, tautan `pt=SMD`) **hanya** untuk sesi exec ber-SMD (L-219).
+- Halaman bersama di dua grup dibedakan `scope`: tautan F&B membuang `SMD` dan cabang `sm:*`; tautan Supermarket memakai
+  `pt=SMD`, cabang `sm:*` saja, tanpa filter kategori/produk ESB. Item aktif: `smd` hanya bila `pt` persis `SMD`.
+
+#### 28.15.2 Grup persona dipindah ke `efn_insight` (L-239; meralat §28.13.2 dan ADR-041 §3.4 butir modul jembatan)
+- `efn_insight` **19.0.3.0.0** memiliki kelima grup + privilege-nya. **Xmlid name tetap** (record dan id grup sama,
+  keanggotaan user tidak berubah); hanya `ir_model_data.module` berpindah:
+
+| Xmlid baru (name tetap) | Label baru | Persona | Dipakai F&B | Sensitif (`SENSITIVE_GROUP_XMLIDS`) |
+|---|---|---|---|---|
+| `efn_insight.group_insight_exec` | Insight: Direksi | `exec` | ya | ya |
+| `efn_insight.group_insight_store` | Insight: Kepala toko | `store` | ya | tidak |
+| `efn_insight.group_insight_marketing` | Insight: Marketing | `marketing` | ya | ya |
+| `efn_insight.group_insight_category` | Insight: Category manager (supermarket) | `category` | tidak (diabaikan scope F&B) | ya |
+| `efn_insight.group_insight_dc` | Insight: DC/logistik (supermarket) | `dc` | tidak | ya |
+| privilege `efn_insight.res_groups_privilege_insight_sm_<exec\|store\|marketing\|category\|dc>` | (nama xmlid tetap) | — | — | — |
+
+- `group_insight_kpi_admin`, privilege-nya, dan model `efn.insight.sm.kpi` **tetap** di `efn_insight_sm` (19.0.2.0.0).
+- Migrasi: `efn_insight/migrations/19.0.3.0.0/pre-migrate.py` **dan** `efn_insight_sm/migrations/19.0.2.0.0/pre-migrate.py`
+  menjalankan SQL idempoten yang sama:
+  `UPDATE ir_model_data SET module = 'efn_insight' WHERE module = 'efn_insight_sm' AND model IN ('res.groups',
+  'res.groups.privilege') AND name IN (<5 grup>, <5 privilege>)`. XML grup/privilege pindah ke `efn_insight/security/`.
+  Upgrade wajib `-u efn_insight,efn_insight_sm` dalam satu perintah.
+- Konstanta tunggal `PERSONA_GROUPS` (persona → xmlid) di `efn_insight`, diimpor `efn_insight_sm`. Semua referensi
+  `efn_insight_sm.group_insight_<persona>` diganti (`efn_role/models/role_policy.py` SENSITIVE, test `efn_role` /
+  `efn_insight_sm`, demo + test `efn_setup_supermarket`).
+- Implied tetap `efn_insight.group_insight_user`. Persona = hak data, bukan hak tindakan (§28.13.2 tetap berlaku).
+
+#### 28.15.3 Model cabang ESB dan penugasan user (L-240)
+Modul `efn_insight` (tanpa dependency SM; `depends` tidak berubah). CE 19 tidak punya padanan: `company_ids` hanya
+granular PT, `property_warehouse_id` self-writeable, cabang ESB bukan record Odoo (fit-gap 22 Nov).
+
+**Model `efn.insight.esb.branch`** ("Cabang ESB (Insight)", `_order = 'company_id, esb_brand, esb_branch_id'`):
+
+| Field | Tipe | Aturan |
+|---|---|---|
+| `company_id` | M2o `res.company`, wajib, index, `ondelete='restrict'` | domain `efn_brand_code in ESB_CODES` |
+| `esb_brand` | Selection `bacha`, `cup`, `imd`, `pb`, `wtz` (= `KNOWN_BRANDS` esb-extract), wajib | akun ESB |
+| `esb_branch_id` | Integer, wajib | 1..4294967295 (`@api.constrains`) |
+| `name` | Char, wajib | nama cabang (dari `v_esb_branch_list.branch_name`) |
+| `branch_code` | Char | opsional, dari `v_esb_branch_list.branch_code` |
+| `is_store` | Boolean, default `True` | hanya cabang toko yang dipakai scope |
+| `active` | Boolean, default `True` | arsip = hak dicabut |
+
+- `_efn_branch_unique = models.Constraint("UNIQUE(esb_brand, esb_branch_id)", …)` (`branch_id` hanya unik per akun ESB,
+  `12-g41-esb.sql:157`).
+- `@api.constrains('company_id', 'esb_brand')`: `bacha` → `efn_brand_code ∈ {BCF, BCR}`; `pb` → `PB`; `wtz` → `WTZ`;
+  `imd` → `IMD`; `cup` → `CUP` (mencegah cabang PB ditautkan ke PT lain).
+- Keamanan: `ir.model.access.csv` → `base.group_erp_manager` 1,1,1,1; **tanpa** akses untuk `group_insight_user`.
+  Record rule multi-company `[('company_id', 'in', company_ids)]`.
+- **Field `res.users.efn_insight_esb_branch_ids`**: Many2many `efn.insight.esb.branch`, relasi
+  `efn_res_users_insight_esb_branch_rel(user_id, branch_id)`, label "Cabang ESB dikelola (Insight)",
+  `domain="[('company_id', 'in', company_ids)]"`, `groups='base.group_erp_manager'`; **tidak** masuk
+  `SELF_WRITEABLE_FIELDS`. Tampil di form user bagian Insight.
+- Audit: `efn_insight_esb_branch_ids` ditambahkan ke `efn_audit.CONTROL_SPECS["res.users"]`; perubahan `company_id`,
+  `esb_brand`, `esb_branch_id`, `is_store`, `active` pada model cabang juga dilacak (mekanisme: belum terverifikasi,
+  §28.15.14).
+- Pemeliharaan: menu Settings → Users & Companies → **Cabang ESB (Insight)** (`base.group_erp_manager`). Diisi lewat
+  **impor CSV standar Odoo**; kolom `esb_brand,esb_branch_id,name,branch_code,is_store,active,company_id`. Sumber: ekspor
+  `efn_dwh.v_esb_branch_list` oleh operator data (langkah baru `docs/runbooks/esb-extract.md`). Odoo tidak membaca
+  ClickHouse dan esb-extract tidak menulis Odoo (tanpa kredensial baru). Cabang salah/tidak ada di ClickHouse → 0 baris
+  (fail closed). Pasca-cutover brand ke POS Odoo: kaitan ke `stock.warehouse` ditunda (YAGNI); F&B **tidak** boleh memakai
+  `efn_outlet_warehouse_ids` (milik `efn_assortment`, G44 supermarket).
+
+#### 28.15.4 Aturan cakupan v3 (Odoo `GET /efn/insight/open`; meralat §28.13.3)
+Konstanta baru (identik Odoo `lib/insight_token.py` dan insight-web `lib/claims.ts`):
+`FNB_PERSONAS = {exec, marketing, store}`, `ESB_BRANDS = {bacha, cup, imd, pb, wtz}`, `MAX_BRS = 50`.
+Notasi: `G` = persona dari grup yang dipegang user (`PERSONA_GROUPS`), `ALLB` = grup `all_brands`,
+`F` = `INSIGHT_FNB_PERSONA_ENABLED` string persis `true`.
+
+1. **Aturan store lintas domain (L-245, perluasan L-234):** bila `store ∈ G`, `exec ∉ G`, dan
+   `G ∩ {category, dc, marketing} ≠ ∅` → `store` dibuang (`G' = G − {store}`, `store_suppressed = true`); selain itu
+   `G' = G`. Hook SM menerima `G'` (perilakunya identik dengan L-234 yang sudah ada).
+2. **Store-only F&B** = `store ∈ G` ∧ `G ∩ {exec, marketing} = ∅` ∧ ¬`ALLB`. (`category`/`dc` tidak memberi apa pun di F&B.)
+3. **Bagian ESB:**
+   - (a) store-only F&B dan (`¬F` atau `store_suppressed`) → bagian ESB **kosong** (tanpa kode/cids ESB, `brs = []`).
+     **Pencabutan ini tidak bergantung flag** (L-241): akun kepala toko tidak pernah lagi mendapat semua cabang PT.
+   - (b) store-only F&B dan `F` dan tidak `store_suppressed` → `B` = record `user.efn_insight_esb_branch_ids` (sudo, hanya
+     id milik user) dengan `active`, `is_store`, `company_id.active`, `company_id.efn_brand_code ∈ ESB_CODES`, dan
+     `company_id` di `res_company_users_rel` user. `brs` = `"<esb_brand>:<esb_branch_id>"` untuk `B`; `codes`/`cids` ESB =
+     PT dari `B`; persona ESB = `{store}` bila `B ≠ ∅`. `B = ∅` → bagian ESB kosong.
+   - (c) selain itu → §26.2 apa adanya (`all_brands` atau PT ESB milik user), `brs = []`; persona ESB (hanya bila `F` dan
+     kode ESB tidak kosong) = `G' ∩ {exec, marketing}` ∪ (`{store}` bila `store ∈ G'` dan `exec ∈ G'`).
+4. **Bagian SM**: §28.13.3 butir 2 apa adanya dengan `G'`.
+5. **Gabung**: `codes`, `cids`, `roles` (= basis `user`/`all_brands` ∪ persona ESB ∪ persona SM) seperti §28.13.3 butir 3;
+   `brs` urut naik **string ASCII** (mis. `"pb:12" < "pb:7"`), unik.
+6. `codes` kosong → info `no_company`, kecuali user store-only F&B dengan `F` dan `B = ∅` → kunci info baru
+   **`no_branch`** (200, tanpa token): "Akun Anda belum ditautkan ke cabang ESB. Minta admin mengisi cabang Anda di Odoo."
+   `len(brs) > 50` → `scope_too_large`.
+7. Audit `ir.logging` menambah `v=3 brs_n=<n>` (tanpa daftar cabang).
+8. `EFN_INSIGHT_TOKEN_VERSION` = `1|2|3`, default **`3`** (nilai lain → `3`). `2` = rollback: `eit2` §28.13.4 tanpa `brs`,
+   dengan butir 3(a) tetap berlaku dan butir 3(b) diperlakukan seperti 3(a) (fail closed).
+
+Contoh: kepala toko PB (company 5) dengan cabang PB 7 dan 12, tanpa persona lain → `codes=["PB"]`, `cids=[5]`,
+`roles=["store","user"]`, `brs=["pb:12","pb:7"]`, `wids=[]`. Perubahan perilaku yang disengaja: user SMD store-only yang
+kebetulan punya PT PB di `company_ids` **kehilangan** akses penuh PB (sebelumnya `roles=["user"]`).
+
+#### 28.15.5 Token `eit3` dan cookie `eis3` (L-242; byte-exact, meralat §28.13.4–§28.13.5)
+Format = §28.13.4 dengan prefix **`eit3`**, `v = 3`, dan **tepat 14 kunci** (13 kunci `eit2` + `brs`):
+
+| Kunci | Tipe / nilai |
+|---|---|
+| `brs` | array string, unik, urut naik ASCII, 0..50; tiap butir cocok `^(bacha\|cup\|imd\|pb\|wtz):[1-9][0-9]{0,9}$` dan ≤ 4294967295 |
+| `v` | `3` |
+| lainnya | §28.13.4 tanpa perubahan |
+
+Aturan konsistensi v3 (pembuat **dan** penerima; gagal = `bad_claims`). `P = roles ∩ PERSONAS`,
+`ESB = codes ∩ ESB_CODES`, `SM = codes ∩ SM_CODES`:
+
+| # | Aturan (mengganti §28.13.4 butir 1–2) |
+|---|---|
+| T1 | `wids ≠ []` ⇔ `SM ≠ ∅`; `SM ≠ ∅` ⇒ `P ≠ ∅` |
+| T2 | `SM ≠ ∅` ⇒ (`0 ∈ wids` ⇔ `P ∩ {category, dc, exec, marketing} ≠ ∅`) |
+| T3 | `P ∩ {category, dc} ≠ ∅` ⇒ `SM ≠ ∅` |
+| T4 | `P ≠ ∅` ⇒ `SM ≠ ∅` ∨ `ESB ≠ ∅` |
+| T5 | `store ∈ P` ⇒ `P ⊆ {exec, store}` (L-245) |
+| T6 | `brs ≠ []` ⇔ (`store ∈ P` ∧ `exec ∉ P` ∧ `all_brands ∉ roles` ∧ `ESB ≠ ∅`) |
+| T7 | `cats ≠ []` ⇒ `category ∈ P` (tetap) |
+| T8 | `len(payload_b64) ≤ 3000` (tetap) |
+
+Regex penerima `^eit3\.[A-Za-z0-9_-]{16,3000}\.[A-Za-z0-9_-]{43}$`. Cookie **`eis3`** (nama `__Host-eis`, atribut §26.5):
+`"eis3." + payload_b64 + "." + sig_b64`, **tepat 10 kunci**, objek dibangun berurutan
+`brs, cats, cids, codes, exp, iat, name, roles, sub, wids`; regex `^eis3\.[A-Za-z0-9_-]{16,3000}\.[A-Za-z0-9_-]{43}$`;
+verifikasi per request = §26.5 + T1–T8.
+- `/sso` menerima `eit3`; `eit2` hanya bila **`INSIGHT_ACCEPT_EIT2=true`** (default `true` selama rollout G52, set `false`
+  setelah Odoo 19.0.3.0.0 di semua env; pola `INSIGHT_ACCEPT_EIT1`). Sesi `eis2` diperlakukan `brs = []`; halaman
+  `/fnb/*` → `buka-ulang`. Semua pemeriksaan "`v === 2`" di insight-web menjadi "`v >= 2`".
+
+**Vektor uji (sintetis)** — `KEY = "ab" * 32`; `payload_b64`/`sig_b64` dihitung builder Python dan Node lalu dicatat
+lead sebelum merge (prosedur §26.3):
+```
+D (store F&B PB) = {"aud":"insight-web","brs":["pb:12","pb:7"],"cats":[],"cids":[5],"codes":["PB"],"exp":1795000060,"iat":1795000000,"iss":"odoo","jti":"0123456789abcdef0123456789abcd01","name":"Andi Toko","roles":["store","user"],"sub":21,"v":3,"wids":[]}
+E (exec F&B + SMD) = {"aud":"insight-web","brs":[],"cats":[],"cids":[3,5,11],"codes":["BCF","PB","SMD"],"exp":1795000060,"iat":1795000000,"iss":"odoo","jti":"0123456789abcdef0123456789abcd02","name":"Budi Uji","roles":["exec","user"],"sub":7,"v":3,"wids":[0,20,21,22,23,24,25]}
+F (marketing F&B) = {"aud":"insight-web","brs":[],"cats":[],"cids":[5,6],"codes":["PB","WTZ"],"exp":1795000060,"iat":1795000000,"iss":"odoo","jti":"0123456789abcdef0123456789abcd03","name":"Maya Promo","roles":["marketing","user"],"sub":30,"v":3,"wids":[]}
+G (store Bacha butik) = {"aud":"insight-web","brs":["bacha:15"],"cats":[],"cids":[4],"codes":["BCR"],"exp":1795000060,"iat":1795000000,"iss":"odoo","jti":"0123456789abcdef0123456789abcd04","name":"Sinta Toko","roles":["store","user"],"sub":31,"v":3,"wids":[]}
+```
+Hasil (dicatat lead 22 Nov 2026; builder Python Odoo dan Node `scripts/print-eit3-vectors.mjs` identik; nilai lengkap
+`payload_b64` di `services/odoo/addons/efn_insight/tests/vectors_g52.json`):
+```
+sig_b64 D = K3j7k8kdp47V3RcoSOPeR0Nx3nSRz2x2SkZZnSq-MZ8
+sig_b64 E = vk05HlyTOz3MWai9uJ0_CdXfNEFn7mAj1GuaXcHffpE
+sig_b64 F = UnQtDnMznzz8hoYeNshIrPuz2DL80vgs2RP6QqfjaOc
+sig_b64 G = fYpWUco4kwc9yYd3pL12J7E-awa1N0cUGWmHBj2mSGI
+SQL_efn_sig3 D (5|PB|pb:12,pb:7)  = 8de4bbe4183a0ae0626d9221ec1d9cd62850b8bde670cdf71d17e4679d1dd181
+SQL_efn_sig3 E (3,5,11|BCF,PB|)   = ad10ccec05362ea92900d0a624e439f8e2dbaa5c930fb2515eedf63deaeba856
+```
+Negatif wajib: (N6) D dengan `roles` `["marketing","store","user"]` (T5); (N7) D dengan `brs=[]` (T6); (N8) F dengan
+`brs=["pb:7"]` (T6); (N9) `brs=["pb:07"]`; (N10) `brs=["PB:7"]`; (N11) `brs=["pb:7","pb:12"]` (urutan); (N12)
+`roles=["dc","user"]`, `codes=["PB"]`, `wids=[]` (T3); (N13) prefix `eit2` dengan `"v":3`; (N14) E dengan `brs=["pb:7"]`
+(exec, T6).
+
+#### 28.15.6 Setting cakupan ClickHouse untuk view ESB (L-243; meralat §26.7 dan §28.13.6 baris ESB)
+Dihitung insight-web dari sesi terverifikasi (`eis3`, atau `eis1`/`eis2` dengan `brs = []`), tidak pernah dari browser:
+
+| Setting | Nilai |
+|---|---|
+| `SQL_efn_cids` | `cids` sesi, koma, urut naik (tetap) |
+| `SQL_efn_codes` | `codes ∩ ESB_CODES`, koma (tetap) |
+| `SQL_efn_brs` | **baru**: `brs` sesi digabung koma, urutan token (boleh string kosong) |
+| `SQL_efn_sig3` | **baru, menggantikan `SQL_efn_sig` untuk view `efn_insight.v_esb_*`**: `lower(hex(SHA256(KEY + "\|" + cids + "\|" + codes + "\|" + brs)))`, `KEY` = byte ASCII string hex `insight_scope_key` |
+
+Pemisahan domain: v1 = 2 pemisah `|`, sig3 = 3, sig2 = 5; regex format setiap setting melarang `|` dan byte non-ASCII
+(SEC-190). Insight tidak lagi mengirim `SQL_efn_sig` (text2sql tidak berubah: database, kunci, dan policy sendiri).
+**Vektor scope**: `KEY + "|5|PB|pb:12,pb:7"` (D) dan `KEY + "|3,5,11|BCF,PB|"` (E); Python dan Node wajib identik.
+Signature fungsi insight-web: `scopeSettings(cids, codes, brs, key) → { SQL_efn_cids, SQL_efn_codes, SQL_efn_brs,
+SQL_efn_sig3 }`; `scopeSettingsSm` tidak berubah.
+
+#### 28.15.7 Row policy `efn_insight_scope` untuk view ESB (L-243, L-244; meralat loop `clickhouse-init.sh:443-446`)
+```sql
+-- bersama (FMT3 + SIG3); <K> = insight_scope_key tervalidasi
+company_code != ''
+AND match(getSetting('SQL_efn_codes'), '^[A-Z]{2,8}(,[A-Z]{2,8})*$')
+AND match(getSetting('SQL_efn_cids'), '^([0-9]{1,10}(,[0-9]{1,10})*)?$')
+AND match(getSetting('SQL_efn_brs'),
+    '^((bacha|cup|imd|pb|wtz):[1-9][0-9]{0,9}(,(bacha|cup|imd|pb|wtz):[1-9][0-9]{0,9})*)?$')
+AND has(splitByChar(',', getSetting('SQL_efn_codes')), company_code)
+AND getSetting('SQL_efn_sig3') = lower(hex(SHA256(concat('<K>', '|', getSetting('SQL_efn_cids'), '|',
+    getSetting('SQL_efn_codes'), '|', getSetting('SQL_efn_brs')))))
+
+-- kelas PT (cakupan PT penuh; sesi ber-cabang ditolak) = bersama +
+AND getSetting('SQL_efn_brs') = ''
+
+-- kelas BR (cabang) = bersama +
+AND (getSetting('SQL_efn_brs') = ''
+     OR has(splitByChar(',', getSetting('SQL_efn_brs')), concat(brand, ':', toString(branch_id))))
+```
+
+| View `efn_insight` | Kelas | Catatan |
+|---|---|---|
+| `v_esb_sales_daily`, `v_esb_sales_branch_daily` | PT | memuat `cogs` (Q-INS-F3) |
+| `v_esb_payment_daily` | PT | memuat `mdr`, baris `branch_id = 0` |
+| `v_esb_flow_daily`, `v_esb_menu_mix`, `v_esb_data_quality`, `v_esb_product_list`, `v_esb_coverage` | PT | tanpa/tak perlu cabang untuk Toko |
+| `v_esb_movement_daily` | PT | `company_code` = PT **asal** (SEC-IR-02/03); sisi terima untuk Toko lewat `v_esb_store_receipt_daily` |
+| `v_esb_branch_list` | BR | daftar cabang untuk chip/pemilih |
+| `v_esb_store_sales_daily`, `v_esb_store_menu_daily`, `v_esb_store_payment_daily`, `v_esb_store_receipt_daily` | BR | baru, §28.15.8 |
+
+Jumlah policy ESB **14** (10 + 4); konstanta di `clickhouse-init.sh` dan `test_insight_access.py` diubah bersama;
+pemeriksaan fail-closed "setiap view `efn_insight` punya policy" tetap. `--log_queries=0` (SEC-191).
+**Test negatif wajib** (ClickHouse 24.8): (E1) `brs=pb:7` tidak melihat baris `pb:12` di keempat view toko maupun
+`v_esb_branch_list`; (E2) `brs` tidak kosong → 0 baris di semua view kelas PT; (E3) sig3 dihitung dari `brs` lain → 0;
+(E4) sig v1 dipasang sebagai `SQL_efn_sig3` dengan `brs=''` → 0; (E5) `brs=PB:7` atau `pb:07` → 0; (E6) tanpa
+`SQL_efn_brs` → galat; (E7) baris `branch_id = 0` tidak terlihat sesi ber-cabang; (E8) kiriman ke cabang tujuan yang tidak
+dikenal `dim_esb_branch` tidak muncul di `v_esb_store_receipt_daily`; (E9) `brs=bacha:15` dengan `codes=BCF` (PT salah) → 0.
+
+#### 28.15.8 View baru (L-244; DEFINER `efn_insight_definer`, kolom eksplisit, tanpa kolom identitas)
+
+| View | Kolom (urutan tetap) | Sumber |
+|---|---|---|
+| `efn_insight.v_esb_store_sales_daily` | `sales_date, brand, company_code, branch_id, branch_name, trx_count, qty, gross, discount, net` | sumber yang sama dengan `efn_insight.v_esb_sales_branch_daily`; **tanpa `cogs`** |
+| `efn_insight.v_esb_store_menu_daily` | `sales_date, brand, company_code, branch_id, menu_code, menu_name, menu_category, qty, gross, discount, net` | sumber yang sama dengan `efn_insight.v_esb_sales_daily`; tanpa `cogs`, tanpa `trx_count` (tidak aditif di grain menu) |
+| `efn_insight.v_esb_store_payment_daily` | `sales_date, brand, company_code, branch_id, branch_name, payment_type, payment_method, payment_count, amount` | sumber `efn_insight.v_esb_payment_daily`, `WHERE branch_id != 0`; **tanpa `mdr`/`net`** |
+| `efn_insight.v_esb_store_receipt_daily` | `day, brand, company_code, branch_id, branch_name, origin_branch_id, origin_branch_name, origin_kind, item_group, category, product_code, product_name, uom, qty, lines` | `efn_dwh.v_esb_store_receipt_daily` (INVOKER, baru di `infra/clickhouse/init/21-g52-insight-fnb.sql`): `efn_dwh.v_esb_movement_daily WHERE kind = 'delivery'` **INNER JOIN** `dim_esb_branch FINAL` (`company_code != ''`, `is_store = 1`) pada `(brand, dest_branch_id)`; `company_code` = PT **tujuan**, `branch_id` = cabang tujuan |
+
+- Sumber "yang sama": ketika `20-esb-aggregates.sql` (branch `feat/esb-daily-aggregates`) masuk dan wrapper lama dialihkan ke
+  tabel agregat, wrapper toko dialihkan **bersama**; test `test_insight_access.py` menegaskan sumber pasangan view sama.
+  G52 tidak bergantung pada file itu.
+- Grant definer baru (per objek, tanpa wildcard): `efn_dwh.v_esb_store_receipt_daily`.
+- `v_esb_store_receipt_daily` memperlihatkan nama cabang asal (CK) milik PT lain dalam brand yang sama kepada toko
+  penerima: metadata kiriman yang diterima toko itu sendiri (konsisten SEC-IR-03).
+- PDP: ESB tidak membawa nomor HP/member (`memberCode` dibuang di `efn_esb/normalize.py:68-75`); tetap demikian (L-249).
+
+#### 28.15.9 Halaman, rute, gating, named query (L-238, L-246..L-248)
+
+| Rute | Persona | Grup sidebar | Sesi yang boleh |
+|---|---|---|---|
+| `/fnb/exec` | `exec` | Food & Beverage, item "Eksekutif" | `F`, `v = 3`, `ESB ≠ ∅`, `exec ∈ roles` |
+| `/fnb/store` | `store` | Food & Beverage, item "Toko" | `F`, `v = 3`, `ESB ≠ ∅`, `store ∈ roles` (cakupan `brs`, atau semua cabang bila `brs = []` karena exec/`all_brands`) |
+| `/fnb/marketing` | `marketing` | Food & Beverage, item "Marketing" | `F`, `v = 3`, `ESB ≠ ∅`, `marketing ∈ roles` |
+
+- Fungsi murni baru `fnbRouteDenial(pathname, session, fnbEnabled)` di `lib/fnb-personas.ts` (dipakai `proxy.ts` + halaman,
+  pola `smRouteDenial`): `!fnbEnabled` → `fnb-belum-aktif` (halaman info baru `/fnb-belum-aktif`); `v < 3` → `buka-ulang`;
+  `ESB = ∅` atau persona tidak ada → `tidak-berwenang`. **Tidak** membaca `INSIGHT_SM_ENABLED`.
+- **Sesi ber-cabang** (`brs ≠ []`): beranda `/` → `/fnb/store`; semua halaman F&B lain (`/`, `/sales`, `/payments`, `/flow`,
+  `/distribution`, `/forecast`, `/data-quality`) → `tidak-berwenang` (lapis kedua; lapis ClickHouse = kelas PT §28.15.7);
+  grup Ringkasan disembunyikan; grup F&B = hanya "Toko"; `/glosarium` tetap. Filter `branch` dipotong ke `brs` (nilai di
+  luar dibuang, kosong = semua `brs`); `pt` ⊆ `codes`. Chip: "Kepala toko · <nama cabang>" atau "Kepala toko · N cabang".
+- `navGroups` (§28.15.1): bila `F`, grup F&B diawali item persona F&B yang dimiliki, urutan Eksekutif, Toko, Marketing.
+- Named query baru di `lib/queries.ts` (prefix baru; `exec_*` milik Ikhtisar `queries.ts:123-198`), makro `${PT}`, `${BR}`,
+  rentang tanggal yang ada:
+
+| Query | View | Keluaran (ringkas) |
+|---|---|---|
+| `fexec_kpi` | `v_esb_sales_branch_daily` | `net_cur, net_yoy, cogs_cur, cogs_yoy, gm_cur, gm_yoy, trx_cur, trx_yoy` (`gm = net − cogs`; YoY = `[from, to]` vs `[addYears(from,−1), addYears(to,−1)]`) |
+| `fexec_margin_monthly` | `v_esb_sales_branch_daily` | `month, company_code, net, cogs, gm` (13 bulan) |
+| `fexec_pt_compare` | `v_esb_sales_branch_daily` | `brand, company_code, net, cogs, gm, gm_pct, trx, net_yoy` |
+| `fexec_mdr_cost` | `v_esb_payment_daily` | `company_code, payment_method, amount, mdr, mdr_pct` |
+| `fexec_branch_rank` | `v_esb_sales_branch_daily` | `brand, company_code, branch_id, branch_label, net, gm, gm_pct, net_yoy, growth_pct` (urut `gm` turun, ≤ 500) |
+| `fexec_yoy_coverage` | `v_esb_coverage` | `company_code, first_day` (entity `sales`): YoY "—" + "data tahun lalu belum tersedia" bila `first_day > addYears(from,−1)` |
+| `fstore_kpi` | `v_esb_store_sales_daily` | `net_day, net_day_lw, trx_day, trx_day_lw, avg_trx_day, avg_trx_lw` (`day` vs `day − 7`) |
+| `fstore_daily_vs_lastweek` | `v_esb_store_sales_daily` | `sales_date, brand, branch_id, net, trx` untuk `[day − 13, day]` |
+| `fstore_top_menu` | `v_esb_store_menu_daily` | `menu_code, menu_name, menu_category, qty, net` (urut `qty` turun, ≤ 20) |
+| `fstore_payment_mix` | `v_esb_store_payment_daily` | `payment_type, payment_method, payment_count, amount` |
+| `fstore_ck_receipts` | `v_esb_store_receipt_daily` | `day, origin_branch_name, item_group, product_code, product_name, uom, qty, lines` (≤ 500; qty tidak dijumlah lintas `uom`) |
+| `fstore_branch_list` | `v_esb_branch_list` | `brand, company_code, branch_id, branch_name` (`is_store = 1`, `active = 1`) |
+| `fmkt_discount_kpi` | `v_esb_sales_branch_daily` | `gross, discount, net, disc_pct` (= discount/gross) + periode lalu |
+| `fmkt_discount_trend` | `v_esb_sales_branch_daily` | `sales_date, gross, discount` |
+| `fmkt_discount_menu` | `v_esb_sales_daily` | `brand, menu_code, menu_name, menu_category, qty, gross, discount, disc_pct` (≤ 100) |
+| `fmkt_discount_branch` | `v_esb_sales_branch_daily` | `brand, company_code, branch_id, branch_label, gross, discount, disc_pct` |
+| `fmkt_channel_mix` | `v_esb_payment_daily` | `payment_type, payment_method, payment_count, amount`; dikelompokkan di `lib/channels.ts` (Q-INS-F4) |
+| `fmkt_takeaway_share` | `v_esb_sales_daily` | `is_takeaway, qty, net`; label wajib "perkiraan (ditebak dari nama menu)" |
+
+- Isi halaman: **Eksekutif F&B** hanya brand ESB (SMD tetap di Ikhtisar/Eksekutif Supermarket), basis tanpa pajak; tanpa
+  waste/WAPE (tidak ada data ESB). **Toko F&B**: `day` default = `max(sales_date)` cabang ≤ kemarin WIB; tanpa data per jam
+  (L-112), tanpa waste, tanpa HPP/margin/MDR. **Marketing F&B**: tanpa data member/segmen (tidak ada di ESB).
+- Ekspor CSV mengikuti C3 (§26.13) dan k-anonim yang ada.
+
+#### 28.15.10 Flag & env
+
+| Flag / env | Lokasi | Default | Production | Demo / prod-lokal |
+|---|---|---|---|---|
+| **`INSIGHT_FNB_PERSONA_ENABLED`** (baru; aktif hanya string persis `true`) | Odoo + insight-web | `false` | `false` sampai pemetaan cabang dimuat (Q-INS-F2), QA + review security G52 lulus | `true` |
+| **`INSIGHT_ACCEPT_EIT2`** (baru) | insight-web | `true` (rollout) | `false` setelah Odoo 19.0.3.0.0 | `false` setelah upgrade |
+| `EFN_INSIGHT_TOKEN_VERSION` (ada) | Odoo | `3` | `3` | `3` |
+| `INSIGHT_SM_ENABLED` (ada) | Odoo + insight-web | tidak berubah; **tidak** memengaruhi halaman `/fnb/*` | | |
+
+Tidak ada secret baru. Urutan deploy: (1) `clickhouse-init` + insight-web **dalam satu rilis** (policy sig3 membuat
+insight-web lama gagal tertutup); (2) Odoo `-u efn_insight,efn_insight_sm`; (3) `INSIGHT_ACCEPT_EIT2=false`.
+
+#### 28.15.11 Kombinasi persona F&B (L-245)
+
+| Grup dipegang | Cakupan ESB | `roles` (persona) | Halaman F&B persona |
+|---|---|---|---|
+| exec | PT penuh | `exec` | Eksekutif |
+| marketing | PT penuh | `marketing` | Marketing |
+| store saja | cabang `brs` | `store` | Toko (cabang sendiri) |
+| store + exec | PT penuh (exec menutupi) | `exec, store` | Eksekutif, Toko (pilih cabang) |
+| store + marketing | PT penuh | `marketing` (store **tidak** diterbitkan, SEC-G47-01) | Marketing |
+| store + category/dc (SMD) | **tidak ada** cakupan ESB | `category`/`dc` | — (fail closed) |
+| store + `all_brands` | semua brand | `store` hanya bila SM menerbitkannya | Toko dengan semua cabang bila `store ∈ roles` |
+
+Alasan store + marketing tidak menerbitkan `store`: `roles` adalah satu himpunan untuk F&B **dan** SMD; menambah `store`
+di samping `marketing` membuka `v_sm_payment_daily` (persona `exec, store`) untuk seluruh outlet SMD, yaitu celah yang
+ditutup SEC-G47-01. Memecah persona per domain di token = biaya ±3–4 hari tambahan dan format baru; tidak sepadan.
+
+#### 28.15.12 Keputusan (L-237..L-249)
+| # | Keputusan |
+|---|---|
+| L-237 | (pemilik proyek 22 Nov 2026) Ringkasan = Ikhtisar saja; Penjualan, Pembayaran, Forecast tampil di grup F&B dan Supermarket; salinan Supermarket hanya untuk sesi exec + SMD (L-219). Sudah dibangun (`0aab9ab`). |
+| L-238 | (pemilik proyek) Eksekutif, Toko, Marketing versi F&B dari data ESB, rute `/fnb/exec`, `/fnb/store`, `/fnb/marketing`, di grup F&B; flag `INSIGHT_FNB_PERSONA_ENABLED` terpisah dari `INSIGHT_SM_ENABLED`. |
+| L-239 | (pemilik proyek) Grup persona yang sama untuk F&B dan SMD, dipindah ke `efn_insight` 19.0.3.0.0 dengan nama xmlid tetap; pre-migrate rename `ir_model_data.module` di kedua modul; F&B memakai exec/store/marketing; dc/category khusus SMD; `kpi_admin` tetap di `efn_insight_sm`. |
+| L-240 | (pemilik proyek) Model `efn.insight.esb.branch` + `res.users.efn_insight_esb_branch_ids`, ACL `base.group_erp_manager`, rule multi-company, unik `(esb_brand, esb_branch_id)`, konsistensi brand ↔ PT, impor CSV dari `v_esb_branch_list`. |
+| L-241 | (pemilik proyek, least privilege) Kepala toko F&B store-only hanya mendapat cabang yang ditugaskan; cakupan PT penuh dicabut **tanpa bergantung flag**. Klaim `brs` = `"<esb_brand>:<branch_id>"` (bukan `"<CODE>:<id>"` usulan lead: kunci mart adalah `(brand, branch_id)` dan Bacha melayani BCF + BCR; format sama dengan filter `branch` §26.9). |
+| L-242 | Token/sesi `eit3`/`eis3` (`v = 3`, + `brs`), aturan T1–T8; `EFN_INSIGHT_TOKEN_VERSION` default 3; `eit2` diterima selama `INSIGHT_ACCEPT_EIT2=true`. |
+| L-243 | View ESB memakai `SQL_efn_brs` + `SQL_efn_sig3` (`KEY\|cids\|codes\|brs`) menggantikan sig v1 insight; kelas PT (brs wajib kosong) dan BR (predikat cabang); 14 policy ESB. |
+| L-244 | Empat view toko tanpa `cogs`/`mdr`; `v_esb_store_receipt_daily` ber-`company_code` PT tujuan, cabang tujuan tak dikenal tidak muncul. |
+| L-245 | Aturan store lintas domain: `store` hanya diterbitkan sendirian atau bersama `exec`; store + marketing → marketing saja; store + category/dc → tanpa cakupan ESB; store + `all_brands` → semua brand. |
+| L-246 | (pemilik proyek) Eksekutif F&B = halaman baru: margin kotor (`net − cogs`), YoY, perbandingan brand/PT, biaya MDR, peringkat cabang; query `fexec_*`; tanpa waste/WAPE; tanpa SMD. |
+| L-247 | (pemilik proyek) Marketing F&B: analisis diskon (nilai, % gross, per menu/cabang), kanal dari `payment_method`, dine-in vs takeaway berlabel "perkiraan"; query `fmkt_*`. |
+| L-248 | (pemilik proyek) Toko F&B: penjualan harian vs minggu lalu, menu terlaris, metode bayar, kiriman CK diterima; tanpa data per jam (L-112), waste, HPP/margin (default Q-INS-F3); query `fstore_*`. |
+| L-249 | PDP: tidak ada data member/nomor HP dari ESB di G52; log Odoo/insight-web hanya jumlah cabang (`brs_n`), bukan daftar. |
+
+#### 28.15.13 Pertanyaan klien baru (default sudah diterapkan)
+- **Q-INS-F1** — Persona berlaku untuk semua PT user (mis. exec di SMD sekaligus kepala toko di PB tidak bisa dinyatakan
+  dalam satu akun). Default: diterima; kebutuhan seperti itu memakai akun terpisah.
+- **Q-INS-F2** — Siapa memelihara pemetaan cabang ESB dan penugasan kepala toko? Default: admin TI per PT (impor CSV).
+- **Q-INS-F3** — Kepala toko F&B boleh melihat HPP/margin cabangnya? Default: tidak (view toko tanpa `cogs`). Bila "ya":
+  tambah kolom `cogs` ke `v_esb_store_sales_daily` (±0,5 hari).
+- **Q-INS-F4** — Nama metode bayar ESB yang dihitung sebagai kanal online (GoFood, GrabFood, ShopeeFood, dll.)? Default:
+  pola nama di `lib/channels.ts`, ditinjau bersama data nyata saat build; tidak cocok → "Lainnya".
+
+#### 28.15.14 Risiko & belum terverifikasi
+| Risiko | Mitigasi |
+|---|---|
+| R-S22 (lanjutan) cakupan cabang bocor (store melihat cabang lain/PT penuh) | pencabutan tanpa flag, T5/T6, kelas PT/BR + sig3, test E1–E9 dan N6–N14 |
+| R-S22 (lanjutan) keanggotaan grup hilang saat relokasi modul | pre-migrate di dua modul, upgrade bersamaan, test upgrade dari DB demo SMD |
+| R-T22 (lanjutan) porsi takeaway dan kanal disalahartikan | label "perkiraan", pemetaan kanal Q-INS-F4 |
+| Outage singkat saat deploy (policy sig3 vs insight-web lama) | satu rilis ClickHouse + insight-web; hanya env lokal (K25-06) |
+
+**Belum terverifikasi:** perilaku `_process_end` Odoo 19 saat xmlid pindah modul dan upgrade hanya satu modul (wajib diuji);
+mekanisme audit perubahan record `efn.insight.esb.branch` di `efn_audit`; isi nyata `payment_method` ESB untuk kanal
+online; status impor G43 per brand (tidak dipakai, cabang dipetakan ke model baru); performa `v_esb_store_menu_daily` di
+atas `v_esb_sales_daily` yang lambat sebelum agregat `20-esb-aggregates.sql` masuk. Semua perilaku runtime G52 (belum ada
+kode).
+
+#### 28.15.15 Rencana bangun per agent (satu cek per langkah)
+| Agent | Pekerjaan | Cek terverifikasi |
+|---|---|---|
+| efn-odoo-engineer | §28.15.2–§28.15.5: relokasi grup + pre-migrate, model/field cabang, scope v3, token `eit3` | `odoo --test-tags efn_insight,efn_insight_sm,efn_role` hijau, termasuk: upgrade DB demo SMD mempertahankan id grup + anggota; vektor D–G byte-identik dengan Node; user store-only tanpa cabang → `no_branch` dan tanpa kode PB |
+| efn-data-ai-engineer (+ devsecops) | §28.15.7–§28.15.8: 4 view, `21-g52-insight-fnb.sql`, policy 14, grant, harness | `pytest services/esb-extract/tests/test_insight_access.py` + test ClickHouse 24.8 E1–E9 lulus di container |
+| efn-frontend-engineer | §28.15.5–§28.15.6, §28.15.9: `eit3`/`eis3`, `scopeSettings` sig3, `fnbRouteDenial`, nav, 3 halaman, query `fexec_*`/`fstore_*`/`fmkt_*` | Vitest hijau: vektor v3 + N6–N14, vektor sig3 sama dengan Python, matriks `fnbRouteDenial` × 7 baris §28.15.11, snapshot `navGroups` |
+| efn-qa-engineer | E2E di `efn-dev` dengan 5 akun (exec PB, marketing PB+WTZ, store PB 1 cabang, store BCR, exec+store PB+SMD) | angka tiap kartu = query admin langsung; store PB: `/sales` → `tidak-berwenang`, cabang lain 0 baris |
+| efn-security-reviewer | review token, sig3, policy, pencabutan, SEC-G47-01 | `docs/reviews/SECURITY_REVIEW_<tanggal>_g52.md` tanpa temuan High/Medium terbuka |
+
+#### 28.15.16 Estimasi (architect)
+| Komponen | Hari-engineer | Pemilik |
+|---|---|---|
+| Odoo: relokasi grup + migrasi + test upgrade | 1,5–2 | efn-odoo-engineer |
+| Odoo: model/field cabang, menu, impor, audit | 1–1,5 | efn-odoo-engineer |
+| Odoo: scope v3 + token `eit3` + test | 1,5–2 | efn-odoo-engineer |
+| ClickHouse: 4 view, policy 14, grant, harness E1–E9 | 2–3 | efn-data-ai-engineer + efn-devsecops-engineer |
+| insight-web: `eit3`/`eis3`, sig3, gating, nav | 2–2,5 | efn-frontend-engineer |
+| insight-web: 3 halaman + 18 query + Vitest | 4–5,5 | efn-frontend-engineer (+ efn-uiux-designer) |
+| QA + security | 2–2,5 | efn-qa-engineer, efn-security-reviewer |
+| **Total** | **±14–19** | |

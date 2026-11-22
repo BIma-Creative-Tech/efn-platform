@@ -12,7 +12,7 @@ import { announce } from '@/lib/client-nav';
 import { useBusy } from '@/lib/loading-store';
 import { buildEsbQuery, nextPt, sameSet, type FilterDraft } from '@/lib/filter-url';
 import { fmtRange } from '@/lib/format';
-import { appliesTo, DATE_NA_REASON } from '@/lib/page-filters';
+import { appliesTo, DATE_NA_REASON, selectableCodes } from '@/lib/page-filters';
 import { DateRangeControl } from './DateRangeControl';
 import { MultiSelect, type Option } from './MultiSelect';
 
@@ -36,9 +36,12 @@ interface Props {
 
 const DEBOUNCE_MS = 500;
 
-function FilterForm({ options, sessionCodes, smdAllowed = false, defaults, yesterday }: Props): React.ReactNode {
+function FilterForm({ options, sessionCodes: allSessionCodes, smdAllowed: smdAllowedProp = false, defaults, yesterday }: Props): React.ReactNode {
   const router = useRouter();
   const pathname = usePathname();
+  // Halaman persona F&B (/fnb/*) hanya ESB: tanpa chip SMD, tanpa cabang `sm:`.
+  const sessionCodes = selectableCodes(pathname, allSessionCodes);
+  const smdAllowed = smdAllowedProp && sessionCodes.includes('SMD');
   const sp = useSearchParams();
   const [pending, start] = useTransition();
   useBusy(pending);

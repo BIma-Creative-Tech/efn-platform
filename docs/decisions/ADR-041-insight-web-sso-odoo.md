@@ -4,7 +4,8 @@
   `INSIGHT_ENABLED=false` default (Odoo dan insight-web); production menunggu review security, DPO (nama tampilan di
   cookie + log audit), **Q-ESB1/Q-ESB7/Q-ESB9** (G41), dan **Q-INS1/Q-INS4** (ADR ini).
 - **Tanggal:** 2026-11-18 (Gelombang 42); **revisi 2026-11-18 (Supermarket, §3.3): cakupan level outlet + 5 persona**;
-  §3.4 2026-11-20; **addendum §3.5 2026-11-21 (G51): filter terpadu F&B + SMD, Proposed**
+  §3.4 2026-11-20; **addendum §3.5 2026-11-21 (G51): filter terpadu F&B + SMD, Proposed**; **addendum §3.6
+  2026-11-22 (G52): persona F&B + cakupan cabang ESB, Proposed**
 - **Pemutus:** pemilik proyek (lingkup pengguna & grup Holding), IT klien (jaringan staf/outlet), Legal/DPO (data
   pribadi staf di sesi & log), Security (kunci SSO)
 - **Referensi review:** R-L01 (PDP), R-S03 (Odoo tidak terekspos), R-S10 (insider), R-T06 (angka dashboard dipakai
@@ -219,6 +220,33 @@ dimitigasi sig2 sesi + row policy kelas W + test negatif baru), R-T06.
 
 **Pertanyaan terbuka.** Q-SM46 terjawab 21 Nov 2026 (total + subtotal segmen, L-236), Q-SM47 terjawab 21 Nov 2026 (semua lot ditampilkan);
 Q-INS-S9 tetap (exec membuka halaman persona lain).
+
+### 3.6 Addendum 22 Nov 2026 — persona F&B dari data ESB dan cakupan cabang (G52, Proposed)
+
+> **Ringkasan manajemen.** Direksi, Kepala toko, dan Marketing F&B mendapat halaman sendiri dari data ESB, memakai grup
+> Odoo yang sama dengan supermarket. Kepala toko F&B hanya melihat cabangnya (sebelumnya akses PT berarti semua cabang).
+> Biaya ±14–19 hari-engineer. Klien perlu menjawab Q-INS-F1..F4 (default sudah diterapkan).
+
+**Konteks.** Keputusan pemilik proyek 22 Nov 2026 bertentangan dengan dua butir ADR ini: §3.4 menaruh grup persona di
+modul jembatan `efn_insight_sm` ("`efn_insight` tetap terpasang di instalasi F&B tanpa modul supermarket"), dan §2.3/§3
+membatasi data ESB **per PT saja** (row policy `company_code` + `SQL_efn_sig`).
+
+| # | Opsi | Kelebihan | Kekurangan | Biaya |
+|---|---|---|---|---|
+| **P1** | **Grup pindah ke `efn_insight` (xmlid tetap, rename `ir_model_data.module`) + model cabang ESB + klaim `brs` + sig3 + kelas policy PT/BR** | Satu set grup; least privilege ditegakkan Odoo + aplikasi + ClickHouse; tanpa modul baru | Token `eit3`, semua query ESB ganti tanda tangan (satu rilis ClickHouse + insight-web) | ±14–19 hari |
+| P2 | Grup F&B baru terpisah di `efn_insight` | Tanpa migrasi xmlid | Dua grup per persona (widget privilege Odoo 19 rawan menghapus salah satu); admin bingung | ±13–17 hari |
+| P3 | Pembatasan cabang hanya di aplikasi | Tanpa perubahan token/policy | Satu bug UI = semua cabang PT terbaca; melanggar pola "ditegakkan dua kali" | ±9–12 hari, tidak direkomendasikan |
+
+**Keputusan yang direkomendasikan: P1**, rinci di `docs/04` §28.15 (L-237..L-249). Butir §3.4 tentang letak grup
+**diganti**; butir lain §3.3–§3.5 tetap.
+
+**Konsekuensi.** (+) Akun kepala toko tidak lagi mendapat semua cabang PT (pencabutan tidak bergantung flag); grup
+persona sama untuk F&B dan SMD. (−) `roles` tetap satu himpunan untuk dua domain, sehingga store + marketing tidak bisa
+menerbitkan `store` (SEC-G47-01) dan persona berlaku untuk semua PT user (Q-INS-F1); migrasi xmlid wajib diuji.
+
+**Risiko terkait.** R-S22 (cakupan bocor; kehilangan keanggotaan grup saat relokasi), R-T22 (porsi takeaway/kanal
+"perkiraan"). **Pertanyaan terbuka.** Q-INS-F1..Q-INS-F4. **Ditinjau ulang** saat brand F&B cutover ke POS Odoo (cabang
+→ `stock.warehouse`) atau bila persona perlu berbeda per PT.
 
 ## 4. Konsekuensi
 

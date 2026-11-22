@@ -10,9 +10,14 @@ Urutan (fit-gap efn-odoo-functional G42 §C.4, diperluas G47):
   (d) cakupan ESB (sudo; PT arsip tidak ikut; `all_brands` -> 6 kode ESB) + (eit2 saja) cakupan supermarket dari hook
       `res.users._efn_insight_sm_scope()` bila `INSIGHT_SM_ENABLED` = "true" persis -> kosong = halaman info
       "no_company" / "no_outlet"; payload > 3000 karakter b64 / wids > 200 / cats > 50 = "scope_too_large";
-  (e) token (`EFN_INSIGHT_TOKEN_VERSION`: "1" = eit1 rollback, lainnya = eit2) -> halaman POST auto-submit ke
-      `<EFN_INSIGHT_URL>/sso` (token tidak pernah di query string); audit `ir.logging` + log server tanpa
-      token/nama/login dan tanpa daftar wids/cats (hanya jumlah).
+  (e) token (`EFN_INSIGHT_TOKEN_VERSION`: "1" = eit1 rollback, "2" = eit2 rollback, lainnya = eit3) -> halaman POST
+      auto-submit ke `<EFN_INSIGHT_URL>/sso` (token tidak pernah di query string); audit `ir.logging` + log server
+      tanpa token/nama/login dan tanpa daftar wids/cats/brs (hanya jumlah).
+
+G52 (docs/04 §28.15.4, ADR-041 §3.6): persona F&B (exec/marketing/store) dari grup `PERSONA_GROUPS` bila
+`INSIGHT_FNB_PERSONA_ENABLED` = "true" persis; aturan store lintas domain (L-245) menghasilkan G' untuk hook SM;
+kepala toko F&B store-only hanya mendapat cabang `efn_insight_esb_branch_ids` (klaim `brs`, eit3) dan **kehilangan
+cakupan PT penuh di semua versi token, tanpa bergantung flag** (L-241; eit1/eit2 = bagian ESB kosong, fail closed).
 """
 
 import logging
@@ -34,6 +39,7 @@ _logger = logging.getLogger(__name__)
 
 ENABLED_ENV = "INSIGHT_ENABLED"
 SM_ENABLED_ENV = "INSIGHT_SM_ENABLED"
+FNB_ENABLED_ENV = "INSIGHT_FNB_PERSONA_ENABLED"
 TOKEN_VERSION_ENV = "EFN_INSIGHT_TOKEN_VERSION"  # noqa: S105 - nama variabel env, bukan secret
 URL_ENV = "EFN_INSIGHT_URL"
 KEY_FILE_ENV = "EFN_INSIGHT_SSO_KEY_FILE"
@@ -51,9 +57,13 @@ INFO_MESSAGES = {
     "Insight semua brand.",
     # G47 (docs/04 §28.13.3 butir 4): persona store tanpa outlet yang ditugaskan.
     "no_outlet": "Akun Anda belum ditautkan ke outlet. Minta admin mengisi outlet Anda di Odoo.",
-    # G47 (docs/04 §28.13.3 butir 5).
+    # G52 (docs/04 §28.15.4 butir 6): kepala toko F&B store-only tanpa cabang ESB yang sah.
+    "no_branch": "Akun Anda belum ditautkan ke cabang ESB. Minta admin mengisi cabang Anda di Odoo.",
+    # G47 (docs/04 §28.13.3 butir 5) + G52 (brs > 50).
     "scope_too_large": "Cakupan akun Anda terlalu besar untuk dibuka sekaligus "
-    "(terlalu banyak outlet atau kategori). Hubungi admin.",
+    "(terlalu banyak outlet, cabang, atau kategori). Hubungi admin.",
+    # SEC-G52-02: kombinasi persona yang ditolak aturan token (mis. exec + store + marketing) -> info, bukan 500.
+    "persona_conflict": "Kombinasi peran Insight akun Anda tidak didukung. Minta admin merapikan grup Insight Anda.",
 }
 
 
@@ -68,9 +78,16 @@ def _sm_enabled():
     return os.environ.get(SM_ENABLED_ENV) == "true"
 
 
+def _fnb_enabled():
+    # docs/04 §28.15.10: string persis "true" (dua sisi, aturan sama dengan INSIGHT_ENABLED).
+    return os.environ.get(FNB_ENABLED_ENV) == "true"
+
+
 def _token_version():
-    # docs/04 §28.13.3 butir 7: `1|2`, default 2; nilai lain -> 2. `1` = rollback eit1 (bagian SM diabaikan).
-    return 1 if (os.environ.get(TOKEN_VERSION_ENV) or "").strip() == "1" else 2
+    # docs/04 §28.15.4 butir 8: `1|2|3`, default 3; nilai lain -> 3. `1` = rollback eit1 (bagian SM diabaikan),
+    # `2` = rollback eit2 (tanpa brs; kepala toko F&B store-only = bagian ESB kosong).
+    value = (os.environ.get(TOKEN_VERSION_ENV) or "").strip()
+    return {"1": 1, "2": 2}.get(value, 3)
 
 
 def _load_config():
@@ -107,6 +124,66 @@ def _insight_scope(env, user):
     return sorted({c.efn_brand_code for c in own}), sorted(own.ids), ["user"]
 
 
+def _company_rel_ids(env, user):
+    """Id company di `res_company_users_rel` user (bukan switcher), pola §26.2."""
+    env["res.users"].flush_model(["company_ids"])
+    env.cr.execute("SELECT cid FROM res_company_users_rel WHERE user_id = %s", (user.id,))
+    return {row[0] for row in env.cr.fetchall()}
+
+
+def _user_branches(env, user):
+    """docs/04 §28.15.4 butir 3(b): cabang ESB sah milik user (sudo, hanya id milik user).
+
+    Sah = cabang aktif, `is_store`, company aktif berkode ESB, dan company ada di tabel relasi user.
+    """
+    rel_ids = _company_rel_ids(env, user)
+    branches = user.sudo().with_context(active_test=False).efn_insight_esb_branch_ids
+    return branches.filtered(
+        lambda b: (
+            b.active
+            and b.is_store
+            and b.company_id.active
+            and b.company_id.efn_brand_code in insight_token.ESB_CODES
+            and b.company_id.id in rel_ids
+            and b.company_id.efn_brand_code in insight_token.BRAND_COMPANY_CODES.get(b.esb_brand, ())
+        )
+    )
+
+
+def _esb_scope(env, user, held, version, fnb):
+    """Bagian ESB v3 (docs/04 §28.15.4 butir 1-3). Dict codes/cids/roles(basis)/personas/brs/no_branch.
+
+    `held` = G (persona dari grup). Pencabutan cakupan PT penuh untuk kepala toko F&B store-only berlaku di semua
+    versi token dan tanpa bergantung flag (L-241); `brs` hanya di eit3 (versi 2/1 = bagian ESB kosong, fail closed).
+    """
+    g_prime, suppressed = insight_token.suppress_store(held)
+    all_brands = user.has_group(GROUP_ALL_BRANDS)
+    codes, cids, roles = _insight_scope(env, user)
+    result = {"codes": codes, "cids": cids, "roles": roles, "personas": [], "brs": [], "no_branch": False}
+    if insight_token.is_store_only_fnb(held, all_brands):
+        empty = dict(result, codes=[], cids=[])
+        if version != 3 or not fnb or suppressed:
+            return empty  # 3(a)
+        branches = _user_branches(env, user)
+        if not branches:
+            # Penyimpangan kecil yang disengaja: info no_branch hanya bila user memang punya PT ESB (selain itu
+            # pesan cabang ESB menyesatkan untuk kepala toko SMD; no_outlet/no_company tetap berlaku).
+            return dict(empty, no_branch=bool(codes))
+        return dict(
+            result,
+            codes=sorted({b.company_id.efn_brand_code for b in branches}),
+            cids=sorted(set(branches.company_id.ids)),
+            personas=["store"],
+            brs=sorted({f"{b.esb_brand}:{b.esb_branch_id}" for b in branches}),
+        )
+    if version == 3 and fnb and codes:
+        personas = set(g_prime) & {"exec", "marketing"}
+        if "store" in g_prime and "exec" in g_prime:
+            personas.add("store")
+        result["personas"] = sorted(personas)
+    return result
+
+
 def merge_scope(esb, sm):
     """Gabung cakupan ESB `(codes, cids, roles)` + hook SM (docs/04 §28.13.3 butir 3). Fungsi murni (diuji)."""
     codes, cids, roles = esb
@@ -117,6 +194,14 @@ def merge_scope(esb, sm):
         "wids": sorted(set(sm.get("wids") or ())),
         "cats": sorted(set(sm.get("cats") or ())),
     }
+
+
+def merge_scope_v3(esb, sm):
+    """docs/04 §28.15.4 butir 5: gabung bagian ESB (dict `_esb_scope`) + hook SM; `brs` urut ASCII, unik."""
+    scope = merge_scope((esb["codes"], esb["cids"], esb["roles"]), sm)
+    scope["roles"] = sorted(set(scope["roles"]) | set(esb["personas"]))
+    scope["brs"] = sorted(set(esb["brs"]))
+    return scope
 
 
 class EfnInsightController(http.Controller):
@@ -132,11 +217,19 @@ class EfnInsightController(http.Controller):
         if config is None:
             return self._info("config", status=503)
         action, origin, key = config
-        esb = _insight_scope(request.env, user)
-        if _token_version() == 1:
+        version = _token_version()
+        held = user._efn_insight_personas()
+        esb = _esb_scope(request.env, user, held, version, _fnb_enabled())
+        if version == 1:
             token, payload = self._token_v1(user, esb, key)
         else:
-            token, payload = self._token_v2(user, esb, key)
+            # Hook SM menerima G' (docs/04 §28.15.4 butir 1/4).
+            g_prime = insight_token.suppress_store(held)[0]
+            sm = user._efn_insight_sm_scope(personas=g_prime) if _sm_enabled() else empty_sm_scope()
+            if version == 2:
+                token, payload = self._token_v2(user, esb, sm, key)
+            else:
+                token, payload = self._token_v3(user, esb, sm, key)
         if token is None:
             return payload  # halaman info
         self._audit(user.id, payload)
@@ -152,7 +245,7 @@ class EfnInsightController(http.Controller):
     # ------------------------------------------------------------------ helper (bukan route)
     def _token_v1(self, user, esb, key):
         """Jalur rollback eit1 (docs/04 §26.3 persis; bagian SM diabaikan). (token, payload) atau (None, info)."""
-        codes, cids, roles = esb
+        codes, cids, roles = esb["codes"], esb["cids"], esb["roles"]
         if not codes:
             _logger.info("insight_no_company uid=%s", user.id)
             return None, self._info("no_company")
@@ -167,17 +260,16 @@ class EfnInsightController(http.Controller):
         )
         return insight_token.encode_token(payload, key), payload
 
-    def _token_v2(self, user, esb, key):
-        """eit2 (docs/04 §28.13.3-§28.13.4). (token, payload) atau (None, halaman info)."""
-        sm = user._efn_insight_sm_scope() if _sm_enabled() else empty_sm_scope()
-        scope = merge_scope(esb, sm)
+    def _token_v2(self, user, esb, sm, key):
+        """eit2 (docs/04 §28.13.3-§28.13.4; rollback G52 §28.15.4 butir 8). (token, payload) atau (None, info)."""
+        scope = merge_scope((esb["codes"], esb["cids"], esb["roles"]), sm)
         if not scope["codes"]:
             state = "no_outlet" if sm.get("no_outlet") else "no_company"
             _logger.info("insight_%s uid=%s", state, user.id)
             return None, self._info(state)
         wids_n, cats_n = len(scope["wids"]), len(scope["cats"])
         if wids_n > insight_token.MAX_WIDS or cats_n > insight_token.MAX_CATS:
-            return None, self._too_large(user.id, wids_n, cats_n)
+            return None, self._too_large(user.id, wids_n, cats_n, 0)
         payload = insight_token.build_payload_v2(
             sub=user.id,
             name=user.name,
@@ -190,11 +282,47 @@ class EfnInsightController(http.Controller):
         except ValueError as exc:
             if str(exc) != "scope_too_large":
                 raise
-            return None, self._too_large(user.id, wids_n, cats_n)
+            return None, self._too_large(user.id, wids_n, cats_n, 0)
         return token, payload
 
-    def _too_large(self, uid, wids_n, cats_n):
-        _logger.info("insight_scope_too_large uid=%s wids_n=%s cats_n=%s", uid, wids_n, cats_n)
+    def _token_v3(self, user, esb, sm, key):
+        """eit3 (docs/04 §28.15.4-§28.15.5). (token, payload) atau (None, halaman info)."""
+        scope = merge_scope_v3(esb, sm)
+        if not scope["codes"]:
+            if esb["no_branch"]:
+                state = "no_branch"
+            elif sm.get("no_outlet"):
+                state = "no_outlet"
+            else:
+                state = "no_company"
+            _logger.info("insight_%s uid=%s", state, user.id)
+            return None, self._info(state)
+        wids_n, cats_n, brs_n = len(scope["wids"]), len(scope["cats"]), len(scope["brs"])
+        if wids_n > insight_token.MAX_WIDS or cats_n > insight_token.MAX_CATS or brs_n > insight_token.MAX_BRS:
+            return None, self._too_large(user.id, wids_n, cats_n, brs_n)
+        try:
+            payload = insight_token.build_payload_v3(
+                sub=user.id,
+                name=user.name,
+                iat=int(time.time()),
+                jti=uuid.uuid4().hex,
+                **scope,
+            )
+        except ValueError:
+            # Fail closed seperti sebelumnya, tetapi dengan halaman info (SEC-G52-02). Log tanpa PII.
+            personas = ",".join(sorted(scope.get("personas", [])))
+            _logger.info("insight_persona_conflict uid=%s roles=%s", user.id, personas)
+            return None, self._info("persona_conflict")
+        try:
+            token = insight_token.encode_token_v3(payload, key)
+        except ValueError as exc:
+            if str(exc) != "scope_too_large":
+                raise
+            return None, self._too_large(user.id, wids_n, cats_n, brs_n)
+        return token, payload
+
+    def _too_large(self, uid, wids_n, cats_n, brs_n):
+        _logger.info("insight_scope_too_large uid=%s wids_n=%s cats_n=%s brs_n=%s", uid, wids_n, cats_n, brs_n)
         return self._info("scope_too_large")
 
     @staticmethod
@@ -219,8 +347,11 @@ class EfnInsightController(http.Controller):
         cids = ",".join(str(c) for c in payload["cids"])
         roles = ",".join(payload["roles"])
         line = f"insight_open uid={uid} v={payload['v']} codes={codes} cids={cids} roles={roles}"
-        if payload["v"] == insight_token.VERSION_V2:
+        if payload["v"] >= insight_token.VERSION_V2:
             line += f" wids_n={len(payload['wids'])} cats_n={len(payload['cats'])}"
+        if payload["v"] == insight_token.VERSION_V3:
+            # docs/04 §28.15.4 butir 7 / L-249: jumlah cabang saja, tanpa daftar.
+            line += f" brs_n={len(payload['brs'])}"
         line += f" jti={payload['jti']}"
         request.env["ir.logging"].sudo().create(
             {

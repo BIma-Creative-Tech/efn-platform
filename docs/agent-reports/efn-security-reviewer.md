@@ -25,3 +25,20 @@ Medium). Perubahan murni UI klien; tidak ada inline `<style>`/`<script>` baru (h
 - **SEC-LS-03 (Info):** tombol Keluar (`Shell.tsx:70-74`) tidak terjangkau saat memuat; durasi terbatas, tab bisa ditutup. Diterima.
 - **SEC-LS-04 (Info):** perangkap fokus dialog modal memang diniatkan; fokus tidak dikembalikan ke pemicu (belum diverifikasi di browser).
 - Belum terverifikasi: perilaku di browser (CSP violation report, `inert`, fokus); `git diff` tidak dijalankan (file dibaca dari tree branch).
+
+## 22 Nov 2026 — review pra-merge G52 persona F&B + sidebar (`feat/insight-nav-dual-menu`)
+
+Laporan lengkap: `docs/reviews/SECURITY_REVIEW_2026-11-22_g52-insight-fnb-persona.md`. **Verdict: boleh merge dengan syarat
+SEC-G52-01 diperbaiki** (wajib sebelum flag diaktifkan). Tidak ada Critical/High. Pencabutan PT penuh untuk kepala toko berlaku
+tanpa flag; `brs` ditandatangani (HMAC + sig3); kelas PT/BR benar; tidak ada jalur eit2/eis2 PT penuh untuk store-only dari Odoo baru.
+- **SEC-G52-01 (Medium):** `docker-compose.yml` tidak meneruskan `INSIGHT_FNB_PERSONA_ENABLED` (Odoo + insight-web) dan
+  `INSIGHT_ACCEPT_EIT2` (insight-web); default `EFN_INSIGHT_TOKEN_VERSION` compose = 2. Akibatnya `INSIGHT_ACCEPT_EIT2=false` tidak
+  berefek (jalur eit2/eis2 terbuka selamanya) dan G52 tidak bisa diaktifkan.
+- **SEC-G52-02 (Low):** exec+store+marketing / exec+store+category|dc → T5 gagal → `ValueError` tak tertangkap → HTTP 500 (fail closed).
+  Saran: T5' `store ∈ P ⇒ exec ∈ P ∨ P = {store}` dua sisi + tangkap ValueError.
+- **SEC-G52-03 (Low):** residu rollout: eis2 pra-G52 PT penuh ≤ 2 jam / selama jeda deploy 1→2. Saran: rotasi `insight_session_key`
+  setelah upgrade Odoo, lalu `INSIGHT_ACCEPT_EIT2=false`.
+- **SEC-G52-04 (Low):** penutupan rute sesi ber-cabang di proxy berupa denylist; saran allowlist.
+- **SEC-G52-05 (Info):** unik global `(esb_brand, esb_branch_id)` → oracle/penyerobotan pemetaan antar PT Bacha; data tetap fail closed.
+- **SEC-G52-06 (Info):** SEC-IR-01 masih terbuka; `SQL_efn_brs` menambah pemicu galat saat versi campuran.
+- Belum terverifikasi: test/harness tidak dijalankan; override compose lokal efn-prod tidak diperiksa; upgrade DB demo nyata.

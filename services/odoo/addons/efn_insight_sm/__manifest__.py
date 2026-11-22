@@ -1,11 +1,14 @@
 {
     "name": "EFN Insight Supermarket (persona, cakupan outlet, definisi KPI per PT)",
     "summary": "G47 (ADR-041 §3.3-§3.4 Proposed, docs/04 §28.13, fit-gap docs/fit-gap/G47_INSIGHT_SM.md): "
-    "5 grup persona Insight SM (Direksi, Category manager, Kepala toko, DC, Marketing) + pengelola definisi KPI, "
-    "masing-masing satu privilege; field kategori dikelola user; cakupan wids/persona/cats untuk token eit2; "
+    "pengelola definisi KPI (grup persona dimiliki efn_insight sejak G52); field kategori dikelola user; cakupan "
+    "wids/persona/cats untuk token eit2/eit3; "
     "model efn.insight.sm.kpi (39 kunci, validasi registri tertutup, teraudit, multi-company) dengan baris default "
     "per PT supermarket.",
-    "version": "19.0.1.0.0",
+    # 19.0.2.0.0 (G52, docs/04 §28.15.2, L-239): 5 grup persona + privilege dipindah ke efn_insight (xmlid name tetap;
+    # pre-migrate rename ir_model_data.module, sama dengan efn_insight 19.0.3.0.0). kpi_admin + model KPI tetap di sini.
+    # Hook menerima G' dari controller. Upgrade wajib `-u efn_insight,efn_insight_sm` satu perintah.
+    "version": "19.0.2.0.0",
     "category": "EFN",
     "author": "Era Food and Nourishment",
     # LGPL-3. Tanpa dependency modul pihak ketiga (ADR-031). OCA base_user_role / mis_builder hanya referensi konsep.

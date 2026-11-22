@@ -1,14 +1,14 @@
 -- Akses read-only Dashboard Insight (G42 bagian B; ADR-041 Proposed, ADR-040 Proposed, K25-02, SEC-04).
 -- User ClickHouse `efn_insight` (service insight-web) HANYA membaca database `efn_insight`: view SQL SECURITY DEFINER
--- di atas efn_dwh.v_esb_* dengan kolom eksplisit. Row policy cakupan PT `efn_insight_scope` (company_code + tanda tangan
--- SHA256(kunci|cids|codes), format = text2sql, kunci = secret `insight_scope_key`) memuat kunci rahasia -> dibuat
--- clickhouse-init.sh, BUKAN di file ini.
+-- di atas efn_dwh.v_esb_* dengan kolom eksplisit. Row policy `efn_insight_scope` (G52 §28.15.7: company_code + tanda
+-- tangan sig3 = SHA256(kunci|cids|codes|brs), kelas PT atau BR (cabang), kunci = secret `insight_scope_key`) memuat
+-- kunci rahasia -> dibuat clickhouse-init.sh lewat access/insight-esb-policy.sh, BUKAN di file ini.
 -- clickhouse-init.sh juga membuat user dari secret `clickhouse_password_insight` dan mengikat role/profile ke user.
 -- Dijalankan clickhouse-init.sh setiap deploy (idempoten) SETELAH init/*.sql (view 12-g41-esb.sql + 13-g42-insight.sql).
 -- Butuh user admin dengan access management (bukan user aplikasi).
 
 -- readonly=2: tidak bisa menulis/DDL/mengubah readonly, tetapi boleh SETTINGS per query (insight-web mengirim
--- SQL_efn_cids/SQL_efn_codes/SQL_efn_sig + param_*). Batas atas dikunci MAX sehingga tidak bisa dinaikkan klien.
+-- SQL_efn_cids/SQL_efn_codes/SQL_efn_brs/SQL_efn_sig3 (G52) + setting SM + param_*). Batas atas dikunci MAX sehingga tidak bisa dinaikkan klien.
 -- result_overflow_mode = 'throw': ekspor CSV yang melebihi batas gagal jelas, bukan terpotong diam-diam.
 CREATE SETTINGS PROFILE IF NOT EXISTS insight_readonly SETTINGS
     readonly = 2 CONST,
@@ -59,6 +59,8 @@ GRANT SELECT ON efn_dwh.v_esb_product_list TO efn_insight_definer;
 -- Review Insight 21 Nov 2026 (init/19-insight-review.sql): tabel dasarnya sudah ada di daftar ini.
 GRANT SELECT ON efn_dwh.v_esb_movement_daily TO efn_insight_definer;
 GRANT SELECT ON efn_dwh.v_esb_coverage TO efn_insight_definer;
+-- G52 (init/21-g52-insight-fnb.sql, §28.15.8): tabel/view dasarnya (v_esb_movement_daily, dim_esb_branch) sudah di sini.
+GRANT SELECT ON efn_dwh.v_esb_store_receipt_daily TO efn_insight_definer;
 GRANT SELECT ON efn_dwh.dim_esb_branch TO efn_insight_definer;
 GRANT SELECT ON efn_dwh.dim_esb_product TO efn_insight_definer;
 GRANT SELECT ON efn_dwh.dim_esb_menu TO efn_insight_definer;
@@ -124,6 +126,30 @@ FROM efn_dwh.v_esb_movement_daily;
 CREATE OR REPLACE VIEW efn_insight.v_esb_coverage DEFINER = efn_insight_definer SQL SECURITY DEFINER AS
 SELECT brand, company_code, entity, first_day, last_day, days
 FROM efn_dwh.v_esb_coverage;
+
+-- G52 (docs/04 §28.15.8, L-244): empat view persona Toko F&B, row policy kelas BR (cabang `brs`). Tanpa cogs/mdr/net
+-- pembayaran (Q-INS-F3). Sumber = sumber pasangan view PT (sales_branch / sales / payment): bila pasangan dialihkan ke
+-- tabel agregat (20-esb-aggregates.sql), view toko WAJIB dialihkan bersama (test_insight_fnb_access.py).
+CREATE OR REPLACE VIEW efn_insight.v_esb_store_sales_daily DEFINER = efn_insight_definer SQL SECURITY DEFINER AS
+SELECT sales_date, brand, company_code, branch_id, branch_name, trx_count, qty, gross, discount, net
+FROM efn_dwh.v_esb_sales_branch_daily;
+
+-- Tanpa trx_count: tidak aditif di grain menu (satu transaksi tiga menu = 3).
+CREATE OR REPLACE VIEW efn_insight.v_esb_store_menu_daily DEFINER = efn_insight_definer SQL SECURITY DEFINER AS
+SELECT sales_date, brand, company_code, branch_id, menu_code, menu_name, menu_category, qty, gross, discount, net
+FROM efn_dwh.v_esb_sales_daily;
+
+-- Baris branch_id = 0 (branchCode tak dikenal) dibuang: tidak pernah milik cabang mana pun (E7).
+CREATE OR REPLACE VIEW efn_insight.v_esb_store_payment_daily DEFINER = efn_insight_definer SQL SECURITY DEFINER AS
+SELECT sales_date, brand, company_code, branch_id, branch_name, payment_type, payment_method, payment_count, amount
+FROM efn_dwh.v_esb_payment_daily
+WHERE branch_id != 0;
+
+-- company_code = PT cabang TUJUAN, branch_id = cabang tujuan (init/21-g52-insight-fnb.sql).
+CREATE OR REPLACE VIEW efn_insight.v_esb_store_receipt_daily DEFINER = efn_insight_definer SQL SECURITY DEFINER AS
+SELECT day, brand, company_code, branch_id, branch_name, origin_branch_id, origin_branch_name, origin_kind, item_group,
+       category, product_code, product_name, uom, qty, lines
+FROM efn_dwh.v_esb_store_receipt_daily;
 
 -- Grant wildcard: view baru di efn_insight otomatis terbaca -> clickhouse-init.sh MEMVERIFIKASI setiap view efn_insight
 -- punya row policy efn_insight_scope dan mencabut grant ini (fail closed) bila ada yang tidak.

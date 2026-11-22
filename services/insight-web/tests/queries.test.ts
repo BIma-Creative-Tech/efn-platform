@@ -93,7 +93,7 @@ describe('serializeParam', () => {
 });
 
 describe('buildChSearchParams', () => {
-  const scope = scopeSettings([1], ['PB'], 'ab'.repeat(32));
+  const scope = scopeSettings([1], ['PB'], [], 'ab'.repeat(32));
   const bag = { from: '2026-10-18', to: '2026-11-16', pt: ['PB'], branch: [], extra: 'x' } as never;
 
   it('pengaturan tetap + SQL_efn_* + hanya param terdeklarasi', () => {
@@ -103,7 +103,10 @@ describe('buildChSearchParams', () => {
     expect(sp.get('output_format_json_quote_64bit_integers')).toBe('0');
     expect(sp.get('SQL_efn_cids')).toBe('1');
     expect(sp.get('SQL_efn_codes')).toBe('PB');
-    expect(sp.get('SQL_efn_sig')).toBe(scope.SQL_efn_sig);
+    // G52 (§28.15.6): SQL_efn_brs + SQL_efn_sig3 menggantikan SQL_efn_sig untuk view ESB.
+    expect(sp.get('SQL_efn_brs')).toBe('');
+    expect(sp.get('SQL_efn_sig3')).toBe(scope.SQL_efn_sig3);
+    expect(sp.has('SQL_efn_sig')).toBe(false);
     expect(sp.get('param_from')).toBe('2026-10-18');
     expect(sp.get('param_pt')).toBe("['PB']");
     expect(sp.get('param_branch')).toBe('[]');

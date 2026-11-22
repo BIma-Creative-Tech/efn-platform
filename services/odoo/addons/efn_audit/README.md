@@ -42,6 +42,11 @@ Alur `write`: aturan dari `ormcache` (namedtuple + frozenset, bukan recordset) �
 - `@api.autovacuum _gc_efn_audit_logs` (cron *Base: Auto-vacuum internal data*, harian): hari = `rule.retention_days` (>0) atau `ir.config_parameter` `efn.audit.retention_days` (tidak valid/hilang → 730; `0` = simpan selamanya), keduanya minimal 365 (SEC-43). Log `purge` dan log model kontrol tidak pernah dihapus. Maks 10.000 log per jalan; satu log `purge` dengan `note="retensi: n log"` (ikut dikirim ke sink).
 - Erasure UU PDP: `env["efn.audit.log"]._efn_audit_purge_records(model_name, res_ids)` → hapus log record tsb, kosongkan `old/new_value` + `old/new_ref` di baris log model lain yang menunjuk record tsb, tulis satu log `purge` tanpa id/nama. Dipakai `efn_privacy`.
 
+## G52 (19.0.1.5.0; docs/04 §28.15.3)
+- `CONTROL_SPECS["res.users"]` + `efn_insight_esb_branch_ids`, dan model kontrol
+  baru `efn.insight.esb.branch` (`company_id, esb_brand, esb_branch_id, is_store, active`; dilewati bila efn_insight
+  belum terpasang; log tidak ikut GC). Test `tests/test_audit_g52.py`.
+
 ## G47 (19.0.1.4.0; fit-gap `docs/fit-gap/G47_INSIGHT_SM.md` §3.2, §8)
 - `CONTROL_SPECS["res.users"]` + `efn_outlet_warehouse_ids` (efn_assortment, G44) dan `efn_insight_categ_ids`
   (efn_insight_sm, G47). Field cakupan data = hak akses: selalu diaudit tanpa aturan admin, log tidak ikut GC, masuk

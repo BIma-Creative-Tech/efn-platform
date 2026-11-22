@@ -1156,3 +1156,37 @@ Semua verifikasi = membaca kode (tanpa runtime; QA ini tidak menjalankan pytest/
 `infra/compose/.env.example`, `scripts/dev/seed_demo_supermarket.py`, `docs/runbooks/demo-supermarket-seed.md`,
 `services/insight-web/lib/smd-merge.ts`, `services/insight-web/lib/sm-data.ts`, `services/insight-web/app/(app)/forecast/page.tsx`,
 `services/insight-web/tests/smd-merge.test.ts`; baru: `docs/qa/G51_UAT.md`.
+
+---
+
+## G52 QA lintas-sisi (22 Nov 2026, worktree efn-platform-nav, branch feat/insight-nav-dual-menu)
+
+Verifikasi hanya dengan membaca kode (tanpa runtime). Dikecualikan atas permintaan lead: 270 test Odoo, 850 vitest, harness ClickHouse E1-E9, eksekusi 18 query, vektor eit3/sig3.
+
+### Hasil per butir
+1. **T1-T8 + kode galat: IDENTIK.** `insight_token.validate_claims_v3` (+ `_validate_common`, `_valid_brs`) vs `claims.ts scopeConsistentV3/parseBrs`; kode rinci Odoo (bad_codes/bad_brs/...) dipetakan ke `bad_claims` di `token.ts`/`session.ts` (semua parse null -> bad_claims). Pencabutan store-only berlaku di eit1/eit2/flag mati (`controllers/main.py:159-162`) -> `no_company`; `no_branch` hanya eit3+flag+B kosong+punya PT ESB (`main.py:164-167`, `_token_v3`).
+2. **Setting SQL_efn_brs / SQL_efn_sig3: IDENTIK.** `scope.ts:83-88` (`key|cids|codes|brs`, brs digabung koma urutan token) = `insight-esb-policy.sh:55`; regex brs `scope.ts BRS_ITEM_RE` = `insight-esb-policy.sh:53` = Odoo `_BRS_RE`. 14 policy = 9 PT + 5 BR = 14 view di `insight-access.sql`.
+3. **Kolom query vs view: cocok** untuk semua `fexec_*`/`fstore_*`/`fmkt_*` (dicek manual per kolom terhadap `insight-access.sql:81-152`). `fstore_*` tidak menyentuh cogs/mdr/net pembayaran.
+4. **Sesi ber-cabang hanya /fnb/store:** halaman (proxy `BRANCH_BLOCKED_PATHS` + `pageCtx`), `/fnb/exec|marketing` (`fnbRouteDenial`), halaman SM (tanpa kode SM -> `tidak-berwenang`), `/api/export` (403 bila `brs`), `/glosarium` terbuka. Lolos.
+5. **Flag:** Odoo/insight-web `INSIGHT_FNB_PERSONA_ENABLED` "true" persis, default false; `INSIGHT_ACCEPT_EIT2` default true; `EFN_INSIGHT_TOKEN_VERSION` default 3 di kode.
+
+### Mismatch / bug
+| ID | Sev | Sisi A | Sisi B | Status |
+|---|---|---|---|---|
+| Q52-1 | **Tinggi** (fitur tidak bisa dinyalakan) | Odoo `controllers/main.py:42,81` dan insight-web `config.ts:82` membaca `INSIGHT_FNB_PERSONA_ENABLED`; `config.ts:81` membaca `INSIGHT_ACCEPT_EIT2` | `infra/compose/docker-compose.yml` (odoo ~982, insight-web ~1826) tidak meneruskan kedua env; `deploy.sh:413-415` tidak merender | **DIPERBAIKI** |
+| Q52-2 | Sedang | Kontrak §28.15.10 default `EFN_INSIGHT_TOKEN_VERSION` = 3 | compose + `deploy.sh:415` + `.env.example` default 2; `deploy-validate.sh:363` regex `^[12]$` MENOLAK 3 | **DIPERBAIKI** (default 3, regex `^[123]$`) |
+| Q52-3 | Sedang (UX, bug yang dilaporkan lead) | `/fnb/exec`, `/fnb/marketing` memakai FilterBar global; layout memberi `sessionCodes` + SMD untuk exec+SMD | `fnbRangePage` memanggil `parseFilters` tanpa opsi smd -> `pt=SMD` / `branch=sm:*` = "filter tidak valid" | **DIPERBAIKI** |
+| Q52-4 | Info | `README efn_replenishment:73` menyebut `efn_insight_sm.group_insight_store` | grup dipindah ke `efn_insight` | dilaporkan (dokumen) |
+
+### Perbaikan (file)
+- `services/insight-web/lib/page-filters.ts`: fungsi murni `selectableCodes(pathname, codes)` (membuang `SMD` di `/fnb/*`).
+- `services/insight-web/components/FilterBar.tsx`: `sessionCodes`/`smdAllowed` diturunkan lewat `selectableCodes(pathname, ...)` -> tanpa chip SMD, tanpa opsi cabang `sm:` di halaman persona F&B; `pt=SMD` di URL diabaikan.
+- Test baru `services/insight-web/tests/fnb-filter-codes.test.ts` (SMD dibuang di /fnb/*, tetap ada di /sales,/forecast, tidak memutasi input, server tetap menolak `pt=SMD` dan `branch=sm:5`).
+- `infra/compose/docker-compose.yml` (odoo + insight-web: `INSIGHT_FNB_PERSONA_ENABLED` default false, `INSIGHT_ACCEPT_EIT2` default true, token version default 3), `scripts/deploy.sh`, `scripts/lib/deploy-validate.sh` (variabel rilis, validasi boolean, `INSIGHT_FNB_PERSONA_ENABLED` masuk `EFN_GATED_FEATURES` = production butuh izin Superadmin, regex versi `[123]`), `infra/compose/.env.example`.
+
+### Sisa risiko / butir terbuka
+1. Perubahan infra Q52-1/2 belum dijalankan (`docker compose config`, tes `scripts/` deploy-validate). Jalankan sebelum merge; bila ada tes yang menghitung `EFN_GATED_FEATURES`, sesuaikan.
+2. User ganda store F&B + store SMD (ber-cabang + outlet SM): token sah, tetapi `navGroups` untuk sesi ber-cabang hanya menampilkan "Toko" F&B sehingga menu Supermarket hilang walau `/store` bisa dibuka lewat URL. Keputusan desain (kontrak §28.15.9 diam).
+3. `FilterBar` masih menampilkan chip cabang `sm:` yang tertinggal di URL (hanya tampil, server menolak); kosmetik.
+4. UAT G52 belum ditulis di `docs/testing/UAT_SCENARIOS.md` (di luar permintaan ini): sarankan skenario OTP tidak relevan; yang perlu: kepala toko tanpa cabang (`no_branch`), store+marketing (store dibuang), eit2 saat `INSIGHT_ACCEPT_EIT2=false`, pt=SMD di /fnb/exec.
+5. Aturan `cids` sesi dual-domain memuat id company SM di `SQL_efn_cids` view ESB: aman (policy ESB hanya cek format + sig), tetapi sig menutup string apa adanya; tidak ada mismatch.

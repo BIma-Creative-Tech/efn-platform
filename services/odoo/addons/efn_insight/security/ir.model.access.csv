@@ -1,0 +1,2 @@
+id,name,model_id:id,group_id:id,perm_read,perm_write,perm_create,perm_unlink
+access_efn_insight_esb_branch_erp_manager,efn.insight.esb.branch admin user,model_efn_insight_esb_branch,base.group_erp_manager,1,1,1,1

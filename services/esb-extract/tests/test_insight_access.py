@@ -13,12 +13,17 @@ CH = ROOT / "infra" / "clickhouse"
 DDL12 = (CH / "init" / "12-g41-esb.sql").read_text(encoding="utf-8")
 DDL13 = (CH / "init" / "13-g42-insight.sql").read_text(encoding="utf-8")
 DDL19 = (CH / "init" / "19-insight-review.sql").read_text(encoding="utf-8")
+DDL21 = (CH / "init" / "21-g52-insight-fnb.sql").read_text(encoding="utf-8")
 ACCESS = (CH / "access" / "insight-access.sql").read_text(encoding="utf-8")
 INIT_SH = (CH / "clickhouse-init.sh").read_text(encoding="utf-8")
+ESB_POLICY_SH = (CH / "access" / "insight-esb-policy.sh").read_text(encoding="utf-8")
+# G52 §28.15.7: jumlah policy ESB (10 + 4); konstanta yang sama di clickhouse-init.sh (ESB_POLICY_EXPECTED).
+ESB_POLICY_COUNT = 14
 
+# G52: WHERE opsional satu baris (hanya v_esb_store_payment_daily: `WHERE branch_id != 0`).
 INSIGHT_VIEW_RE = re.compile(
     r"CREATE OR REPLACE VIEW efn_insight\.(\w+) DEFINER = efn_insight_definer SQL SECURITY DEFINER AS\n"
-    r"SELECT (.+?)\nFROM (efn_dwh\.\w+);",
+    r"SELECT (.+?)\nFROM (efn_dwh\.\w+)(?:\nWHERE [^;\n]+)?;",
     re.DOTALL,
 )
 NEW_DWH_VIEWS = {"v_esb_sales_branch_daily", "v_esb_branch_list", "v_esb_product_list", "v_esb_data_quality_pt"}
@@ -33,6 +38,11 @@ EXPECTED_INSIGHT_VIEWS = {
     "v_esb_product_list",
     "v_esb_movement_daily",  # review Insight 21 Nov 2026 (19-insight-review.sql)
     "v_esb_coverage",
+    # G52 §28.15.8 (persona Toko F&B, kelas BR)
+    "v_esb_store_sales_daily",
+    "v_esb_store_menu_daily",
+    "v_esb_store_payment_daily",
+    "v_esb_store_receipt_daily",
 }
 REVIEW_DWH_VIEWS = {"v_esb_movement_daily", "v_esb_coverage"}
 # Kontrak kolom (frontend menulis query paralel terhadap daftar ini; urutan = urutan SELECT).
@@ -63,9 +73,9 @@ def strip_comments(sql: str) -> str:
 
 
 def dwh_view_body(name: str) -> str:
-    """Badan view efn_dwh.<name> (tanpa komentar) dari 12/13/19."""
+    """Badan view efn_dwh.<name> (tanpa komentar) dari 12/13/19/21."""
     header = f"CREATE OR REPLACE VIEW efn_dwh.{name} AS"
-    for ddl in (DDL19, DDL13, DDL12):
+    for ddl in (DDL21, DDL19, DDL13, DDL12):
         if header in ddl:
             return strip_comments(ddl.split(header, 1)[1].split(";", 1)[0])
     raise AssertionError(f"view efn_dwh.{name} tidak ditemukan")
@@ -292,31 +302,41 @@ def test_init_script_user_binding_and_scope_key() -> None:
     assert '[ "$INSIGHT_KEY" != "$SCOPE_KEY" ]' in INIT_SH  # kunci beda dari text2sql
 
 
+def esb_policy_manifest() -> dict[str, str]:
+    """ESB_POLICY_VIEWS insight-esb-policy.sh -> {view: kelas PT|BR} (baris duplikat = gagal)."""
+    block = ESB_POLICY_SH.split('ESB_POLICY_VIEWS="\n', 1)[1].split('\n"\n', 1)[0]
+    out: dict[str, str] = {}
+    for line in block.splitlines():
+        view, cls = line.split()
+        assert view not in out, view
+        out[view] = cls
+    return out
+
+
 def test_every_insight_view_has_row_policy() -> None:
-    # Tanpa quantifier bersarang (CodeQL py/redos): daftar view = karakter kata/spasi/backslash sampai "; do".
-    loop = re.search(r"for v in (v_esb_[\w \t\n\\]*?); do\n(.+?)\ndone", INIT_SH, re.DOTALL)
-    assert loop, "loop row policy efn_insight tidak ditemukan"
-    assert set(re.findall(r"v_esb_\w+", loop.group(1))) == EXPECTED_INSIGHT_VIEWS
-    stmt = loop.group(2)
-    # C4 (§26.13): baris tanpa PT tidak pernah terlihat, termasuk bila codes kosong ber-sig sah.
+    # G52 (§28.15.7): daftar + predikat di access/insight-esb-policy.sh (disourcing clickhouse-init.sh); 14 policy.
+    manifest = esb_policy_manifest()
+    assert set(manifest) == EXPECTED_INSIGHT_VIEWS
+    assert len(manifest) == ESB_POLICY_COUNT
+    assert f"\nESB_POLICY_EXPECTED={ESB_POLICY_COUNT}\n" in INIT_SH
+    assert '[ "$ESB_POLICY_N" = "$ESB_POLICY_EXPECTED" ]' in ESB_POLICY_SH
+    assert "\n. /init/access/insight-esb-policy.sh\n" in INIT_SH
     assert (
-        "CREATE ROW POLICY OR REPLACE efn_insight_scope ON efn_insight.${v} "
-        "USING company_code != '' AND ${FMT} AND ${CODES} AND ${INSIGHT_SIG}"
-    ) in stmt
-    assert stmt.rstrip().endswith('TO insight_reader;"')
+        "CREATE ROW POLICY OR REPLACE efn_insight_scope ON efn_insight.%s USING %s TO insight_reader;" in ESB_POLICY_SH
+    )
     # SEC-190: format kanonik codes/cids (menolak byte padding length-extension), juga untuk efn_t2s.
     fmt = re.search(r'^FMT="(.+)"$', INIT_SH, re.MULTILINE)
     assert fmt and "match(getSetting('SQL_efn_codes'), '^[A-Z]{2,8}(,[A-Z]{2,8})*" in fmt.group(1)
     assert "match(getSetting('SQL_efn_cids'), '^([0-9]{1,10}(,[0-9]{1,10})*)?" in fmt.group(1)
     assert INIT_SH.count("USING ${FMT} AND ${CIDS} AND ${SIG}") == 1
     assert INIT_SH.count("USING ${FMT} AND ${CODES} AND ${SIG}") == 1
-    # SEC-191: DDL policy (memuat kunci) tanpa query_log.
-    assert INIT_SH.count("$CH --log_queries=0 --multiquery") == 3
-    # Format tanda tangan = text2sql (kunci|cids|codes), hanya kuncinya berbeda.
-    t2s = re.search(r'^SIG="(.+)"$', INIT_SH, re.MULTILINE)
-    ins = re.search(r'^INSIGHT_SIG="(.+)"$', INIT_SH, re.MULTILINE)
-    assert t2s and ins
-    assert ins.group(1) == t2s.group(1).replace("${SCOPE_KEY}", "${INSIGHT_KEY}")
+    # SEC-191: DDL policy (memuat kunci) tanpa query_log: 2x efn_t2s di init + policy ESB di file yang disourcing.
+    assert INIT_SH.count("$CH --log_queries=0 --multiquery") == 2
+    assert ESB_POLICY_SH.count("$CH --log_queries=0 --multiquery") == 1
+    # G52: insight tidak lagi memakai sig v1 (SQL_efn_sig) untuk view ESB; sig v1 tetap milik text2sql.
+    assert "INSIGHT_SIG" not in INIT_SH
+    assert "SQL_efn_sig'" not in ESB_POLICY_SH and "getSetting('SQL_efn_sig3')" in ESB_POLICY_SH
+    assert "getSetting('SQL_efn_sig')" in re.search(r'^SIG="(.+)"$', INIT_SH, re.MULTILINE).group(1)
     # Verifikasi fail-closed ke system.row_policies + cabut grant bila ada view tanpa policy.
     assert "system.row_policies WHERE database = 'efn_insight' AND short_name = 'efn_insight_scope'" in INIT_SH
     assert 'REVOKE SELECT ON efn_insight.* FROM insight_reader" < /dev/null' in INIT_SH
@@ -443,6 +463,8 @@ def test_contract_doc_reflects_g42_hardening() -> None:
 
 def test_policy_codes_predicate_uses_company_code() -> None:
     assert "CODES=\"has(splitByChar(',', getSetting('SQL_efn_codes')), company_code)\"" in INIT_SH
-    # Policy insight dibuat sebelum kunci dibuang dari environment skrip.
-    policy_at = INIT_SH.index("efn_insight_scope ON efn_insight.${v}")
-    assert INIT_SH.index("unset INSIGHT_KEY INSIGHT_SIG") > policy_at
+    # Policy insight dibuat SETELAH kunci divalidasi dan SEBELUM kunci dibuang dari environment skrip.
+    esb_at = INIT_SH.index("\n. /init/access/insight-esb-policy.sh\n")
+    sm_at = INIT_SH.index("\n. /init/access/insight-sm-policy.sh\n")
+    assert INIT_SH.index('[ "$INSIGHT_KEY" != "$SCOPE_KEY" ]') < esb_at < sm_at
+    assert INIT_SH.index("\nunset INSIGHT_KEY\n") > sm_at

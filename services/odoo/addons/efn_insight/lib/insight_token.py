@@ -1,4 +1,9 @@
-"""Token SSO `eit1` / `eit2` Odoo -> insight-web (G42 + G47, ADR-041 §3.3-§3.4 Proposed, docs/04 §26 + §28.13).
+"""Token SSO `eit1` / `eit2` / `eit3` Odoo -> insight-web (G42 + G47 + G52, ADR-041 §3.3-§3.6 Proposed, docs/04 §26 +
+§28.13 + §28.15).
+
+`eit3` (G52, docs/04 §28.15.5): format sama dengan `eit2`, prefix `eit3`, `v=3`, tepat 14 kunci (13 kunci `eit2` +
+`brs` = cabang ESB `"<esb_brand>:<branch_id>"` untuk kepala toko F&B) dan aturan konsistensi T1-T8
+(`validate_claims_v3`). `eit2` tetap ada untuk rollback (`EFN_INSIGHT_TOKEN_VERSION=2`).
 
 `eit2` (G47, docs/04 §28.13.4): format sama dengan `eit1` di bawah, prefix `eit2`, tepat 13 kunci (tambahan `cats`,
 `wids`; `v=2`; `codes` boleh memuat `SM_CODES`; `roles` = satu dari user/all_brands + 0..5 persona) dan aturan
@@ -59,6 +64,27 @@ MAX_CATS = 50
 MAX_ID = 2**32 - 1  # UInt32 ClickHouse
 MAX_PAYLOAD_B64 = 3000
 _TOKEN_V2_RE = re.compile(r"eit2\.[A-Za-z0-9_-]{16,3000}\.[A-Za-z0-9_-]{43}")
+
+# ------------------------------------------------------------------ eit3 (G52, docs/04 §28.15.4-§28.15.5)
+# Konstanta identik dengan insight-web `lib/claims.ts`.
+PREFIX_V3 = "eit3"
+VERSION_V3 = 3
+FNB_PERSONAS = frozenset({"exec", "marketing", "store"})
+# Akun ESB (= KNOWN_BRANDS esb-extract). Bacha melayani dua PT (BCF + BCR).
+ESB_BRANDS = frozenset({"bacha", "cup", "imd", "pb", "wtz"})
+BRAND_COMPANY_CODES = {
+    "bacha": frozenset({"BCF", "BCR"}),
+    "cup": frozenset({"CUP"}),
+    "imd": frozenset({"IMD"}),
+    "pb": frozenset({"PB"}),
+    "wtz": frozenset({"WTZ"}),
+}
+MAX_BRS = 50
+PAYLOAD_KEYS_V3 = PAYLOAD_KEYS_V2 | {"brs"}
+_TOKEN_V3_RE = re.compile(r"eit3\.[A-Za-z0-9_-]{16,3000}\.[A-Za-z0-9_-]{43}")
+_BRS_RE = re.compile(r"(bacha|cup|imd|pb|wtz):[1-9][0-9]{0,9}")
+# L-245 butir 1: persona yang membuat `store` dibuang bila dipegang tanpa `exec`.
+_STORE_CONFLICT_PERSONAS = frozenset({"category", "dc", "marketing"})
 # docs/04 §26.3: kategori Unicode yang dihapus dari `name`.
 _NAME_DROP_CATEGORIES = frozenset({"Cc", "Cf", "Zl", "Zp"})
 
@@ -212,12 +238,8 @@ def _sorted_unique(values):
     return isinstance(values, list) and all(values[i] < values[i + 1] for i in range(len(values) - 1))
 
 
-def validate_claims_v2(payload):
-    """Validasi isi klaim eit2 (docs/04 §28.13.4) — dipakai pembuat DAN rujukan verifikasi.
-
-    Hanya memeriksa kunci yang dipengaruhi cakupan (`codes`, `cids`, `roles`, `wids`, `cats`) + aturan konsistensi
-    1-3; batas panjang payload (aturan 4) diperiksa `encode_token_v2` / `verify_token_v2`. ValueError(kode).
-    """
+def _validate_common(payload):
+    """Bentuk kunci cakupan bersama eit2/eit3 (`codes`, `cids`, `roles`, `wids`, `cats`). Mengembalikan persona."""
     codes, cids, roles = payload.get("codes"), payload.get("cids"), payload.get("roles")
     wids, cats = payload.get("wids"), payload.get("cats")
     if (
@@ -261,6 +283,17 @@ def validate_claims_v2(payload):
     # cids >= 1 kecuali roles memuat all_brands dan tanpa persona.
     if not cids and not ("all_brands" in roles and not personas):
         raise ValueError("bad_cids")
+    return personas
+
+
+def validate_claims_v2(payload):
+    """Validasi isi klaim eit2 (docs/04 §28.13.4) — dipakai pembuat DAN rujukan verifikasi.
+
+    Hanya memeriksa kunci yang dipengaruhi cakupan (`codes`, `cids`, `roles`, `wids`, `cats`) + aturan konsistensi
+    1-3; batas panjang payload (aturan 4) diperiksa `encode_token_v2` / `verify_token_v2`. ValueError(kode).
+    """
+    personas = _validate_common(payload)
+    codes, roles, wids, cats = payload["codes"], payload["roles"], payload["wids"], payload["cats"]
     # Aturan konsistensi 1-3.
     if not (bool(wids) == bool(personas) == bool(set(codes) & SM_CODES)):
         raise ValueError("bad_claims")
@@ -329,4 +362,130 @@ def verify_token_v2(token, key, now):
         raise ValueError("expired")
     # Kode rinci (bad_codes, bad_wids, bad_claims, ...) dipertahankan untuk test; insight-web memetakan ke bad_claims.
     validate_claims_v2(payload)
+    return payload
+
+
+# ====================================================================== eit3 (G52)
+def suppress_store(held):
+    """docs/04 §28.15.4 butir 1 (L-245, perluasan L-234). `(G', store_suppressed)` dari persona yang dipegang.
+
+    `store` dibuang bila dipegang tanpa `exec` bersama category/dc/marketing (SEC-G47-01: `roles` satu himpunan untuk
+    F&B dan SMD).
+    """
+    held = frozenset(held)
+    if "store" in held and "exec" not in held and held & _STORE_CONFLICT_PERSONAS:
+        return held - {"store"}, True
+    return held, False
+
+
+def is_store_only_fnb(held, all_brands):
+    """docs/04 §28.15.4 butir 2: store ∈ G, G ∩ {exec, marketing} = ∅, tanpa grup all_brands."""
+    held = frozenset(held)
+    return "store" in held and not held & {"exec", "marketing"} and not all_brands
+
+
+def _valid_brs(brs):
+    if not isinstance(brs, list) or len(brs) > MAX_BRS or not all(isinstance(b, str) for b in brs):
+        return False
+    for item in brs:
+        if not _BRS_RE.fullmatch(item) or int(item.split(":", 1)[1]) > MAX_ID:
+            return False
+    # Urut naik string ASCII (mis. "pb:12" < "pb:7"), unik.
+    return _sorted_unique(brs)
+
+
+def validate_claims_v3(payload):
+    """Validasi isi klaim eit3 (docs/04 §28.15.5, aturan T1-T7) — pembuat DAN rujukan verifikasi. ValueError(kode).
+
+    T8 (`payload_b64 ≤ 3000`) diperiksa `encode_token_v3` / `verify_token_v3`.
+    """
+    personas = _validate_common(payload)
+    codes, roles, wids, cats = payload["codes"], payload["roles"], payload["wids"], payload["cats"]
+    brs = payload.get("brs")
+    if not _valid_brs(brs):
+        raise ValueError("bad_brs")
+    esb, sm = set(codes) & ESB_CODES, set(codes) & SM_CODES
+    # T1: wids ≠ [] ⇔ SM ≠ ∅; SM ≠ ∅ ⇒ P ≠ ∅.
+    if bool(wids) != bool(sm) or (sm and not personas):
+        raise ValueError("bad_claims")
+    # T2: SM ≠ ∅ ⇒ (0 ∈ wids ⇔ P ∩ {category, dc, exec, marketing} ≠ ∅).
+    if sm and (0 in wids) != bool(personas & ORG_PERSONAS):
+        raise ValueError("bad_claims")
+    # T3: P ∩ {category, dc} ≠ ∅ ⇒ SM ≠ ∅.
+    if personas & {"category", "dc"} and not sm:
+        raise ValueError("bad_claims")
+    # T4: P ≠ ∅ ⇒ SM ≠ ∅ ∨ ESB ≠ ∅.
+    if personas and not (sm or esb):
+        raise ValueError("bad_claims")
+    # T5: store ∈ P ⇒ P ⊆ {exec, store} (L-245).
+    if "store" in personas and not personas <= {"exec", "store"}:
+        raise ValueError("bad_claims")
+    # T6: brs ≠ [] ⇔ (store ∈ P ∧ exec ∉ P ∧ all_brands ∉ roles ∧ ESB ≠ ∅).
+    branch_scoped = "store" in personas and "exec" not in personas and "all_brands" not in roles and bool(esb)
+    if bool(brs) != branch_scoped:
+        raise ValueError("bad_claims")
+    # T7: cats ≠ [] ⇒ category ∈ P.
+    if cats and "category" not in roles:
+        raise ValueError("bad_claims")
+
+
+def build_payload_v3(*, sub, name, codes, cids, roles, wids, cats, brs, iat, jti):
+    """Payload eit3 tervalidasi (14 kunci). Daftar diurutkan & dideduplikasi; ValueError bila tidak sah/konsisten."""
+    if not _is_int(sub) or not 0 < sub <= MAX_SUB:
+        raise ValueError("bad_sub")
+    if not _is_int(iat) or iat <= 0:
+        raise ValueError("bad_iat")
+    if not isinstance(jti, str) or not _JTI_RE.fullmatch(jti):
+        raise ValueError("bad_jti")
+    payload = {
+        "v": VERSION_V3,
+        "aud": AUDIENCE,
+        "iss": ISSUER,
+        "sub": sub,
+        "name": clean_name(name),
+        "codes": sorted(set(codes or ())),
+        "cids": sorted(set(cids or ())),
+        "roles": sorted(set(roles or ())),
+        "wids": sorted(set(wids or ())),
+        "cats": sorted(set(cats or ())),
+        "brs": sorted(set(brs or ())),
+        "iat": iat,
+        "exp": iat + TTL_SECONDS,
+        "jti": jti,
+    }
+    validate_claims_v3(payload)
+    return payload
+
+
+def encode_token_v3(payload, key):
+    """Token eit3. ValueError("scope_too_large") bila payload_b64 > 3000 karakter (T8)."""
+    payload_b64 = b64url_encode(canonical_json(payload).encode("ascii"))
+    if len(payload_b64) > MAX_PAYLOAD_B64:
+        raise ValueError("scope_too_large")
+    signing_input = f"{PREFIX_V3}.{payload_b64}"
+    return f"{signing_input}.{b64url_encode(sign(signing_input, key))}"
+
+
+def verify_token_v3(token, key, now):
+    """Rujukan verifikasi eit3 (test; insight-web adalah verifikator sesungguhnya). Payload atau ValueError(kode)."""
+    if not isinstance(token, str) or not _TOKEN_V3_RE.fullmatch(token):
+        raise ValueError("bad_format")
+    _prefix, payload_b64, sig_b64 = token.split(".")
+    expected = sign(f"{PREFIX_V3}.{payload_b64}", key)
+    if not hmac.compare_digest(expected, b64url_decode(sig_b64)):
+        raise ValueError("bad_sig")
+    try:
+        payload = json.loads(b64url_decode(payload_b64).decode("ascii"))
+    except (UnicodeDecodeError, ValueError) as exc:
+        raise ValueError("bad_payload") from exc
+    if not isinstance(payload, dict) or set(payload) != PAYLOAD_KEYS_V3:
+        raise ValueError("bad_claims")
+    if payload.get("v") != VERSION_V3 or payload.get("aud") != AUDIENCE or payload.get("iss") != ISSUER:
+        raise ValueError("bad_claims")
+    iat, exp, sub = payload.get("iat"), payload.get("exp"), payload.get("sub")
+    if not _is_int(iat) or not _is_int(exp) or not _is_int(sub) or not 0 < sub <= MAX_SUB:
+        raise ValueError("bad_claims")
+    if iat > now + 30 or not now < exp or not 1 <= exp - iat <= TTL_SECONDS:
+        raise ValueError("expired")
+    validate_claims_v3(payload)
     return payload

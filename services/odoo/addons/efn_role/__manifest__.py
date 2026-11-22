@@ -7,7 +7,9 @@
     # 19.0.1.2.1 (G26): hook _efn_default_rule_specs agar modul lain menambah aturan SoD bawaan (SOD-PAY-*).
     # 19.0.1.2.2 (G47): + 5 xmlid efn_insight_sm (persona exec/category/dc/marketing + kpi_admin) di
     # SENSITIVE_GROUP_XMLIDS (opsional, dilewati bila belum terpasang). Tanpa perubahan skema/data.
-    "version": "19.0.1.2.2",
+    # 19.0.1.2.3 (G52, docs/04 §28.15.2): xmlid persona exec/category/dc/marketing -> efn_insight.* (grup pindah modul,
+    # id sama); kpi_admin tetap efn_insight_sm. Tanpa perubahan skema/data.
+    "version": "19.0.1.2.3",
     "category": "EFN",
     "author": "Era Food and Nourishment",
     # LGPL-3. Tanpa dependency OCA/Cybrosys (ADR-031). OCA `base_user_role` (LGPL-3) hanya dipelajari sebagai

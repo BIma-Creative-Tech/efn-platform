@@ -79,8 +79,9 @@ SCHEDULE_CATEGORIES = {
 ZONE_FREQUENCY = {"fresh": 7, "chiller": 14, "freezer": 30, "dry": 30}
 
 # G47 (19.0.3.0.0): persona Insight per user demo (demo/res_users_insight_demo.xml; xmlid fit-gap G47 §2.2).
+# G52 (docs/04 §28.15.2): grup persona dimiliki efn_insight (xmlid name tetap).
 PERSONA_GROUPS = {
-    persona: f"efn_insight_sm.group_insight_{persona}" for persona in ("exec", "category", "store", "dc", "marketing")
+    persona: f"efn_insight.group_insight_{persona}" for persona in ("exec", "category", "store", "dc", "marketing")
 }
 PERSONA_USERS = {
     **{f"user_smd0{i}_store_head": {"store"} for i in range(1, 6)},

@@ -70,7 +70,7 @@ qty       = round_pack(min(need, cap_shelf, cap_rack))
   satu pilihan per privilege + `Command.set`: dalam satu privilege, kombinasi wajar (admin + buyer) tidak bisa
   dipegang dan grup kedua terhapus saat form user disimpan. Tanpa `implied_ids` baru (admin tidak otomatis buyer),
   keanggotaan grup tidak berubah, tanpa migrasi. Test `tests/test_privilege.py`.
-- Persona Insight `efn_insight_sm.group_insight_store` (hak data) ≠ `group_replenishment_store` (hak tindakan); keduanya
+- Persona Insight `efn_insight.group_insight_store` (dipindah dari `efn_insight_sm` di G52) (hak data) ≠ `group_replenishment_store` (hak tindakan); keduanya
   membaca cakupan outlet dari `res.users.efn_outlet_warehouse_ids`, yang sejak G47 teraudit (`efn_audit` CONTROL_SPECS).
 
 ## Risiko yang dimitigasi

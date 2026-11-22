@@ -14,6 +14,7 @@ export async function POST(req: Request): Promise<Response> {
     ssoKey: getKey('sso'),
     sessionKey: getKey('session'),
     acceptEit1: cfg.acceptEit1,
+    acceptEit2: cfg.acceptEit2,
     nowMs: () => Date.now(),
     jti: getJtiCache(),
     limiter: getSsoLimiter(),

@@ -12,6 +12,7 @@ import {
   isInt,
   isRecord,
   isSub,
+  parseBrs,
   parseCats,
   parseCids,
   parseCodes,
@@ -21,6 +22,7 @@ import {
   parseRolesV2,
   parseWids,
   scopeConsistent,
+  scopeConsistentV3,
   type Code,
   type EsbCode,
   type Role,
@@ -48,7 +50,7 @@ export interface SsoPayload {
   v: 1;
 }
 
-export type SsoFailCode = 'bad_format' | 'bad_sig' | 'bad_claims' | 'expired' | 'replay' | 'eit1_disabled';
+export type SsoFailCode = 'bad_format' | 'bad_sig' | 'bad_claims' | 'expired' | 'replay' | 'eit1_disabled' | 'eit2_disabled';
 export type SsoVerifyResult = { ok: true; payload: SsoPayload } | { ok: false; code: SsoFailCode };
 
 // ---------------------------------------------------------------- eit2 (docs/04 §28.13.4)
@@ -72,7 +74,7 @@ export interface SsoPayloadV2 {
   wids: number[];
 }
 export type SsoVerifyResultV2 = { ok: true; payload: SsoPayloadV2 } | { ok: false; code: SsoFailCode };
-export type SsoVerifyResultAny = { ok: true; payload: SsoPayload | SsoPayloadV2 } | { ok: false; code: SsoFailCode };
+export type SsoVerifyResultAny = { ok: true; payload: SsoPayload | SsoPayloadV2 | SsoPayloadV3 } | { ok: false; code: SsoFailCode };
 
 export function verifySsoTokenV2(
   token: unknown,
@@ -127,9 +129,88 @@ export function verifySsoTokenV2(
   return { ok: true, payload: { aud: 'insight-web', cats, cids, codes, exp, iat, iss: 'odoo', jti, name, roles, sub, v: 2, wids } };
 }
 
+// ---------------------------------------------------------------- eit3 (docs/04 §28.15.5, G52)
+/** Batas 3000 = T8; menjamin cookie `eis3` < 4096 byte. */
+export const SSO_TOKEN_RE_V3 = /^eit3\.[A-Za-z0-9_-]{16,3000}\.[A-Za-z0-9_-]{43}$/;
+/** Tepat 14 kunci (13 kunci eit2 + `brs`), urut abjad. */
+const PAYLOAD_KEYS_V3 = ['aud', 'brs', 'cats', 'cids', 'codes', 'exp', 'iat', 'iss', 'jti', 'name', 'roles', 'sub', 'v', 'wids'] as const;
+
+export interface SsoPayloadV3 {
+  aud: 'insight-web';
+  brs: string[];
+  cats: number[];
+  cids: number[];
+  codes: Code[];
+  exp: number;
+  iat: number;
+  iss: 'odoo';
+  jti: string;
+  name: string;
+  roles: Role[];
+  sub: number;
+  v: 3;
+  wids: number[];
+}
+export type SsoVerifyResultV3 = { ok: true; payload: SsoPayloadV3 } | { ok: false; code: SsoFailCode };
+
+export function verifySsoTokenV3(
+  token: unknown,
+  key: string,
+  nowSec: number,
+  isReplay: (jti: string) => boolean,
+): SsoVerifyResultV3 {
+  // 1. format
+  if (typeof token !== 'string' || !SSO_TOKEN_RE_V3.test(token)) return { ok: false, code: 'bad_format' };
+  const [, payloadB64, sigB64] = token.split('.');
+
+  // 2. HMAC
+  if (!verifyHmacB64Url(key, `eit3.${payloadB64}`, sigB64)) return { ok: false, code: 'bad_sig' };
+
+  // 3. payload
+  let raw: unknown;
+  try {
+    raw = JSON.parse(Buffer.from(payloadB64, 'base64url').toString('utf8'));
+  } catch {
+    return { ok: false, code: 'bad_claims' };
+  }
+  if (!isRecord(raw) || !hasExactKeys(raw, PAYLOAD_KEYS_V3)) return { ok: false, code: 'bad_claims' };
+  if (raw.v !== 3 || raw.aud !== 'insight-web' || raw.iss !== 'odoo') return { ok: false, code: 'bad_claims' };
+  const sub: unknown = raw.sub;
+  const iat: unknown = raw.iat;
+  const exp: unknown = raw.exp;
+  const jti: unknown = raw.jti;
+  if (!isSub(sub) || !isInt(iat) || !isInt(exp)) return { ok: false, code: 'bad_claims' };
+  if (typeof jti !== 'string' || !JTI_RE.test(jti)) return { ok: false, code: 'bad_claims' };
+  const name = parseName(raw.name);
+  const roles = parseRolesV2(raw.roles);
+  const cids = parseCids(raw.cids);
+  const codes = parseCodesV2(raw.codes);
+  const wids = parseWids(raw.wids);
+  const cats = parseCats(raw.cats);
+  const brs = parseBrs(raw.brs);
+  if (name === null || roles === null || cids === null || codes === null || wids === null || cats === null || brs === null) {
+    return { ok: false, code: 'bad_claims' };
+  }
+
+  // 4. waktu
+  if (iat > nowSec + SSO_IAT_SKEW || nowSec >= exp || exp - iat < 1 || exp - iat > SSO_MAX_TTL) {
+    return { ok: false, code: 'expired' };
+  }
+
+  // 5. jti
+  if (isReplay(jti)) return { ok: false, code: 'replay' };
+
+  // 6. cids sesuai roles + konsistensi T1..T7
+  if (!cidsMatchRole(cids, roles)) return { ok: false, code: 'bad_claims' };
+  if (!scopeConsistentV3({ codes, roles, wids, cats, brs })) return { ok: false, code: 'bad_claims' };
+
+  return { ok: true, payload: { aud: 'insight-web', brs, cats, cids, codes, exp, iat, iss: 'odoo', jti, name, roles, sub, v: 3, wids } };
+}
+
 /**
- * Pintu masuk `/sso`: `eit2` selalu; `eit1` hanya bila `acceptEit1` (INSIGHT_ACCEPT_EIT1, §28.13.5). Prefix dipilih dari
- * string yang diterima; semua pemeriksaan sesungguhnya dilakukan verifier masing-masing.
+ * Pintu masuk `/sso`: `eit3` selalu; `eit2` hanya bila `acceptEit2` (INSIGHT_ACCEPT_EIT2, §28.15.5; default true selama
+ * rollout G52); `eit1` hanya bila `acceptEit1` (INSIGHT_ACCEPT_EIT1, §28.13.5). Prefix dipilih dari string yang diterima;
+ * semua pemeriksaan sesungguhnya dilakukan verifier masing-masing.
  */
 export function verifyAnySsoToken(
   token: unknown,
@@ -137,8 +218,12 @@ export function verifyAnySsoToken(
   nowSec: number,
   isReplay: (jti: string) => boolean,
   acceptEit1: boolean,
+  acceptEit2 = true,
 ): SsoVerifyResultAny {
-  if (typeof token === 'string' && token.startsWith('eit2.')) return verifySsoTokenV2(token, key, nowSec, isReplay);
+  if (typeof token === 'string' && token.startsWith('eit3.')) return verifySsoTokenV3(token, key, nowSec, isReplay);
+  if (typeof token === 'string' && token.startsWith('eit2.')) {
+    return acceptEit2 ? verifySsoTokenV2(token, key, nowSec, isReplay) : { ok: false, code: 'eit2_disabled' };
+  }
   if (typeof token === 'string' && token.startsWith('eit1.')) {
     return acceptEit1 ? verifySsoToken(token, key, nowSec, isReplay) : { ok: false, code: 'eit1_disabled' };
   }

@@ -19,7 +19,7 @@ type Mod = typeof import('@/lib/clickhouse');
 let mod: Mod;
 const fetchMock = vi.fn();
 const ok = (): Response => new Response(JSON.stringify({ data: [] }), { status: 200 });
-const sess = (sub: number) => ({ cids: [1], codes: ['PB' as const], sub });
+const sess = (sub: number) => ({ cids: [1], codes: ['PB' as const], brs: [] as string[], sub });
 const bag = { pt: ['PB'] };
 const tick = (ms = 15) => new Promise<void>((r) => setTimeout(r, ms));
 

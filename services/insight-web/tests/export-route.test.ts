@@ -19,7 +19,7 @@ vi.mock('@/lib/loaders', () => ({
 
 import { GET } from '@/app/api/export/[name]/route';
 
-const session = (sub: number) => ({ sub, name: 'Budi Rahasia', codes: ['PB'], cids: [1], roles: ['user'], iat: 1, exp: 2 });
+const session = (sub: number, brs: string[] = []) => ({ sub, name: 'Budi Rahasia', codes: ['PB'], cids: [1], roles: ['user'], brs, iat: 1, exp: 2 });
 const asUser = (sub: number) => authFn.mockReturnValue({ status: 'ok', session: session(sub) });
 const call = (name = 'branch-rank') =>
   GET(new Request(`https://insight.test/api/export/${name}?from=2020-01-01&to=2020-01-31`, { headers: { cookie: '__Host-eis=RAHASIA' } }), {
@@ -50,6 +50,13 @@ describe('GET /api/export/<tabel>', () => {
     expect(loaderFn).toHaveBeenCalledTimes(5);
     asUser(102);
     expect((await call()).status).toBe(200);
+  });
+
+  it('G52: sesi ber-cabang (kepala toko F&B) ditolak 403 tanpa memuat data', async () => {
+    rowsFixture();
+    authFn.mockReturnValue({ status: 'ok', session: { ...session(103, ['pb:7']), roles: ['store', 'user'] } });
+    expect((await call()).status).toBe(403);
+    expect(loaderFn).not.toHaveBeenCalled();
   });
 
   it('CSV: header, escape formula (C3), pool ekspor dipakai pemuat', async () => {
