@@ -2049,3 +2049,12 @@ body[data-busy] main {
     transition: none;
   }
 }
+.ld-reload {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  margin: 10px 0 0;
+  font-size: 13px;
+  color: var(--text-muted);
+}

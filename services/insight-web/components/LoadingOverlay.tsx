@@ -14,6 +14,7 @@ import { beginNav, endNav, isInternalNavClick, useIsBusy } from '@/lib/loading-s
 const SHOW_DELAY_MS = 200;
 const TIP_MS = 7000;
 const BARS = 9;
+const RELOAD_AFTER_S = 45;
 
 const STAGES: readonly { at: number; text: string }[] = [
   { at: 0, text: 'Menghubungkan ke gudang data' },
@@ -110,6 +111,15 @@ export function LoadingScreen({ startedAt }: { startedAt?: number }): React.Reac
         <span>{Math.floor(sec)} dtk</span>
         {sec >= 20 ? <span>Bisa sampai ±1 menit untuk rentang panjang</span> : <span>Halaman dikunci sampai selesai</span>}
       </p>
+      {sec >= RELOAD_AFTER_S ? (
+        // SEC-LS-01/02: jalan keluar bila permintaan menggantung (transisi tanpa batas waktu) atau URL tidak berubah.
+        <p className="ld-reload">
+          Terlalu lama?{' '}
+          <button type="button" className="btn btn-sm" onClick={() => window.location.reload()}>
+            Muat ulang halaman
+          </button>
+        </p>
+      ) : null}
 
       <div className="ld-tip">
         <p key={tip} className="ld-tip-text">
@@ -140,12 +150,12 @@ function Overlay(): React.ReactNode {
     const onClick = (ev: MouseEvent): void => {
       const a = (ev.target as Element | null)?.closest?.('a[href]') as HTMLAnchorElement | null;
       if (!a) return;
-      const ok = isInternalNavClick(
-        { href: a.href, target: a.target, hasDownload: a.hasAttribute('download') },
-        ev,
-        window.location.href,
-      );
-      if (ok) beginNav();
+      const from = window.location.href;
+      const link = { href: a.href, target: a.target, hasDownload: a.hasAttribute('download') };
+      // SEC-LS-02: dinilai setelah dispatch selesai agar preventDefault dari onClick React ikut terlihat.
+      window.setTimeout(() => {
+        if (isInternalNavClick(link, ev, from)) beginNav();
+      }, 0);
     };
     document.addEventListener('click', onClick, true);
     return () => document.removeEventListener('click', onClick, true);
