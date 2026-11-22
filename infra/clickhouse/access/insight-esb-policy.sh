@@ -34,6 +34,7 @@ v_esb_data_quality PT
 v_esb_product_list PT
 v_esb_movement_daily PT
 v_esb_coverage PT
+v_esb_forecast_daily PT
 v_esb_branch_list BR
 v_esb_store_sales_daily BR
 v_esb_store_menu_daily BR

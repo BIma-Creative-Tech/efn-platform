@@ -14,13 +14,14 @@ import { fmtDayShort, fmtPct, fmtQty } from '@/lib/format';
 import { odooListUrl } from '@/lib/odoo-links';
 import { pageCtx, type SearchParams } from '@/lib/page-ctx';
 import { getConfig } from '@/lib/runtime';
-import { FORECAST_DAYS, runSm } from '@/lib/smd-data';
+import { FORECAST_DAYS, runEsb, runSm } from '@/lib/smd-data';
+import { FnbForecast } from './FnbForecast';
 import { esbOnlyMode, smdActive } from '@/lib/smd-merge';
 import { loadSmBase } from '@/lib/sm-data';
 import { MARTS, martOff } from '@/lib/sm-freshness';
 import { fmtPctOrNa, fmtStampWib } from '@/lib/sm-format';
 import { biasStatus, wapeBias, wapeStatus } from '@/lib/sm-kpi';
-import { parseChDateTime, toNum } from '@/lib/sm-parse';
+import { parseChDateTime, toNum, type Raw } from '@/lib/sm-parse';
 import { joinNotes } from '@/lib/flow-notes';
 import type { SmThresholds } from '@/lib/sm-thresholds';
 import { biasReason, wapeReason } from '@/lib/status-reasons';
@@ -62,6 +63,16 @@ export default async function ForecastPage({ searchParams }: { searchParams: Sea
       ])
     : [null, null, null, null, null];
 
+  // Forecast F&B (ESB): hanya bila brand ESB ada di pilihan. Total/grafik/top produk mengeluarkan gudang pusat (DC).
+  const fnbOn = mode !== 'only-smd' && sel.esb;
+  const dcCodes = getConfig().fnbDcCodes;
+  const fcBag = { today, until: addDays(today, FORECAST_DAYS - 1), dc_codes: dcCodes };
+  const [fnbNext, fnbWh, fnbTop] = await Promise.all([
+    runEsb<Raw>(fnbOn, 'fnb_fc_next', ctx, fcBag),
+    runEsb<Raw>(fnbOn, 'fnb_fc_by_wh', ctx, fcBag),
+    runEsb<Raw>(fnbOn, 'fnb_fc_top_products', ctx, fcBag),
+  ]);
+
   return (
     <>
       <PageHeader
@@ -73,10 +84,8 @@ export default async function ForecastPage({ searchParams }: { searchParams: Sea
 
       {mode !== 'only-smd' ? (
         <div>
-          <p className="muted small" role="note">
-            Forecast brand F&amp;B (ESB) belum tersedia dan sedang disiapkan (G44): prakiraan penjualan dan kebutuhan produksi per cabang dan produk.
-          </p>
           {mode === 'mixed' ? <MixedScopeNote /> : null}
+          <FnbForecast next={fnbNext} wh={fnbWh} top={fnbTop} dcCodes={dcCodes} now={now} />
         </div>
       ) : null}
 

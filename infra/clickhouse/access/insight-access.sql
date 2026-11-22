@@ -73,6 +73,13 @@ GRANT SELECT ON efn_dwh.fact_esb_delivery TO efn_insight_definer;
 GRANT SELECT ON efn_dwh.fact_esb_transfer TO efn_insight_definer;
 GRANT SELECT ON efn_esb.extract_checkpoint TO efn_insight_definer;
 GRANT SELECT ON efn_esb.extract_run TO efn_insight_definer;
+-- G53 (init/22-g53-insight-fnb-forecast.sql): forecast F&B; fact_forecast_daily/dim_forecast_run/dim_product juga di
+-- insight-sm-access.sql (grant ganda aman, file ini berdiri sendiri).
+GRANT SELECT ON efn_dwh.v_esb_forecast_daily TO efn_insight_definer;
+GRANT SELECT ON efn_dwh.fact_forecast_daily TO efn_insight_definer;
+GRANT SELECT ON efn_dwh.dim_forecast_run TO efn_insight_definer;
+GRANT SELECT ON efn_dwh.dim_fc_warehouse TO efn_insight_definer;
+GRANT SELECT ON efn_dwh.dim_product TO efn_insight_definer;
 
 CREATE DATABASE IF NOT EXISTS efn_insight;
 
@@ -161,3 +168,9 @@ CREATE QUOTA IF NOT EXISTS insight_quota KEYED BY user_name
     FOR INTERVAL 1 hour MAX queries = 20000, errors = 2000, result_rows = 50000000, read_rows = 100000000000,
         execution_time = 36000
     TO insight_reader;
+
+-- G53 (init/22-g53-insight-fnb-forecast.sql): forecast F&B (run ok terbaru per PT), row policy kelas PT. Satuan qty.
+CREATE OR REPLACE VIEW efn_insight.v_esb_forecast_daily DEFINER = efn_insight_definer SQL SECURITY DEFINER AS
+SELECT company_code, brand, warehouse_id, warehouse_code, warehouse_name, product_id, product_code, product_name,
+       category, forecast_date, yhat, p10, p90, model, generated_at
+FROM efn_dwh.v_esb_forecast_daily;
