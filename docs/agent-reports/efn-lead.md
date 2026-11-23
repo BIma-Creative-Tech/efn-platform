@@ -71,3 +71,20 @@ company_code `v_esb_movement_daily` = PT cabang asal (alternatif dua baris asal/
 ### Riwayat
 - 21 Nov 2026 — konsolidasi worktree; review Insight 11 poin (`fix/insight-review`).
 - 20–21 Nov 2026 — adopsi Claude Standard Kit (#120), gitleaks main hijau (#129).
+
+### G65 — migrasi ESB → Odoo PB: pembelian, harga beli supplier, HPP cutover, stok awal (24 Nov 2026)
+- Keputusan user 24 Nov: semua yang mungkin termasuk histori pembelian; PB saja; gladi efn-prod; cutover uji
+  2026-12-01; saldo awal = stok awal saja (TB & AR/AP tetap NOT_BUILT, Q-ESB21).
+- Probe GET prod PB: pricelist & cogs-history kosong, inventory-valuation 401; sumber stok/HPP = baris `Beginning`
+  `/report/stock-movement` (limit 100, filter branchCode); pembelian = purchase-recapitulation (limit 1000) + header PO
+  (join purchaseNum); `currencyID` 1 = IDR → disimpan `currencySign`.
+- Alur: fit-gap G65 (functional) + ADR-042 §0b & docs/04 §27.13 (architect) → W-A esb-extract, W-B scripts/migration,
+  W-C Odoo (paralel) → QA (2 bug P2 satuan harga diperbaiki) + security (0 C/H/M, 4 Low ditutup) → putaran perbaikan.
+- Verifikasi lead: ruff check/format 3 paket, pytest esb-extract & scripts/migration hijau, DDL ClickHouse 24.8 2×
+  tanpa error, 39/39 test Odoo efn_legacy_history, check-odoo-deps 0 terlarang. check-encryption.sh belum (butuh
+  docker compose di skrip; CI). Commit a2212b2, 6e37d19, 4d14116 di `feat/esb-migration-purchase-stock` (worktree
+  efn-platform-esbmig), belum push/PR.
+- Berikutnya (butuh OK user): deploy ke efn-prod (merge lokal smd, image esb-extract & Odoo, DDL 23-g65, -u
+  efn_legacy_history), backfill purchase_line 24 bln (jendela 22:00–05:00 WIB), snapshot stock_opening tanggal hari
+  ini untuk dry-run; impor nyata stok + geser cutover 17 Nov → 1 Des pada 1–2 Des.
+- Terbuka: Q-ESB25..29, Q-G65-1..7, SEC-G65-04 (DPO), ADR-042 §0b Proposed.
