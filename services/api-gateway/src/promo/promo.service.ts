@@ -16,7 +16,10 @@ import { ODOO_PROMO, OdooPromoApi, OdooPromoError, PromoFeedItem, PromoLink, Pro
  *
  * Push (#24): popup `queued` diklaim lalu dikirim lewat Expo Push API HANYA ke member dengan consent `marketing`
  * aktif (baris consent terbaru `granted=true`) dan token aktif. Kegagalan push tidak memengaruhi pop-up in-app.
+ * Push per brand (keputusan pemilik 23 Nov 2026, docs/04 §18.2): token push hanya berasal dari Super-App EFN, yang tidak
+ * memuat PT supermarket independen → popup PT di `PROMO_PUSH_EXCLUDED_COMPANIES` tidak diklaim (tetap `queued` di Odoo).
  */
+export const PROMO_PUSH_EXCLUDED_COMPANIES: readonly string[] = ['SMD'];
 
 export const PROMO_WIDTHS = { banner: 1600, popup: 1024 } as const;
 export type PromoKind = keyof typeof PROMO_WIDTHS;
@@ -255,7 +258,7 @@ export class PromoService implements OnModuleInit, OnModuleDestroy {
 
   /** Klaim push antre (#24) lalu kirim ke member ber-consent marketing. */
   async dispatchPush(company: string): Promise<{ claimed: number; sent: number }> {
-    if (!this.config.promoPushEnabled || !this.push) return { claimed: 0, sent: 0 };
+    if (!this.config.promoPushEnabled || !this.push || PROMO_PUSH_EXCLUDED_COMPANIES.includes(company)) return { claimed: 0, sent: 0 };
     const items: PromoPush[] = await this.odoo.pushClaim(company, 5);
     let sent = 0;
     for (const item of items) sent += await this.sendToConsented(item);

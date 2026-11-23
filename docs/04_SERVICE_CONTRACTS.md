@@ -1939,6 +1939,10 @@ slide utama**; (2) pop-up promo di dalam app/web **dan** push notification; (3) 
   (`platform.push_token`, AAD `efn:push_token.token_enc:v1`); `DELETE /v1/me/push-token`. Job push mengambil popup
   `queued` (#24) dan mengirim ke **member dengan consent `marketing` aktif saja** lewat Expo Push API
   (`https://exp.host/--/api/v2/push/send`, egress allowlist). Tanpa consent = tidak dikirim; pop-up in-app tetap tampil.
+  **Push per brand (keputusan pemilik 23 Nov 2026):** token push hanya berasal dari Super-App EFN (holding), yang tidak
+  memuat supermarket independen. Popup PT `SMD` (konstanta BFF `PROMO_PUSH_EXCLUDED_COMPANIES`) **tidak diklaim** (#24)
+  sehingga tetap `queued` di Odoo dan tidak terkirim ke pengguna Super-App. Pop-up in-app SMD tetap tampil di tenant
+  `supermarket`. Push SMD baru bisa dikirim setelah ada app supermarket sendiri (token per app; belum dibangun).
 - Kill switch: `PROMO_ENABLED` (default false; mati → `GET /v1/promo` 200 `{banners:[],popups:[]}` agar klien tetap
   menampilkan hero lama), `PROMO_PUSH_ENABLED` (default false).
 - Migrasi `15-platform-g27.sql`: `promo_item`, `promo_sync`, `push_token`.
