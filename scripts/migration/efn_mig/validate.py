@@ -250,6 +250,7 @@ def _validate_master(
     bundle: Bundle, brand: str, companies: list[str], out: _Collector
 ) -> dict[str, list[dict[str, Any]]]:
     records: dict[str, list[dict[str, Any]]] = {}
+    xmlids: dict[str, str] = {}  # xmlid -> entitas (QA G65 P3: tabrakan xmlid = error)
     for entry in bundle.manifest.get("files", []):
         entity = str(entry.get("entity"))
         if entity in m.HISTORY_KEYS:
@@ -277,6 +278,10 @@ def _validate_master(
             expected = _expected_xmlid(brand, entity, row)
             if expected is not None and row["xmlid"] != expected:
                 raise IntegrityError(f"xmlid {entity} {key!s:.40} tidak sama dengan hasil hitung ulang (§27.4)")
+            if row["xmlid"] is not None:
+                if row["xmlid"] in xmlids:
+                    out.error("DUPLICATE_XMLID", entity, key, f"xmlid sama dengan baris {xmlids[row['xmlid']]} lain")
+                xmlids.setdefault(row["xmlid"], entity)
     return records
 
 
@@ -290,7 +295,7 @@ def _expected_xmlid(brand: str, entity: str, row: Mapping[str, Any]) -> str | No
         supplier, code = str(data.get("supplier_code") or ""), str(data.get("product_code") or "")
         if row["esb_key"] != f"{supplier}|{code}" or not supplier or not code:
             raise IntegrityError("supplierinfo: esb_key wajib <supplier_code>|<product_code> (§27.13.4)")
-        return xmlid(brand, company, "supplierinfo", f"{supplier}_{code}")
+        return m.supplierinfo_xmlid(brand, company, supplier, code)
     if entity in XMLID_ENTITY:
         return xmlid(brand, company, XMLID_ENTITY[entity], row["esb_key"])
     return None  # cost, quant: tanpa xmlid
@@ -449,6 +454,9 @@ def _check_g65(
     if _count(skipped, "quarantine") or "quarantine" in _location_actions(bundle, brand, out):
         out.error("LOCATION_QUARANTINE", "quant", "location_map.csv",
                   "action quarantine belum didukung G65 (lokasi karantina belum dibuat)")  # fmt: skip
+    if _count(skipped, "cost_uom_unconvertible"):
+        out.warn("COST_UOM_UNCONVERTIBLE", "cost", _count(skipped, "cost_uom_unconvertible"),
+                 "sumber HPP satuan tanpa faktor ke UoM produk dilewati (pakai sumber berikutnya)")  # fmt: skip
     if _count(skipped, "supplierinfo_unmapped"):
         out.warn("SUPPLIERINFO_UNMAPPED", "supplierinfo", _count(skipped, "supplierinfo_unmapped"),
                  "supplier/produk/satuan beli tidak terpetakan -> tidak menjadi harga beli")  # fmt: skip

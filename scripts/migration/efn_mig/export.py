@@ -241,6 +241,8 @@ class G65Result:
     purchase: m.PurchaseSkips = field(default_factory=m.PurchaseSkips)
     stock: m.StockSkips = field(default_factory=m.StockSkips)
     cost_mixed_uom: set[str] = field(default_factory=set)
+    # (company, produk, sumber, satuan): sumber HPP dengan satuan tanpa faktor ke UoM produk -> sumber berikutnya
+    cost_unconvertible: set[tuple[str, str, str, str]] = field(default_factory=set)
     stock_without_cost: list[str] = field(default_factory=list)  # "<company>|<product_code>"
 
 
@@ -276,7 +278,7 @@ def master_records(
             brand, inputs.opening, index, maps.branch, data.products, uom_by_code, maps.uom, maps.location,
             run.cutover, result.stock,
         )  # fmt: skip
-        result.stock_without_cost = _stock_without_cost(brand, data, inputs, latest, out["quant"], maps.uom)
+        result.stock_without_cost = _stock_without_cost(brand, data, inputs, latest, out["quant"], maps)
     if "branch" in out:
         out["branch"] = branch_records
     for company in data.companies:
@@ -308,7 +310,9 @@ def master_records(
                 result.purchase, uom_by_code,
             )  # fmt: skip
         if "cost" in out:
-            out["cost"] += company_costs(brand, company, data, inputs, latest, result.cost_mixed_uom, maps.uom)
+            out["cost"] += company_costs(
+                brand, company, data, inputs, latest, maps, result.cost_mixed_uom, result.cost_unconvertible
+            )
     return out, index
 
 
@@ -318,16 +322,21 @@ def company_costs(
     data: MasterData,
     inputs: G65Inputs,
     latest: dict[m.PurchaseKey, tuple[m.PurchaseRank, Any]],
+    maps: Maps,
     mixed_uom: set[str] | None = None,
-    umap: dict[str, m.UomMap] | None = None,
+    unconvertible: set[tuple[str, str, str, str]] | None = None,
 ) -> list[dict[str, Any]]:
-    """`cost.jsonl` satu company: stock_opening (baris company ini; qty dikonversi ke satuan produk bila `umap`
-    diberikan) -> bom_last_hpp -> purchase_last (L-252)."""
-    opening = [r for r in inputs.opening if str(r.get("company_code")) == company]
-    product_uoms = m.product_uoms(data.products, data.bom_headers, data.bom_lines) if umap is not None else None
+    """`cost.jsonl` satu company: stock_opening -> bom_last_hpp -> purchase_last (L-252), semua dalam satuan produk.
+    HPP `stock_opening` hanya dari baris yang juga dimuat langkah `stock` (cabang non-skip, lokasi `stock`; QA P3)."""
+    _, index = m.build_branches(brand, data.branches, maps.branch)
+    opening = [
+        r for r in inputs.opening
+        if str(r.get("company_code")) == company and m.opening_row_loaded(brand, r, index, maps.branch, maps.location)
+    ]  # fmt: skip
+    product_uoms = m.product_uoms(data.products, data.bom_headers, data.bom_lines)
     return m.build_costs(
         brand, company, data.bom_lines, data.product_codes, opening, m.purchase_last_prices(latest, company),
-        inputs.as_of, mixed_uom, product_uoms, umap,
+        inputs.as_of, mixed_uom, product_uoms, maps.uom, unconvertible,
     )  # fmt: skip
 
 
@@ -337,12 +346,12 @@ def _stock_without_cost(
     inputs: G65Inputs,
     latest: dict[m.PurchaseKey, tuple[m.PurchaseRank, Any]],
     quants: list[dict[str, Any]],
-    umap: dict[str, m.UomMap] | None = None,
+    maps: Maps,
 ) -> list[str]:
     """Produk ber-quant tanpa sumber HPP mana pun (validator: error; §27.13.4 butir 4)."""
     missing: set[str] = set()
     for company in sorted({str(q["company_code"]) for q in quants}):
-        costs = company_costs(brand, company, data, inputs, latest, umap=umap)
+        costs = company_costs(brand, company, data, inputs, latest, maps)
         priced = {str(c["data"]["product_code"]) for c in costs}
         missing |= {
             f"{company}|{q['data']['product_code']}"
@@ -426,6 +435,11 @@ def export_master(
     if "cost" in master_steps:
         manifest["cost_as_of"] = inputs.as_of.isoformat()
         manifest["cost_mixed_uom"] = sorted(result.cost_mixed_uom)
+        items = [
+            {"company_code": c, "product_code": p, "source": s, "uom": u}
+            for c, p, s, u in sorted(result.cost_unconvertible)
+        ]
+        skipped["cost_uom_unconvertible"] = {"count": len(items), "items": items[:1000]}
     if "stock" in master_steps:
         skipped.update(result.stock.to_manifest())
         meta = inputs.opening_meta or {"opening_date": None, "max_version": "", "branches_checkpointed": []}

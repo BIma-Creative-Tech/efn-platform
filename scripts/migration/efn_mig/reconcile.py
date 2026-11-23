@@ -400,7 +400,12 @@ def reconcile_final(parent_run_id: str, sources: list[Bundle], totals_results: l
             if months == 0 or (start is not None and seg_month < month_label(start)):
                 skip_runs.add(str(bundle.manifest["run_id"]))
     source = aggregate_bundle(sources, frozenset(skip_runs))
-    _compare_history(report, source, _odoo_totals(merged))
+    covered = {
+        (str(entry.get("entity")), str(bundle.manifest["segment"]["month"]))
+        for bundle in sources
+        for entry in bundle.manifest.get("files", [])
+    }
+    _compare_history(report, source, _odoo_totals(merged), covered)
     for key, value in bulk.items():
         report.lines.append(Line("5d_bulk_check", key, 0, value, value, "ok" if value == 0 else "selisih"))
     for bundle in sources:
@@ -417,10 +422,17 @@ def _compare_history(
     report: ReconReport,
     source: Mapping[str, Mapping[tuple[str, ...], Mapping[str, float]]],
     odoo: Mapping[str, Mapping[tuple[str, ...], Mapping[str, float]]],
+    covered: set[tuple[str, str]] | None = None,
 ) -> None:
+    """`covered` = (berkas, bulan) yang ada di bundel parent ini. Baris Odoo untuk (berkas, bulan) di luar itu = irisan
+    yang dimuat ekspor LAIN (mis. bulan lama sebelum ekspor ulang November, runbook §4.3/§4.6) -> info, bukan selisih
+    (QA G65 P3). None = semua dibandingkan (perilaku lama)."""
     for entity, (item, cols) in HISTORY_SPECS.items():
         for key in sorted(set(source[entity]) | set(odoo[entity])):
             src, dst = source[entity].get(key, {}), odoo[entity].get(key, {})
+            if covered is not None and not src and (entity, key[0]) not in covered:
+                report.lines.append(Line(f"{item}_di_luar_parent", "|".join(key), 0, dst.get("rows", "-"), "-", "info"))
+                continue
             for col in cols:
                 tol = QTY_TOL if col in (*FLOW_COLUMNS, "outflow", "qty", "rows", "trx_count") else MONEY_TOL
                 _cmp(report, item, "|".join(key) + f"|{col}", src.get(col, 0.0), dst.get(col, 0.0), tol)

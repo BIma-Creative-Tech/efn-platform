@@ -131,7 +131,7 @@ LOCATION_ACTIONS = frozenset({"stock", "skip", "quarantine"})
 SUSPECT_LOCATION = re.compile(r"damage|rusak|expired|kadaluar?sa|temporary|sementara|reject", re.I)
 # `currency` fact_esb_purchase_line (header `currencyID`): kosong = baris tanpa header (fallback nama) -> mata uang
 # brand. Nilai persis currencyID IDR di ESB [B] (§27.13.9).
-IDR_CODES = frozenset({"", "IDR"})
+IDR_CODES = frozenset({"", "IDR", "RP"})  # dibandingkan setelah upper(): "Rp" -> "RP" (currencySign, QA G65)
 
 
 class MapError(ValueError):
@@ -750,6 +750,34 @@ def bom_last_hpp(lines: Iterable[Mapping[str, Any]], product_codes: set[str]) ->
     return best
 
 
+# Satuan referensi Odoo standar per keluarga (G65 QA P2: beli G, produk KG). Satuan dengan `uom_xmlid` di luar tabel
+# hanya dapat dikonversi ke satuan ber-`uom_xmlid` sama (keluarga = xmlid itu sendiri, ukuran = ea_factor). Lusin
+# sengaja tidak dimasukkan: klien bisa memetakan LUSIN ke Unit dengan ea_factor 12 (dihitung ganda).
+STANDARD_UOM_SIZE: dict[str, tuple[str, Decimal]] = {
+    "uom.product_uom_gram": ("weight", Decimal("0.001")),
+    "uom.product_uom_kgm": ("weight", Decimal(1)),
+    "uom.product_uom_ton": ("weight", Decimal(1000)),
+}
+
+
+def uom_size(entry: UomMap) -> tuple[str, Decimal]:
+    family, size = STANDARD_UOM_SIZE.get(entry.uom_xmlid, (entry.uom_xmlid, Decimal(1)))
+    return family, size * entry.ea_factor
+
+
+def uom_ratio(src_uom: str, dst_uom: str, umap: Mapping[str, UomMap]) -> Decimal | None:
+    """Berapa satuan `dst_uom` per 1 `src_uom` (qty_dst = qty_src × rasio; harga_dst = harga_src / rasio). Teks sama ->
+    1; keduanya di uom_map dan sekeluarga (xmlid sama -> ea_factor; berat standar G/KG/TON -> faktor Odoo) -> rasio;
+    selain itu None (tidak ditebak)."""
+    if src_uom and src_uom == dst_uom:
+        return Decimal(1)
+    src, dst = umap.get(src_uom), umap.get(dst_uom)
+    if src is None or dst is None:
+        return None
+    (src_family, src_size), (dst_family, dst_size) = uom_size(src), uom_size(dst)
+    return src_size / dst_size if src_family == dst_family else None
+
+
 def opening_costs(
     rows: Iterable[Mapping[str, Any]],
     product_codes: set[str],
@@ -791,16 +819,16 @@ def _price_in_product_uom(
     code: str,
     product_uoms: Mapping[str, str] | None,
     umap: Mapping[str, UomMap] | None,
-) -> tuple[Decimal, str]:
-    """Harga per `uom` -> per satuan produk bila satuan beda teks tetapi `uom_xmlid` sama (PACK = 6 EA, keduanya Unit):
-    `price / ea_sumber × ea_produk` (kebalikan `to_product_qty`). Selain itu apa adanya (importer mengonversi bila
-    bundel memuat uom.jsonl/product.jsonl). QA G65: bundel `cost` tanpa master tidak membawa `uom.jsonl`, sehingga
-    importer tidak bisa mengonversi; tanpa ini harga per PACK menjadi HPP per Unit."""
-    target = (product_uoms or {}).get(code, "")
-    src, dst = (umap or {}).get(uom), (umap or {}).get(target)
-    if not uom or not target or uom == target or src is None or dst is None or src.uom_xmlid != dst.uom_xmlid:
+) -> tuple[Decimal, str] | None:
+    """Harga per `uom` -> per satuan produk: `price / uom_ratio(uom, produk)` (PACK = 6 EA -> /6; G -> KG ×1000).
+    QA G65: bundel `cost` tanpa master tidak membawa `uom.jsonl`, jadi importer tidak bisa mengonversi -> export
+    tidak pernah mengirim satuan ≠ UoM produk. Tanpa `product_uoms`/`umap` (perilaku lama, test murni) -> apa
+    adanya. Tidak terkonversi -> None (sumber dilewati)."""
+    if product_uoms is None or umap is None:
         return price, uom
-    return price / src.ea_factor * dst.ea_factor, target
+    target = product_uoms.get(code, "")
+    ratio = uom_ratio(uom, target, umap)
+    return None if ratio is None else (price / ratio, target)
 
 
 def build_costs(
@@ -814,19 +842,37 @@ def build_costs(
     mixed_uom: set[str] | None = None,
     product_uoms: Mapping[str, str] | None = None,
     umap: Mapping[str, UomMap] | None = None,
+    unconvertible: set[tuple[str, str, str, str]] | None = None,
 ) -> list[dict[str, Any]]:
     """`standard_price` per produk, sumber pertama yang > 0 (§27.13.4, L-252): `stock_opening` (baris
     `fact_esb_stock_opening` company ini pada cutover; kosong bila tanpa --cutover-date) -> `bom_last_hpp` ->
-    `purchase_last` (harga baris PO sah terbaru, satuan beli). Nilai per satuan ESB (`source_uom`); konversi ke UoM
-    produk oleh importer. Tanpa sumber -> tidak ada baris."""
+    `purchase_last` (harga baris PO sah terbaru). Dengan `product_uoms` + `umap` (export) semua nilai per satuan
+    produk (`source_uom` = UoM produk); sumber yang satuannya tidak terkonversi dilewati dan dicatat di
+    `unconvertible` (company, produk, sumber, satuan) -> sumber berikutnya. Tanpa sumber -> tidak ada baris."""
     found: dict[str, tuple[Decimal, str, str]] = {}
-    for code, (price, uom) in opening_costs(opening, product_codes, mixed_uom, product_uoms, umap).items():
+    mixed: set[str] = set()
+    for code, (price, uom) in opening_costs(opening, product_codes, mixed, product_uoms, umap).items():
         found[code] = (price, uom, "stock_opening")
+    if mixed_uom is not None:
+        mixed_uom |= mixed
+    if unconvertible is not None and product_uoms is not None and umap is not None:
+        unconvertible |= {(company, code, "stock_opening", "") for code in mixed}
+
+    def offer(code: str, price: Decimal, uom: str, source: str) -> None:
+        if code in found:
+            return
+        converted = _price_in_product_uom(price, uom, code, product_uoms, umap)
+        if converted is None:
+            if unconvertible is not None:
+                unconvertible.add((company, code, source, uom))
+            return
+        found[code] = (*converted, source)
+
     for code, (price, uom) in bom_last_hpp(lines, product_codes).items():
-        found.setdefault(code, (*_price_in_product_uom(price, uom, code, product_uoms, umap), "bom_last_hpp"))
+        offer(code, price, uom, "bom_last_hpp")
     for code, (price, uom) in (purchase_last or {}).items():
         if code in product_codes and price > 0:
-            found.setdefault(code, (*_price_in_product_uom(price, uom, code, product_uoms, umap), "purchase_last"))
+            offer(code, price, uom, "purchase_last")
     return [
         record(
             "cost",
@@ -954,34 +1000,32 @@ def build_supplierinfos(
 ) -> list[dict[str, Any]]:
     """`product.supplierinfo` per company × supplier × produk (L-253). Supplier/produk tidak ada di master atau satuan
     beli tidak ada di uom_map -> dilewati (`skips.unmapped`). `sequence` per produk: date_start terbaru = 1.
-    `product_uoms` (kode -> satuan ESB produk): satuan beli beda teks tetapi `uom_xmlid` sama dengan satuan produk
-    (PACK = 6 EA, keduanya Unit) -> harga dikonversi ke satuan produk (`price / ea_beli × ea_produk`, kebalikan
-    `to_product_qty`); tanpa ini harga per PACK akan terbaca per Unit oleh Odoo (QA G65)."""
-    picked: dict[str, list[tuple[date, str, Mapping[str, Any], UomMap]]] = defaultdict(list)
+    `product_uoms` (kode -> satuan ESB produk; selalu diisi export): harga dikonversi ke satuan produk
+    (`price / uom_ratio`: PACK = 6 EA -> /6, G -> KG ×1000) dan `uom_*` = satuan produk; tidak terkonversi -> dilewati
+    (`skips.unmapped` alasan `uom_unconvertible`). Tanpa `product_uoms` (test murni) -> per satuan beli."""
+    picked: dict[str, list[tuple[date, str, Mapping[str, Any], Decimal, UomMap]]] = defaultdict(list)
     for (comp, supplier, code), ((day, _, _), row) in latest.items():
         if comp != company:
             continue
         uom = norm_uom(row.get("uom"))
+        converted = _price_in_product_uom(dec(row.get("price")), uom, code, product_uoms, umap)
         reason = (
             "supplier" if supplier not in supplier_codes
             else "product" if code not in product_codes
             else "uom" if uom not in umap
+            else "uom_unconvertible" if converted is None or converted[1] not in umap
             else ""
         )  # fmt: skip
-        if reason:
+        if reason or converted is None:
             if skips is not None:
                 skips.unmapped[(comp, supplier, code)] = reason
             continue
-        picked[code].append((day, supplier, row, umap[uom]))
+        picked[code].append((day, supplier, row, converted[0], umap[converted[1]]))
     out: list[dict[str, Any]] = []
     for code in sorted(picked):
         ordered = sorted(picked[code], key=lambda x: (-x[0].toordinal(), x[1]))
-        for seq, (day, supplier, row, mapped) in enumerate(ordered, start=1):
-            price = dec(row.get("price"))
-            target = umap.get((product_uoms or {}).get(code, ""))
-            if target is not None and target.esb_uom != mapped.esb_uom and target.uom_xmlid == mapped.uom_xmlid:
-                price = round(price / mapped.ea_factor * target.ea_factor, 4)
-                mapped = target
+        for seq, (day, supplier, row, unit_price, mapped) in enumerate(ordered, start=1):
+            price = round(unit_price, 4)
             data = {
                 "partner_key": xmlid(brand, company, "supplier", supplier),
                 "product_key": xmlid(brand, company, "product", code),
@@ -997,9 +1041,16 @@ def build_supplierinfos(
                 "uom_xmlid": mapped.uom_xmlid,
                 "source_purchase_num": str(row["purchase_num"]),
             }
-            key = xmlid(brand, company, "supplierinfo", f"{supplier}_{code}")
+            key = supplierinfo_xmlid(brand, company, supplier, code)
             out.append(record("supplierinfo", company, f"{supplier}|{code}", key, data))
     return out
+
+
+def supplierinfo_xmlid(brand: str, company: str, supplier: str, code: str) -> str:
+    """xmlid supplierinfo dari esb_key `<supplier>|<produk>` (QA G65 P3): `|` di luar `[A-Z0-9_]` sehingga `xmlid_key`
+    selalu menambah sha256 kode utuh -> `A_B`+`C` dan `A`+`B_C` tidak bertabrakan (dulu `<sup>_<prod>`). Importer
+    wajib menghitung sama."""
+    return xmlid(brand, company, "supplierinfo", f"{supplier}|{code}")
 
 
 # ================================================================== G65 stok awal (§27.13.4 `stock`)
@@ -1160,16 +1211,27 @@ def build_quants(
     return out
 
 
+def opening_row_loaded(
+    brand: str,
+    row: Mapping[str, Any],
+    index: BranchIndex,
+    bmap: Mapping[int, BranchMap],
+    lmap: Mapping[tuple[int, str], str],
+) -> bool:
+    """Baris saldo awal dari cabang/lokasi yang dimuat langkah `stock` (cabang non-skip terpetakan, lokasi ESB
+    `stock` di location_map atau tanpa entri) -- dipakai juga HPP `stock_opening` (QA G65 P3)."""
+    branch_id = int(row["branch_id"])
+    if location_key(brand, branch_id, bmap.get(branch_id), index) is None:
+        return False
+    return lmap.get((branch_id, location_name_key(row.get("location_name"))), "stock") == "stock"
+
+
 def to_product_qty(qty: Decimal, row_uom: str, product_uom: str, umap: Mapping[str, UomMap]) -> Decimal | None:
     """Qty satuan ESB baris -> satuan produk (temuan W-C G65). Sama -> apa adanya; beda -> hanya bila keduanya di
-    uom_map dengan `uom_xmlid` sama (keluarga EA: qty × ea_factor(baris) / ea_factor(produk)); selain itu None
+    uom_map dan sekeluarga (`uom_ratio`: xmlid sama -> ea_factor; G/KG/TON -> faktor berat); selain itu None
     (faktor tidak diketahui -> baris ditolak, tidak dimuat apa adanya)."""
-    if row_uom and row_uom == product_uom:
-        return qty
-    src, dst = umap.get(row_uom), umap.get(product_uom)
-    if src is None or dst is None or src.uom_xmlid != dst.uom_xmlid:
-        return None
-    return qty * src.ea_factor / dst.ea_factor
+    ratio = uom_ratio(row_uom, product_uom, umap)
+    return None if ratio is None else qty * ratio
 
 
 # ================================================================== histori (baris datar)

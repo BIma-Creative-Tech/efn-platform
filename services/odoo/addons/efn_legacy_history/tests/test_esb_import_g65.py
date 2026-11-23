@@ -134,7 +134,7 @@ class TestEsbImportG65(TransactionCase):
                   "source_purchase_num": "ZPO-1"}  # fmt: skip
         values.update(data)
         return {"entity": "supplierinfo", "company_code": CODE, "esb_key": f"{sup}|{prod}",
-                "xmlid": X("supplierinfo", f"{sup}_{prod}"), "data": values}  # fmt: skip
+                "xmlid": X("supplierinfo", f"{sup}|{prod}"), "data": values}  # fmt: skip
 
     def test_supplierinfo_upsert_conflict_and_missing(self):
         rows = [self._si_row("ZSUP", "ZRM"), self._si_row("ZSUP", "ZFIN", price=3000, discount=0,
@@ -266,6 +266,12 @@ class TestEsbImportG65(TransactionCase):
         self.ICP.set_param(imp.PARAM_COST_AS_OF_PREFIX + CODE, CUTOVER)
         with self.assertRaisesRegex(imp.GateError, "opening_date"):
             self._run(self._stock_bundle(rows, opening="2026-11-30"))
+        # SEC-G65-03: production memeriksa ulang lokasi damage/expired tanpa location_map (laporan validator dev
+        # tidak mengikat APP_ENV); non-production = peringatan validator saja.
+        damaged = self._stock_rows()
+        damaged[0]["data"]["esb_locations"] = ["Gudang Utama", "Gudang Damage"]
+        with self.assertRaisesRegex(imp.GateError, "SEC-G65-03"):
+            self._run(self._stock_bundle(damaged), app_env="production", confirm_brand=BRAND, dry_run=True)
         with self.assertRaisesRegex(imp.GateError, "SALDO_BLOCKED"):
             self._run(self._stock_bundle(rows), saldo_blocked=frozenset({CODE}))
         foreign = self._quant(1, xmlid(BRAND, "PB", "branch_wh", 1), "ZFIN", 1)

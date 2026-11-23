@@ -108,8 +108,10 @@ python -m efn_esb snapshot --brand pb --entity stock_opening --date <cutover>   
   `'name'`); gagal/ambigu → `branch_id=0`, `supplier_code=''` (`'none'`, baris tetap disimpan). `map_source` = pemetaan
   terlemah di antara cabang dan supplier. `line_no` stabil per `purchaseNum` (pola L-113). Semua status disimpan;
   daftar izin status = tugas export (W-B). `supplier_id` kosong di store → `master` dipaksa sekali per proses.
+- SEC-G65-01: baris recap/header dengan `purchaseDate` ≠ hari slice (atau kosong) → slice error tanpa checkpoint.
 - `stock_opening`: hanya `transactionType="Beginning"` dan `qtyBalance != 0`; setiap baris wajib `branchID` = cabang
-  diminta (selain itu slice error); kunci ganda dijumlah; angka `Decimal(str(x))`. raw = baris tersimpan + ringkasan
+  diminta, atau tanpa `branchID` → `branchCode` = kode diminta (selain itu slice error); cabang AKTIF tanpa satu pun
+  baris `Beginning` (respons kosong) → slice error tanpa checkpoint (SEC-G65-02); kunci ganda dijumlah; angka `Decimal(str(x))`. raw = baris tersimpan + ringkasan
   `{pages, rows_total, rows_beginning, rows_kept}`.
 - Cek kualitas: view terpisah `efn_dwh.v_esb_g65_quality` (`purchase_unmapped`, `stock_opening_missing_branch`), bukan
   tambahan `v_esb_data_quality` — view itu INVOKER dan dibaca Metabase/Insight yang sengaja tidak punya hak tabel G65.

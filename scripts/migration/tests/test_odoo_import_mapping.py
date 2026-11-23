@@ -345,7 +345,7 @@ def _si_row(sup="SUP-1", prod="RM001", **data):
     values.update(date_start="2026-11-20", uom_esb="KG", uom_xmlid=None, source_purchase_num="PO-1")
     values.update(data)
     return {"entity": "supplierinfo", "company_code": "PB", "esb_key": f"{sup}|{prod}",
-            "xmlid": X("supplierinfo", f"{sup}_{prod}"), "data": values}  # fmt: skip
+            "xmlid": X("supplierinfo", f"{sup}|{prod}"), "data": values}  # fmt: skip
 
 
 def test_g65_supplierinfo_row_check_and_plan():
@@ -353,7 +353,7 @@ def test_g65_supplierinfo_row_check_and_plan():
     m.check_master_row(BRAND, "supplierinfo", row, ["PB"])
     for mutate in (
         lambda r: r.update(esb_key="SUP-1_RM001"),  # esb_key wajib supplier|produk
-        lambda r: r.update(xmlid=X("supplierinfo", "SUP-1|RM001")),
+        lambda r: r.update(xmlid=X("supplierinfo", "SUP-1_RM001")),
         lambda r: r["data"].update(partner_key=X("customer", "SUP-1")),
         lambda r: r["data"].update(product_key=X("product", "RM002")),
     ):
@@ -368,11 +368,28 @@ def test_g65_supplierinfo_row_check_and_plan():
     assert plan.owned == {"price": 12000.0, "discount": 2.5, "date_start": date(2026, 11, 20), "product_uom_id": 3,
                           "sequence": 2, "min_qty": 0.0, "currency_id": 99}  # fmt: skip
     assert plan.create_only == {"partner_id": 5, "product_tmpl_id": 11, "company_id": 7}
+    same = m.supplierinfo_plan({**row["data"], "uom_xmlid": "uom.product_uom_kgm"}, 7, resolver, 99)
+    assert not same.missing and same.owned["product_uom_id"] == 3
+    # Kontrak final W-B: harga selalu per UoM produk -> uom_xmlid beda = baris ditolak (bukan dimuat).
     unit = m.supplierinfo_plan({**row["data"], "uom_xmlid": "uom.product_uom_unit"}, 7, resolver, 99)
-    assert unit.owned["product_uom_id"] == 1, "satuan beli terpetakan dipakai apa adanya"
+    assert any("UoM produk" in x for x in unit.missing)
     broken = m.supplierinfo_plan({**row["data"], "price": 0, "discount": 120}, 7, FakeResolver(), None)
-    assert {"price > 0", "discount 0..100", "currency (hanya IDR)"} <= set(broken.missing)
+    assert {"price > 0", "discount 0..100", "currency (hanya IDR)", "UoM produk"} <= set(broken.missing)
     assert any(x.startswith("partner_key") for x in broken.missing)
+
+
+def test_suspect_location_matches_export():
+    """SEC-G65-03: salinan pola importer = pola validator/export (efn_mig.mapping.SUSPECT_LOCATION)."""
+    assert m.SUSPECT_LOCATION.pattern == export_mapping.SUSPECT_LOCATION.pattern
+    assert m.SUSPECT_LOCATION.flags == export_mapping.SUSPECT_LOCATION.flags
+    assert m.location_key_name("  gudang   Damage ") == export_mapping.location_name_key("  gudang   Damage ")
+    rows = [
+        {"data": {"esb_branch_id": 11, "esb_locations": ["Utama", "Gudang  Damage"]}},
+        {"data": {"esb_branch_id": 12, "esb_locations": ["EXPIRED"]}},
+    ]
+    assert m.suspect_locations(BRAND, rows, None) == ["11|Gudang  Damage", "12|EXPIRED"]
+    csv_text = "brand,branch_id,esb_location_name,action\npb,11,gudang damage,stock\nwtz,12,EXPIRED,skip\n"
+    assert m.suspect_locations(BRAND, rows, csv_text) == ["12|EXPIRED"], "entri map brand lain tidak berlaku"
 
 
 def _quant_row(**data):

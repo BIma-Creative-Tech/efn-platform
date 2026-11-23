@@ -26,7 +26,7 @@ from efn_esb.extract_g65 import (
 from efn_esb.normalize import name_norm
 from efn_esb.planning import WIB, SliceTask, snapshot_tasks, wib_today
 from efn_esb.records import RAW_COLUMNS, raw_rows
-from efn_esb.runner import ALL_TABLES, run_backfill, run_snapshot
+from efn_esb.runner import ALL_TABLES, execute, run_backfill, run_snapshot
 from efn_esb.transform_g65 import (
     FACT_PURCHASE_LINE_COLUMNS,
     FACT_STOCK_OPENING_COLUMNS,
@@ -35,6 +35,8 @@ from efn_esb.transform_g65 import (
     MAP_NAME,
     MAP_NONE,
     check_branch,
+    check_opening_present,
+    check_purchase_day,
     opening_rows,
     purchase_lookups,
     transform_purchase_lines,
@@ -226,7 +228,7 @@ def test_backfill_purchase_line_forces_master_once_when_supplier_ids_missing() -
 
 # ================================================================== stock_opening
 def movement(
-    branch: int | None, ttype: str, code: str, qty: Any, vpu: Any = 0, amount: Any = 0, **extra: Any
+    branch: Any, ttype: str, code: str, qty: Any, vpu: Any = 0, amount: Any = 0, **extra: Any
 ) -> dict[str, Any]:
     row = {
         "branchID": branch, "branchCode": "T07", "branchName": "Toko Tujuh", "location": "Gudang Utama",
@@ -267,11 +269,64 @@ def test_opening_rows_filter_and_transform_decimal() -> None:
 
 
 def test_check_branch_rejects_rows_of_other_branch() -> None:
-    check_branch([movement(7, "Beginning", "RM1", 1)], 7)
-    check_branch([], 7)
-    for bad in (movement(8, "Beginning", "RM1", 1), movement(None, "Beginning", "RM1", 1)):
+    check_branch([movement(7, "Beginning", "RM1", 1)], 7, "T07")
+    check_branch([], 7, "T07")
+    # QA P3: tanpa branchID -> cocokkan branchCode = kode diminta.
+    check_branch([movement(None, "Beginning", "RM1", 1), movement("", "Beginning", "RM2", 1)], 7, "T07")
+    for bad in (
+        movement(8, "Beginning", "RM1", 1),  # cabang lain (branchID menang atas branchCode)
+        movement(None, "Beginning", "RM1", 1, branchCode="T99"),  # kode lain
+        movement(None, "Beginning", "RM1", 1, branchCode=""),  # keduanya kosong
+        {k: v for k, v in movement(7, "Beginning", "RM1", 1).items() if k not in ("branchID", "branchCode")},
+    ):
         with pytest.raises(ValueError):
-            check_branch([movement(7, "Beginning", "RM0", 1), bad], 7)
+            check_branch([movement(7, "Beginning", "RM0", 1), bad], 7, "T07")
+    with pytest.raises(ValueError):
+        check_branch([movement(None, "Beginning", "RM1", 1)], 7, "")  # kode diminta kosong -> tidak cocok
+
+
+def test_check_opening_present_active_branch_empty_is_error() -> None:
+    zero = movement(7, "Beginning", "RM1", 0)
+    check_opening_present([zero], 7, active=True)  # Beginning qty 0 = respons sah
+    check_opening_present([], 9, active=False)  # cabang nonaktif boleh kosong
+    for rows in ([], [movement(7, "Transfer In", "RM1", 5)]):
+        with pytest.raises(ValueError, match="Beginning"):
+            check_opening_present(rows, 7, active=True)
+
+
+def test_extract_stock_opening_empty_response_active_branch_no_checkpoint() -> None:
+    esb = FakeEsb({**base_routes(), STOCK_MOVEMENT_PATH: {"count": 0, "data": []}})
+    with pytest.raises(ValueError):
+        run_slice(runtime(), SliceTask(CUTOVER, "stock_opening", "7"), V, esb.get)
+    # Cabang nonaktif (9 tidak punya kode -> pakai runtime dengan kode) boleh kosong: sukses 0 baris.
+    rt = runtime()
+    rt.branch_rows[4][3] = "T09"
+    result = run_slice(rt, SliceTask(CUTOVER, "stock_opening", "9"), V, esb.get)
+    assert result.tables["fact_esb_stock_opening"] == []
+    now = datetime(2026, 11, 25, 9, 0, tzinfo=WIB)
+    store = FakeStore({("master", "*", now.date()): V})
+    run = run_snapshot(EsbSettings(enabled=True, brands=(CFG,)), BrandRuntime(CFG), Client(esb), store,
+                       ["stock_opening"], CUTOVER, threading.Event(), now_fn=lambda: now)  # fmt: skip
+    assert run.status == "partial"
+    checkpoints = [rows[0] for _, table, rows in store.writes if table == "extract_checkpoint"]
+    assert [c for c in checkpoints if c[1] == "stock_opening"] == []
+
+
+def test_purchase_day_mismatch_rejects_slice() -> None:
+    check_purchase_day([recap("PO/1", "RM1", 1, 1, 1), header()], DAY, "x")
+    for bad in ("2026-10-14", "", None, "bukan-tanggal"):
+        with pytest.raises(ValueError, match="purchaseDate"):
+            check_purchase_day([recap("PO/1", "RM1", 1, 1, 1, purchaseDate=bad)], DAY, "recap")
+    for routes in (
+        {PURCHASE_RECAP_PATH: {"count": 1, "data": [recap("PO/1", "RM1", 1, 1, 1, purchaseDate="2026-10-16")]},
+         PURCHASE_ORDER_PATH: {"count": 1, "data": [header()]}},
+        {PURCHASE_RECAP_PATH: {"count": 1, "data": [recap("PO/1", "RM1", 1, 1, 1)]},
+         PURCHASE_ORDER_PATH: {"count": 1, "data": [header(purchaseDate="2026-10-14")]}},
+    ):  # fmt: skip
+        store = FakeStore()
+        outcome = execute([SliceTask(DAY, "purchase_line", "*")], runtime(), store, FakeEsb(routes).get, 1,
+                          threading.Event(), clock=lambda: V)  # fmt: skip
+        assert outcome.errors == 1 and store.writes == []  # tanpa raw, fakta, maupun checkpoint
 
 
 def test_extract_stock_opening_params_paging_summary_and_pdp() -> None:

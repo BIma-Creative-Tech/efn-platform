@@ -3217,7 +3217,7 @@ belum terautentikasi sebelum tag diperiksa.
 - Entitas & `key`: `branch_wh`/`branch_loc`/`branch_pos` (`branch_id`), `category` (path ternormalisasi), `pos_category`
   (path), `uom` (teks ESB), `product` (`product_code`), `menu` (`menu_code`; menu takeaway `" T"` → **xmlid kedua**
   menunjuk record yang sama), `combo` (kode menu paket), `bom` (`bom_id`), `supplier`, `customer` (kode), `payment_term`
-  (`net_<hari>`), `supplierinfo` (`<supplier>_<product>`). Tanpa xmlid: quant (idempoten lewat `inventory_quantity`
+  (`net_<hari>`), `supplierinfo` (`<supplier>|<product>`). Tanpa xmlid: quant (idempoten lewat `inventory_quantity`
   absolut), jurnal pembukaan (`ref = EFN-MIG-OPEN/<CODE>/<cutover>`), histori (**(v19.1)** idempoten lewat
   ganti-per-irisan §27.8a; `flow.daily` & `sales.daily` juga punya kunci unik §27.8).
 
@@ -3597,7 +3597,7 @@ Antarmuka W-A↔W-B = tabel ClickHouse §27.13.2; W-B↔W-C = berkas bundel + ku
 - **PDP (L-110):** whitelist kunci recap `purchaseNum, purchaseDate, requiredDate, branchName, supplierName,
   productCode, categoryName, subCategoryName, productName, uomName, qty, receiptQty, pricelistPrice, price, discount,
   vatValue, total, statusName`; header `purchaseNum, purchaseDate, branchID, branchName, supplierID, supplierName,
-  currencyID, purchaseTotal, statusID, statusName`. **Dibuang** sebelum `raw_doc`: `notes`, `additionalInfo`,
+  currencyID, currencySign, purchaseTotal, statusID, statusName`. **Dibuang** sebelum `raw_doc`: `notes`, `additionalInfo`,
   `costCenterName`, `projectName`, `createdBy`, `editedBy`, `authorizer*`, `creator*`, `emailSupplier`, `printedBy`, dan
   kunci identitas lain (denylist `redact()` tetap berlaku). `supplierName` disimpan (nama perusahaan; supplier
   perorangan = data pribadi → hanya `esb_writer`/`mig_rw`, §27.13.3).
@@ -3678,7 +3678,7 @@ Langkah (perubahan atas §27.2):
   `discount / (price × qty) × 100` (dibulatkan 2 desimal, dibatasi 0..100); `percent` → apa adanya. Mode dicatat di
   manifest.
 - `esb_key` = `<supplier_code>|<product_code>`; xmlid = `xmlid(brand, company, "supplierinfo",
-  f"{supplier_code}_{product_code}")` (normalisasi + hash §27.4; sudah dipesan di `xmlid.py`).
+  esb_key)` (normalisasi + hash §27.4; `|` selalu memicu hash kode utuh sehingga `A_B`+`C` ≠ `A`+`B_C`, QA G65 P3; validator menolak xmlid ganda `DUPLICATE_XMLID`).
 - `DATA_KEYS["supplierinfo"]` = `{partner_key, product_key, supplier_code, product_code, price, discount, currency,
   min_qty, sequence, date_start, uom_esb, uom_xmlid, source_purchase_num}` (`min_qty` = 0, `date_start` = tanggal PO
   terakhir, `date_end`/`product_id` kosong). Field milik migrasi (meralat §27.4 baris `product.supplierinfo`, fit-gap
@@ -3818,7 +3818,7 @@ lewat `check_import_allowed`, label "arsip sistem lama — bukan transaksi Odoo"
 - ACL: `purchase.group_purchase_user` baca saja (`1,0,0,0`); tidak ada grup tulis. Menu baru **Purchase › Histori ESB
   (arsip)** (parent `purchase.menu_purchase_root`, sequence 98, grup `purchase.group_purchase_user`); entri Inventaris
   hanya bila Q-G65-4 meminta. View list + pivot + graph, filter default 3 bulan terakhir.
-- Mata uang: tanpa kolom per baris (IDR); header `currencyID` ≠ IDR → baris ditolak export + dilaporkan.
+- Mata uang: tanpa kolom per baris (IDR); header `currencySign` (probe 24 Nov: `currencyID` 1 = `IDR`, 2 = `USD`) ≠ IDR → baris ditolak export + dilaporkan.
 
 #### 27.13.7 Odoo: importer `odoo_import_esb.py` / `esb_import` (W-C)
 | Handler | Perilaku | Idempotensi |

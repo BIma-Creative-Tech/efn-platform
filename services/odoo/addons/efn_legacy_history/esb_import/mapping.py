@@ -9,7 +9,10 @@ Konvensi `Plan.owned` (field milik migrasi, §27.4) dan `Plan.create_only` (hany
   (satu baris 100 %); `payment_method_ids` (create_only pos.config) = tuple kosong -> tanpa metode bayar (milik admin).
 """
 
+import csv
 import hashlib
+import io
+import re
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from datetime import date
@@ -56,6 +59,42 @@ QUANT_DATA_KEYS = frozenset(
     }
 )  # fmt: skip
 COST_SOURCES = frozenset({"stock_opening", "bom_last_hpp", "purchase_last"})
+# SEC-G65-03: salinan `scripts/migration/efn_mig/mapping.py` SUSPECT_LOCATION (pola sama dijaga test pytest
+# `test_suspect_location_matches_export`). Importer production memeriksa ulang `esb_locations` quant.
+SUSPECT_LOCATION = re.compile(r"damage|rusak|expired|kadaluar?sa|temporary|sementara|reject", re.I)
+LOCATION_MAP_MEMBER = "maps/location_map.csv"
+
+
+def mapped_locations(csv_text: str, brand: str) -> set[tuple[int, str]]:
+    """`location_map.csv` bundel -> {(branch_id, NAMA LOKASI ternormalisasi)} untuk brand (semua action). Baris rusak
+    diabaikan di sini (validator yang menolak); hasilnya hanya dipakai untuk MELONGGARKAN gerbang lokasi suspect."""
+    out: set[tuple[int, str]] = set()
+    for row in csv.DictReader(io.StringIO(csv_text)):
+        branch = str(row.get("branch_id") or "").strip()
+        if str(row.get("brand") or "").lower() == brand and branch.isdigit():
+            out.add((int(branch), location_key_name(row.get("esb_location_name"))))
+    return out
+
+
+def location_key_name(value: Any) -> str:
+    """= `efn_mig.mapping.location_name_key` (spasi dirapatkan, huruf besar)."""
+    return re.sub(r"\s+", " ", str(value or "").strip()).upper()
+
+
+def suspect_locations(brand: str, rows: Iterable[Mapping[str, Any]], csv_text: str | None) -> list[str]:
+    """Baris quant (amplop) -> daftar `<branch_id>|<lokasi>` berpola damage/expired tanpa entri location_map (Q-ESB25;
+    sama dengan validator LOCATION_SUSPECT)."""
+    mapped = mapped_locations(csv_text, brand) if csv_text else set()
+    found = []
+    for row in rows:
+        data = row["data"]
+        for name in data.get("esb_locations") or []:
+            key = (int(data.get("esb_branch_id") or 0), location_key_name(name))
+            if SUSPECT_LOCATION.search(str(name)) and key not in mapped:
+                found.append(f"{key[0]}|{name}")
+    return sorted(set(found))
+
+
 FLOW_COLUMNS = ("sold", "ck_prod", "store_prod", "ck_out", "in_ck", "in_other", "st_in", "st_out")
 SALES_DAILY_SUMS = ("qty", "gross", "discount", "net", "cogs", "trx_count")
 # Salinan `efn_mig.mapping.HISTORY_KEYS` (dijaga test kesamaan di scripts/migration/tests).
@@ -154,11 +193,11 @@ def check_master_row(brand: str, entity: str, row: Mapping[str, Any], companies:
         raise IntegrityError(f"{entity}: esb_key kosong")
     target = row_xmlid_entity(entity, data)
     if entity == "supplierinfo":
-        # §27.13.4: esb_key = "<supplier_code>|<product_code>", xmlid dari "<supplier_code>_<product_code>".
+        # §27.13.4: esb_key = "<supplier_code>|<product_code>", xmlid dari esb_key (QA G65 P3: `|` -> hash kode utuh).
         sup, prod = data.get("supplier_code"), data.get("product_code")
         if not sup or not prod or esb_key != f"{sup}|{prod}":
             raise IntegrityError("supplierinfo: esb_key tidak sama dengan supplier_code|product_code")
-        expected = xmlid(brand, company, "supplierinfo", f"{sup}_{prod}")
+        expected = xmlid(brand, company, "supplierinfo", esb_key)
     else:
         expected = xmlid(brand, company, target, esb_key) if target else None
     if row["xmlid"] != expected:
@@ -423,23 +462,26 @@ def supplier_plan(data: Mapping[str, Any], company_id: int) -> Plan:
 def supplierinfo_plan(data: Mapping[str, Any], company_id: int, resolver: Resolver, currency_id: int | None) -> Plan:
     """`supplierinfo.jsonl` -> product.supplierinfo (§27.13.4, fit-gap G65 §2). Field milik migrasi: `price`,
     `discount` (%), `date_start`, `product_uom_id`, `sequence`, `min_qty`, `currency_id`; saat create `partner_id`,
-    `product_tmpl_id`, `company_id`. `product_uom_id` = `uom_xmlid` (satuan beli terpetakan) atau UoM produk bila kosong
-    (export sudah mengonversi harga ke UoM produk untuk satuan tak terpetakan); `currency_id` di-resolve importer (IDR).
+    `product_tmpl_id`, `company_id`. Kontrak final W-B: harga SELALU per UoM produk -> `product_uom_id` = UoM produk;
+    `uom_xmlid` (bila diisi) wajib = UoM produk, selain itu baris ditolak (`failed`, tidak dimuat dengan harga salah
+    satuan). `currency_id` di-resolve importer (IDR).
     """
     partner = resolver.res_id(data.get("partner_key"))
     tmpl = resolver.res_id(data.get("product_key"))
-    uom = (
-        resolver.std_ref(data.get("uom_xmlid"), UOM_MODEL)
-        if data.get("uom_xmlid")
-        else resolver.uom_of(data.get("product_key"))
-    )
+    uom = resolver.uom_of(data.get("product_key"))
     missing = []
     if not partner:
         missing.append("partner_key (supplier belum ada di Odoo)")
     if not tmpl:
         missing.append("product_key (produk belum ada di Odoo)")
+    if data.get("uom_xmlid"):
+        sent = resolver.std_ref(data.get("uom_xmlid"), UOM_MODEL)
+        if not sent:
+            missing.append("uom_xmlid")
+        elif uom and sent != uom:
+            missing.append("uom_xmlid ≠ UoM produk (harga wajib per UoM produk)")
     if not uom:
-        missing.append("uom_xmlid")
+        missing.append("UoM produk")
     if not currency_id:
         missing.append("currency (hanya IDR)")
     price = Decimal(str(data.get("price") if data.get("price") is not None else 0))

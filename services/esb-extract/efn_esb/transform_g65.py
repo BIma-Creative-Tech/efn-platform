@@ -182,12 +182,38 @@ def transform_purchase_lines(
 
 
 # ================================================================== stock_opening
-def check_branch(rows: Sequence[Mapping[str, Any]], branch_id: int) -> None:
-    """Setiap baris stock-movement wajib milik cabang yang diminta (filter `branchCode` [B]); selain itu slice error
-    (lebih baik gagal daripada saldo cabang lain tercatat di cabang ini)."""
-    foreign = sum(1 for row in rows if to_int(row.get("branchID")) != branch_id)
+def check_purchase_day(rows: Sequence[Mapping[str, Any]], day: date, source: str) -> None:
+    """SEC-G65-01: setiap baris recap/header wajib `purchaseDate` = hari slice (filter `dateFrom/dateTo` [B]). Selain
+    itu (tanggal lain, kosong, tak terbaca) slice error tanpa checkpoint: `purchase_date` = hari slice, jadi baris hari
+    lain akan tercatat di tanggal yang salah."""
+    other = sum(1 for row in rows if parse_day(row.get("purchaseDate")) != day)
+    if other:
+        raise ValueError(f"{source}: {other} baris purchaseDate != {day.isoformat()} (filter tanggal tidak berlaku)")
+
+
+def _row_in_branch(row: Mapping[str, Any], branch_id: int, branch_code: str) -> bool:
+    raw_id = row.get("branchID")
+    if raw_id not in (None, ""):
+        return to_int(raw_id) == branch_id
+    code = text(row.get("branchCode"), 64)  # QA P3: tanpa branchID -> cocokkan kode cabang yang diminta
+    return bool(code) and bool(branch_code) and code == branch_code
+
+
+def check_branch(rows: Sequence[Mapping[str, Any]], branch_id: int, branch_code: str) -> None:
+    """Setiap baris stock-movement wajib milik cabang yang diminta (filter `branchCode` [B]): `branchID` = cabang, atau
+    bila `branchID` tidak ada, `branchCode` = kode diminta; keduanya kosong / cabang lain -> slice error (lebih baik
+    gagal daripada saldo cabang lain tercatat di cabang ini)."""
+    foreign = sum(1 for row in rows if not _row_in_branch(row, branch_id, branch_code))
     if foreign:
         raise ValueError(f"stock-movement: {foreign} baris bukan cabang {branch_id} (filter branchCode tidak berlaku)")
+
+
+def check_opening_present(rows: Sequence[Mapping[str, Any]], branch_id: int, active: bool) -> None:
+    """SEC-G65-02: ESB mengembalikan baris `Beginning` (qty 0 pun) untuk setiap produk cabang aktif; respons tanpa satu
+    pun baris `Beginning` untuk cabang AKTIF = sinyal filter salah -> slice error tanpa checkpoint (bukan sukses 0
+    baris). Cabang nonaktif boleh kosong."""
+    if active and not any(is_opening_row(row) for row in rows):
+        raise ValueError(f"stock-movement: cabang aktif {branch_id} tanpa baris Beginning (respons kosong)")
 
 
 def is_opening_row(row: Mapping[str, Any]) -> bool:

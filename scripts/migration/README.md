@@ -95,9 +95,14 @@ entitas `purchase_line` scope `*` / `stock_opening` scope `<branch_id>`).
   `discount / (price × qty) × 100`, 2 desimal, 0..100) atau `percent` (apa adanya). Supplier/produk tanpa master atau
   satuan beli tanpa `uom_map.csv` → dilewati, `manifest.skipped.supplierinfo_unmapped` (alasan per kunci).
 - `cost`: sumber pertama yang > 0: `stock_opening` (hanya dengan `--cutover-date`: Σ amount / Σ qty baris qty > 0 semua
-  cabang PT, qty dikonversi ke satuan produk → harga per satuan produk; satuan tak terkonversi → dilewati,
-  `manifest.cost_mixed_uom`) → `bom_last_hpp` → `purchase_last`. `as_of` = cutover atau tanggal export WIB
-  (`manifest.cost_as_of`).
+  cabang **yang dimuat langkah stock** (non-skip, lokasi `stock`; QA P3), qty dikonversi ke satuan produk; satuan tak
+  terkonversi → dilewati, `manifest.cost_mixed_uom`) → `bom_last_hpp` → `purchase_last`. Semua sumber dikonversi ke
+  UoM produk lewat `mapping.uom_ratio` (teks sama = 1; `uom_xmlid` sama → `ea_factor`; berat G/KG/TON → faktor Odoo);
+  tanpa faktor → sumber dilewati, `skipped.cost_uom_unconvertible` + peringatan `COST_UOM_UNCONVERTIBLE`; `source_uom`
+  selalu = UoM produk. Supplierinfo sama: harga + `uom_*` dalam UoM produk, tanpa faktor → `supplierinfo_unmapped`
+  alasan `uom_unconvertible`; xmlid = `supplierinfo_xmlid` dari esb_key `<sup>|<prod>` (hash kode utuh, tidak ambigu;
+  importer wajib menghitung sama). `as_of` = cutover atau tanggal export WIB (`manifest.cost_as_of`). Mata uang IDR =
+  `""`, `IDR`, `Rp`. Validator: `DUPLICATE_XMLID` (xmlid ganda dalam satu bundel).
 - `stock` (bundel tunggal, wajib `--cutover-date`; company di `EFN_MIG_SALDO_BLOCKED` → exit 4): cabang non-`skip` di
   `branch_map` tanpa checkpoint `stock_opening` pada cutover → bundel tetap ditulis (`manifest.stock_opening_missing_
   branches`) lalu exit 1; validator menolaknya. **Qty dikonversi export ke satuan produk** (temuan W-C): satuan baris =
@@ -199,7 +204,7 @@ pajak, tanggal ISO `YYYY-MM-DD`.
 | `payment_term.jsonl` | `payment_term` | `net_<hari>` | `days, name` |
 | `bom.jsonl` | `bom` | `bom_id` | `code, name, type` (`phantom` bila ditautkan menu lewat `bomName`, selain itu `normal`), `bom_type_id, bom_type_name, product_code, product_key` (normal), `menu_keys` (phantom: BoM kit per menu), `product_qty` (rasio BATCH→EA bila `ratio_source="bom_ratio"`, selain itu 1), `uom_esb, uom_xmlid, ratio_source, lines:[{product_key, product_code, qty, uom_esb, uom_xmlid, yield_percent}]` |
 | `cost.jsonl` | — (`xmlid` null) | `product_code` | `product_key, product_code, standard_price` (per satuan `source_uom`, 4 desimal), `source_uom` (satuan ESB; importer mengonversi bila ≠ UoM produk [B]), `source` ∈ `stock_opening`\|`bom_last_hpp`\|`purchase_last`, `as_of` (ISO; = cutover untuk `stock_opening`) |
-| `supplierinfo.jsonl` (G65) | `supplierinfo` dari `<supplier_code>_<product_code>` | `<supplier_code>\|<product_code>` | `partner_key` (xmlid `supplier`), `product_key`, `supplier_code, product_code, price` (harga satuan PO terakhir, per `uom_xmlid`), `discount` (%), `currency="IDR"`, `min_qty=0`, `sequence` (1..n per PT × produk), `date_start` (tanggal PO), `uom_esb, uom_xmlid` (satuan beli dari `uom_map.csv` → `product_uom_id`), `source_purchase_num` |
+| `supplierinfo.jsonl` (G65) | `supplierinfo` dari esb_key `<supplier_code>\|<product_code>` (`supplierinfo_xmlid`) | `<supplier_code>\|<product_code>` | `partner_key` (xmlid `supplier`), `product_key`, `supplier_code, product_code, price` (harga satuan PO terakhir, per `uom_xmlid`), `discount` (%), `currency="IDR"`, `min_qty=0`, `sequence` (1..n per PT × produk), `date_start` (tanggal PO), `uom_esb, uom_xmlid` (= UoM produk; harga sudah dikonversi export → `product_uom_id`), `source_purchase_num` |
 | `quant.jsonl` (G65, bundel `stock`) | — (`xmlid` null) | `<branch_id>\|<product_code>` | `location_key` (xmlid `branch_wh` untuk store/ck/warehouse → importer memakai `lot_stock_id`; xmlid `branch_loc` untuk cabang `location`), `product_key, product_code, quantity` (Σ qty > 0, satuan `uom_esb`), `uom_esb, uom_xmlid` (= UoM produk; qty sudah dikonversi export), `esb_branch_id, esb_locations` (nama lokasi ESB yang dijumlah), `amount` (Σ amount_balance ESB, untuk rekonsiliasi), `accounting_date` (= cutover − 1) |
 
 ## Baris JSONL histori (objek datar, company = `segment.company_code`, berkas `.jsonl.gz`)

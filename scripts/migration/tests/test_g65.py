@@ -29,7 +29,7 @@ from efn_mig.export import (
     export_master,
     master_records,
 )
-from efn_mig.reconcile import aggregate_bundle, reconcile
+from efn_mig.reconcile import aggregate_bundle, reconcile, reconcile_final
 from efn_mig.validate import validate_bundle
 from efn_mig.xmlid import xmlid
 
@@ -89,7 +89,10 @@ def test_supplierinfo_latest_sequence_discount_and_skips(source: FakeSource) -> 
     by = {r["esb_key"]: r for r in rows}
     assert set(by) == {"SUP1|RM001", "SUP2|RM001"}
     sup1 = by["SUP1|RM001"]
-    assert sup1["xmlid"] == xmlid("pb", "PB", "supplierinfo", "SUP1_RM001")
+    # QA P3: xmlid dari esb_key `SUP1|RM001` (hash kode utuh) -- `A_B`+`C` tidak lagi bertabrakan dengan `A`+`B_C`.
+    assert sup1["xmlid"] == m.supplierinfo_xmlid("pb", "PB", "SUP1", "RM001") == xmlid("pb", "PB", "supplierinfo",
+                                                                                        "SUP1|RM001")  # fmt: skip
+    assert m.supplierinfo_xmlid("pb", "PB", "A_B", "C") != m.supplierinfo_xmlid("pb", "PB", "A", "B_C")
     assert sup1["data"]["price"] == 13000 and sup1["data"]["discount"] == 10  # 13000 / (13000 × 10) × 100
     assert sup1["data"]["sequence"] == 1 and sup1["data"]["date_start"] == "2026-11-15"
     assert sup1["data"]["source_purchase_num"] == "PO2" and sup1["data"]["uom_xmlid"] == "uom.product_uom_kgm"
@@ -180,9 +183,51 @@ def test_cost_purchase_last_and_bom_converted_to_product_uom_same_xmlid() -> Non
     by = {r["esb_key"]: r["data"] for r in out}
     assert by["PCK1"]["standard_price"] == 100 and by["PCK1"]["source_uom"] == "EA"
     assert by["KGP"]["standard_price"] == 9000 and by["KGP"]["source_uom"] == "KG"
-    # Satuan beda xmlid (G vs KG): tidak ditebak, apa adanya (importer/validator yang menangani).
-    kept = m.build_costs("pb", "PB", [], {"KGP"}, (), {"KGP": (D(9), "G")}, CUTOVER, None, {"KGP": "KG"}, umap)
-    assert kept[0]["data"]["source_uom"] == "G"
+    # Satuan tanpa faktor ke UoM produk (G tidak ada di uom_map uji): sumber dilewati + dicatat, BUKAN apa adanya.
+    bad: set[tuple[str, str, str, str]] = set()
+    lost = m.build_costs("pb", "PB", [], {"KGP"}, (), {"KGP": (D(9), "G")}, CUTOVER, None, {"KGP": "KG"}, umap,
+                         bad)  # fmt: skip
+    assert lost == [] and bad == {("PB", "KGP", "purchase_last", "G")}
+
+
+UMAP_G = m.parse_uom_map(UOM_MAP + "G,uom.product_uom_gram,\nBOX,uom.product_uom_box_x,\n")
+
+
+def test_weight_family_g_to_kg_converted_for_cost_supplierinfo_and_stock() -> None:
+    """QA G65 P2: beli/stok G, produk KG -> faktor berat Odoo (1 G = 0,001 KG); xmlid tak dikenal beda -> ditolak."""
+    assert m.uom_ratio("G", "KG", UMAP_G) == D("0.001") and m.uom_ratio("KG", "G", UMAP_G) == 1000
+    assert m.uom_ratio("BOX", "KG", UMAP_G) is None and m.uom_ratio("EA", "KG", UMAP_G) is None
+    assert m.to_product_qty(D(2500), "G", "KG", UMAP_G) == D("2.5")
+    out = m.build_costs("pb", "PB", [], {"KGP"}, (), {"KGP": (D(9), "G")}, CUTOVER, None, {"KGP": "KG"}, UMAP_G)
+    assert out[0]["data"]["standard_price"] == 9000 and out[0]["data"]["source_uom"] == "KG"  # Rp 9/G = Rp 9.000/KG
+    rows = [purchase(date(2026, 11, 2), "PO2", code="KGP", price="12", uom="G"),
+            purchase(date(2026, 11, 3), "PO3", supplier="SUP2", code="KGP", price="5", uom="BOX")]  # fmt: skip
+    latest = m.latest_purchases(rows, m.PURCHASE_PRICE_STATUSES, date(2025, 12, 1), CUTOVER)
+    skips = m.PurchaseSkips()
+    infos = m.build_supplierinfos("pb", "PB", latest, {"SUP1", "SUP2"}, {"KGP"}, UMAP_G, "nominal", skips,
+                                  {"KGP": "KG"})  # fmt: skip
+    assert [(r["esb_key"], r["data"]["price"], r["data"]["uom_xmlid"]) for r in infos] == [
+        ("SUP1|KGP", 12000, "uom.product_uom_kgm")
+    ]
+    assert skips.unmapped == {("PB", "SUP2", "KGP"): "uom_unconvertible"}
+
+
+def test_opening_cost_only_from_loaded_branches_and_locations(source: FakeSource) -> None:
+    """QA G65 P3: HPP stock_opening hanya dari baris yang dimuat langkah stock (bukan cabang skip / lokasi skip)."""
+    source.opening = [
+        opening(11, "RM001", "10", "100000"),  # 10.000/KG -> dipakai
+        opening(11, "RM001", "10", "0", location="Damage"),  # location_map skip -> tidak ikut rata-rata
+        opening(99, "RM001", "10", "500000"),  # cabang skip -> tidak ikut rata-rata
+    ]
+    inputs = G65Inputs.load(source, "pb", ["cost"], CUTOVER)
+    rows, _ = _master(source, ["cost"], inputs)
+    by = {r["esb_key"]: r["data"] for r in rows["cost"]}
+    assert by["RM001"]["source"] == "stock_opening" and by["RM001"]["standard_price"] == 10000
+
+
+def test_idr_codes_accept_rp() -> None:
+    assert all(m.is_idr(v) for v in ("", None, "IDR", "idr", "Rp", "RP", " rp "))
+    assert not m.is_idr("USD") and not m.is_idr("1")
 
 
 def _master(
@@ -343,7 +388,7 @@ def sinfo(supplier: str = "SUP1", code: str = "RM001", **data: Any) -> dict[str,
             "uom_xmlid": "uom.product_uom_kgm", "source_purchase_num": "PO1"}  # fmt: skip
     base.update(data)
     return {"entity": "supplierinfo", "company_code": "PB", "esb_key": f"{supplier}|{code}",
-            "xmlid": xmlid("pb", "PB", "supplierinfo", f"{supplier}_{code}"), "data": base}  # fmt: skip
+            "xmlid": m.supplierinfo_xmlid("pb", "PB", supplier, code), "data": base}  # fmt: skip
 
 
 def test_validator_supplierinfo_rules(keys: b.Keys) -> None:
@@ -352,8 +397,12 @@ def test_validator_supplierinfo_rules(keys: b.Keys) -> None:
            sinfo("SUP3", code="X1", discount="10")]  # fmt: skip
     report = validate_bundle(_bundle(keys, {"supplierinfo": bad}))
     expected = {"SUPPLIERINFO_PRICE", "SUPPLIERINFO_CURRENCY", "SUPPLIERINFO_DISCOUNT", "SUPPLIERINFO_DUP",
-                "SUPPLIERINFO_SEQUENCE"}  # fmt: skip
+                "SUPPLIERINFO_SEQUENCE", "DUPLICATE_XMLID"}  # fmt: skip
     assert expected <= codes(report)
+    data = {"default_code": "RM001", "name": "x", "uom_xmlid": "uom.product_uom_kgm"}
+    product = {"entity": "product", "company_code": "PB", "esb_key": "RM001",
+               "xmlid": xmlid("pb", "PB", "product", "RM001"), "data": data}  # fmt: skip
+    assert "DUPLICATE_XMLID" in codes(validate_bundle(_bundle(keys, {"product": [product, dict(product)]})))
     extra = sinfo()
     extra["data"]["supplier_phone"] = "0812"
     assert "PII_WHITELIST" in codes(validate_bundle(_bundle(keys, {"supplierinfo": [extra]})))
@@ -522,6 +571,30 @@ def test_reconcile_purchase_history_5e(tmp_path: Path, keys: b.Keys, source: Fak
     short[0]["rows"] -= 1
     bad = reconcile([(bundle, _result(keys, bundle, report_json, {"legacy_purchase_line": short}))])
     assert bad.blocking == 1
+
+
+def _totals(keys: b.Keys, parent: str, totals: dict) -> b.Bundle:
+    blob = json.dumps(totals).encode()
+    entry = b.file_entry("odoo_totals.json", "odoo_totals", blob, 0)
+    man = {"run_id": str(uuid.uuid4()), "brand": "pb", "company_codes": ["PB"], "parent_run_id": parent,
+           "steps": ["totals"], "files": [entry], "maps": []}  # fmt: skip
+    return b.open_bundle(b.build_bundle(man, {"odoo_totals.json": blob}, keys, kind="result"), keys, "result")
+
+
+def test_reconcile_final_month_outside_parent_is_info(tmp_path: Path, keys: b.Keys, source: FakeSource) -> None:
+    """QA G65 P3: ekspor ulang November saja; Oktober (dimuat ekspor sebelumnya) ada di totals Odoo -> info, bukan
+    selisih. November yang hilang di Odoo tetap pemblokir."""
+    purchase_history_fixture(source)
+    (seg,) = _history(tmp_path, keys, source, ["legacy_purchase_line"], ["2026-11"])
+    bundle = b.read_bundle(seg.path, keys, "bundle")
+    parent = str(bundle.manifest["parent_run_id"])
+    older = {"month": "2026-10", "company_code": "PB", "branch_name": "Cabang 11", "rows": 3, "qty": 30, "total": 9}
+    totals = {"legacy_purchase_line": [*purchase_totals(bundle), older]}
+    report = reconcile_final(parent, [bundle], [_totals(keys, parent, totals)])
+    assert report.blocking == 0
+    assert any(ln.item == "5e_purchase_line_di_luar_parent" and ln.status == "info" for ln in report.lines)
+    missing = reconcile_final(parent, [bundle], [_totals(keys, parent, {"legacy_purchase_line": [older]})])
+    assert missing.blocking > 0
 
 
 def test_reconcile_stock_item2(tmp_path: Path, keys: b.Keys, source: FakeSource) -> None:

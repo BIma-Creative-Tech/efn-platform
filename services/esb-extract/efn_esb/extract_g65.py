@@ -20,6 +20,8 @@ from efn_esb.paging import Getter, fetch_all
 from efn_esb.planning import SliceTask
 from efn_esb.transform_g65 import (
     check_branch,
+    check_opening_present,
+    check_purchase_day,
     is_opening_row,
     opening_rows,
     purchase_lookups,
@@ -48,6 +50,14 @@ def branch_code_for(rt: BrandRuntime, branch_id: int) -> str:
     raise ValueError(f"cabang {branch_id} tanpa branch_code di dim_esb_branch")
 
 
+def branch_is_active(rt: BrandRuntime, branch_id: int) -> bool:
+    """Flag aktif dim_esb_branch (kolom 7). Cabang tak dikenal dianggap aktif (pemeriksaan paling ketat)."""
+    for row in rt.branch_rows:
+        if int(row[2]) == branch_id:
+            return int(row[7]) == 1
+    return True
+
+
 def extract_purchase_line(rt: BrandRuntime, task: SliceTask, version: datetime, get: Getter) -> SliceResult:
     cfg, day = rt.cfg, task.day.isoformat()
     window = {"dateFrom": day, "dateTo": day}
@@ -59,6 +69,8 @@ def extract_purchase_line(rt: BrandRuntime, task: SliceTask, version: datetime, 
         whitelist(row, PURCHASE_HEADER_FIELDS)
         for row in fetch_all(get, PURCHASE_ORDER_PATH, window, limit=PURCHASE_ORDER_LIMIT, max_pages=rt.max_pages)
     ]
+    check_purchase_day(recap, task.day, "purchase-recapitulation")  # SEC-G65-01
+    check_purchase_day(headers, task.day, "purchase-order")
     branches = [(int(row[2]), str(row[4])) for row in rt.branch_rows]
     with rt.lock:
         suppliers = list(rt.suppliers)
@@ -81,7 +93,8 @@ def extract_stock_opening(rt: BrandRuntime, task: SliceTask, version: datetime, 
         whitelist(row, STOCK_MOVEMENT_FIELDS)
         for row in fetch_all(pages, STOCK_MOVEMENT_PATH, params, limit=STOCK_MOVEMENT_LIMIT, max_pages=rt.max_pages)
     ]
-    check_branch(rows, branch_id)
+    check_branch(rows, branch_id, code)
+    check_opening_present(rows, branch_id, branch_is_active(rt, branch_id))  # SEC-G65-02
     kept = opening_rows(rows)
     facts = transform_stock_opening(kept, cfg.key, cfg.company_for(branch_id), branch_id, code, task.day, version)
     summary: dict[str, Any] = {

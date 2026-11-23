@@ -1412,6 +1412,16 @@ class _Run:
             raise GateError(
                 f"{len(tracked)} produk ber-tracking (lot/serial) di quant; ESB tanpa lot (Q-34, §27.13.7 gerbang e)"
             )
+        if is_production(self.opts.app_env):
+            # SEC-G65-03: laporan validator tidak mengikat APP_ENV -> production memeriksa ulang LOCATION_SUSPECT.
+            raw = self.bundle.files.get(m.LOCATION_MAP_MEMBER)
+            text = raw.decode("utf-8-sig", errors="replace") if raw else None
+            suspects = m.suspect_locations(self.brand, (i["row"] for i in self.stock_items), text)
+            if suspects:
+                raise GateError(
+                    f"{len(suspects)} lokasi ESB berpola damage/expired/temporary tanpa location_map.csv di production "
+                    f"(Q-ESB25, SEC-G65-03): {', '.join(suspects[:5])}"
+                )
 
     def _stock_qty(self, data, product):
         """Qty target dalam UoM produk. `uom_xmlid` kosong = satuan produk; selain itu dikonversi bila satuan

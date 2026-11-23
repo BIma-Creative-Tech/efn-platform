@@ -30,7 +30,7 @@ class EfnLegacyPurchaseLine(models.Model):
     company_id = fields.Many2one("res.company", string="Company", required=True, readonly=True)
     date = fields.Date(string="Tanggal PO", required=True, readonly=True)
     date_required = fields.Date(string="Tanggal diminta", readonly=True)
-    purchase_num = fields.Char(string="No. PO ESB", size=32, required=True, readonly=True, index=True)
+    purchase_num = fields.Char(string="No. PO ESB", size=64, required=True, readonly=True, index=True)
     line_no = fields.Integer(string="Baris", required=True, readonly=True)
     warehouse_id = fields.Many2one(
         "stock.warehouse", string="Gudang/outlet", readonly=True, check_company=True, ondelete="set null"
@@ -43,7 +43,7 @@ class EfnLegacyPurchaseLine(models.Model):
     product_id = fields.Many2one(
         "product.product", string="Produk (Odoo)", readonly=True, check_company=True, ondelete="set null"
     )
-    esb_product_code = fields.Char(string="Kode produk ESB", size=32, required=True, readonly=True)
+    esb_product_code = fields.Char(string="Kode produk ESB", size=64, required=True, readonly=True)
     product_name = fields.Char(string="Nama produk ESB", size=128, readonly=True)
     category_name = fields.Char(string="Kategori ESB", size=64, readonly=True)
     sub_category_name = fields.Char(string="Sub-kategori ESB", size=64, readonly=True)
@@ -70,13 +70,13 @@ class EfnLegacyPurchaseLine(models.Model):
         ("date_required", "date", False),
         ("company_id", "m2o", True),
         ("warehouse_id", "m2o", False),
-        ("purchase_num", "char:32", True),
+        ("purchase_num", "char:64", True),
         ("line_no", "int", True),
         ("branch_name", "char:64", False),
         ("supplier_id", "m2o", False),
         ("supplier_name", "char:128", False),
         ("product_id", "m2o", False),
-        ("esb_product_code", "char:32", True),
+        ("esb_product_code", "char:64", True),
         ("product_name", "char:128", False),
         ("category_name", "char:64", False),
         ("sub_category_name", "char:64", False),
