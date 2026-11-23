@@ -12,7 +12,7 @@ import re
 from collections import defaultdict
 from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass, field
-from datetime import date
+from datetime import date, timedelta
 from decimal import Decimal
 from functools import cache
 from typing import Any
@@ -40,6 +40,12 @@ HISTORY_KEYS: dict[str, tuple[str, ...]] = {
         "sales_num", "line_no", "date", "branch_key", "menu_key", "esb_menu_code", "qty", "price", "total",
         "discount", "cogs", "row_type", "is_takeaway",
     ),
+    # G65 (docs/04 §27.13.4): arsip pembelian 24 bulan, semua status; *_key boleh null.
+    "legacy_purchase_line": (
+        "purchase_num", "line_no", "date", "date_required", "branch_key", "branch_name", "supplier_key",
+        "supplier_name", "product_key", "esb_branch_id", "esb_supplier_code", "esb_product_code", "uom_name", "qty",
+        "receipt_qty", "pricelist_price", "price_unit", "discount", "vat_value", "total", "status", "map_source",
+    ),
 }  # fmt: skip
 # Kunci OPSIONAL histori (nama tampilan, data bisnis -- bukan PII). Export selalu mengisinya (nilai boleh null);
 # identik dengan `HISTORY_OPTIONAL_KEYS` importer Odoo (esb_import/mapping.py).
@@ -47,6 +53,7 @@ HISTORY_OPTIONAL_KEYS: dict[str, frozenset[str]] = {
     "legacy_flow_daily": frozenset({"esb_product_name"}),
     "legacy_sales_daily": frozenset({"menu_name", "menu_category"}),
     "legacy_sales_line": frozenset(),
+    "legacy_purchase_line": frozenset({"product_name", "category_name", "sub_category_name"}),
 }
 # Kunci `data` per entitas master (validator: di luar whitelist = error).
 DATA_KEYS: dict[str, frozenset[str]] = {
@@ -79,7 +86,20 @@ DATA_KEYS: dict[str, frozenset[str]] = {
             "product_qty", "uom_esb", "uom_xmlid", "ratio_source", "lines",
         }
     ),
-    "cost": frozenset({"product_key", "product_code", "standard_price", "source_uom"}),
+    "cost": frozenset({"product_key", "product_code", "standard_price", "source_uom", "source", "as_of"}),
+    # G65 (§27.13.4)
+    "supplierinfo": frozenset(
+        {
+            "partner_key", "product_key", "supplier_code", "product_code", "price", "discount", "currency", "min_qty",
+            "sequence", "date_start", "uom_esb", "uom_xmlid", "source_purchase_num",
+        }
+    ),
+    "quant": frozenset(
+        {
+            "location_key", "product_key", "product_code", "quantity", "uom_esb", "uom_xmlid", "esb_branch_id",
+            "esb_locations", "amount", "accounting_date",
+        }
+    ),
 }  # fmt: skip
 BOM_LINE_KEYS = frozenset({"product_key", "product_code", "qty", "uom_esb", "uom_xmlid", "yield_percent"})
 # Berkas per entitas master (§27.3).
@@ -95,10 +115,23 @@ ENTITY_FILES: dict[str, str] = {
     "customer": "customer.jsonl",
     "bom": "bom.jsonl",
     "cost": "cost.jsonl",
+    "supplierinfo": "supplierinfo.jsonl",
+    "quant": "quant.jsonl",
     "legacy_flow_daily": "legacy_flow_daily.jsonl.gz",
     "legacy_sales_daily": "legacy_sales_daily.jsonl.gz",
     "legacy_sales_line": "legacy_sales_line.jsonl.gz",
+    "legacy_purchase_line": "legacy_purchase_line.jsonl.gz",
 }
+# G65 (§27.13.4, Q-ESB28): status PO yang mewakili harga beli sah (daftar izin; status lain tidak menjadi harga).
+PURCHASE_PRICE_STATUSES = ("Authorized", "Receiving", "Finished", "Closed")
+DISCOUNT_MODES = ("nominal", "percent")  # arti `discount` ESB (Q-G65-2)
+COST_SOURCES = ("stock_opening", "bom_last_hpp", "purchase_last")  # urutan sumber HPP (L-252)
+LOCATION_ACTIONS = frozenset({"stock", "skip", "quarantine"})
+# Q-ESB25: lokasi ESB berpola ini tanpa entri location_map -> peringatan (non-production) / error (production).
+SUSPECT_LOCATION = re.compile(r"damage|rusak|expired|kadaluar?sa|temporary|sementara|reject", re.I)
+# `currency` fact_esb_purchase_line (header `currencyID`): kosong = baris tanpa header (fallback nama) -> mata uang
+# brand. Nilai persis currencyID IDR di ESB [B] (§27.13.9).
+IDR_CODES = frozenset({"", "IDR"})
 
 
 class MapError(ValueError):
@@ -187,6 +220,31 @@ def parse_uom_map(text: str) -> dict[str, UomMap]:
         if key in out:
             raise MapError(f"uom_map.csv baris {line_no}: esb_uom ganda")
         out[key] = UomMap(key, row["uom_xmlid"], factor)
+    return out
+
+
+def location_name_key(value: Any) -> str:
+    return norm_text(value).upper()
+
+
+def parse_location_map(text: str, brand: str) -> dict[tuple[int, str], str]:
+    """G65 opsional `brand,branch_id,esb_location_name,action` (action stock|skip|quarantine; brand lain diabaikan)
+    -> {(branch_id, NAMA LOKASI ternormalisasi): action}."""
+    out: dict[tuple[int, str], str] = {}
+    cols = ("brand", "branch_id", "esb_location_name", "action")
+    for line_no, row in enumerate(_csv_rows(text, cols, "location_map.csv"), start=2):
+        if row["brand"].lower() != brand:
+            continue
+        if not row["branch_id"].isdigit() or int(row["branch_id"]) <= 0:
+            raise MapError(f"location_map.csv baris {line_no}: branch_id tidak valid")
+        name = location_name_key(row["esb_location_name"])
+        action = row["action"].lower()
+        if not name or action not in LOCATION_ACTIONS:
+            raise MapError(f"location_map.csv baris {line_no}: nama kosong / action bukan stock|skip|quarantine")
+        key = (int(row["branch_id"]), name)
+        if key in out:
+            raise MapError(f"location_map.csv baris {line_no}: lokasi ganda")
+        out[key] = action
     return out
 
 
@@ -673,16 +731,84 @@ def build_boms(
     return out
 
 
-def build_costs(
-    brand: str, company: str, lines: Iterable[Mapping[str, Any]], product_codes: set[str]
-) -> list[dict[str, Any]]:
-    """standard_price = `lastHpp` komponen BOM terbaru (nilai > 0 terbesar per kode; satuan = satuan komponen [B])."""
+def dec(value: Any) -> Decimal:
+    """Angka sumber (int/float/Decimal/None campur, §27.13.1) -> Decimal lewat str (bukan float)."""
+    out = value if isinstance(value, Decimal) else Decimal(str(value if value not in (None, "") else 0))
+    if not out.is_finite():
+        raise ValueError("angka tidak hingga")
+    return out
+
+
+def bom_last_hpp(lines: Iterable[Mapping[str, Any]], product_codes: set[str]) -> dict[str, tuple[Decimal, str]]:
+    """`lastHpp` komponen BOM (nilai > 0 terbesar per kode; satuan = satuan komponen [B])."""
     best: dict[str, tuple[Decimal, str]] = {}
     for line in lines:
         code = str(line["product_code"])
-        hpp = Decimal(str(line.get("last_hpp") or 0))
+        hpp = dec(line.get("last_hpp"))
         if code in product_codes and hpp > 0 and (code not in best or hpp > best[code][0]):
             best[code] = (hpp, norm_uom(line.get("uom")))
+    return best
+
+
+def opening_costs(
+    rows: Iterable[Mapping[str, Any]],
+    product_codes: set[str],
+    mixed_uom: set[str] | None = None,
+    product_uoms: Mapping[str, str] | None = None,
+    umap: Mapping[str, UomMap] | None = None,
+) -> dict[str, tuple[Decimal, str]]:
+    """HPP cutover per produk = Σ amount_balance / Σ qty_balance atas baris qty_balance > 0 (semua cabang company,
+    L-252). Dengan `product_uoms` + `umap`: qty dikonversi ke satuan produk (`to_product_qty`) -> harga per satuan
+    produk; tanpa keduanya: per satuan ESB baris. Satuan tak terkonversi / campur -> tidak dihitung (dicatat di
+    `mixed_uom`; sumber berikutnya dipakai) -- tidak menebak konversi."""
+    sums: dict[str, dict[str, list[Decimal]]] = defaultdict(lambda: defaultdict(lambda: [Decimal(0), Decimal(0)]))
+    for row in rows:
+        code, qty = str(row["product_code"]), dec(row.get("qty_balance"))
+        if code in product_codes and qty > 0:
+            uom = norm_uom(row.get("uom"))
+            if product_uoms is not None and umap is not None:
+                target = product_uoms.get(code, "")
+                converted = to_product_qty(qty, uom, target, umap)
+                uom, qty = (target, converted) if converted is not None else (f"?{uom}", qty)
+            acc = sums[code][uom]
+            acc[0] += dec(row.get("amount_balance"))
+            acc[1] += qty
+    out: dict[str, tuple[Decimal, str]] = {}
+    for code, by_uom in sums.items():
+        if len(by_uom) > 1 or any(u.startswith("?") for u in by_uom):  # "?" = satuan tak terkonversi
+            if mixed_uom is not None:
+                mixed_uom.add(code)
+            continue
+        ((uom, (amount, qty)),) = by_uom.items()
+        if amount > 0:
+            out[code] = (amount / qty, uom)
+    return out
+
+
+def build_costs(
+    brand: str,
+    company: str,
+    lines: Iterable[Mapping[str, Any]],
+    product_codes: set[str],
+    opening: Iterable[Mapping[str, Any]] = (),
+    purchase_last: Mapping[str, tuple[Decimal, str]] | None = None,
+    as_of: date | None = None,
+    mixed_uom: set[str] | None = None,
+    product_uoms: Mapping[str, str] | None = None,
+    umap: Mapping[str, UomMap] | None = None,
+) -> list[dict[str, Any]]:
+    """`standard_price` per produk, sumber pertama yang > 0 (§27.13.4, L-252): `stock_opening` (baris
+    `fact_esb_stock_opening` company ini pada cutover; kosong bila tanpa --cutover-date) -> `bom_last_hpp` ->
+    `purchase_last` (harga baris PO sah terbaru, satuan beli). Nilai per satuan ESB (`source_uom`); konversi ke UoM
+    produk oleh importer. Tanpa sumber -> tidak ada baris."""
+    found: dict[str, tuple[Decimal, str, str]] = {}
+    for code, (price, uom) in opening_costs(opening, product_codes, mixed_uom, product_uoms, umap).items():
+        found[code] = (price, uom, "stock_opening")
+    for code, (price, uom) in bom_last_hpp(lines, product_codes).items():
+        found.setdefault(code, (price, uom, "bom_last_hpp"))
+    for code, (price, uom) in (purchase_last or {}).items():
+        if code in product_codes and price > 0:
+            found.setdefault(code, (price, uom, "purchase_last"))
     return [
         record(
             "cost",
@@ -692,12 +818,331 @@ def build_costs(
             {
                 "product_key": xmlid(brand, company, "product", code),
                 "product_code": code,
-                "standard_price": num(hpp),
+                "standard_price": num(round(price, 4)),
                 "source_uom": uom or None,
+                "source": source,
+                "as_of": as_of.isoformat() if as_of else None,
             },
         )
-        for code, (hpp, uom) in sorted(best.items())
+        for code, (price, uom, source) in sorted(found.items())
     ]
+
+
+# ================================================================== G65 harga beli supplier (§27.13.4)
+def _date(value: Any) -> date:
+    return value if isinstance(value, date) else date.fromisoformat(str(value)[:10])
+
+
+def is_idr(value: Any) -> bool:
+    return norm_text(value).upper() in IDR_CODES
+
+
+def year_before(day: date) -> date:
+    """`day` − 12 bulan (29 Feb -> 28 Feb)."""
+    try:
+        return day.replace(year=day.year - 1)
+    except ValueError:
+        return day.replace(year=day.year - 1, day=28)
+
+
+@dataclass
+class PurchaseSkips:
+    """Yang tidak menjadi harga beli supplier (manifest `skipped.currency`, `skipped.supplierinfo_unmapped`)."""
+
+    currency: int = 0
+    unmapped: dict[tuple[str, str, str], str] = field(default_factory=dict)  # (company, supplier, produk) -> alasan
+
+    def to_manifest(self) -> dict[str, Any]:
+        items = [
+            {"company_code": c, "supplier_code": s, "product_code": p, "reason": r}
+            for (c, s, p), r in sorted(self.unmapped.items())
+        ]
+        return {
+            "currency": {"count": self.currency},
+            "supplierinfo_unmapped": {"count": len(items), "items": items[:1000]},
+        }
+
+
+PurchaseKey = tuple[str, str, str]  # (company_code, supplier_code, product_code)
+PurchaseRank = tuple[date, str, int]  # (purchase_date, purchase_num, line_no) -- terbesar = terbaru
+
+
+def latest_purchases(
+    rows: Iterable[Mapping[str, Any]],
+    statuses: Iterable[str],
+    start: date,
+    end: date,
+    skips: PurchaseSkips | None = None,
+) -> dict[PurchaseKey, tuple[PurchaseRank, Mapping[str, Any]]]:
+    """Baris PO sah terbaru per (company, supplier, produk) dalam `[start, end)`: status di daftar izin,
+    `map_source != none`, `supplier_code` ada, qty > 0, price > 0, IDR (lain -> `skips.currency`). Seri tanggal ->
+    `purchase_num` terbesar -> `line_no` terbesar."""
+    allowed = set(statuses)
+    best: dict[PurchaseKey, tuple[PurchaseRank, Mapping[str, Any]]] = {}
+    for row in rows:
+        day = _date(row["purchase_date"])
+        supplier = str(row.get("supplier_code") or "")
+        if not start <= day < end or norm_text(row.get("status_name")) not in allowed:
+            continue
+        if str(row.get("map_source") or "none") == "none" or not supplier:
+            continue
+        if dec(row.get("qty")) <= 0 or dec(row.get("price")) <= 0:
+            continue
+        if not is_idr(row.get("currency")):
+            if skips is not None:
+                skips.currency += 1
+            continue
+        key = (str(row["company_code"]), supplier, str(row["product_code"]))
+        rank = (day, str(row["purchase_num"]), int(row["line_no"]))
+        if key not in best or rank > best[key][0]:
+            best[key] = (rank, row)
+    return best
+
+
+def purchase_last_prices(
+    latest: Mapping[PurchaseKey, tuple[PurchaseRank, Mapping[str, Any]]], company: str
+) -> dict[str, tuple[Decimal, str]]:
+    """Sumber HPP ke-3: harga baris PO sah terbaru per produk (semua supplier) -> (price, satuan beli)."""
+    best: dict[str, tuple[PurchaseRank, Decimal, str]] = {}
+    for (comp, _, code), (rank, row) in latest.items():
+        if comp == company and (code not in best or rank > best[code][0]):
+            best[code] = (rank, dec(row.get("price")), norm_uom(row.get("uom")))
+    return {code: (price, uom) for code, (_, price, uom) in best.items()}
+
+
+def supplier_discount(row: Mapping[str, Any], mode: str) -> Decimal:
+    """`discount` ESB -> % Odoo. `nominal`: discount / (price × qty) × 100, 2 desimal, dibatasi 0..100;
+    `percent`: apa adanya (validator menolak di luar 0..100)."""
+    raw = dec(row.get("discount"))
+    if mode == "percent":
+        return raw
+    if mode != "nominal":
+        raise MapError(f"--purchase-discount-mode tidak dikenal: {mode}")
+    base = dec(row.get("price")) * dec(row.get("qty"))
+    pct = raw / base * 100 if base > 0 else Decimal(0)
+    return min(max(round(pct, 2), Decimal(0)), Decimal(100))
+
+
+def build_supplierinfos(
+    brand: str,
+    company: str,
+    latest: Mapping[PurchaseKey, tuple[PurchaseRank, Mapping[str, Any]]],
+    supplier_codes: set[str],
+    product_codes: set[str],
+    umap: Mapping[str, UomMap],
+    discount_mode: str,
+    skips: PurchaseSkips | None = None,
+) -> list[dict[str, Any]]:
+    """`product.supplierinfo` per company × supplier × produk (L-253). Supplier/produk tidak ada di master atau satuan
+    beli tidak ada di uom_map -> dilewati (`skips.unmapped`). `sequence` per produk: date_start terbaru = 1."""
+    picked: dict[str, list[tuple[date, str, Mapping[str, Any], UomMap]]] = defaultdict(list)
+    for (comp, supplier, code), ((day, _, _), row) in latest.items():
+        if comp != company:
+            continue
+        uom = norm_uom(row.get("uom"))
+        reason = (
+            "supplier" if supplier not in supplier_codes
+            else "product" if code not in product_codes
+            else "uom" if uom not in umap
+            else ""
+        )  # fmt: skip
+        if reason:
+            if skips is not None:
+                skips.unmapped[(comp, supplier, code)] = reason
+            continue
+        picked[code].append((day, supplier, row, umap[uom]))
+    out: list[dict[str, Any]] = []
+    for code in sorted(picked):
+        ordered = sorted(picked[code], key=lambda x: (-x[0].toordinal(), x[1]))
+        for seq, (day, supplier, row, mapped) in enumerate(ordered, start=1):
+            data = {
+                "partner_key": xmlid(brand, company, "supplier", supplier),
+                "product_key": xmlid(brand, company, "product", code),
+                "supplier_code": supplier,
+                "product_code": code,
+                "price": num(dec(row.get("price"))),
+                "discount": num(supplier_discount(row, discount_mode)),
+                "currency": "IDR",
+                "min_qty": 0,
+                "sequence": seq,
+                "date_start": day.isoformat(),
+                "uom_esb": mapped.esb_uom,
+                "uom_xmlid": mapped.uom_xmlid,
+                "source_purchase_num": str(row["purchase_num"]),
+            }
+            key = xmlid(brand, company, "supplierinfo", f"{supplier}_{code}")
+            out.append(record("supplierinfo", company, f"{supplier}|{code}", key, data))
+    return out
+
+
+# ================================================================== G65 stok awal (§27.13.4 `stock`)
+@dataclass
+class StockSkips:
+    """Baris/kelompok stok yang tidak diekspor (manifest `skipped`) + neraca qty per cabang (rekonsiliasi 2)."""
+
+    negative_stock: list[dict[str, Any]] = field(default_factory=list)
+    uom_unconvertible: set[tuple[int, str, str]] = field(default_factory=set)  # (cabang, produk, satuan ESB)
+    non_storable: int = 0
+    product_unmapped: int = 0
+    branch_unmapped: int = 0
+    location_skip: int = 0
+    quarantine: int = 0
+    location_unmapped: set[tuple[int, str]] = field(default_factory=set)
+    location_suspect: set[tuple[int, str]] = field(default_factory=set)
+    by_branch: dict[int, dict[str, Decimal]] = field(default_factory=dict)
+
+    def branch(self, branch_id: int) -> dict[str, Decimal]:
+        zero = Decimal(0)
+        return self.by_branch.setdefault(branch_id, {"source_qty": zero, "exported_qty": zero, "skipped_qty": zero})
+
+    def to_manifest(self) -> dict[str, Any]:
+        def locs(items: set[tuple[int, str]]) -> dict[str, Any]:
+            rows = [{"branch_id": b, "location_name": n} for b, n in sorted(items)]
+            return {"count": len(rows), "items": rows[:1000]}
+
+        return {
+            "negative_stock": {"count": len(self.negative_stock), "items": self.negative_stock[:1000]},
+            "uom_unconvertible": {
+                "count": len(self.uom_unconvertible),
+                "items": [{"branch_id": b, "product_code": c, "uom": u} for b, c, u in sorted(self.uom_unconvertible)][
+                    :1000
+                ],
+            },
+            "non_storable": {"count": self.non_storable},
+            "product_unmapped": {"count": self.product_unmapped},
+            "branch_unmapped": {"count": self.branch_unmapped},
+            "location_skip": {"count": self.location_skip},
+            "quarantine": {"count": self.quarantine},
+            "location_unmapped": locs(self.location_unmapped),
+            "location_suspect": locs(self.location_suspect),
+        }
+
+    def branch_stats(self) -> dict[str, dict[str, int | float]]:
+        return {
+            str(b): {k: num(round(v, 3)) for k, v in sorted(stat.items())} for b, stat in sorted(self.by_branch.items())
+        }
+
+
+def location_key(brand: str, branch_id: int, entry: BranchMap | None, index: BranchIndex) -> str | None:
+    """Lokasi Odoo stok awal: gudang (store/ck/warehouse) -> xmlid `branch_wh` (importer: `lot_stock_id`);
+    `location` -> xmlid `branch_loc` (lokasi internal di bawah gudang induk) bila induk PT sama; skip/tak terpetakan
+    -> None."""
+    company = index.company.get(branch_id)
+    if entry is None or company is None or entry.type == "skip":
+        return None
+    if entry.type in WAREHOUSE_TYPES:
+        return xmlid(brand, company, "branch_wh", branch_id)
+    return xmlid(brand, company, "branch_loc", branch_id) if branch_id in index.wh_key else None
+
+
+def build_quants(
+    brand: str,
+    rows: Iterable[Mapping[str, Any]],
+    index: BranchIndex,
+    bmap: Mapping[int, BranchMap],
+    products: Iterable[Mapping[str, Any]],
+    uom_by_code: Mapping[str, str],
+    umap: Mapping[str, UomMap],
+    lmap: Mapping[tuple[int, str], str],
+    cutover: date,
+    skips: StockSkips,
+) -> list[dict[str, Any]]:
+    """`fact_esb_stock_opening` (opening_date = cutover) -> `quant.jsonl`: Σ qty per company × lokasi Odoo × produk
+    (lokasi ESB `stock` digabung), dikonversi ke **satuan produk** (`to_product_qty`; `uom_esb`/`uom_xmlid` = UoM
+    produk). Satuan tanpa faktor -> `uom_unconvertible` (validator error). Hanya produk storable; hasil < 0 ->
+    `negative_stock`, = 0 -> tidak diekspor. `accounting_date` = cutover − 1."""
+    storable = {str(p["product_code"]): product_role(p).is_storable for p in products}
+    groups: dict[tuple[str, str, int, str], dict[str, Any]] = {}
+    for row in rows:
+        branch_id, qty = int(row["branch_id"]), dec(row.get("qty_balance"))
+        stat = skips.branch(branch_id)
+        stat["source_qty"] += qty
+        loc = location_key(brand, branch_id, bmap.get(branch_id), index)
+        name = norm_text(row.get("location_name"))
+        code = str(row["product_code"])
+        converted: Decimal | None = None
+        reason = ""
+        if loc is None:
+            skips.branch_unmapped += 1
+            reason = "branch"
+        else:
+            action = lmap.get((branch_id, name.upper()))
+            if action is None:
+                skips.location_unmapped.add((branch_id, name))
+                if SUSPECT_LOCATION.search(name):
+                    skips.location_suspect.add((branch_id, name))
+                action = "stock"
+            if action == "skip":
+                skips.location_skip += 1
+                reason = "skip"
+            elif action == "quarantine":
+                skips.quarantine += 1
+                reason = "quarantine"
+            elif code not in storable:
+                skips.product_unmapped += 1
+                reason = "product"
+            elif not storable[code]:
+                skips.non_storable += 1
+                reason = "non_storable"
+        if not reason:
+            row_uom = norm_uom(row.get("uom"))
+            converted = to_product_qty(qty, row_uom, uom_by_code.get(code, ""), umap)
+            if converted is None:
+                skips.uom_unconvertible.add((branch_id, code, row_uom))
+                reason = "uom"
+        if reason:
+            stat["skipped_qty"] += qty
+            continue
+        company = index.company[branch_id]
+        group = groups.setdefault(
+            (company, str(loc), branch_id, code),
+            {"qty": Decimal(0), "source_qty": Decimal(0), "amount": Decimal(0), "locations": set()},
+        )
+        group["qty"] += converted
+        group["source_qty"] += qty
+        group["amount"] += dec(row.get("amount_balance"))
+        group["locations"].add(name)
+    accounting = (cutover - timedelta(days=1)).isoformat()
+    out: list[dict[str, Any]] = []
+    for (company, loc, branch_id, code), group in sorted(groups.items()):
+        # Neraca per cabang dalam satuan ESB baris (sumber); quantity diekspor dalam satuan produk.
+        stat, qty, source_qty = skips.by_branch[branch_id], group["qty"], group["source_qty"]
+        if qty < 0:
+            skips.negative_stock.append({"branch_id": branch_id, "product_code": code, "qty": num(round(qty, 3))})
+            stat["skipped_qty"] += source_qty
+            continue
+        if qty == 0:
+            stat["skipped_qty"] += source_qty
+            continue
+        uom = uom_by_code.get(code, "")
+        mapped = umap.get(uom)
+        data = {
+            "location_key": loc,
+            "product_key": xmlid(brand, company, "product", code),
+            "product_code": code,
+            "quantity": num(round(qty, 3)),
+            "uom_esb": uom or None,
+            "uom_xmlid": mapped.uom_xmlid if mapped else None,
+            "esb_branch_id": branch_id,
+            "esb_locations": sorted(group["locations"]),
+            "amount": num(round(group["amount"], 2)),
+            "accounting_date": accounting,
+        }
+        out.append(record("quant", company, f"{branch_id}|{code}", None, data))
+        stat["exported_qty"] += source_qty
+    return out
+
+
+def to_product_qty(qty: Decimal, row_uom: str, product_uom: str, umap: Mapping[str, UomMap]) -> Decimal | None:
+    """Qty satuan ESB baris -> satuan produk (temuan W-C G65). Sama -> apa adanya; beda -> hanya bila keduanya di
+    uom_map dengan `uom_xmlid` sama (keluarga EA: qty × ea_factor(baris) / ea_factor(produk)); selain itu None
+    (faktor tidak diketahui -> baris ditolak, tidak dimuat apa adanya)."""
+    if row_uom and row_uom == product_uom:
+        return qty
+    src, dst = umap.get(row_uom), umap.get(product_uom)
+    if src is None or dst is None or src.uom_xmlid != dst.uom_xmlid:
+        return None
+    return qty * src.ea_factor / dst.ea_factor
 
 
 # ================================================================== histori (baris datar)
@@ -709,6 +1154,7 @@ class HistoryContext:
     product_codes: set[str]
     ea_factor: Mapping[str, Decimal]  # product_code -> EA per satuan produk
     menus: MenuIndex
+    supplier_codes: frozenset[str] = frozenset()  # G65: kode supplier master (supplier_key)
 
 
 def _day(value: Any) -> str:
@@ -785,10 +1231,55 @@ def sales_line_row(ctx: HistoryContext, row: Mapping[str, Any]) -> dict[str, Any
     }
 
 
+def _text(value: Any, size: int) -> str | None:
+    return norm_text(value)[:size] or None
+
+
+def purchase_line_row(ctx: HistoryContext, row: Mapping[str, Any]) -> dict[str, Any] | None:
+    """fact_esb_purchase_line -> efn.legacy.purchase.line (§27.13.4/§27.13.6). SEMUA baris/status dimuat; cabang
+    skip/HO/tak terpetakan atau gudang PT lain -> `branch_key` null, supplier/produk tanpa master -> `*_key` null.
+    Hanya `currency` ≠ IDR -> None (tidak diekspor, dihitung `skipped.currency`)."""
+    if not is_idr(row.get("currency")):
+        return None
+    branch_id = int(row.get("branch_id") or 0)
+    wh = ctx.branches.wh_key.get(branch_id)
+    supplier, code = str(row.get("supplier_code") or ""), str(row.get("product_code") or "")
+    required = row.get("required_date")
+    supplier_key = xmlid(ctx.brand, ctx.company, "supplier", supplier) if supplier in ctx.supplier_codes else None
+    return {
+        "purchase_num": str(row["purchase_num"]),
+        "line_no": int(row["line_no"]),
+        "date": _day(row["purchase_date"]),
+        "date_required": _day(required) if required not in (None, "") else None,
+        "branch_key": wh if wh and ctx.branches.wh_company.get(wh) == ctx.company else None,
+        "branch_name": _text(row.get("branch_name"), 64),
+        "supplier_key": supplier_key,
+        "supplier_name": _text(row.get("supplier_name"), 128),
+        "product_key": xmlid(ctx.brand, ctx.company, "product", code) if code in ctx.product_codes else None,
+        "esb_branch_id": branch_id,
+        "esb_supplier_code": supplier,
+        "esb_product_code": code,
+        "product_name": _text(row.get("product_name"), 128),
+        "category_name": _text(row.get("category_name"), 64),
+        "sub_category_name": _text(row.get("sub_category_name"), 64),
+        "uom_name": _text(row.get("uom"), 16),
+        "qty": num(row.get("qty")),
+        "receipt_qty": num(row.get("receipt_qty")),
+        "pricelist_price": num(row.get("pricelist_price")),
+        "price_unit": num(row.get("price")),
+        "discount": num(row.get("discount")),
+        "vat_value": num(row.get("vat_value")),
+        "total": num(row.get("total")),
+        "status": _text(row.get("status_name"), 32),
+        "map_source": str(row.get("map_source") or "none"),
+    }
+
+
 HISTORY_BUILDERS = {
     "legacy_flow_daily": flow_row,
     "legacy_sales_daily": sales_daily_row,
     "legacy_sales_line": sales_line_row,
+    "legacy_purchase_line": purchase_line_row,
 }
 
 # SEC-197: kunci unik model Odoo per berkas (beberapa cabang ESB -> satu gudang tujuan wajib dijumlahkan dulu).

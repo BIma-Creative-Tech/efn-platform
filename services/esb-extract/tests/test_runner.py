@@ -61,6 +61,7 @@ class FakeStore:
         self._checkpoints = checkpoints or {}
         self.aliases: dict[str, str] = {"FIN ROTI": "FIN001"}
         self.ratios: dict[int, BomRatio] = {}
+        self.suppliers: list[tuple[int, str, str]] = []
 
     # Sama dengan ClickHouseStore: baris kosong tidak ditulis.
     def insert(self, table: str, columns: Sequence[str], rows: list[list[Any]]) -> None:
@@ -81,6 +82,9 @@ class FakeStore:
 
     def load_bom_ratios(self, brand: str) -> dict[int, BomRatio]:
         return dict(self.ratios)
+
+    def load_suppliers(self, brand: str) -> list[tuple[int, str, str]]:
+        return list(self.suppliers)
 
     def tables(self) -> list[str]:
         return [table for _, table, _ in self.writes]

@@ -141,6 +141,45 @@ def sales_line(day: date, branch_id: int, line_no: int, code: str) -> dict[str, 
     }
 
 
+def purchase(
+    day: date,
+    num: str,
+    line_no: int = 1,
+    supplier: str = "SUP1",
+    code: str = "RM001",
+    price: str = "12000",
+    qty: str = "10",
+    status: str = "Finished",
+    branch_id: int = 11,
+    map_source: str = "header",
+    currency: str = "IDR",
+    uom: str = "KG",
+    discount: str = "0",
+) -> dict[str, Any]:
+    """Baris sintetis `efn_dwh.fact_esb_purchase_line` (kolom = source.PURCHASE_COLUMNS)."""
+    return {
+        "purchase_date": day, "purchase_num": num, "line_no": line_no, "required_date": day, "company_code": "PB",
+        "branch_id": branch_id, "branch_name": f"Cabang {branch_id}", "supplier_code": supplier,
+        "supplier_name": "PT Pemasok", "status_name": status, "currency": currency, "product_code": code,
+        "product_name": "Tepung", "category_name": "Local - Dry", "sub_category_name": "Tepung", "uom": uom,
+        "qty": D(qty), "receipt_qty": D(qty), "pricelist_price": D(price), "price": D(price), "discount": D(discount),
+        "vat_value": D("0"), "total": D(price) * D(qty) - D(discount), "map_source": map_source,
+    }  # fmt: skip
+
+
+def opening(
+    branch_id: int, code: str, qty: str, amount: str, location: str = "Gudang Utama", uom: str = "KG",
+    day: date = date(2026, 12, 1),
+) -> dict[str, Any]:  # fmt: skip
+    """Baris sintetis `efn_dwh.fact_esb_stock_opening` (kolom = source.OPENING_COLUMNS)."""
+    return {
+        "opening_date": day, "company_code": "PB", "branch_id": branch_id, "branch_code": f"B{branch_id}",
+        "location_name": location, "product_id": 1, "product_detail_id": 1, "product_code": code,
+        "product_name": code, "uom": uom, "value_per_unit": D(amount) / D(qty) if D(qty) else D(0),
+        "qty_balance": D(qty), "amount_balance": D(amount),
+    }  # fmt: skip
+
+
 class FakeSource:
     """Meniru `efn_mig.source.ClickHouseSource` dengan baris dict sintetis."""
 
@@ -194,6 +233,28 @@ class FakeSource:
                 self.history["legacy_sales_daily"].append(sales_daily(day, branch_id, "M01T"))
                 self.history["legacy_sales_line"].append(sales_line(day, branch_id, 1, "M01T"))
                 self.history["legacy_sales_line"].append(sales_line(day, branch_id, 2, "OLD9"))
+        # G65: kosong secara default (test mengisi sesuai kasus).
+        self.purchases: list[dict[str, Any]] = []
+        self.opening: list[dict[str, Any]] = []
+        self.checkpointed: list[int] = [4, 11, 12, 30]
+
+    def purchase_lines(self, brand: str, start: date, end: date) -> list[dict[str, Any]]:
+        return [dict(r) for r in self.purchases if start <= r["purchase_date"] < end]
+
+    def purchase_history_rows(self, brand: str, company: str, start: date, end: date) -> Iterator[dict[str, Any]]:
+        rows = [r for r in self.purchases if r["company_code"] == company and start <= r["purchase_date"] < end]
+        for r in sorted(rows, key=lambda x: (x["purchase_date"], x["purchase_num"], x["line_no"])):
+            yield dict(r)
+
+    def purchase_snapshot(self, brand: str) -> dict[str, str]:
+        return {"max_version": "2026-12-01T01:00:00+00:00", "last_checkpoint_day": "2026-11-30"}
+
+    def stock_opening(self, brand: str, day: date) -> list[dict[str, Any]]:
+        return [dict(r) for r in self.opening if r["opening_date"] == day]
+
+    def stock_opening_meta(self, brand: str, day: date) -> dict[str, Any]:
+        return {"opening_date": day.isoformat(), "max_version": "2026-12-01T02:00:00+00:00",
+                "branches_checkpointed": sorted(self.checkpointed)}  # fmt: skip
 
     def companies(self, brand: str) -> list[str]:
         return ["PB"]

@@ -138,7 +138,8 @@ $DC run --rm esb-extract python -m efn_esb snapshot --brand pb \
 
 - `--ignore-window` hanya dev (production ditolak kecuali `ESB_ALLOW_IGNORE_WINDOW=true` dan rentang ≤ 1 hari).
 - P2 (`stock_opname`, `ap_open`, `ar_open`, `coa`) **jangan** di dry-run master: belum diverifikasi, butuh
-  `--allow-unverified`, dan langkah `stock`/`opening` export belum dibangun (exit 2).
+  `--allow-unverified`, dan langkah `opening` export belum dibangun (exit 2, Q-ESB21). Stok awal G65 memakai entitas
+  `stock_opening` (bukan `stock_opname`) — lihat §4.6.
 - Kesegaran & kualitas: `chq <<< "SELECT * FROM efn_dwh.v_esb_data_quality WHERE brand = 'pb' FORMAT Vertical"`.
 
 ## 4. Dry-run PB end-to-end di dev
@@ -280,6 +281,59 @@ Skrip ini hanya menyentuh PT `PB` (`EFN_G61_COMPANY`, SMD ditolak). Akun kategor
 menjawab Q-ESB16: kategori baru langsung diisi, sedangkan kategori yang sudah ada hanya diisi bila akunnya kosong.
 Kategori lama di bawah `PB` yang sudah kosong dan tidak dirujuk akan dihapus (bersama xmlid-nya). Laporan CSV disimpan
 di `MIG_EXCHANGE_DIR` dan ikut aturan hapus §7.
+
+### 4.6 G65 — PB gladi efn-prod: harga beli, HPP, stok awal, histori pembelian (cutover uji 2026-12-01)
+Kontrak: `docs/04` §27.13 (urutan §27.13.4), ADR-042 §0b, fit-gap `docs/fit-gap/G65_MIGRASI_PEMBELIAN_STOK.md`.
+**Status 24 Nov 2026: belum pernah dijalankan** (kode export/validator/rekonsiliasi diuji dengan fixture sintetis saja).
+Neraca pembukaan & AR/AP **tidak** dikerjakan (`opening` NOT_BUILT, Q-ESB21). Prasyarat:
+- Q-ESB29: tidak ada transaksi PB di efn-prod mulai 1 Des sampai langkah `stock` selesai, atau reset Odoo efn-prod dulu
+  ([efn-prod-odoo-reset.md](efn-prod-odoo-reset.md)). Importer menolak (exit 4) bila ada `stock.move` done non-inventaris
+  PB bertanggal ≥ cutover atau sesi POS PB terbuka.
+- Parameter `efn_mig_esb.cutover_date.PB` digeser 2026-11-17 → 2026-12-01 lewat `cutover-param` (§27.13.8): histori
+  17–30 Nov **wajib** sudah dimuat (langkah 4) sebelum parameter digeser, selain itu importer exit 4.
+- `location_map.csv` (opsional, di `--maps`): `brand,branch_id,esb_location_name,action` (`stock|skip`; `quarantine`
+  belum didukung = error). Lokasi berpola Damage/Expired/Temporary tanpa entri = peringatan di dev/efn-prod gladi,
+  **error** di production (Q-ESB25) — putuskan bersama Ops sebelum run nyata.
+
+Urutan (setiap bundel: `validate_import.py` → dry-run → `--apply`; nama perintah esb-extract = runbook
+[esb-extract.md](esb-extract.md), entitas dibangun W-A):
+```bash
+# (1) Histori PO 24 bulan + koreksi status 30 hari terakhir (L-114: wajib sekali tepat sebelum export cutover)
+$DC run --rm esb-extract python -m efn_esb backfill --brand pb --entity purchase_line --from 2024-12-01 --to 2026-11-30
+$DC run --rm esb-extract python -m efn_esb backfill --brand pb --entity purchase_line --from 2026-11-01 --to 2026-11-30 --force
+# (2) SETELAH freeze ESB pada/setelah 2026-12-01: saldo awal hari cutover (= saldo akhir 30 Nov), per cabang
+$DC run --rm esb-extract python -m efn_esb snapshot --brand pb --entity stock_opening --date 2026-12-01
+# (3) Master ulang dengan cutover: supplierinfo (PO sah 12 bln) + cost (urutan stock_opening -> bom_last_hpp -> purchase_last)
+$MIG python esb_to_odoo.py export --brand pb --step supplierinfo --step cost --cutover-date 2026-12-01 --maps /maps \
+  --out /out [--purchase-statuses Authorized,Receiving,Finished,Closed] [--purchase-discount-mode nominal]
+#   impor nyata cost menulis efn_mig_esb.cost_as_of.PB = 2026-12-01 (gerbang langkah 5)
+# (4) Histori: November ulang (flow, sales.daily, sales.line, purchase) + pembelian 23 bulan sebelumnya
+$MIG python esb_to_odoo.py export --brand pb --step history --cutover-date 2026-12-01 --maps /maps --out /out --months 2026-11
+$MIG python esb_to_odoo.py export --brand pb --step legacy_purchase_line --cutover-date 2026-12-01 --maps /maps --out /out
+#   (tanpa --months = seluruh rentang [2024-12-01, 2026-12-01); November ikut lagi -> idempoten, ganti irisan)
+# (5) Stok awal (bundel cutover tunggal quant.jsonl); exit 1 bila ada cabang non-skip tanpa checkpoint stock_opening
+$MIG python esb_to_odoo.py export --brand pb --step stock --cutover-date 2026-12-01 --maps /maps --out /out
+# (6) Parameter cutover
+$MIG python esb_to_odoo.py export --brand pb --step cutover-param --cutover-date 2026-12-01 --maps /maps --out /out
+```
+Catatan:
+- Langkah `cost` **wajib** dijalankan ulang (dengan `--cutover-date`) sebelum `stock`; importer menolak `stock` bila
+  `efn_mig_esb.cost_as_of.PB` ≠ cutover. HPP produk yang sudah berstok tidak diubah importer (`conflict_has_stock`) →
+  pada gladi ulang reset stok/DB dulu.
+- Validator `stock` (exit 1 bila error): `QUANT_NO_COST` (produk ber-stok tanpa sumber HPP), `STOCK_UOM_UNCONVERTIBLE`,
+  `QUANT_UOM` (satuan tanpa `uom_map.csv`), `STOCK_CHECKPOINT_MISSING`, `LOCATION_QUARANTINE`. Peringatan
+  `STOCK_NEGATIVE` (saldo negatif ESB tidak dimigrasi — daftar `manifest.skipped.negative_stock` dikirim ke Ops,
+  Q-ESB27), `LOCATION_UNMAPPED`, `LOCATION_SUSPECT`, `SUPPLIERINFO_UNMAPPED`.
+- Setelah `stock` nyata: valuasi PB periodik → apply tidak membuat jurnal. Closing draft
+  `res.company.action_close_stock_valuation(at_date=2026-11-30, auto_post=False)` dijalankan Finance setelah akun
+  kliring "Saldo Awal – Kliring" dikonfirmasi (Q-ESB16/Q-G65-6); cron closing tetap mati sampai itu.
+- Rekonsiliasi: `reconcile --bundle <stock>.efnmig --result <stock>.result.efnmig` → butir `2_stok_qty` (pemblokir),
+  `2_stok_sumber` (neraca qty export per cabang, pemblokir), `2_stok_nilai`/`2_stok_nilai_pt` (laporan Finance; peringatan
+  bila selisih > 1 % per PT). Histori pembelian: butir `5e_purchase_line` (per PT × bulan × cabang, pemblokir) dan
+  `reconcile --final` seperti §4.3. Butir 4 (neraca) tetap "tidak dijalankan" — **pemblokir cutover production**.
+- Checklist Odoo tambahan: menu *Purchase › Histori ESB (arsip)* menampilkan PB 24 bulan; supplierinfo sampel 10 produk
+  (harga, diskon %, supplier urutan 1 = PO terakhir); `stock.quant` per gudang cocok dengan `quant.jsonl`; `stock.move`
+  saldo awal bertanggal 30 Nov (`is_inventory=True`).
 
 ## 5. Ukuran tabel histori & dampak backup (wajib dilaporkan di dry-run PB)
 

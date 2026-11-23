@@ -82,6 +82,10 @@ class BrandRuntime:
     branch_rows: list[list[Any]] = field(default_factory=list)
     aliases: dict[str, str] = field(default_factory=dict)
     ratios: dict[int, BomRatio] = field(default_factory=dict)
+    # G65 purchase_line: (supplier_id, supplier_code, supplier_name) dari dim_esb_supplier (store) / slice master.
+    suppliers: list[tuple[int, str, str]] = field(default_factory=list)
+    # G65: master dipaksa paling banyak sekali per proses bila supplier_id belum terisi (lihat runner.prepare_brand).
+    master_forced_for_ids: bool = False
     lock: threading.Lock = field(default_factory=threading.Lock)
 
     @property
@@ -312,9 +316,14 @@ EXTRACTORS: dict[str, Extractor] = {
 
 
 def extractor_for(entity: str) -> Extractor:
-    """Extractor G41 atau entitas migrasi G43 (`efn_esb.extract_mig`, import tertunda: hindari import melingkar)."""
+    """Extractor G41, G65 (`efn_esb.extract_g65`) atau entitas migrasi G43 (`efn_esb.extract_mig`); import tertunda
+    untuk menghindari import melingkar."""
     if entity in EXTRACTORS:
         return EXTRACTORS[entity]
+    from efn_esb.extract_g65 import G65_EXTRACTORS
+
+    if entity in G65_EXTRACTORS:
+        return G65_EXTRACTORS[entity]
     from efn_esb.extract_mig import MIG_EXTRACTORS
 
     return MIG_EXTRACTORS[entity]

@@ -2,7 +2,8 @@
 
 Tujuan: memindahkan data induk + histori ESB (via ClickHouse `efn_dwh`, hasil `esb-extract`) ke Odoo CE 19 dengan
 bundel terenkripsi yang bisa divalidasi, diulang tanpa duplikasi, dan direkonsiliasi. Acuan: **ADR-042 (Accepted
-18 Nov 2026)**, `docs/04` §27 (v19.1), fit-gap `docs/fit-gap/G43_MIGRASI_ESB_ODOO.md`. Risiko: R-O02, R-O12, R-O13,
+18 Nov 2026)** + amandemen §0b (G65), `docs/04` §27 (v19.1) + §27.13 (G65), fit-gap
+`docs/fit-gap/G43_MIGRASI_ESB_ODOO.md` + `docs/fit-gap/G65_MIGRASI_PEMBELIAN_STOK.md`. Risiko: R-O02, R-O12, R-O13,
 R-L01 (PDP), R-L12. **Dokumen ini = kontrak bersama export (efn-data-ai-engineer) ↔ importer `odoo_import_esb.py`
 (efn-odoo-engineer).** Bila bertentangan dengan `docs/04` §27, §27 menang — laporkan ke efn-lead.
 
@@ -53,6 +54,10 @@ python esb_to_odoo.py export --brand pb --step master --maps /maps --out /out [-
 python esb_to_odoo.py export --brand pb --step history --cutover-date D --maps /maps --out /out \
        [--months 2025-01,2025-02] [--legacy-days N] [--sales-line-months N]
 python esb_to_odoo.py export --brand pb --step cutover --cutover-date D --maps /maps --out /out
+python esb_to_odoo.py export --brand pb --step supplierinfo --step cost --cutover-date D --maps /maps --out /out \
+       [--purchase-statuses Authorized,Receiving,Finished,Closed] [--purchase-discount-mode nominal|percent]
+python esb_to_odoo.py export --brand pb --step stock --cutover-date D --maps /maps --out /out        # G65
+python esb_to_odoo.py export --brand pb --step legacy_purchase_line --cutover-date D --maps /maps --out /out [--months ...]
 python validate_import.py --source esb-bundle /out/<bundel>.efnmig [/out/<part2>.efnmig ...] --out /out
 python esb_to_odoo.py writeback --result /out/<run_id>.result.efnmig
 python esb_to_odoo.py reconcile --bundle <b1> --bundle <b2> --result <r1> --result <r2> --out /out [--with-source]
@@ -76,9 +81,37 @@ mengabaikan kunci data master tambahan (`data.uom_source`) dan kunci manifest ba
 HMAC manifest) — terverifikasi pada impor master dry-run PB 18 Nov 2026.
 
 Langkah: `branch uom category product menu partner bom supplierinfo cost` (grup `master`), `legacy_flow
-legacy_sales_daily legacy_sales_line` (grup `history`), `cutover` = histori + `cutover-param`. `stock`/`opening` →
-exit 2 "belum dibangun" (menunggu E6–E10 terverifikasi). `supplierinfo` tidak punya sumber ESB (dicatat di manifest).
+legacy_sales_daily legacy_sales_line legacy_purchase_line` (grup `history`), `cutover` = histori + `stock` +
+`cutover-param`. `opening` → exit 2 "belum dibangun" (neraca pembukaan/AR-AP ditunda, Q-ESB21).
 Exit: 0 OK · 1 data/selisih rekonsiliasi · 2 argumen/konfigurasi · 3 integritas · 4 gerbang (company diblokir, hasil dry-run).
+
+**G65 (docs/04 §27.13.4, ADR-042 §0b; PB, gladi cutover 2026-12-01):** sumber = tabel W-A `efn_dwh.fact_esb_purchase_line`
+dan `efn_dwh.fact_esb_stock_opening` (kolom = kontrak §27.13.2, hanya versi slice ber-checkpoint `extract_checkpoint`
+entitas `purchase_line` scope `*` / `stock_opening` scope `<branch_id>`).
+- `supplierinfo`: PO `[ref − 12 bulan, ref)` (`ref` = `--cutover-date`, selain itu hari ini WIB), status di
+  `--purchase-statuses` (default `Authorized,Receiving,Finished,Closed`, Q-ESB28), `map_source ≠ none`, supplier ada,
+  qty > 0, price > 0, IDR. Baris terbaru per company × supplier × produk (seri: `purchase_num` lalu `line_no` terbesar);
+  `sequence` per produk = PO terbaru 1..n; `discount` % dari `--purchase-discount-mode nominal` (default:
+  `discount / (price × qty) × 100`, 2 desimal, 0..100) atau `percent` (apa adanya). Supplier/produk tanpa master atau
+  satuan beli tanpa `uom_map.csv` → dilewati, `manifest.skipped.supplierinfo_unmapped` (alasan per kunci).
+- `cost`: sumber pertama yang > 0: `stock_opening` (hanya dengan `--cutover-date`: Σ amount / Σ qty baris qty > 0 semua
+  cabang PT, qty dikonversi ke satuan produk → harga per satuan produk; satuan tak terkonversi → dilewati,
+  `manifest.cost_mixed_uom`) → `bom_last_hpp` → `purchase_last`. `as_of` = cutover atau tanggal export WIB
+  (`manifest.cost_as_of`).
+- `stock` (bundel tunggal, wajib `--cutover-date`; company di `EFN_MIG_SALDO_BLOCKED` → exit 4): cabang non-`skip` di
+  `branch_map` tanpa checkpoint `stock_opening` pada cutover → bundel tetap ditulis (`manifest.stock_opening_missing_
+  branches`) lalu exit 1; validator menolaknya. **Qty dikonversi export ke satuan produk** (temuan W-C): satuan baris =
+  satuan produk → apa adanya; beda → hanya bila keduanya di `uom_map.csv` dengan `uom_xmlid` sama (qty × ea_factor
+  baris / ea_factor produk, mis. PACK=6 → ×6); selain itu baris ditolak (`skipped.uom_unconvertible`, error validator
+  `STOCK_UOM_UNCONVERTIBLE`). `quant.uom_esb`/`uom_xmlid` = UoM produk; `stock_by_branch` tetap dalam satuan ESB baris.
+- `legacy_purchase_line`: rentang = sales.daily (24 bulan s.d. cutover − 1), semua status; **hanya di part 1** segmen
+  company × bulan (tidak ikut pembagian part per gudang); currency ≠ IDR tidak diekspor (`stats.legacy_purchase_line.
+  rows_skipped_currency`, `manifest.skipped.currency`).
+- Manifest tambahan: `purchase_statuses`, `purchase_discount_mode`, `source.snapshot.fact_esb_purchase_line =
+  {max_version, last_checkpoint_day}`, `source.snapshot.fact_esb_stock_opening = {opening_date, max_version,
+  branches_checkpointed}`, `stock_without_cost` (`<PT>|<kode>`), `stock_by_branch` (`{branch_id: {source_qty,
+  exported_qty, skipped_qty}}`), `skipped.{negative_stock, uom_unconvertible, non_storable, product_unmapped, branch_unmapped,
+  location_skip, quarantine, location_unmapped, location_suspect, supplierinfo_unmapped, currency}` (`{count[, items]}`).
 
 ## Tabel pemetaan (`--maps`, data klien — di luar repo; ikut bundel `maps/*.csv`, hash di manifest)
 - `branch_map.csv`: `brand,branch_id,type,warehouse_code,display_name,parent_branch_id`; `type` ∈ `store` (gudang +
@@ -87,6 +120,9 @@ Exit: 0 OK · 1 data/selisih rekonsiliasi · 2 argumen/konfigurasi · 3 integrit
 - `uom_map.csv`: `esb_uom,uom_xmlid,ea_factor` — teks satuan ESB (dinormalisasi huruf besar) → xmlid UoM Odoo;
   `ea_factor` = jumlah EA per 1 satuan itu (kosong = 1), dipakai mengonversi histori aliran (EA) ke UoM produk.
 - `coa_map.csv`, `payment_map.csv`: opsional, ikut bundel apa adanya (dipakai langkah `opening`, belum dibangun).
+- `location_map.csv` (G65, opsional): `brand,branch_id,esb_location_name,action`, `action` ∈ `stock` (default bila tidak
+  ada entri: dijumlahkan ke stok gudang + peringatan `LOCATION_UNMAPPED`), `skip` (tidak dimigrasi), `quarantine`
+  (belum didukung G65 → error validator). Nama dicocokkan huruf besar, spasi dinormalisasi.
 - **Lokasi (E5):** gudang/lokasi Odoo berasal dari `branch_map.csv` (`type` + `parent_branch_id`), **bukan** dari
   `efn_dwh.dim_esb_location`. `dim_esb_location` (sub-lokasi ESB per cabang: dapur, gudang kering, …) hanya referensi
   untuk menyusun `branch_map.csv` dan opname (E6); tidak diekspor ke bundel.
@@ -162,7 +198,9 @@ pajak, tanggal ISO `YYYY-MM-DD`.
 | `customer.jsonl` | `customer` | kode | `ref, name, is_company, customer_rank, category_name, payment_term_key, active` (tanpa alamat/PIC/telepon/NPWP) |
 | `payment_term.jsonl` | `payment_term` | `net_<hari>` | `days, name` |
 | `bom.jsonl` | `bom` | `bom_id` | `code, name, type` (`phantom` bila ditautkan menu lewat `bomName`, selain itu `normal`), `bom_type_id, bom_type_name, product_code, product_key` (normal), `menu_keys` (phantom: BoM kit per menu), `product_qty` (rasio BATCH→EA bila `ratio_source="bom_ratio"`, selain itu 1), `uom_esb, uom_xmlid, ratio_source, lines:[{product_key, product_code, qty, uom_esb, uom_xmlid, yield_percent}]` |
-| `cost.jsonl` | — (`xmlid` null) | `product_code` | `product_key, product_code, standard_price` (lastHpp komponen BOM terbesar > 0), `source_uom` (satuan HPP; konversi bila ≠ UoM produk [B]) |
+| `cost.jsonl` | — (`xmlid` null) | `product_code` | `product_key, product_code, standard_price` (per satuan `source_uom`, 4 desimal), `source_uom` (satuan ESB; importer mengonversi bila ≠ UoM produk [B]), `source` ∈ `stock_opening`\|`bom_last_hpp`\|`purchase_last`, `as_of` (ISO; = cutover untuk `stock_opening`) |
+| `supplierinfo.jsonl` (G65) | `supplierinfo` dari `<supplier_code>_<product_code>` | `<supplier_code>\|<product_code>` | `partner_key` (xmlid `supplier`), `product_key`, `supplier_code, product_code, price` (harga satuan PO terakhir, per `uom_xmlid`), `discount` (%), `currency="IDR"`, `min_qty=0`, `sequence` (1..n per PT × produk), `date_start` (tanggal PO), `uom_esb, uom_xmlid` (satuan beli dari `uom_map.csv` → `product_uom_id`), `source_purchase_num` |
+| `quant.jsonl` (G65, bundel `stock`) | — (`xmlid` null) | `<branch_id>\|<product_code>` | `location_key` (xmlid `branch_wh` untuk store/ck/warehouse → importer memakai `lot_stock_id`; xmlid `branch_loc` untuk cabang `location`), `product_key, product_code, quantity` (Σ qty > 0, satuan `uom_esb`), `uom_esb, uom_xmlid` (= UoM produk; qty sudah dikonversi export), `esb_branch_id, esb_locations` (nama lokasi ESB yang dijumlah), `amount` (Σ amount_balance ESB, untuk rekonsiliasi), `accounting_date` (= cutover − 1) |
 
 ## Baris JSONL histori (objek datar, company = `segment.company_code`, berkas `.jsonl.gz`)
 | Berkas → model | Kunci wajib (+ opsional `mapping.HISTORY_OPTIONAL_KEYS`; lain = error PII) | Satuan |
@@ -170,6 +208,7 @@ pajak, tanggal ISO `YYYY-MM-DD`.
 | `legacy_flow_daily` → `efn.legacy.flow.daily` | `day, branch_key, product_key, esb_branch_id, esb_product_code, sold, ck_prod, store_prod, ck_out, in_ck, in_other, st_in, st_out, outflow` | qty dalam **UoM produk** (= EA / `ea_factor`), 3 desimal; `outflow = sold + st_out + ck_out` (sudah dihitung); kunci **opsional** `esb_product_name` (≤ 128 karakter atau null; export selalu mengisi) |
 | `legacy_sales_daily` → `efn.legacy.sales.daily` | `day, branch_key, pos_key, menu_key, esb_branch_id, esb_menu_code, is_takeaway, qty, gross, discount, net, cogs, trx_count` | Rupiah; `net = gross − discount` (sudah dihitung); `menu_key` takeaway = menu dasar; kunci **opsional** `menu_name`, `menu_category` (teks ESB ≤ 128 atau null; export selalu mengisi) |
 | `legacy_sales_line` → `efn.legacy.sales.line` | `sales_num, line_no, date, branch_key, menu_key, esb_menu_code, qty, price, total, discount, cogs, row_type, is_takeaway` | Rupiah; `menu_key` boleh null (baris tetap disimpan, §27.8); tanpa `run_id` per baris |
+| `legacy_purchase_line` → `efn.legacy.purchase.line` (G65) | `purchase_num, line_no, date, date_required, branch_key, branch_name, supplier_key, supplier_name, product_key, esb_branch_id, esb_supplier_code, esb_product_code, uom_name, qty, receipt_qty, pricelist_price, price_unit, discount, vat_value, total, status, map_source` + opsional `product_name, category_name, sub_category_name` | Rupiah; qty dalam `uom_name` ESB (tidak dikonversi); `*_key` boleh null (HO/cabang skip/tak terpetakan, gudang PT lain); teks dipotong ke ukuran field model; irisan ganti = **company × bulan** (bukan per gudang), berkas hanya di part 1 |
 `branch_key` = xmlid `branch_wh` (cabang `location` → gudang induk). Baris dengan cabang/produk tak terpetakan **tidak
 diekspor** (dihitung di `stats`). Idempotensi impor = ganti irisan company × gudang × bulan (`DELETE`+`INSERT`, §27.8a);
 satu bundel segmen = irisan bulan penuh untuk gudang di `target_warehouses` (bulan cutover: hari < cutover).
@@ -185,7 +224,11 @@ Manifest: `run_id` = run_id bundel sumber, `brand`, `company_codes`, `parent_run
   "outflow"}], "legacy_sales_daily": [{"month","branch_key","menu_key","is_takeaway", "qty","gross","discount","net",
   "cogs","trx_count"}], "legacy_sales_line": [{"month","branch_key","rows","qty","total","discount","cogs"}],
   "bulk_check": {"wrong_company_rows": 0, "foreign_product_rows": 0}}` — agregat **dari tabel Odoo setelah tulis**
-  (sebelum rollback pada dry-run), bukan dari bundel.
+  (sebelum rollback pada dry-run), bukan dari bundel. G65 menambah (kunci W-B ↔ W-C):
+  `"legacy_purchase_line": [{"month","company_code","branch_name","rows","qty","total"}]` (per PT × bulan × teks
+  `branch_name`; `branch_name` null = `""`) dan, untuk bundel `stock`, `"quant": [{"company_code","location_key",
+  "product_key","quantity","value"}]` — `quantity` dalam **UoM produk** (= satuan baris bundel, export sudah
+  mengonversi), `value` = qty Odoo × `standard_price` setelah apply.
 - `map.jsonl` (master): `{"entity","company_code","esb_key","odoo_model","xmlid","odoo_id"}` per xmlid → `writeback`
   ke `efn_dwh.map_esb_odoo` (ReplacingMergeTree, ulang = idempoten).
 
@@ -214,10 +257,15 @@ tumpang tindih. Perintah: `esb_to_odoo.py reconcile --final --parent-run-id X --
 ## Rekonsiliasi (§27.5) — `reconcile_<parent_run_id>.md/.csv` (per pasangan) dan `reconcile_final_<parent>` (kontrak 5)
 Rekonsiliasi per pasangan menjumlahkan `odoo_totals` per part dan **tidak** mendeteksi part yang saling menimpa
 (SEC-197); berita acara histori wajib memakai `reconcile --final`.
-1 jumlah per entitas (selisih bila gagal > 0 atau total status ≠ baris bundel; konflik = peringatan) · 2–4 "tidak
-dijalankan" (langkah stok/saldo default mati) · 5a/5b/5c Σ per bulan × gudang × produk/menu vs `odoo_totals` (toleransi
-qty 0,001, uang 0,01) · 5d `bulk_check` = 0 · baris tak terpetakan (info) · 6 rasio net/pembayaran per cabang-bulan
-(`--with-source`, peringatan di luar 0,80–0,98) · 7 snapshot `v_esb_data_quality` (`--with-source`).
+1 jumlah per entitas (selisih bila gagal > 0 atau total status ≠ baris bundel; konflik = peringatan) · 1a (G65) jumlah
+`cost` per `source` (info) · 2 (G65, bila ada `quant.jsonl`): `2_stok_qty` Σ qty per PT × lokasi × produk vs
+`odoo_totals.quant` (pemblokir), `2_stok_sumber` neraca export per cabang `source_qty = exported_qty + skipped_qty`
+(pemblokir), `2_stok_nilai` per lokasi (info) dan `2_stok_nilai_pt` (peringatan bila selisih > 1 %) · 3–4 "tidak
+dijalankan" (`opening` NOT_BUILT; butir 4 tetap pemblokir cutover production) · 5a/5b/5c Σ per bulan × gudang ×
+produk/menu vs `odoo_totals` (toleransi qty 0,001, uang 0,01) · 5e (G65) Σ rows/qty/total pembelian per PT × bulan ×
+`branch_name` (pemblokir) + info `5e_map_source` (baris `map_source ≠ header`) dan `5e_mata_uang_dilewati` · 5d
+`bulk_check` = 0 · baris tak terpetakan (info) · 6 rasio net/pembayaran per cabang-bulan (`--with-source`, peringatan di
+luar 0,80–0,98) · 7 snapshot `v_esb_data_quality` (`--with-source`). Butir 2b (opname ESB vs saldo awal) belum dibangun.
 
 ## PDP & retensi
 Bundel tanpa kunci identitas orang (whitelist per entitas + pola terlarang `address|pic|phone|email|creator|editor|
@@ -228,8 +276,12 @@ Bundel/hasil dihapus ≤ 90 hari setelah berita acara (Q-ESB24); tidak boleh di 
 ## Belum / belum diverifikasi
 - Tidak dijalankan terhadap ClickHouse/Odoo nyata (penulis tanpa shell). SQL `source.py` (`query_row_block_stream`,
   `has({ids:Array(UInt32)}, …)`) perlu uji di ClickHouse 24.8.
-- Langkah `stock`, `opening`, `supplierinfo`, `combo` (Q-ESB12) belum diekspor. `validate_import.py --source templates`
-  belum dibangun. Pemeriksaan "company ada di Odoo target" & pajak lintas PT = tugas importer.
+- Langkah `opening`, `combo` (Q-ESB12) belum diekspor. `validate_import.py --source templates` belum dibangun.
+  Pemeriksaan "company ada di Odoo target" & pajak lintas PT = tugas importer.
+- G65 (24 Nov 2026) belum dijalankan terhadap ClickHouse/Odoo nyata: SQL `fact_esb_purchase_line`/`fact_esb_stock_opening`
+  ditulis dari kontrak §27.13.2 sebelum DDL W-A ada; `currency` IDR diasumsikan `""`/`"IDR"` (nilai `currencyID` [B]);
+  arti `discount` (nominal/persen) dan PPN di `total` [B] (Q-G65-2, Q-ESB26); `purchase_ok` produk belum diturunkan
+  dari supplierinfo (tetap aturan G61 `recategorize_pb.py`).
 - **Q-ESB25 (ESB/Ops, terbuka):** di data nyata PB `bomName` pada `/menu/browse-for-product` KOSONG dan kode BoM ≠
   kode menu (988 BoM tipe Menu tanpa `bom_code`), sehingga tautan menu ↔ resep via nama tidak berfungsi
   (1.156 `BOM_PRODUCT_MISSING`). Pertanyaan: dari endpoint/field ESB mana tautan menu ↔ BoM resep dibaca

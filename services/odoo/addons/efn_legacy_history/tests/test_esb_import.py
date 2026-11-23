@@ -359,8 +359,9 @@ class TestEsbImport(TransactionCase):
             self._run(bundle, validation=None)
         with self.assertRaisesRegex(imp.GateError, "confirm-brand"):
             self._run(bundle, app_env="production")
+        # G65: `stock` dibangun (bundel cutover ber-quant, test_esb_import_g65); `opening` tetap default mati / stub.
         with self.assertRaisesRegex(imp.ConfigError, "default MATI"):
-            self._run(bundle, steps=("stock",))
+            self._run(bundle, steps=("opening",))
         with self.assertRaisesRegex(imp.ConfigError, "belum diimplementasikan"):
             self._run(bundle, steps=("opening",), enable_opening_balances=True)
         self.assertFalse(self._ref(X("branch_wh", 11)), "gerbang ditolak sebelum DB ditulis")
@@ -600,7 +601,8 @@ class TestEsbImport(TransactionCase):
         self.assertFalse(self._legacy("efn.legacy.sales.daily"), "gudang target tanpa baris -> irisan dikosongkan")
         self.assertFalse(self._legacy("efn.legacy.sales.line"))
         ck_slices = [s for s in result.report["slices"] if s["branch_key"] == X("branch_wh", 4)]
-        self.assertEqual({s["model"] for s in ck_slices}, set(imp.m.HISTORY_MODEL.values()))
+        sliced = {v for k, v in imp.m.HISTORY_MODEL.items() if k in imp.m.WAREHOUSE_SLICED}
+        self.assertEqual({s["model"] for s in ck_slices}, sliced)
         # Gudang target yang xmlid-nya menunjuk gudang PT lain -> ditolak sebelum histori ditulis.
         wh_wtz = (
             self.env["stock.warehouse"]

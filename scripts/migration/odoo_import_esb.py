@@ -11,8 +11,11 @@ direktori itu (selain itu exit 2):
      "steps": ["master"],                      # opsional: subset langkah §27.2 (default = semua berkas di bundel)
      "confirm_brand": "pb",                    # wajib bila APP_ENV production ATAU staging dan dry_run=false
      "allow_older": false,                     # SEC-198: izinkan bundel lebih tua dari run sukses terakhir (dicatat)
-     "enable_opening_balances": false,         # stock/opening: STUB, selalu exit 2 (data E6+ belum diverifikasi)
+     "enable_opening_balances": false,         # opening (neraca): STUB, selalu exit 2 (Q-ESB21). `stock` dibangun G65
+     "zero_missing": false,                    # G65 stock: quant Odoo tanpa baris snapshot -> 0 (non-production saja)
      "allow_missing_validation": false}
+Langkah `stock` (G65, docs/04 §27.13.7): bundel cutover tunggal ber-`quant.jsonl`; gerbang exit 4 = cost_as_of.<PT> =
+cutover, opening_date manifest = cutover, tanpa stock.move non-inventaris >= cutover / sesi POS terbuka, tanpa tracking.
 Mode totals (tanpa bundel, tanpa tulis; untuk `reconcile --final`):
     {"steps": ["totals"], "companies": ["PB"], "months": ["2026-09", "2026-10"], "parent_run_id": "<uuid>",
      "brand": "pb" (opsional)}  # parent_run_id = run export histori (wajib; reconcile --final mencocokkannya)
@@ -170,8 +173,9 @@ def _main(env):
         validation_path = _inside(exchange, args.get("validation"), "validation", required=False)
         dry_run = args.get("dry_run", True)
         allow_older = args.get("allow_older", False)
-        if not isinstance(dry_run, bool) or not isinstance(allow_older, bool):
-            raise _ArgError("dry_run / allow_older wajib boolean")
+        zero_missing = args.get("zero_missing", False)
+        if not all(isinstance(v, bool) for v in (dry_run, allow_older, zero_missing)):
+            raise _ArgError("dry_run / allow_older / zero_missing wajib boolean")
         blob = _read_limited(bundle_path, _max_bundle_bytes(), "bundel")
         bundle = official.open_bundle(blob, keys, expect_kind="bundle")
         del blob
@@ -196,6 +200,7 @@ def _main(env):
             allow_missing_validation=bool(args.get("allow_missing_validation")),
             validation_key=imp.derive_validation_key(secret),
             allow_older=allow_older,
+            zero_missing=zero_missing,
         )
         del secret
         summary.update(run_id=bundle.manifest["run_id"], brand=brand, dry_run=dry_run)

@@ -1413,3 +1413,22 @@ Ada di README `efn_setup_pos` bagian "Denah meja — langkah UI standar". Ringka
 - Posisi persis menu *Edit Plan* di UI (hanya diverifikasi dari template navbar).
 - Multi-edit `pos.config` di list view sebagai alternatif massal.
 - Tidak ada test/instalasi yang dijalankan dalam tugas ini (dokumen saja).
+
+## 24 Nov 2026 — G65 fit-gap migrasi pembelian & stok PB (dokumen saja)
+
+Worktree `efn-platform-esbmig`, branch `feat/esb-migration-purchase-stock`. Keluaran:
+`docs/fit-gap/G65_MIGRASI_PEMBELIAN_STOK.md` (addendum G43 untuk PB, cutover uji 2026-12-01, stok awal saja).
+
+- **Histori pembelian 24 bln:** gap → model arsip baru `efn.legacy.purchase.line` di `efn_legacy_history` (pola
+  sales line; read-only, record rule company, ACL `purchase.group_purchase_user` baca). Bukan `purchase.order` (stok,
+  jurnal, nomor ganda). Tambah depends `purchase`. Menu di bawah `purchase.menu_purchase_root`, karena Purchase ›
+  Reporting hanya untuk manager [V]. `bulk_replace_slice` perlu varian tanpa gudang (irisan company × bulan).
+- **Harga beli:** standar `product.supplierinfo` (modul `product`, field `product_uom_id`, `discount` dalam %) [V],
+  dari PO terakhir 12 bulan per PT × supplier × produk.
+- **HPP:** standar `standard_price` (company-dependent) [V], dari Σ amountBalance/Σ qtyBalance baris Beginning
+  stock-movement per PT. Fallback lastHpp BOM, lalu harga PO terakhir. PB = AVCO + periodik (G61 placeholder).
+- **Stok awal:** standar `stock.quant` mode inventaris [V]. Temuan: `accounting_date`/`force_period_date` hanya
+  menentukan tanggal jurnal, bukan `stock.move.date` → pakai `action_apply_inventory(date=…)`. Periodik = tanpa jurnal
+  saat apply. Kliring lewat `valuation_account_id` lokasi Inventory adjustment + `action_close_stock_valuation(at_date)`.
+- Audit duplikasi: tidak ada; langkah `cost`/`supplierinfo`/`stock` importer memakai API CE standar.
+- Pertanyaan klien baru Q-G65-1..7; daftar [B] untuk engineer di §6 dokumen.

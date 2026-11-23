@@ -3589,3 +3589,60 @@ mata pola `efn_loyalty_accounting`. Hook sumber (grup ke semua user internal) TI
 - [B] `payment_state` tagihan yang direkonsiliasi dengan entri umum = `paid` (test menerima `in_payment`).
 - [B] `disburse_via_payment=1` dan multi-mata uang tidak diuji.
 - [B] Ripgrep mesin ini tidak melihat `data/`: pastikan `git status` memuat `services/odoo/addons/efn_petty_cash/data/`.
+
+# G65 W-C — `efn_legacy_history` 19.0.1.1.0 + importer ESB (supplierinfo, cost_as_of, stock, histori pembelian, geser cutover) (24 Nov 2026, worktree `efn-platform-esbmig`) — BELUM DIJALANKAN
+
+Kontrak docs/04 §27.13.4 (format bundel, masukan), §27.13.6–§27.13.8; ADR-042 §0b; fit-gap
+`docs/fit-gap/G65_MIGRASI_PEMBELIAN_STOK.md` (diikuti, termasuk [V]/[B]). Tanpa referensi OCA/Cybrosys. Tidak di-commit.
+
+## Modul & file
+- `services/odoo/addons/efn_legacy_history`: `__manifest__.py` (19.0.1.0.0 → **19.0.1.1.0**, depends + `purchase`),
+  `models/efn_legacy_purchase_line.py` (baru), `models/__init__.py`, `bulk.py` (varian irisan tanpa gudang
+  `_efn_slice_by_warehouse=False`, cek supplier milik company, `date` opsional, `shift_cutover`),
+  `security/ir.model.access.csv` (+`purchase.group_purchase_user` 1,0,0,0), `security/efn_legacy_history_security.xml`
+  (+rule global noupdate), `views/efn_legacy_purchase_views.xml` (baru), `views/menus.xml` (Purchase › Histori ESB,
+  seq 98), `esb_import/mapping.py`, `esb_import/importer.py`, `tests/test_legacy_purchase_line.py` (baru),
+  `tests/test_esb_import_g65.py` (baru), `tests/test_esb_import.py` (2 penyesuaian: `stock` kini dibangun → assert
+  `opening`; slice CK hanya model beririsan gudang), `tests/__init__.py`, README.
+- `scripts/migration/odoo_import_esb.py` (argumen `zero_missing`, docstring), `scripts/migration/run-import.sh`
+  (`--zero-missing`), `scripts/migration/tests/test_odoo_import_mapping.py` (+3 test G65).
+- Tanpa skrip `migrations/` (hanya tabel/view/menu/ACL/rule baru).
+
+## Keputusan / penyimpangan
+- Stok tanpa konteks `inventory_mode` (Odoo 19 `_is_inventory_mode` butuh user teknis di `stock.group_stock_user` dan
+  mengubah create/whitelist): quant dicari sendiri, write/create sebagai su, `inventory_quantity_set=True` eksplisit.
+- Qty sama (presisi `Product Unit`) → `skipped` tanpa write (ulang = 0 move); per lokasi satu savepoint.
+- Gerbang (b) = move `done`, `is_inventory=False`, company PT, lokasi asal/tujuan internal, `date` ≥ cutover 00:00 WIB
+  (UTC+7 tetap) — semua lokasi internal PT, bukan hanya lokasi bundel (lebih ketat).
+- `cost_as_of` ditulis hanya bila semua baris cost PT itu tidak gagal dan `as_of` tunggal.
+- Replay SEC-198 bundel stok = grup `.stock`. `legacy_purchase_line` hanya di part 1 (exit 3 bila part > 1); segmen
+  pembelian saja tidak wajib `target_warehouses`.
+- Geser cutover (§27.13.8): history segmen dengan manifest cutover > parameter: production exit 4, non-production
+  `shift_cutover` (batas helper = manifest). `cutover-param` maju: wajib ada baris tiap bulan `[lama, baru)` untuk setiap
+  model histori yang pernah dimuat PT; mundur exit 4.
+- `odoo_totals` mengikuti kontrak final W-B (scripts/migration/README.md): `legacy_purchase_line` =
+  `{month, company_code, branch_name, rows, qty, total}`; `quant` (bundel stock) = satu baris per baris bundel
+  `{company_code, location_key, product_key, quantity (satuan uom_xmlid baris, konversi balik dari UoM produk), value
+  (= qty Odoo × standard_price PT)}`; baris tak ter-resolve / non-storable = 0 (muncul sebagai selisih di reconcile).
+
+## Untuk lead / W-B
+- `efn_mig/mapping.py` (W-B): `HISTORY_KEYS`/`HISTORY_OPTIONAL_KEYS["legacy_purchase_line"]` dan `DATA_KEYS["quant"]`
+  sudah identik dengan importer (dicek baca kode, tidak saya sentuh).
+- Export `quant` (`build_quants`): qty dalam satuan ESB baris + `uom_xmlid` dari `uom_map`. Bila satuan ESB beda teks
+  tetapi UoM Odoo sama dengan UoM produk (mis. PACK=6 EA → Unit), importer menganggap qty sudah dalam UoM produk (tanpa
+  `ea_factor`) dan `odoo_totals.quant` ikut sama → reconcile tidak menangkap salah skala. W-B: konversi `ea_factor` di
+  export atau error validator untuk kasus itu.
+- Export `supplierinfo`: `esb_key = "<sup>|<prod>"`, xmlid dari `"<sup>_<prod>"`, `currency` = "IDR", `discount` %.
+- Manifest bundel stok: `source.snapshot.fact_esb_stock_opening.opening_date` = `cutover_date`, `segment` null.
+- `EFN_TEST_MODULES`: tidak berubah (modul sama). RPC allowlist: tidak ada metode publik baru.
+
+## Belum diverifikasi
+- Semua test (Odoo + pytest) belum dijalankan (tanpa shell); ruff belum dijalankan (baris ≤120 dicek grep).
+- [V] dari source 19.0 (WebFetch 24 Nov): `action_apply_inventory(date=None)` / `_apply_inventory(date=None)` set
+  `moves.date = date`; move `is_inventory=True` dibuat `inventory_mode=False`; konteks `inventory_name`;
+  `stock_account` `accounting_date` (Date) + `force_period_date` + dikosongkan setelah apply; `inventory_quantity_set`
+  stored compute; `is_outdated` → wizard `stock.inventory.conflict`; tanpa cek grup manager di apply; create non-inventory
+  tanpa batasan; `uom._compute_quantity(qty, to_unit, round=True, …)` **tidak** memeriksa referensi → dicek
+  `_has_common_reference`; gram = akar, kg relatif gram; `purchase/models/product.py` 19 tanpa `uom_po_id`.
+- [B]: perilaku RFQ `product_uom_id` ≠ UoM produk; AVCO dengan `date` mundur; filter `at_date` closing valuasi;
+  `property_stock_inventory` company baru di test; pivot Char `supplier_name` sebagai row.

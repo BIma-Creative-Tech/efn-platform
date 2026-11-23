@@ -122,6 +122,29 @@ Perkiraan durasi (hitung ulang dengan angka nyata dari `extract_run`): panggilan
 
 Jangan menjalankan loop `run` dan `backfill` untuk brand yang sama bersamaan (lihat "Satu proses per brand" di atas). Penulisan tetap idempoten (ReplacingMergeTree + checkpoint), tetapi aturan ini soal beban ke server klien, bukan konsistensi data. Bila 429 muncul (§7), turunkan rate dulu.
 
+### 5a. G65 — histori pembelian & stok awal (PB, docs/04 §27.13)
+
+Prasyarat: `clickhouse-init` sudah dijalankan ulang dengan `23-g65-esb-purchase-stock.sql` (tabel `fact_esb_purchase_line`, `fact_esb_stock_opening`, kolom `dim_esb_supplier.supplier_id`, view `v_esb_g65_quality`).
+
+1. **`purchase_line` (harian, default mati).** Backfill 24 bulan ±1,5–2,2 rb GET (±15–20 menit), satu malam:
+   ```bash
+   $DC run -d --name efn-esb-backfill-pb-po esb-extract \
+     python -m efn_esb backfill --brand pb --from 2024-12-01 --to <kemarin> --entity purchase_line
+   ```
+   Bila `dim_esb_supplier` belum punya `supplier_id > 0`, proses otomatis menarik `master` sekali dulu. Agar ikut loop harian: tambahkan `purchase_line` ke `ESB_ENTITIES` (opsional). Status PO yang berubah > 7 hari (Receiving → Finished) **wajib** ditangkap ulang dengan `--force` bulanan dan **sekali tepat sebelum export cutover** (L-114).
+2. **`stock_opening` (snapshot per cabang, setelah freeze ESB).** `--date` = **tanggal cutover** (bukan cutover − 1), wajib eksplisit; tanpa `--allow-unverified`. ±477 GET ≈ 4–8 menit untuk PB:
+   ```bash
+   $DC run --rm esb-extract python -m efn_esb snapshot --brand pb --entity stock_opening --date 2026-12-01
+   ```
+   Exit 1 / `status=partial` = ada cabang gagal (cabang lain tetap tersimpan); jalankan ulang perintah yang sama. Dry-run boleh tanggal uji lebih awal (mis. 2026-11-25).
+3. Cek:
+   ```sql
+   SELECT * FROM efn_dwh.v_esb_g65_quality;   -- purchase_unmapped (map_source name/none), stock_opening_missing_branch
+   SELECT map_source, count() FROM efn_dwh.fact_esb_purchase_line FINAL WHERE brand = 'pb' GROUP BY map_source;
+   SELECT countIf(supplier_id > 0), count() FROM efn_dwh.dim_esb_supplier FINAL WHERE brand = 'pb';
+   ```
+   `v_esb_g65_quality` hanya terbaca admin/`efn_mig` (tabel G65 tidak di-grant ke Metabase/Insight, L-258).
+
 ## 6. Memantau
 
 ```bash

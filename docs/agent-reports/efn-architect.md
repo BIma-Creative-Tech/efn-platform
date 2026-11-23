@@ -1427,3 +1427,39 @@ default tidak), dan Q-INS-F4 (daftar metode bayar kanal online). ADR-041 tetap P
 - Yang sudah dibaca dari repo: `controllers/main.py:89-119`, `lib/insight_token.py:47-59`, `lib/claims.ts`,
   `lib/scope.ts`, `lib/sm-personas.ts`, `lib/queries.ts:123-198`, `clickhouse-init.sh:410-460`,
   `insight-access.sql:79-126`, `12-g41-esb.sql`, `19-insight-review.sql`, laporan fungsional 22 Nov.
+
+# G65 — Migrasi ESB → Odoo PB: histori pembelian, harga beli supplier, HPP cutover, stok awal (2026-11-24)
+
+## Ringkasan (untuk manajemen)
+Keputusan user 24 Nov (cakupan penuh termasuk histori pembelian, PB saja, gladi efn-prod cutover uji 1 Des, saldo awal =
+stok saja) sudah dituangkan ke amandemen ADR-042 dan kontrak `docs/04` §27.13. Stok dan HPP awal diambil dari satu
+laporan ESB (saldo awal per tanggal), harga beli dari histori PO. Neraca dan utang/piutang tetap ditunda. Estimasi
+±13–16 hari-engineer; target 1 Des ketat. Status: kontrak, belum dibangun.
+
+## File diubah (worktree `efn-platform-esbmig`, tanpa kode)
+- `docs/decisions/ADR-042-migrasi-esb-odoo-dan-histori.md`: header + §0b "Amandemen G65" (keputusan user, kontradiksi
+  hasil probe vs §3.3/§27.6, opsi sumber stok/HPP/harga/histori dengan biaya, keputusan Proposed, Mermaid, konsekuensi,
+  risiko termasuk usulan R-O15, pertanyaan, kapan ditinjau).
+- `docs/04_SERVICE_CONTRACTS.md`: judul v21.4; §27.13.1–27.13.9 (entitas `purchase_line` + `stock_opening`, DDL
+  `23-g65-esb-purchase-stock.sql`, grant, langkah export, validator/rekonsiliasi, model `efn.legacy.purchase.line`,
+  importer, parameter cutover, L-250..L-258, Q-ESB25..Q-ESB29).
+
+## Keputusan desain penting
+- Pembelian diekstrak per **hari** (slice + checkpoint G41), bukan per bulan seperti di fit-gap: lebih banyak GET
+  (±2 rb vs ±90) tetapi koreksi H-1/H-7 dan ganti-per-hari tetap berlaku.
+- Cabang/supplier diambil dari header PO via `purchaseNum`; nama hanya fallback berlabel `map_source`;
+  `dim_esb_supplier.supplier_id` ditambah.
+- `stock_opening --date` = tanggal cutover (beda konvensi P2 `cutover − 1`), per cabang, hanya Beginning qty ≠ 0.
+- Status PO untuk harga = daftar izin (lebih ketat dari default fit-gap).
+- Model histori pembelian mengikuti fit-gap (warehouse nullable, irisan company × bulan, depends `purchase`) + `map_source`.
+- Valuasi PB periodik → closing draft lewat runbook, bukan importer.
+
+## Keputusan yang butuh tanda tangan klien
+Penerimaan amandemen §0b (Proposed); Q-ESB25 (lokasi damage/expired), Q-ESB26 (HPP rata-rata per PT, harga sebelum
+diskon/tanpa PPN), Q-ESB27 (stok negatif), Q-ESB28 (status PO), Q-ESB29 (larangan transaksi PB efn-prod mulai 1 Des
+sampai stok dimuat, atau reset); tetap Q-ESB16, Q-ESB21.
+
+## Belum terverifikasi
+Semua runtime; nama field `supplierID` `/supplier`; limit header PO; `branchCode` = `dim_esb_branch.branch_code`;
+`unitToShow`; pembulatan `amountBalance`; arti `discount`/`total`; RFQ dengan `product_uom_id` beda; filter `at_date`
+closing; efek tanggal mundur pada AVCO. R-O15 belum dimasukkan ke `docs/01` (milik lead).

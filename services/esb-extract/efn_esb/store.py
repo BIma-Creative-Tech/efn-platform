@@ -77,3 +77,13 @@ class ClickHouseStore:
             parameters={"brand": brand},
         )
         return {int(b): BomRatio(str(c), str(n), float(r), str(u), str(s)) for b, c, n, u, r, s in result.result_rows}
+
+    def load_suppliers(self, brand: str) -> list[tuple[int, str, str]]:
+        """G65: (supplier_id, supplier_code, supplier_name) versi terakhir per kode (kolom supplier_id: ALTER di
+        23-g65-esb-purchase-stock.sql)."""
+        result = self._client.query(
+            f"SELECT supplier_id, supplier_code, supplier_name FROM {self._mart}.dim_esb_supplier FINAL "  # noqa: S608
+            "WHERE brand = {brand:String}",
+            parameters={"brand": brand},
+        )
+        return [(int(i), str(c), str(n)) for i, c, n in result.result_rows]

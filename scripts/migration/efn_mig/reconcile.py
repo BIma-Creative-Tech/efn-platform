@@ -1,8 +1,9 @@
 """Laporan rekonsiliasi 7 butir (docs/04 §27.5 v19.1). Murni: bundel sumber + hasil impor (+ data sumber opsional).
 
 Sisi "sumber" = isi bundel (snapshot ClickHouse yang sama dengan yang diimpor) + statistik baris tak terpetakan di
-manifest; sisi "Odoo" = `import_report.json` + `odoo_totals.json` dari importer. Butir 2-4 (stok, AR/AP, neraca)
-belum berlaku selama langkah `stock`/`opening` default mati -> dilaporkan "tidak dijalankan".
+manifest; sisi "Odoo" = `import_report.json` + `odoo_totals.json` dari importer. Butir 2 (stok awal, G65 §27.13.5)
+dievaluasi bila ada bundel `quant.jsonl`; butir 3-4 (AR/AP, neraca; `opening` NOT_BUILT) "tidak dijalankan".
+Butir 1a (cost per sumber) dan 5e (histori pembelian) = G65.
 Toleransi: qty 0,001; uang 0,01 (pembulatan float JSON).
 """
 
@@ -27,6 +28,9 @@ SALES_LINE_SUMS = ("rows", "qty", "total", "discount", "cogs")
 ENTITY_STATUSES = ("created", "updated", "skipped", "conflict", "failed")
 # Rasio net penjualan / pembayaran (pembayaran memuat PB1 + SC): PB ±89,6 % (G41). Di luar rentang -> peringatan.
 SANITY_RANGE = (0.80, 0.98)
+# G65 butir 2: selisih nilai stok (HPP rata-rata company vs nilai buku ESB per lokasi) > 1 % per company = peringatan.
+STOCK_VALUE_TOL = 0.01
+PURCHASE_LINE_SUMS = ("rows", "qty", "total")
 
 
 @dataclass
@@ -102,11 +106,20 @@ def aggregate_bundle(
         "legacy_flow_daily": defaultdict(lambda: defaultdict(float)),
         "legacy_sales_daily": defaultdict(lambda: defaultdict(float)),
         "legacy_sales_line": defaultdict(lambda: defaultdict(float)),
+        "legacy_purchase_line": defaultdict(lambda: defaultdict(float)),
     }
     for bundle in bundles:
+        company = str((bundle.manifest.get("segment") or {}).get("company_code") or "")
         for entry in bundle.manifest.get("files", []):
             entity, name = entry.get("entity"), str(entry.get("name"))
-            if entity == "legacy_flow_daily":
+            if entity == "legacy_purchase_line":
+                # 5e (G65): per company × bulan × cabang (teks branch_name; warehouse_id boleh kosong).
+                for r in bundle.rows(name):
+                    bucket = agg[entity][(_month(r["date"]), company, str(r.get("branch_name") or ""))]
+                    bucket["rows"] += 1
+                    for col in ("qty", "total"):
+                        bucket[col] += float(r[col])
+            elif entity == "legacy_flow_daily":
                 for r in bundle.rows(name):
                     bucket = agg[entity][(_month(r["day"]), r["branch_key"], r["product_key"])]
                     for col in (*FLOW_COLUMNS, "outflow"):
@@ -128,6 +141,11 @@ def aggregate_bundle(
     return agg
 
 
+def _purchase_key(row: Mapping[str, Any]) -> tuple[str, ...]:
+    """Kunci `odoo_totals.legacy_purchase_line` (kontrak README): bulan, company_code, branch_name."""
+    return (str(row["month"]), str(row["company_code"]), str(row.get("branch_name") or ""))
+
+
 def _odoo_totals(totals: Mapping[str, Any]) -> dict[str, dict[tuple[str, ...], dict[str, float]]]:
     out: dict[str, dict[tuple[str, ...], dict[str, float]]] = {}
     keyfn = {
@@ -135,6 +153,7 @@ def _odoo_totals(totals: Mapping[str, Any]) -> dict[str, dict[tuple[str, ...], d
         "legacy_sales_daily": lambda r: (r["month"], r["branch_key"], str(r["menu_key"]),
                                          str(bool(r["is_takeaway"])).lower()),
         "legacy_sales_line": lambda r: (r["month"], r["branch_key"]),
+        "legacy_purchase_line": _purchase_key,
     }  # fmt: skip
     for entity, fn in keyfn.items():
         bucket: dict[tuple[str, ...], dict[str, float]] = defaultdict(lambda: defaultdict(float))
@@ -160,7 +179,10 @@ def reconcile(
         if bundle.manifest["run_id"] != result.manifest["run_id"]:
             raise ValueError("run_id bundel dan hasil tidak sama")
     _item1_counts(report, pairs)
-    for item in ("2_stok", "3_ar_ap", "4_neraca"):
+    if not _item2_stock(report, pairs):
+        report.lines.append(Line("2_stok", "-", "-", "-", "-", "tidak_dijalankan"))
+    # 3/4: AR/AP & neraca pembukaan (`opening`) tetap NOT_BUILT (Q-ESB21); butir 4 tetap pemblokir cutover production.
+    for item in ("3_ar_ap", "4_neraca"):
         report.lines.append(Line(item, "-", "-", "-", "-", "tidak_dijalankan"))
     _item5(report, pairs)
     _item6(report, sales_payments)
@@ -186,6 +208,54 @@ def _item1_counts(report: ReconReport, pairs: list[tuple[Bundle, Bundle]]) -> No
             status = "selisih" if failed or handled != int(entry["rows"]) else ("peringatan" if conflict else "ok")
             detail = ", ".join(f"{s}={int(got.get(s, 0))}" for s in ENTITY_STATUSES)
             report.lines.append(Line("1_jumlah", entity, int(entry["rows"]), handled, detail, status))
+            if entity == "cost":  # 1a (G65): jumlah baris cost per sumber HPP
+                per_source: dict[str, int] = defaultdict(int)
+                for row in bundle.rows(str(entry["name"])):
+                    per_source[str(row["data"].get("source"))] += 1
+                for source, count in sorted(per_source.items()):
+                    report.lines.append(Line("1a_cost_sumber", source, count, "-", "-", "info"))
+
+
+def _item2_stock(report: ReconReport, pairs: list[tuple[Bundle, Bundle]]) -> bool:
+    """Butir 2 (G65 §27.13.5): qty `quant.jsonl` vs `odoo_totals.quant` per company × lokasi × produk (pemblokir);
+    neraca qty export per cabang (sumber = diekspor + dilewati, pemblokir); nilai Σ(qty × standard_price) Odoo vs
+    Σ amount ESB per lokasi (info) dan per company (peringatan bila > 1 %). False bila tidak ada bundel stok."""
+    found = False
+    for bundle, result in pairs:
+        name = bundle.entity_file("quant")
+        if name is None:
+            continue
+        found = True
+        src_qty: dict[tuple[str, ...], float] = defaultdict(float)
+        src_amount: dict[tuple[str, ...], float] = defaultdict(float)
+        for row in bundle.rows(name):
+            data = row["data"]
+            src_qty[(row["company_code"], data["location_key"], data["product_key"])] += float(data["quantity"])
+            src_amount[(row["company_code"], data["location_key"])] += float(data["amount"])
+        odoo_qty: dict[tuple[str, ...], float] = defaultdict(float)
+        odoo_value: dict[tuple[str, ...], float] = defaultdict(float)
+        for row in json_member(result, "odoo_totals.json").get("quant") or []:
+            odoo_qty[(row["company_code"], row["location_key"], row["product_key"])] += float(row["quantity"])
+            odoo_value[(row["company_code"], row["location_key"])] += float(row.get("value") or 0)
+        for key in sorted(set(src_qty) | set(odoo_qty)):
+            _cmp(report, "2_stok_qty", "|".join(key), src_qty.get(key, 0.0), odoo_qty.get(key, 0.0), QTY_TOL)
+        for branch, stat in sorted((bundle.manifest.get("stock_by_branch") or {}).items()):
+            source = float(stat.get("source_qty") or 0)
+            handled = float(stat.get("exported_qty") or 0) + float(stat.get("skipped_qty") or 0)
+            _cmp(report, "2_stok_sumber", str(branch), source, handled, QTY_TOL)
+        per_company: dict[str, list[float]] = defaultdict(lambda: [0.0, 0.0])
+        for key in sorted(set(src_amount) | set(odoo_value)):
+            src, dst = src_amount.get(key, 0.0), odoo_value.get(key, 0.0)
+            report.lines.append(Line("2_stok_nilai", "|".join(key), round(src, 2), round(dst, 2), round(dst - src, 2),
+                                     "info"))  # fmt: skip
+            per_company[key[0]][0] += src
+            per_company[key[0]][1] += dst
+        for company, (src, dst) in sorted(per_company.items()):
+            ratio = abs(dst - src) / abs(src) if src else (0.0 if not dst else 1.0)
+            status = "peringatan" if ratio > STOCK_VALUE_TOL else "ok"
+            line = Line("2_stok_nilai_pt", company, round(src, 2), round(dst, 2), round(ratio, 4), status)
+            report.lines.append(line)
+    return found
 
 
 def _item5(report: ReconReport, pairs: list[tuple[Bundle, Bundle]]) -> None:
@@ -222,11 +292,7 @@ def _item5(report: ReconReport, pairs: list[tuple[Bundle, Bundle]]) -> None:
         for key in bulk:
             bulk[key] += int((totals.get("bulk_check") or {}).get(key, 0))
     odoo = _odoo_totals(merged)
-    specs = {
-        "legacy_flow_daily": ("5a_flow", (*FLOW_COLUMNS, "outflow")),
-        "legacy_sales_daily": ("5b_sales_daily", SALES_DAILY_SUMS),
-        "legacy_sales_line": ("5c_sales_line", SALES_LINE_SUMS),
-    }
+    specs = HISTORY_SPECS
     for entity, (item, cols) in specs.items():
         for key in sorted(set(source[entity]) | set(odoo[entity])):
             src, dst = source[entity].get(key, {}), odoo[entity].get(key, {})
@@ -246,6 +312,27 @@ def _item5(report: ReconReport, pairs: list[tuple[Bundle, Bundle]]) -> None:
                 seg = bundle.manifest["segment"]
                 key = f"{seg['company_code']}|{seg['month']}|p{seg['part']}|{entity}"
                 report.lines.append(Line("5_tak_terpetakan", key, skipped, 0, skipped, "info"))
+    _purchase_info(report, [b for b, _ in history])
+
+
+def _purchase_info(report: ReconReport, bundles: Iterable[Bundle]) -> None:
+    """5e (G65): baris mata uang ≠ IDR (tidak diekspor) dan baris `map_source ≠ header` dilaporkan terpisah (info)."""
+    for bundle in bundles:
+        seg = bundle.manifest["segment"]
+        name = bundle.entity_file("legacy_purchase_line")
+        if name is None:
+            continue
+        key = f"{seg['company_code']}|{seg['month']}"
+        currency = int(((bundle.manifest.get("stats") or {}).get("legacy_purchase_line") or {}).get(
+            "rows_skipped_currency", 0))  # fmt: skip
+        if currency:
+            report.lines.append(Line("5e_mata_uang_dilewati", key, currency, 0, currency, "info"))
+        by_source: dict[str, int] = defaultdict(int)
+        for row in bundle.rows(name):
+            if row.get("map_source") != "header":
+                by_source[str(row.get("map_source"))] += 1
+        for source, count in sorted(by_source.items()):
+            report.lines.append(Line("5e_map_source", f"{key}|{source}", count, "-", "-", "info"))
 
 
 TOTALS_STEP = "totals"
@@ -253,6 +340,7 @@ HISTORY_SPECS = {
     "legacy_flow_daily": ("5a_flow", (*FLOW_COLUMNS, "outflow")),
     "legacy_sales_daily": ("5b_sales_daily", SALES_DAILY_SUMS),
     "legacy_sales_line": ("5c_sales_line", SALES_LINE_SUMS),
+    "legacy_purchase_line": ("5e_purchase_line", PURCHASE_LINE_SUMS),
 }
 
 
@@ -286,6 +374,7 @@ def reconcile_final(parent_run_id: str, sources: list[Bundle], totals_results: l
         "legacy_flow_daily": lambda r: (r["month"], r["branch_key"], r["product_key"]),
         "legacy_sales_daily": lambda r: (r["month"], r["branch_key"], str(r["menu_key"]), str(bool(r["is_takeaway"]))),
         "legacy_sales_line": lambda r: (r["month"], r["branch_key"]),
+        "legacy_purchase_line": _purchase_key,
     }
     for index, result in enumerate(totals_results):
         totals = json_member(result, "odoo_totals.json")

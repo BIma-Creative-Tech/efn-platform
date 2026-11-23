@@ -5,6 +5,57 @@ ADR terkait (semua `Proposed`): ADR-003, ADR-006, ADR-007, ADR-008, ADR-010, ADR
 
 **Tidak ada yang dijalankan.** Mesin penulis tidak punya Python; semua kode, test, dan SQL belum pernah dieksekusi. Validasi pertama terjadi di CI / oleh QA.
 
+## Gelombang 65 paket W-A — esb-extract: `purchase_line` + `stock_opening` (24 Nov 2026)
+
+Branch `feat/esb-migration-purchase-stock` (worktree `efn-platform-esbmig`). Kontrak `docs/04` §27.13.1–27.13.3,
+§27.13.9 (L-250..L-258); ADR-042 §0b (Proposed). **Tidak ada yang dijalankan** (tanpa shell/Python/ClickHouse); lead
+menjalankan pytest + ruff di container.
+
+### File
+- Baru: `services/esb-extract/efn_esb/extract_g65.py`, `efn_esb/transform_g65.py`, `tests/test_g65.py`,
+  `infra/clickhouse/init/23-g65-esb-purchase-stock.sql`.
+- Diubah: `efn_esb/config.py` (`purchase_line` di ENTITIES/DAILY, bukan default; `SNAPSHOT_BRANCH_SCOPED`),
+  `normalize.py` (whitelist `PURCHASE_RECAP_FIELDS`, `PURCHASE_HEADER_FIELDS`, `STOCK_MOVEMENT_FIELDS`; `name_norm`),
+  `transform.py` (`DIM_SUPPLIER_COLUMNS` + `supplier_id`), `extract.py` (`BrandRuntime.suppliers`,
+  `master_forced_for_ids`, `extractor_for` G65), `planning.py` (`snapshot_tasks`), `runner.py` (`ALL_TABLES` + G65,
+  `prepare_brand(need_supplier_ids)`, `_absorb` master → supplier, snapshot per cabang), `store.py` (`load_suppliers`),
+  `__main__.py` (`snapshot --entity stock_opening`, `--date` wajib), `infra/clickhouse/access/esb-access.sql`
+  (esb_writer), `infra/clickhouse/access/mig-access.sql` (mig_rw: role ini didefinisikan di file itu, bukan di
+  esb-access.sql), README, runbook §5a, test lama (`test_ddl.py`, `test_ddl_g43.py`, `test_transform.py`,
+  `test_config.py`, `test_runner.py` FakeStore.load_suppliers). `clickhouse-init.sh` tidak diubah (glob `init/*.sql`).
+
+### Antarmuka ke W-B (tabel final)
+- `efn_dwh.fact_esb_purchase_line`: `brand, company_code, purchase_date, purchase_num, line_no, required_date,
+  branch_id, branch_name, supplier_id, supplier_code, supplier_name, status_id, status_name, currency, product_code,
+  product_name, category_name, sub_category_name, uom, qty, receipt_qty, pricelist_price, price, discount, vat_value,
+  total, map_source, _version, _loaded_at` — persis §27.13.2. Checkpoint: entitas `purchase_line`, scope `*`, day =
+  purchase_date.
+- `efn_dwh.fact_esb_stock_opening`: `brand, company_code, opening_date, branch_id, branch_code, location_name,
+  product_id, product_detail_id, product_code, product_name, uom, value_per_unit, qty_balance, amount_balance,
+  _version, _loaded_at`. Checkpoint: entitas `stock_opening`, scope `<branch_id>`, day = opening_date.
+- `efn_dwh.dim_esb_supplier.supplier_id UInt64 DEFAULT 0` (ALTER).
+- `efn_dwh.v_esb_g65_quality` (kolom = `v_esb_data_quality`): `purchase_unmapped`, `stock_opening_missing_branch`.
+
+### Asumsi / keputusan
+- **Penyimpangan disengaja dari §27.13.2**: dua cek kualitas TIDAK ditambahkan ke `v_esb_data_quality` tetapi ke view
+  baru `v_esb_g65_quality` (hanya mig_rw). `v_esb_data_quality` adalah INVOKER dan dibaca `metabase_reader` +
+  `efn_insight_definer`; UNION ke tabel G65 akan membuat view itu gagal untuk mereka (L-258 melarang grant). Perlu
+  diserap architect ke §27.13.2.
+- `map_source` baris = pemetaan terlemah (cabang, supplier): header < name < none. Header ada tetapi `supplierID` tak
+  ada di dim → kode lewat nama (`'name'`), `supplier_id` tetap dari header.
+- `purchase_date` = hari slice (bukan `purchaseDate` respons). `status_id`/`currency` dari header (0/'' tanpa header);
+  `currency` = `currencyID` apa adanya (kode atau angka [B]). Semua status disimpan; filter izin = W-B.
+- Baris recap tanpa `purchaseNum` dibuang; `productCode` kosong disimpan apa adanya.
+- `stock_opening`: kunci ganda (lokasi, produk, detail, UOM) dijumlah, `value_per_unit` baris pertama; saldo negatif
+  disimpan (L-257: W-B yang memutuskan/melaporkan). Satu GET per halaman, snapshot berjalan 1 worker (token bucket 2/dtk).
+- `supplier_id` kosong di store saat `purchase_line` aktif → `master` dipaksa sekali per proses (bukan per siklus).
+
+### Belum terverifikasi
+Semua test/ruff (belum dijalankan); DDL & view di ClickHouse 24.8 (ALTER ADD COLUMN, LEFT JOIN `c.hit = 0` tanpa
+`join_use_nulls`); GET nyata via extractor; nama field `supplierID` di `/supplier`; batas `limit` header PO (100);
+kesamaan `branchCode` stock-movement dengan `dim_esb_branch.branch_code`; apakah `dateFrom/dateTo` recap & header
+sama-sama memfilter `purchaseDate`; arti `discount`/`total`/`amountBalance`/`unitToShow`; tipe `currencyID`.
+
 ## Gelombang 52 — sisi ClickHouse persona F&B: 4 view Toko, sig3 + kelas PT/BR, 14 policy (22 Nov 2026)
 
 Branch `feat/insight-nav-dual-menu` (worktree `efn-platform-nav`). Kontrak `docs/04` §28.15.6–§28.15.8 (v21.1,
@@ -1931,3 +1982,53 @@ lock ada (sengaja, fail closed).
 `dim_esb_menu` dari `raw_doc` dijalankan di efn-prod dengan dua koreksi atas SQL draf: tanpa `FINAL` pada `raw_doc` (gagal dengan
 `ARRAY JOIN`; duplikat diredam `argMax(..., doc_date)`), dan alias kolom dalam dibedakan dari alias agregat (galat
 `ILLEGAL_AGGREGATION`). Hasil: +1.004 kode, kategori kosong di `v_esb_sales_daily` (22 Okt–20 Nov) 94% -> 0%.
+
+## Gelombang 65 paket W-B — `scripts/migration`: supplierinfo, cost berurutan sumber, stock, histori pembelian (24 Nov 2026)
+
+Branch `feat/esb-migration-purchase-stock` (worktree `efn-platform-esbmig`). Kontrak `docs/04` §27.13.2 (antarmuka
+masukan), §27.13.4–27.13.5, §27.13.8–27.13.9; ADR-042 §0b; fit-gap `G65_MIGRASI_PEMBELIAN_STOK.md`. **Tidak ada yang
+dijalankan** (pytest/ruff oleh lead). `odoo_import_esb.py` dan `services/odoo` tidak disentuh (W-C).
+
+### File
+- Diubah: `scripts/migration/efn_mig/mapping.py` (DATA_KEYS `supplierinfo`/`quant`, `cost` + `source, as_of`;
+  HISTORY_KEYS/OPTIONAL `legacy_purchase_line`; ENTITY_FILES; `parse_location_map`; `latest_purchases`,
+  `build_supplierinfos`, `supplier_discount`, `opening_costs`, `bom_last_hpp`, `build_costs` berurutan sumber,
+  `build_quants` + `StockSkips`, `purchase_line_row`), `export.py` (`legacy_purchase_line` di HISTORY_STEPS, `stock` keluar
+  NOT_BUILT, `SINGLE_STEPS`, `G65Inputs`/`G65Result`, gerbang `stock`, `StockGateError`, pembelian hanya part 1),
+  `source.py` (`purchase_lines`, `purchase_history_rows`, `purchase_snapshot`, `stock_opening`, `stock_opening_meta`),
+  `segments.py` (rentang pembelian = sales.daily), `validate.py` (§27.13.5 + `production`), `reconcile.py` (butir 1a, 2,
+  5e), `esb_to_odoo.py` (`--purchase-statuses`, `--purchase-discount-mode`), `validate_import.py` (APP_ENV production),
+  `README.md`, `tests/conftest.py`, `tests/test_export_flow.py` (expand_steps), `docs/runbooks/migrasi-esb-odoo.md` (§3,
+  §4.6 urutan gladi PB 2026-12-01).
+- Baru: `scripts/migration/tests/test_g65.py` (sintetis; kasus negatif validator supplierinfo/cost/quant/pembelian).
+
+### Format bundel final (W-B ↔ W-C)
+- Master: `supplierinfo.jsonl` (xmlid `supplierinfo` dari `<sup>_<prod>`, esb_key `<sup>|<prod>`, data = DATA_KEYS §27.13.4);
+  `cost.jsonl` + `source`, `as_of`. Cutover: `quant.jsonl` (xmlid null, esb_key `<branch_id>|<prod>`, data = DATA_KEYS
+  §27.13.4); `location_key` = xmlid `branch_wh` (store/ck/warehouse → `lot_stock_id`) **atau** `branch_loc` (cabang
+  `location`) — W-C wajib menerima keduanya.
+- Histori: `legacy_purchase_line.jsonl.gz` hanya di part 1 segmen; `files[].range` ada; kunci = §27.13.4.
+- `odoo_totals.json` baru (didefinisikan W-B, belum ada di kontrak): `legacy_purchase_line: [{month, company_code,
+  branch_name, rows, qty, total}]`, `quant: [{company_code, location_key, product_key, quantity (satuan uom_esb), value}]`.
+
+### Asumsi / keputusan
+- `currency` IDR = `""` atau `"IDR"` (W-A menyimpan `currencyID` apa adanya; bila numerik, semua baris PO dilewati →
+  tambah nilainya ke `mapping.IDR_CODES`).
+- Satuan campur dalam satu cabang × produk (stok) → tidak diekspor, error validator `STOCK_UOM_MIXED`; untuk HPP
+  `stock_opening` → sumber berikutnya (`manifest.cost_mixed_uom`). Tidak menebak konversi.
+- Gerbang checkpoint: bundel tetap ditulis (`stock_opening_missing_branches`) lalu exit 1; validator error.
+- Supplierinfo dengan satuan beli tanpa `uom_map` → dilewati (konversi `ea_factor` tidak mungkin tanpa entri peta).
+- Neraca qty export per cabang (`stock_by_branch`) = butir `2_stok_sumber`; perbandingan ulang ke ClickHouse
+  (`--with-source`) dan butir 2b (opname) belum dibangun.
+
+### Belum terverifikasi
+pytest/ruff; SQL G65 di ClickHouse 24.8 (IN tuple `(brand, toString(branch_id), opening_date, _version)` vs
+`extract_checkpoint`); importer W-C menerima `supplierinfo.jsonl` di bundel master lama-baru, `data.source/as_of`, dan
+`odoo_totals` baru; arti `discount`/PPN (Q-G65-2, Q-ESB26); status PO PB lain (Q-ESB28); `purchase_ok` produk belum
+diturunkan dari supplierinfo.
+
+**Perbaikan temuan W-C (24 Nov):** `build_quants` kini mengonversi qty ke UoM produk (`mapping.to_product_qty`: satuan
+sama → apa adanya; beda → hanya bila keduanya di `uom_map` dengan `uom_xmlid` sama, qty × ea_factor baris / ea_factor
+produk; selain itu baris ditolak `skipped.uom_unconvertible` + error validator `STOCK_UOM_UNCONVERTIBLE`, menggantikan
+`uom_mixed`/`STOCK_UOM_MIXED`). `quant.uom_esb/uom_xmlid` = UoM produk; `stock_by_branch` tetap satuan ESB. HPP
+`stock_opening` juga dihitung per satuan produk. `odoo_totals.quant.quantity` = UoM produk.

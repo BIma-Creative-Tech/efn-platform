@@ -10,7 +10,8 @@
 # Pemakaian:
 #   scripts/migration/run-import.sh <bundel.efnmig> [--validation validation_<run>.json] [--apply]
 #       [--company PB]... [--step master|history|<langkah>]... [--confirm-brand pb] [--allow-older]
-#       [--allow-missing-validation]
+#       [--allow-missing-validation] [--zero-missing]
+#   (--zero-missing: langkah stock G65, quant Odoo tanpa baris snapshot -> 0; ditolak importer di production)
 #   scripts/migration/run-import.sh --totals --company PB --month 2026-09 [--month 2026-10]... --parent-run-id <uuid>
 #       [--brand pb]
 #   <bundel>/<validation> = nama berkas DI DALAM direktori pertukaran (${MIG_EXCHANGE_DIR} host = /mnt/efn-mig).
@@ -28,6 +29,7 @@ die() { echo "run-import: $*" >&2; exit 2; }
 
 NAME_RE='^[A-Za-z0-9][A-Za-z0-9._-]{0,200}$'
 bundle="" validation="" dry_run=true confirm="" allow_missing=false allow_older=false totals=false brand="" parent=""
+zero_missing=false
 companies=() steps=() months=()
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -43,6 +45,7 @@ while [ $# -gt 0 ]; do
     --confirm-brand) shift; [[ "${1:-}" =~ ^[a-z0-9]{2,16}$ ]] || die "--confirm-brand tidak valid"; confirm="$1" ;;
     --allow-older) allow_older=true ;;
     --allow-missing-validation) allow_missing=true ;;
+    --zero-missing) zero_missing=true ;;
     -h|--help) sed -n '2,20p' "$0"; exit 0 ;;
     -*) die "opsi tidak dikenal: $1" ;;
     *) [ -z "$bundle" ] || die "hanya satu bundel per run"; bundle="$1" ;;
@@ -75,7 +78,7 @@ else
     [[ "$validation" =~ $NAME_RE ]] || die "nama berkas validasi tidak valid"
   fi
   argv="{\"bundle\":\"$bundle\",\"dry_run\":$dry_run,\"allow_missing_validation\":$allow_missing"
-  argv="$argv,\"allow_older\":$allow_older"
+  argv="$argv,\"allow_older\":$allow_older,\"zero_missing\":$zero_missing"
   if [ -n "$validation" ]; then argv="$argv,\"validation\":\"$validation\""; fi
   if [ ${#companies[@]} -gt 0 ]; then argv="$argv,\"companies\":$(json_list "${companies[@]}")"; fi
   if [ ${#steps[@]} -gt 0 ]; then argv="$argv,\"steps\":$(json_list "${steps[@]}")"; fi

@@ -231,9 +231,12 @@ def test_master_dims() -> None:
         "pb", "PB", V,
     )  # fmt: skip
     assert menus == [["pb", "PB", "M1", "Kopi T", "Minuman", "Kopi", 1, V]]
-    suppliers = t.transform_suppliers([{"supplierCode": "S1", "supplierName": "PT Sintetis", "flagActive": True}],
+    suppliers = t.transform_suppliers([{"supplierCode": "S1", "supplierName": "PT Sintetis", "flagActive": True},
+                                       {"supplierCode": "S2", "supplierName": "PT Dua", "supplierID": 42}],
                                       "pb", "PB", V)  # fmt: skip
-    assert suppliers == [["pb", "PB", "S1", "PT Sintetis", 1, V]]
+    # G65: supplier_id dari `supplierID` (tanpa field -> 0).
+    assert suppliers == [["pb", "PB", "S1", "PT Sintetis", 1, 0, V], ["pb", "PB", "S2", "PT Dua", 1, 42, V]]
+    assert all(len(row) == len(t.DIM_SUPPLIER_COLUMNS) for row in suppliers)
     assert t.alias_rows({"FIN ROTI": "FIN001", "": "X"}, "pb", "PB", V) == [["pb", "PB", "FIN ROTI", "FIN001", V]]
 
 

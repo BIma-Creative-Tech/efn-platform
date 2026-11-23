@@ -53,6 +53,26 @@ HISTORY_ORDER = _HISTORY_ORDER = {
 MAP_COLUMNS = (
     "brand", "company_code", "entity", "esb_key", "odoo_model", "odoo_xmlid", "odoo_id", "run_id", "_version",
 )  # fmt: skip
+# G65 (docs/04 §27.13.2; tabel milik W-A, nama kolom = kontrak). Dibaca hanya versi slice ber-checkpoint (§25.4).
+PURCHASE_COLUMNS = (
+    "purchase_date", "purchase_num", "line_no", "required_date", "company_code", "branch_id", "branch_name",
+    "supplier_code", "supplier_name", "status_name", "currency", "product_code", "product_name", "category_name",
+    "sub_category_name", "uom", "qty", "receipt_qty", "pricelist_price", "price", "discount", "vat_value", "total",
+    "map_source",
+)  # fmt: skip
+_PURCHASE_WHERE = (
+    "brand = {brand:String} AND purchase_date >= {start:Date} AND purchase_date < {end:Date}"
+    " AND (brand, purchase_date, _version) IN (SELECT brand, day, finished_at FROM efn_esb.extract_checkpoint FINAL"
+    " WHERE entity = 'purchase_line' AND scope_key = '*' AND brand = {brand:String})"
+)
+OPENING_COLUMNS = (
+    "opening_date", "company_code", "branch_id", "branch_code", "location_name", "product_id", "product_detail_id",
+    "product_code", "product_name", "uom", "value_per_unit", "qty_balance", "amount_balance",
+)  # fmt: skip
+_OPENING_CHECKPOINT = (
+    "SELECT brand, scope_key, day, finished_at FROM efn_esb.extract_checkpoint FINAL"
+    " WHERE entity = 'stock_opening' AND brand = {brand:String} AND day = {day:Date}"
+)
 
 
 class Source(Protocol):
@@ -65,6 +85,12 @@ class Source(Protocol):
     def history_rows(
         self, brand: str, company: str, file: str, start: date, end: date, branch_ids: Sequence[int]
     ) -> Iterator[dict[str, Any]]: ...
+    # G65
+    def purchase_lines(self, brand: str, start: date, end: date) -> list[dict[str, Any]]: ...
+    def purchase_history_rows(self, brand: str, company: str, start: date, end: date) -> Iterator[dict[str, Any]]: ...
+    def purchase_snapshot(self, brand: str) -> dict[str, str]: ...
+    def stock_opening(self, brand: str, day: date) -> list[dict[str, Any]]: ...
+    def stock_opening_meta(self, brand: str, day: date) -> dict[str, Any]: ...
 
 
 def client_kwargs(settings: ClickHouseSettings) -> dict[str, Any]:
@@ -177,6 +203,68 @@ class ClickHouseSource:
             for block in stream:
                 for row in block:
                     yield dict(zip(columns, row, strict=True))
+
+    # ---------------------------------------------------------------- G65 pembelian & stok awal
+    def purchase_lines(self, brand: str, start: date, end: date) -> list[dict[str, Any]]:
+        """Baris PO semua company `[start, end)` (jendela supplierinfo 12 bulan, ±30 rb baris PB)."""
+        sql = (
+            f"SELECT {', '.join(PURCHASE_COLUMNS)} FROM efn_dwh.fact_esb_purchase_line FINAL "  # noqa: S608
+            f"WHERE {_PURCHASE_WHERE}"
+        )
+        return self._rows(sql, {"brand": brand, "start": start, "end": end}, PURCHASE_COLUMNS)
+
+    def purchase_history_rows(self, brand: str, company: str, start: date, end: date) -> Iterator[dict[str, Any]]:
+        sql = (
+            f"SELECT {', '.join(PURCHASE_COLUMNS)} FROM efn_dwh.fact_esb_purchase_line FINAL "  # noqa: S608
+            f"WHERE {_PURCHASE_WHERE} AND company_code = {{company:String}} "
+            "ORDER BY purchase_date, purchase_num, line_no"
+        )
+        params = {"brand": brand, "company": company, "start": start, "end": end}
+        with self._c.query_row_block_stream(sql, parameters=params) as stream:
+            for block in stream:
+                for row in block:
+                    yield dict(zip(PURCHASE_COLUMNS, row, strict=True))
+
+    def _scalar(self, sql: str, params: Mapping[str, Any]) -> Any:
+        result = self._c.query(sql, parameters=dict(params))
+        return result.result_rows[0][0] if result.result_rows else None
+
+    @staticmethod
+    def _iso(value: Any) -> str:
+        return value.isoformat() if hasattr(value, "isoformat") else str(value or "")
+
+    def purchase_snapshot(self, brand: str) -> dict[str, str]:
+        version = self._scalar(
+            "SELECT max(_version) FROM efn_dwh.fact_esb_purchase_line WHERE brand = {brand:String}", {"brand": brand}
+        )
+        day = self._scalar(
+            "SELECT max(day) FROM efn_esb.extract_checkpoint FINAL WHERE entity = 'purchase_line' AND scope_key = '*' "
+            "AND brand = {brand:String}",
+            {"brand": brand},
+        )
+        return {"max_version": self._iso(version), "last_checkpoint_day": self._iso(day)}
+
+    def stock_opening(self, brand: str, day: date) -> list[dict[str, Any]]:
+        sql = (
+            f"SELECT {', '.join(OPENING_COLUMNS)} FROM efn_dwh.fact_esb_stock_opening FINAL "  # noqa: S608
+            "WHERE brand = {brand:String} AND opening_date = {day:Date} "
+            f"AND (brand, toString(branch_id), opening_date, _version) IN ({_OPENING_CHECKPOINT}) "
+            "ORDER BY branch_id, location_name, product_code"
+        )
+        return self._rows(sql, {"brand": brand, "day": day}, OPENING_COLUMNS)
+
+    def stock_opening_meta(self, brand: str, day: date) -> dict[str, Any]:
+        """Manifest `source.snapshot.fact_esb_stock_opening` + cabang ber-checkpoint pada `day` (gerbang `stock`)."""
+        params = {"brand": brand, "day": day}
+        version = self._scalar(
+            "SELECT max(_version) FROM efn_dwh.fact_esb_stock_opening WHERE brand = {brand:String} "
+            "AND opening_date = {day:Date}",
+            params,
+        )
+        sql = f"SELECT DISTINCT scope_key FROM ({_OPENING_CHECKPOINT})"  # noqa: S608
+        result = self._c.query(sql, parameters=params)
+        branches = sorted(int(r[0]) for r in result.result_rows if str(r[0]).isdigit())
+        return {"opening_date": day.isoformat(), "max_version": self._iso(version), "branches_checkpointed": branches}
 
     # ---------------------------------------------------------------- reconcile (butir 6, 7)
     def monthly_sales_payments(self, brand: str, start: date, end: date) -> list[dict[str, Any]]:
