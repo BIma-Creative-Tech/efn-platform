@@ -1,0 +1,228 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Voucher bertanda tangan, port dari custom_petty_cash/reports/petty_cash_vouchers.xml (ADR-049).
+     Aturan sumber dipertahankan: (1) pembungkus mandiri, tanpa web.html_container (sumber: wkhtmltopdf macet pada
+     callback aset); (2) <style>/<meta> di DALAM <main> — Odoo 19 hanya menyimpan subtree //main laporan.
+     Perubahan: karyawan/OU -> pemegang/fund; label Bahasa Indonesia. -->
+<odoo>
+    <template id="voucher_styles">
+        <meta charset="utf-8"/>
+        <style>
+            @page { margin: 14mm; }
+            body { font-family: Arial, Helvetica, sans-serif; font-size: 12px; }
+            table { border-collapse: collapse; width: 100%; }
+            td, th { padding: 4px 6px; }
+            .box td, .box th { border: 1px solid #999; }
+            .title { font-size: 20px; font-weight: bold; margin-bottom: 2px; }
+            .subtitle { color: #555; margin-bottom: 10px; }
+            .lbl { color: #555; width: 30%; }
+            .text-end { text-align: right; }
+            .sign td { text-align: center; padding-top: 48px; }
+        </style>
+    </template>
+
+    <!-- ================= Bukti Pencairan ================= -->
+    <record id="action_report_disbursement_voucher" model="ir.actions.report">
+        <field name="name">Bukti Pencairan</field>
+        <field name="model">efn.petty.cash.request</field>
+        <field name="report_type">qweb-pdf</field>
+        <field name="report_name">efn_petty_cash.report_disbursement_voucher</field>
+        <field name="report_file">efn_petty_cash.report_disbursement_voucher</field>
+        <field name="binding_model_id" ref="model_efn_petty_cash_request"/>
+        <field name="binding_type">report</field>
+        <field name="print_report_name">'Bukti Pencairan - %s' % (object.name)</field>
+    </record>
+
+    <template id="report_disbursement_voucher">
+        <html>
+            <body>
+                <main>
+                    <t t-call="efn_petty_cash.voucher_styles"/>
+                    <t t-foreach="docs" t-as="doc">
+                        <div class="page" style="page-break-after: always;">
+                            <div class="title">Bukti Pencairan Uang Muka</div>
+                            <div class="subtitle" t-esc="doc.company_id.name"/>
+                            <table class="box">
+                                <tr><td class="lbl">Nomor</td><td t-esc="doc.name"/></tr>
+                                <tr><td class="lbl">Jenis</td><td t-esc="doc.advance_type_id.name or ''"/></tr>
+                                <tr><td class="lbl">Dana Kas Kecil</td><td t-esc="doc.fund_id.name or '-'"/></tr>
+                                <tr><td class="lbl">Pemegang</td><td t-esc="doc.holder_partner_id.name"/></tr>
+                                <tr><td class="lbl">Tanggal</td><td t-esc="doc.request_date"/></tr>
+                                <tr><td class="lbl">Tenggat Realisasi</td><td t-esc="doc.realization_deadline or '-'"/></tr>
+                                <tr><td class="lbl">Keperluan</td><td t-esc="doc.purpose or ''"/></tr>
+                                <tr>
+                                    <td class="lbl">Jumlah</td>
+                                    <td><span t-esc="doc.amount_requested"
+                                              t-options="{'widget': 'monetary', 'display_currency': doc.currency_id}"/></td>
+                                </tr>
+                            </table>
+                            <div t-if="doc.line_ids" style="margin-top:12px;">
+                                <strong>Rincian Estimasi</strong>
+                                <table class="box" style="margin-top:4px;">
+                                    <thead><tr><th>Keterangan</th><th>Akun</th><th class="text-end">Jumlah</th></tr></thead>
+                                    <tbody>
+                                        <tr t-foreach="doc.line_ids" t-as="l">
+                                            <td t-esc="l.name"/>
+                                            <td t-esc="l.account_id.display_name or ''"/>
+                                            <td class="text-end"><span t-esc="l.amount"
+                                                t-options="{'widget': 'monetary', 'display_currency': doc.currency_id}"/></td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                            <table class="sign">
+                                <tr>
+                                    <td>Diajukan<br/><br/><br/>__________________</td>
+                                    <td>Disetujui<br/><br/><br/>__________________</td>
+                                    <td>Diterima<br/><br/><br/>__________________</td>
+                                </tr>
+                            </table>
+                        </div>
+                    </t>
+                </main>
+            </body>
+        </html>
+    </template>
+
+    <!-- ============ Bukti Pertanggungjawaban (realisasi) ============ -->
+    <record id="action_report_realization_voucher" model="ir.actions.report">
+        <field name="name">Bukti Pertanggungjawaban</field>
+        <field name="model">efn.petty.cash.realization</field>
+        <field name="report_type">qweb-pdf</field>
+        <field name="report_name">efn_petty_cash.report_realization_voucher</field>
+        <field name="report_file">efn_petty_cash.report_realization_voucher</field>
+        <field name="binding_model_id" ref="model_efn_petty_cash_realization"/>
+        <field name="binding_type">report</field>
+        <field name="print_report_name">'Bukti Pertanggungjawaban - %s' % (object.name)</field>
+    </record>
+
+    <template id="report_realization_voucher">
+        <html>
+            <body>
+                <main>
+                    <t t-call="efn_petty_cash.voucher_styles"/>
+                    <t t-foreach="docs" t-as="doc">
+                        <div class="page" style="page-break-after: always;">
+                            <div class="title">Bukti Pertanggungjawaban</div>
+                            <div class="subtitle" t-esc="doc.company_id.name"/>
+                            <table class="box">
+                                <tr><td class="lbl">Nomor</td><td t-esc="doc.name"/></tr>
+                                <tr><td class="lbl">Pengajuan / Dana</td>
+                                    <td t-esc="doc.request_id.name or doc.fund_id.name"/></tr>
+                                <tr><td class="lbl">Jenis</td><td t-esc="doc.advance_type_id.name or ''"/></tr>
+                                <tr><td class="lbl">Pemegang</td><td t-esc="doc.holder_partner_id.name"/></tr>
+                                <tr><td class="lbl">Tanggal</td><td t-esc="doc.date"/></tr>
+                            </table>
+                            <table class="box" style="margin-top:12px;">
+                                <thead>
+                                    <tr>
+                                        <th>Tipe</th><th>Keterangan</th><th>Vendor</th><th>Akun</th>
+                                        <th class="text-end">DPP</th><th class="text-end">Pajak</th><th class="text-end">Total</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <tr t-foreach="doc.line_ids" t-as="l">
+                                        <td t-esc="dict(l._fields['line_type'].selection).get(l.line_type, '')"/>
+                                        <td t-esc="l.name"/>
+                                        <td t-esc="l.partner_id.display_name or ''"/>
+                                        <td t-esc="l.account_id.display_name or ''"/>
+                                        <td class="text-end"><span t-esc="l.price_subtotal"
+                                            t-options="{'widget': 'monetary', 'display_currency': doc.currency_id}"/></td>
+                                        <td class="text-end"><span t-esc="l.price_tax"
+                                            t-options="{'widget': 'monetary', 'display_currency': doc.currency_id}"/></td>
+                                        <td class="text-end"><span t-esc="l.price_total"
+                                            t-options="{'widget': 'monetary', 'display_currency': doc.currency_id}"/></td>
+                                    </tr>
+                                </tbody>
+                                <tfoot>
+                                    <tr style="font-weight:bold;">
+                                        <td colspan="6">Total Realisasi</td>
+                                        <td class="text-end"><span t-esc="doc.amount_total"
+                                            t-options="{'widget': 'monetary', 'display_currency': doc.currency_id}"/></td>
+                                    </tr>
+                                    <tr t-if="doc.request_id">
+                                        <td colspan="6">Dicairkan</td>
+                                        <td class="text-end"><span t-esc="doc.request_id.amount_disbursed"
+                                            t-options="{'widget': 'monetary', 'display_currency': doc.currency_id}"/></td>
+                                    </tr>
+                                    <tr t-if="doc.request_id" style="font-weight:bold;">
+                                        <td colspan="6">Outstanding (dikembalikan / diganti)</td>
+                                        <td class="text-end"><span t-esc="doc.request_id.amount_outstanding"
+                                            t-options="{'widget': 'monetary', 'display_currency': doc.currency_id}"/></td>
+                                    </tr>
+                                </tfoot>
+                            </table>
+                            <table class="sign">
+                                <tr>
+                                    <td>Diajukan<br/><br/><br/>__________________</td>
+                                    <td>Diverifikasi<br/><br/><br/>__________________</td>
+                                    <td>Disetujui<br/><br/><br/>__________________</td>
+                                </tr>
+                            </table>
+                        </div>
+                    </t>
+                </main>
+            </body>
+        </html>
+    </template>
+
+    <!-- ========= Bukti Penyelesaian (pengembalian / penggantian) ========= -->
+    <record id="action_report_settlement_voucher" model="ir.actions.report">
+        <field name="name">Bukti Penyelesaian</field>
+        <field name="model">efn.petty.cash.request</field>
+        <field name="report_type">qweb-pdf</field>
+        <field name="report_name">efn_petty_cash.report_settlement_voucher</field>
+        <field name="report_file">efn_petty_cash.report_settlement_voucher</field>
+        <field name="binding_model_id" ref="model_efn_petty_cash_request"/>
+        <field name="binding_type">report</field>
+        <field name="print_report_name">'Bukti Penyelesaian - %s' % (object.name)</field>
+    </record>
+
+    <template id="report_settlement_voucher">
+        <html>
+            <body>
+                <main>
+                    <t t-call="efn_petty_cash.voucher_styles"/>
+                    <t t-foreach="docs" t-as="doc">
+                        <div class="page" style="page-break-after: always;">
+                            <div class="title">Bukti Penyelesaian Uang Muka</div>
+                            <div class="subtitle" t-esc="doc.company_id.name"/>
+                            <table class="box">
+                                <tr><td class="lbl">Nomor</td><td t-esc="doc.name"/></tr>
+                                <tr><td class="lbl">Jenis</td><td t-esc="doc.advance_type_id.name or ''"/></tr>
+                                <tr><td class="lbl">Pemegang</td><td t-esc="doc.holder_partner_id.name"/></tr>
+                                <tr><td class="lbl">Status</td>
+                                    <td t-esc="dict(doc._fields['state'].selection).get(doc.state, '')"/></tr>
+                                <tr><td class="lbl">Dicairkan</td><td><span t-esc="doc.amount_disbursed"
+                                    t-options="{'widget': 'monetary', 'display_currency': doc.currency_id}"/></td></tr>
+                                <tr><td class="lbl">Direalisasi</td><td><span t-esc="doc.amount_realized"
+                                    t-options="{'widget': 'monetary', 'display_currency': doc.currency_id}"/></td></tr>
+                                <tr><td class="lbl">Outstanding</td><td><span t-esc="doc.amount_outstanding"
+                                    t-options="{'widget': 'monetary', 'display_currency': doc.currency_id}"/></td></tr>
+                            </table>
+                            <div style="margin-top:12px;"><strong>Entri Jurnal</strong></div>
+                            <table class="box" style="margin-top:4px;">
+                                <thead><tr><th>Tanggal</th><th>Entri</th><th>Jurnal</th><th>Referensi</th><th>Status</th></tr></thead>
+                                <tbody>
+                                    <tr t-foreach="doc.move_ids.sorted(key=lambda m: (m.date, m.id))" t-as="m">
+                                        <td t-esc="m.date"/>
+                                        <td t-esc="m.name"/>
+                                        <td t-esc="m.journal_id.name"/>
+                                        <td t-esc="m.ref or ''"/>
+                                        <td t-esc="m.state"/>
+                                    </tr>
+                                </tbody>
+                            </table>
+                            <table class="sign">
+                                <tr>
+                                    <td>Dikembalikan / Diterima<br/><br/><br/>__________________</td>
+                                    <td>Kasir<br/><br/><br/>__________________</td>
+                                    <td>Finance<br/><br/><br/>__________________</td>
+                                </tr>
+                            </table>
+                        </div>
+                    </t>
+                </main>
+            </body>
+        </html>
+    </template>
+</odoo>

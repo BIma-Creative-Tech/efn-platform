@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Port mail_template_realization_reminder (pemegang = partner; tanpa OU/karyawan). Dikirim cron hanya bila
+     pemegang punya email. -->
+<odoo noupdate="1">
+    <record id="mail_template_realization_reminder" model="mail.template">
+        <field name="name">Kas Kecil: Pengingat Realisasi</field>
+        <field name="model_id" ref="model_efn_petty_cash_request"/>
+        <field name="subject">Realisasi uang muka lewat tenggat — {{ object.name }}</field>
+        <field name="email_from">{{ (object.company_id.email_formatted or user.email_formatted) }}</field>
+        <field name="partner_to">{{ object.holder_partner_id.id }}</field>
+        <field name="body_html" type="html">
+            <div style="font-family: Arial, sans-serif; font-size: 13px;">
+                <p>Yth. <t t-out="object.holder_partner_id.name or ''"/>,</p>
+                <p>
+                    Uang muka <strong t-out="object.name or ''"/> sudah melewati tenggat realisasi
+                    (<t t-out="object.realization_deadline or ''"/>).
+                </p>
+                <p>
+                    Outstanding:
+                    <strong t-out="format_amount(object.amount_outstanding, object.currency_id) or ''"/>.
+                    Mohon segera catat realisasi atau kembalikan sisa uang.
+                </p>
+                <p>Terima kasih.</p>
+            </div>
+        </field>
+        <field name="auto_delete" eval="True"/>
+    </record>
+</odoo>

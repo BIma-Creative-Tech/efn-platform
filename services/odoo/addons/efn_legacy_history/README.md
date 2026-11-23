@@ -114,8 +114,13 @@ Keputusan:
 - Cabang store → `stock.warehouse` + `pos.config` tanpa sesi & **tanpa metode bayar** (`payment_method_ids` kosong:
   milik admin/efn_setup_pos; juga mencegah default CE membuat jurnal); `location` → `stock.location` internal di bawah
   `lot_stock_id` gudang induk; `efn_is_central_kitchen` hanya bila `efn_ck_production` terpasang (dicatat).
-- Kategori produk: `<BRAND> / <kategori ESB>` (induk per brand = kategori **tingkat atas**, xmlid
-  `efn_mig_esb.<brand>_category_root`; Odoo 19 tidak memasang kategori "All" — dipakai sebagai induk hanya bila ada).
+- Kategori produk (G61, `docs/fit-gap/G61_KATEGORI_PRODUK_PB.md`): bundel membawa pohon per peran akuntansi
+  (`Persediaan / Bahan Baku / Impor`, `Perlengkapan / …`, `Beban / Jasa / …`, `Aset Tetap / …`) dari
+  `scripts/migration/efn_mig/category_roles.csv`. Tingkat atas **tanpa** induk brand. `product.category` tidak ber-company,
+  jadi kategori yang sudah ada dengan nama + induk sama (mis. dibuat `scripts/migration/recategorize_pb.py`) ditautkan
+  ke xmlid bundel, bukan digandakan. Importer memiliki `categ_id`, `type`, `is_storable`, `sale_ok`, `purchase_ok` produk
+  (nilai dari tabel peran). Induk brand `efn_mig_esb.<brand>_category_root` hanya untuk bundel lama (produk tanpa
+  `categ_key`).
 - Produk & menu dibuat dengan `responsible_id` kosong; user `efn_migration` wajib anggota semua company target.
 - Gerbang `--confirm-brand`: `APP_ENV` kosong/tidak dikenal = production (fail closed); non-production hanya
   `dev|development|local|test|ci|staging|stg`.

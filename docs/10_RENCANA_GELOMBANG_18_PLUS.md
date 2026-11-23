@@ -222,6 +222,16 @@ Masih terbuka: markup TP & opini pajak (Finance), parameter QC nyata per komodit
 | **G37** | Gateway LLM 9router + fallback Ollama untuk OCR tahap 2 (K25-01, ADR-037, docs/04 §22): `efn_ocr/llm.py`, overlay `docker-compose.llm.yml`, gerbang PDP (Q-T7) | dibangun, terpasang di dev |
 | **G38** | Text-to-SQL "Tanya Data" (K25-01, Q-48 dijawab, ADR-038, docs/04 §23): service `text2sql` (HTTPS, guard sqlglot, 9router/Ollama), mart `efn_t2s` (view DEFINER + row policy per PT bertanda tangan), modul Odoo `efn_data_ask` | dibangun |
 | **G39** | AI agent pertama (K25-01, ADR-039, docs/04 §24): asisten analisis "Analisis bertahap" di Tanya Data — `text2sql` `POST /v1/analyze` (rencana ≤3 query, eksekusi per PT, ringkasan AI; izin P8 terpisah untuk angka ke 9router), `efn_data_ask` 19.0.1.1.0 mode analisis | dibangun, terpasang di dev |
+| **G54** | Wizard "Lengkapi konfigurasi POS" `efn.pos.setup.wizard` (cek P01..P19 + apply idempoten: jurnal & metode tunai per outlet, EDC, QRIS manual, Poin EFN, akun POS company, pajak menu) — `efn_setup_pos` 19.0.1.15.0; fit-gap `docs/fit-gap/G54_G55_G61_ODOO_SETUP.md` | dibangun (23 Nov 2026), belum diterapkan di efn-prod |
+| **G55** | Menu Finance vs Accounting terpisah + "Manufacturing" → "Produksi" — `efn_setup_menu` | dibangun |
+| **G56** | Beranda staf (port `custom_home_console`, ADR-049) + gaya halaman login Odoo — `efn_web_home` | dibangun |
+| **G57** | Aset tetap (`efn_account_asset`: tagihan kategori "Aset Tetap / …" → draf aset, depresiasi cron, revaluasi, pelepasan, register XLSX/PDF) + kas kecil (`efn_petty_cash`: dana imprest per outlet, uang muka, realisasi, pengisian ulang, 4-eyes) — port ADR-049, fit-gap `docs/fit-gap/G57_G58_ACCOUNTING_PORT.md` | dibangun (23 Nov 2026) |
+| **G58** | Rekonsiliasi bank (`efn_account_reconcile`, true-up MDR via reconcile model CE), impor mutasi CSV generik + BCA (`efn_bank_import`, tolak periode terkunci), batch payment (`efn_account_batch_payment`, 4-eyes, digest validasi, file transfer 24 jam, format generik saja) | dibangun |
+| **G59** | PPh 23/4(2)/26 via pajak CE + data e-Bupot (`efn_tax_withholding`), deferred sewa/biaya dibayar di muka dengan analitik (`efn_account_deferred`), menu "Entri Berulang" (auto_post CE, tanpa modul baru) — fit-gap `docs/fit-gap/G59_G60_ACCOUNTING_PORT.md` | dibangun |
+| **G60** | `efn_account_localization`: Payment Voucher/Receipt + persetujuan di atas ambang (default nonaktif), MDR EDC/QRIS per metode bayar saat tutup sesi POS, rencana analitik Outlet per gudang | dibangun |
+| **G61** | Kategori produk per peran akuntansi (PB): `category_roles.csv` di migrasi + `recategorize_pb.py` (dry-run default) — `docs/fit-gap/G61_KATEGORI_PRODUK_PB.md` | dibangun; dry-run efn-prod 23 Nov OK, apply menunggu tinjauan user |
+| **G62** | Halaman masuk staf `services/login-gateway` (ADR-050) + wiring compose/Traefik/PKI/probe | dibangun |
+| **G63** | Review gap implementasi Odoo — `docs/fit-gap/ODOO_IMPLEMENTATION_GAP_REVIEW.md` | selesai |
 
 ---
 

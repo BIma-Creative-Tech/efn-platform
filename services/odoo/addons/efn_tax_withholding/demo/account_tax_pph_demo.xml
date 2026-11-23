@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- DEMO / PLACEHOLDER saja (database dengan data demo), BUKAN konfigurasi produksi (ADR-027, Q-G59-1, R-L03).
+     Untuk setiap PT ber-CoA l10n_id: PPh 23 2% (24-104-01), PPh 23 4% tanpa NPWP, PPh 4(2) sewa 10% (28-403-01),
+     PPh 26 20% (27-100-99), fiscal position "Vendor Luar Negeri" (auto, negara selain ID) dan "Vendor tanpa NPWP"
+     (manual). Kode objek = placeholder sampai dikonfirmasi konsultan pajak. Dibuat lewat fungsi karena akun CoA
+     bersifat per company (xmlid `account.<id>_l10n_id_...`) dan modul ini tidak bergantung pada efn_setup_company. -->
+<odoo noupdate="1">
+    <function model="account.tax" name="_efn_pph_load_demo"/>
+</odoo>

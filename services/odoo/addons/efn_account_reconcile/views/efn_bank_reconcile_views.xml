@@ -1,0 +1,132 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <!-- Baris mutasi yang perlu direkonsiliasi, dikelompokkan per jurnal -->
+    <record id="view_efn_bank_rec_st_line_list" model="ir.ui.view">
+        <field name="name">account.bank.statement.line.efn.bankrec.list</field>
+        <field name="model">account.bank.statement.line</field>
+        <field name="priority">99</field>
+        <field name="arch" type="xml">
+            <list create="false" delete="false" edit="false" default_order="date desc">
+                <field name="date"/>
+                <field name="journal_id"/>
+                <field name="company_id" groups="base.group_multi_company" optional="hide"/>
+                <field name="ref" optional="hide"/>
+                <field name="payment_ref"/>
+                <field name="partner_id"/>
+                <field name="amount" sum="Total"/>
+                <field name="currency_id" column_invisible="1"/>
+                <field name="is_reconciled" column_invisible="1"/>
+                <button name="action_efn_open_match_wizard" type="object" string="Cocokkan"
+                        class="btn btn-primary" icon="fa-exchange" invisible="is_reconciled"/>
+                <button name="action_undo_reconciliation" type="object" string="Batalkan"
+                        icon="fa-undo" invisible="not is_reconciled"
+                        confirm="Batalkan pencocokan baris ini? Pasangannya kembali terbuka."/>
+            </list>
+        </field>
+    </record>
+
+    <record id="view_efn_bank_rec_st_line_search" model="ir.ui.view">
+        <field name="name">account.bank.statement.line.efn.bankrec.search</field>
+        <field name="model">account.bank.statement.line</field>
+        <field name="priority">99</field>
+        <field name="arch" type="xml">
+            <search>
+                <field name="payment_ref"/>
+                <field name="partner_id"/>
+                <field name="journal_id"/>
+                <filter name="not_reconciled" string="Perlu Direkonsiliasi" domain="[('is_reconciled', '=', False)]"/>
+                <filter name="reconciled" string="Sudah Direkonsiliasi" domain="[('is_reconciled', '=', True)]"/>
+                <separator/>
+                <filter name="group_journal" string="Jurnal" context="{'group_by': 'journal_id'}"/>
+            </search>
+        </field>
+    </record>
+
+    <record id="action_efn_bank_reconciliation" model="ir.actions.act_window">
+        <field name="name">Rekonsiliasi Bank</field>
+        <field name="res_model">account.bank.statement.line</field>
+        <field name="view_mode">list</field>
+        <field name="view_id" ref="view_efn_bank_rec_st_line_list"/>
+        <field name="search_view_id" ref="view_efn_bank_rec_st_line_search"/>
+        <field name="domain">[('state', '=', 'posted')]</field>
+        <field name="context">{'search_default_not_reconciled': 1, 'search_default_group_journal': 1}</field>
+        <field name="help" type="html">
+            <p class="o_view_nocontent_smiling_face">Tidak ada yang perlu direkonsiliasi</p>
+            <p>Impor mutasi bank (Finance &gt; Kas &amp; Bank &gt; Impor Mutasi Bank), lalu cocokkan setiap baris dengan item
+               jurnal terbuka di sini.</p>
+        </field>
+    </record>
+
+    <!-- "Cocokkan otomatis" pada baris mutasi terpilih -->
+    <record id="action_efn_st_lines_auto_match" model="ir.actions.server">
+        <field name="name">Cocokkan otomatis</field>
+        <field name="model_id" ref="account.model_account_bank_statement_line"/>
+        <field name="binding_model_id" ref="account.model_account_bank_statement_line"/>
+        <field name="binding_view_types">list</field>
+        <field name="group_ids" eval="[(4, ref('account.group_account_user'))]"/>
+        <field name="state">code</field>
+        <field name="code">action = records.action_efn_auto_match()</field>
+    </record>
+
+    <!-- Pencocokan sebagai halaman penuh (target=current): kolom kandidat terlalu banyak untuk dialog. -->
+    <record id="view_efn_bank_reconcile_wizard_form" model="ir.ui.view">
+        <field name="name">efn.bank.reconcile.wizard.form</field>
+        <field name="model">efn.bank.reconcile.wizard</field>
+        <field name="arch" type="xml">
+            <form string="Cocokkan Mutasi" create="false" duplicate="false">
+                <header>
+                    <button name="action_reconcile" type="object" string="Rekonsiliasi" class="btn-primary"
+                            data-hotkey="q"/>
+                    <button name="action_efn_suggest" type="object" string="Isi otomatis"
+                            help="Pilih item terbesar dulu hingga nominal mutasi, tidak pernah melebihinya."/>
+                    <button name="action_search_more" type="object" string="Cari lagi"
+                            help="Perlebar kandidat (tanpa filter arah). Item setelah tanggal mutasi tetap tidak ditawarkan."/>
+                </header>
+                <sheet>
+                    <field name="st_line_id" invisible="1"/>
+                    <field name="company_id" invisible="1"/>
+                    <field name="currency_id" invisible="1"/>
+                    <field name="journal_id" invisible="1"/>
+                    <div class="oe_title">
+                        <h2><field name="payment_ref" readonly="1" nolabel="1"/></h2>
+                    </div>
+                    <group>
+                        <group string="Mutasi bank">
+                            <field name="date" readonly="1"/>
+                            <field name="bank_ref" readonly="1" invisible="not bank_ref"/>
+                            <field name="partner_id" readonly="1"/>
+                        </group>
+                        <group string="Nominal">
+                            <field name="amount" readonly="1"/>
+                            <field name="selected_total"/>
+                            <field name="remainder"/>
+                        </group>
+                    </group>
+                    <separator string="Item jurnal terbuka"/>
+                    <field name="candidate_ids" nolabel="1">
+                        <list editable="bottom" create="false" delete="false">
+                            <field name="selected" widget="boolean_toggle"/>
+                            <field name="date"/>
+                            <field name="move_name"/>
+                            <field name="transaction_ref"/>
+                            <field name="account_id"/>
+                            <field name="partner_id" optional="show"/>
+                            <field name="name"/>
+                            <field name="amount_residual" sum="Total"/>
+                            <field name="company_currency_id" column_invisible="1"/>
+                            <field name="aml_id" column_invisible="1"/>
+                        </list>
+                    </field>
+                    <group>
+                        <group string="Sisa selisih">
+                            <field name="reconcile_model_id" options="{'no_create': True}"/>
+                            <field name="writeoff"/>
+                            <field name="writeoff_account_id" invisible="not writeoff" required="writeoff"/>
+                            <field name="writeoff_label" invisible="not writeoff"/>
+                        </group>
+                    </group>
+                </sheet>
+            </form>
+        </field>
+    </record>
+</odoo>

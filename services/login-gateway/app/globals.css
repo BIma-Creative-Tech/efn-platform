@@ -1,0 +1,93 @@
+/* Kontras (WCAG 2.2 AA): teks #1b2333 di #ffffff = 15.9:1; tautan/tombol #ffffff di #0b3d91 = 10.4:1;
+   teks sekunder #4a5568 di #ffffff = 7.5:1; fokus #b45309 pada latar putih >= 3:1. Tanpa JS, tanpa font eksternal. */
+:root {
+  --ink: #1b2333;
+  --muted: #4a5568;
+  --brand: #0b3d91;
+  --brand-hover: #082c69;
+  --bg: #eef1f6;
+  --surface: #ffffff;
+  --line: #c7cfdd;
+  --focus: #b45309;
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  color: var(--ink);
+  background: var(--bg);
+  line-height: 1.5;
+}
+
+.shell {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1.5rem 1rem;
+}
+
+.panel {
+  width: 100%;
+  max-width: 28rem;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 2rem 1.5rem;
+}
+
+.logo { display: block; height: auto; width: 9rem; margin: 0 0 1.25rem; }
+
+h1 { font-size: 1.5rem; margin: 0 0 0.5rem; }
+
+.lead { margin: 0 0 1.25rem; color: var(--muted); }
+
+.dest-list, .brands { list-style: none; margin: 0; padding: 0; }
+
+.dest-list li + li { margin-top: 0.75rem; }
+
+.dest {
+  display: block;
+  padding: 0.875rem 1rem;
+  min-height: 44px;
+  border-radius: 8px;
+  text-decoration: none;
+}
+
+a.dest { background: var(--brand); color: #ffffff; }
+a.dest:hover { background: var(--brand-hover); }
+
+.dest-off { background: #e2e8f0; color: var(--muted); border: 1px dashed var(--muted); }
+
+.dest-title { display: block; font-weight: 600; font-size: 1.0625rem; }
+.dest-desc { display: block; font-size: 0.9375rem; }
+
+a:focus-visible {
+  outline: 3px solid var(--focus);
+  outline-offset: 3px;
+}
+
+.note { margin: 1.25rem 0 0; font-size: 0.875rem; color: var(--muted); }
+
+.brands {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem 1.25rem;
+  align-items: center;
+  justify-content: center;
+  margin-top: 1.5rem;
+  padding-top: 1.25rem;
+  border-top: 1px solid var(--line);
+}
+
+.brands img { height: 1.75rem; width: auto; max-width: 7.5rem; object-fit: contain; }
+
+@media (prefers-reduced-motion: no-preference) {
+  a.dest { transition: background-color 0.15s; }
+}
+
+@media (max-width: 360px) {
+  .panel { padding: 1.5rem 1rem; }
+}

@@ -1,0 +1,106 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- G57 §2.5. Global: multi-company untuk semua model. Grup Pemohon & Kustodian: hanya dokumen miliknya (pemegang atau
+     pembuat) dan fund yang dipegangnya. Penyetuju / Finance / auditor (account.group_account_readonly): semua dokumen di
+     company yang diizinkan (dibatasi rule global). Rule sumber "Finance all" tanpa batas company tidak dipakai. -->
+<odoo noupdate="1">
+    <!-- ======================= global: company ======================= -->
+    <record id="efn_pc_type_rule_company" model="ir.rule">
+        <field name="name">EFN kas kecil jenis: multi-company</field>
+        <field name="model_id" ref="model_efn_petty_cash_type"/>
+        <field name="domain_force">[('company_id', 'in', company_ids)]</field>
+    </record>
+    <record id="efn_pc_fund_rule_company" model="ir.rule">
+        <field name="name">EFN kas kecil dana: multi-company</field>
+        <field name="model_id" ref="model_efn_petty_cash_fund"/>
+        <field name="domain_force">[('company_id', 'in', company_ids)]</field>
+    </record>
+    <record id="efn_pc_request_rule_company" model="ir.rule">
+        <field name="name">EFN kas kecil pengajuan: multi-company</field>
+        <field name="model_id" ref="model_efn_petty_cash_request"/>
+        <field name="domain_force">[('company_id', 'in', company_ids)]</field>
+    </record>
+    <record id="efn_pc_request_line_rule_company" model="ir.rule">
+        <field name="name">EFN kas kecil rincian pengajuan: multi-company</field>
+        <field name="model_id" ref="model_efn_petty_cash_request_line"/>
+        <field name="domain_force">[('company_id', 'in', company_ids)]</field>
+    </record>
+    <record id="efn_pc_realization_rule_company" model="ir.rule">
+        <field name="name">EFN kas kecil realisasi: multi-company</field>
+        <field name="model_id" ref="model_efn_petty_cash_realization"/>
+        <field name="domain_force">[('company_id', 'in', company_ids)]</field>
+    </record>
+    <record id="efn_pc_realization_line_rule_company" model="ir.rule">
+        <field name="name">EFN kas kecil baris realisasi: multi-company</field>
+        <field name="model_id" ref="model_efn_petty_cash_realization_line"/>
+        <field name="domain_force">[('company_id', 'in', company_ids)]</field>
+    </record>
+    <record id="efn_pc_report_wizard_rule_company" model="ir.rule">
+        <field name="name">EFN kas kecil wizard laporan: multi-company</field>
+        <field name="model_id" ref="model_efn_petty_cash_report_wizard"/>
+        <field name="domain_force">[('company_id', 'in', company_ids)]</field>
+    </record>
+
+    <!-- ======================= Pemohon & Kustodian: milik sendiri ======================= -->
+    <record id="efn_pc_fund_rule_user" model="ir.rule">
+        <field name="name">EFN kas kecil dana: kustodian melihat fund sendiri</field>
+        <field name="model_id" ref="model_efn_petty_cash_fund"/>
+        <field name="domain_force">[('holder_user_id', '=', user.id)]</field>
+        <field name="groups" eval="[Command.link(ref('group_petty_cash_user'))]"/>
+    </record>
+    <record id="efn_pc_request_rule_user" model="ir.rule">
+        <field name="name">EFN kas kecil pengajuan: milik sendiri</field>
+        <field name="model_id" ref="model_efn_petty_cash_request"/>
+        <field name="domain_force">['|', ('holder_user_id', '=', user.id), ('maker_id', '=', user.id)]</field>
+        <field name="groups" eval="[Command.link(ref('group_petty_cash_user'))]"/>
+    </record>
+    <record id="efn_pc_request_line_rule_user" model="ir.rule">
+        <field name="name">EFN kas kecil rincian pengajuan: milik sendiri</field>
+        <field name="model_id" ref="model_efn_petty_cash_request_line"/>
+        <field name="domain_force">['|', ('request_id.holder_user_id', '=', user.id), ('request_id.maker_id', '=', user.id)]</field>
+        <field name="groups" eval="[Command.link(ref('group_petty_cash_user'))]"/>
+    </record>
+    <record id="efn_pc_realization_rule_user" model="ir.rule">
+        <field name="name">EFN kas kecil realisasi: milik sendiri</field>
+        <field name="model_id" ref="model_efn_petty_cash_realization"/>
+        <field name="domain_force">['|', ('holder_user_id', '=', user.id), ('maker_id', '=', user.id)]</field>
+        <field name="groups" eval="[Command.link(ref('group_petty_cash_user'))]"/>
+    </record>
+    <record id="efn_pc_realization_line_rule_user" model="ir.rule">
+        <field name="name">EFN kas kecil baris realisasi: milik sendiri</field>
+        <field name="model_id" ref="model_efn_petty_cash_realization_line"/>
+        <field name="domain_force">['|', ('realization_id.holder_user_id', '=', user.id), ('realization_id.maker_id', '=', user.id)]</field>
+        <field name="groups" eval="[Command.link(ref('group_petty_cash_user'))]"/>
+    </record>
+
+    <!-- ======================= Penyetuju / Finance / auditor: semua di company ======================= -->
+    <record id="efn_pc_fund_rule_all" model="ir.rule">
+        <field name="name">EFN kas kecil dana: penyetuju/finance/auditor</field>
+        <field name="model_id" ref="model_efn_petty_cash_fund"/>
+        <field name="domain_force">[(1, '=', 1)]</field>
+        <field name="groups" eval="[Command.link(ref('group_petty_cash_approver')), Command.link(ref('group_petty_cash_finance')), Command.link(ref('account.group_account_readonly'))]"/>
+    </record>
+    <record id="efn_pc_request_rule_all" model="ir.rule">
+        <field name="name">EFN kas kecil pengajuan: penyetuju/finance/auditor</field>
+        <field name="model_id" ref="model_efn_petty_cash_request"/>
+        <field name="domain_force">[(1, '=', 1)]</field>
+        <field name="groups" eval="[Command.link(ref('group_petty_cash_approver')), Command.link(ref('group_petty_cash_finance')), Command.link(ref('account.group_account_readonly'))]"/>
+    </record>
+    <record id="efn_pc_request_line_rule_all" model="ir.rule">
+        <field name="name">EFN kas kecil rincian pengajuan: penyetuju/finance/auditor</field>
+        <field name="model_id" ref="model_efn_petty_cash_request_line"/>
+        <field name="domain_force">[(1, '=', 1)]</field>
+        <field name="groups" eval="[Command.link(ref('group_petty_cash_approver')), Command.link(ref('group_petty_cash_finance')), Command.link(ref('account.group_account_readonly'))]"/>
+    </record>
+    <record id="efn_pc_realization_rule_all" model="ir.rule">
+        <field name="name">EFN kas kecil realisasi: penyetuju/finance/auditor</field>
+        <field name="model_id" ref="model_efn_petty_cash_realization"/>
+        <field name="domain_force">[(1, '=', 1)]</field>
+        <field name="groups" eval="[Command.link(ref('group_petty_cash_approver')), Command.link(ref('group_petty_cash_finance')), Command.link(ref('account.group_account_readonly'))]"/>
+    </record>
+    <record id="efn_pc_realization_line_rule_all" model="ir.rule">
+        <field name="name">EFN kas kecil baris realisasi: penyetuju/finance/auditor</field>
+        <field name="model_id" ref="model_efn_petty_cash_realization_line"/>
+        <field name="domain_force">[(1, '=', 1)]</field>
+        <field name="groups" eval="[Command.link(ref('group_petty_cash_approver')), Command.link(ref('group_petty_cash_finance')), Command.link(ref('account.group_account_readonly'))]"/>
+    </record>
+</odoo>

@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="view_account_payment_form_efn_batch" model="ir.ui.view">
+        <field name="name">account.payment.form.efn.batch</field>
+        <field name="model">account.payment</field>
+        <field name="inherit_id" ref="account.view_account_payment_form"/>
+        <field name="arch" type="xml">
+            <field name="memo" position="after">
+                <field name="efn_batch_payment_id" readonly="1" invisible="not efn_batch_payment_id"/>
+            </field>
+        </field>
+    </record>
+
+    <!-- "Tambahkan ke Batch" di menu Action list pembayaran -->
+    <record id="action_efn_payments_create_batch" model="ir.actions.server">
+        <field name="name">Tambahkan ke Batch</field>
+        <field name="model_id" ref="account.model_account_payment"/>
+        <field name="binding_model_id" ref="account.model_account_payment"/>
+        <field name="binding_view_types">list</field>
+        <field name="group_ids" eval="[(4, ref('account.group_account_user'))]"/>
+        <field name="state">code</field>
+        <field name="code">action = records.action_efn_create_batch()</field>
+    </record>
+</odoo>

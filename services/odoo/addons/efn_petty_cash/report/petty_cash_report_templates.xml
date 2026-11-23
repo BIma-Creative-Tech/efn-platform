@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- PDF laporan kas kecil (Kartu Uang Muka / Outstanding / Aging): tabel generik dari wizard._efn_data(). -->
+<odoo>
+    <template id="efn_petty_cash_report_pdf">
+        <t t-call="web.html_container">
+            <t t-foreach="docs" t-as="o">
+                <t t-call="web.internal_layout">
+                    <t t-set="d" t-value="o._efn_data()"/>
+                    <div class="page">
+                        <h4 t-esc="d['title']"/>
+                        <p t-esc="d['subtitle']"/>
+                        <table class="table table-sm">
+                            <thead>
+                                <tr>
+                                    <th t-foreach="d['headers']" t-as="h" t-esc="h"/>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr t-foreach="d['rows']" t-as="r">
+                                    <t t-foreach="r" t-as="v">
+                                        <td t-if="v_index in d['money_cols']" class="text-end" t-esc="o._efn_fmt(v)"/>
+                                        <td t-else="" t-esc="v"/>
+                                    </t>
+                                </tr>
+                                <tr t-if="d['totals']" class="fw-bold">
+                                    <t t-foreach="d['totals']" t-as="v">
+                                        <td t-if="v_index in d['money_cols']" class="text-end" t-esc="o._efn_fmt(v)"/>
+                                        <td t-else="" t-esc="v"/>
+                                    </t>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </t>
+            </t>
+        </t>
+    </template>
+
+    <record id="action_efn_petty_cash_report_pdf" model="ir.actions.report">
+        <field name="name">Laporan Kas Kecil</field>
+        <field name="model">efn.petty.cash.report.wizard</field>
+        <field name="report_type">qweb-pdf</field>
+        <field name="report_name">efn_petty_cash.efn_petty_cash_report_pdf</field>
+        <field name="report_file">efn_petty_cash.efn_petty_cash_report_pdf</field>
+        <field name="print_report_name">'Laporan Kas Kecil'</field>
+    </record>
+</odoo>

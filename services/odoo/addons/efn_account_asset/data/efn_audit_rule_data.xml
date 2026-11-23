@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- G57 §1.6 (pengganti pdp.audited.mixin sumber): aset dilacak pada nilai, akun, umur, status, kelompok; kelompok
+     aset dilacak semua field (akun & umur). Tidak ada data pribadi selain custodian (res.users, id saja). -->
+<odoo>
+    <record id="audit_rule_efn_account_asset" model="efn.audit.rule">
+        <field name="name">EFN - Aset Tetap</field>
+        <field name="model_id" ref="model_efn_account_asset"/>
+        <field name="log_create" eval="True"/>
+        <field name="log_write" eval="True"/>
+        <field name="log_unlink" eval="True"/>
+        <field name="capture_unlink_values" eval="True"/>
+        <field name="tracked_field_ids" eval="[Command.set([
+            ref('field_efn_account_asset__acquisition_value'),
+            ref('field_efn_account_asset__salvage_value'),
+            ref('field_efn_account_asset__quantity'),
+            ref('field_efn_account_asset__revaluation_value'),
+            ref('field_efn_account_asset__opening_accumulated_depreciation'),
+            ref('field_efn_account_asset__retired_accumulated_depreciation'),
+            ref('field_efn_account_asset__asset_account_id'),
+            ref('field_efn_account_asset__depreciation_account_id'),
+            ref('field_efn_account_asset__expense_account_id'),
+            ref('field_efn_account_asset__journal_id'),
+            ref('field_efn_account_asset__useful_life_months'),
+            ref('field_efn_account_asset__depreciation_method'),
+            ref('field_efn_account_asset__state'),
+            ref('field_efn_account_asset__group_id'),
+            ref('field_efn_account_asset__company_id'),
+        ])]"/>
+    </record>
+    <record id="audit_rule_efn_account_asset_group" model="efn.audit.rule">
+        <field name="name">EFN - Kelompok Aset Tetap</field>
+        <field name="model_id" ref="model_efn_account_asset_group"/>
+        <field name="log_create" eval="True"/>
+        <field name="log_write" eval="True"/>
+        <field name="log_unlink" eval="True"/>
+        <field name="capture_unlink_values" eval="True"/>
+    </record>
+</odoo>

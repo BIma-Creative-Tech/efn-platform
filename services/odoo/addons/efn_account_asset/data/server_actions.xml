@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <!-- List aset: posting baris jatuh tempo aset terpilih (action_post_selected cek Aset / Manager di server). -->
+    <record id="action_efn_asset_post_due_server" model="ir.actions.server">
+        <field name="name">Posting Penyusutan Jatuh Tempo</field>
+        <field name="model_id" ref="model_efn_account_asset"/>
+        <field name="binding_model_id" ref="model_efn_account_asset"/>
+        <field name="binding_view_types">list</field>
+        <field name="group_ids" eval="[Command.set([ref('group_asset_manager')])]"/>
+        <field name="state">code</field>
+        <field name="code">action = records.action_post_selected()</field>
+    </record>
+</odoo>

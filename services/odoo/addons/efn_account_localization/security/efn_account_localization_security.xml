@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- G60: multi-company. Tarif MDR dan wizard analitik Outlet hanya terlihat di company yang diizinkan user.
+     Hook tutup sesi POS membaca tarif dengan sudo tetapi selalu memfilter company_id = company sesi. -->
+<odoo noupdate="1">
+    <record id="efn_mdr_rate_rule_company" model="ir.rule">
+        <field name="name">EFN MDR rate: multi-company</field>
+        <field name="model_id" ref="model_efn_mdr_rate"/>
+        <field name="domain_force">[('company_id', 'in', company_ids)]</field>
+    </record>
+    <record id="efn_outlet_analytic_wizard_rule_company" model="ir.rule">
+        <field name="name">EFN outlet analytic wizard: multi-company</field>
+        <field name="model_id" ref="model_efn_outlet_analytic_wizard"/>
+        <field name="domain_force">[('company_id', 'in', company_ids)]</field>
+    </record>
+    <record id="efn_outlet_analytic_wizard_line_rule_company" model="ir.rule">
+        <field name="name">EFN outlet analytic wizard line: multi-company</field>
+        <field name="model_id" ref="model_efn_outlet_analytic_wizard_line"/>
+        <field name="domain_force">[('company_id', 'in', company_ids)]</field>
+    </record>
+</odoo>

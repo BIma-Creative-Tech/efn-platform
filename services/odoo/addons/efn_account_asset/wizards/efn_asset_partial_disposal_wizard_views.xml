@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="view_efn_asset_partial_disposal_wizard_form" model="ir.ui.view">
+        <field name="name">efn.account.asset.partial.disposal.wizard.form</field>
+        <field name="model">efn.account.asset.partial.disposal.wizard</field>
+        <field name="arch" type="xml">
+            <form string="Pelepasan Sebagian">
+                <sheet>
+                    <group>
+                        <group string="Unit">
+                            <field name="asset_id" invisible="1"/>
+                            <field name="currency_id" invisible="1"/>
+                            <field name="company_id" invisible="1"/>
+                            <field name="asset_quantity"/>
+                            <field name="unit_acquisition_value"/>
+                            <field name="quantity"/>
+                            <field name="quantity_after"/>
+                            <field name="disposal_date"/>
+                            <field name="reason"/>
+                        </group>
+                        <group string="Nilai Dikeluarkan">
+                            <field name="cost_removed"/>
+                            <field name="accumulated_removed"/>
+                            <field name="net_book_value_removed"/>
+                            <field name="proceeds"/>
+                            <field name="gain_loss"/>
+                        </group>
+                    </group>
+                    <group string="Jurnal">
+                        <field name="create_journal_entry"/>
+                        <group invisible="not create_journal_entry">
+                            <field name="receivable_account_id" required="create_journal_entry and proceeds &gt; 0"/>
+                            <field name="loss_account_id" required="create_journal_entry and gain_loss &lt; 0"/>
+                        </group>
+                        <group invisible="not create_journal_entry">
+                            <field name="gain_account_id" required="create_journal_entry and gain_loss &gt; 0"/>
+                            <field name="surplus_account_id"/>
+                            <field name="retained_earnings_account_id"/>
+                        </group>
+                    </group>
+                    <group string="Catatan">
+                        <field name="note" nolabel="1" colspan="2"/>
+                    </group>
+                </sheet>
+                <footer>
+                    <button name="action_retire" type="object" string="Lepas Unit" class="btn-primary"/>
+                    <button string="Batal" class="btn-secondary" special="cancel"/>
+                </footer>
+            </form>
+        </field>
+    </record>
+</odoo>

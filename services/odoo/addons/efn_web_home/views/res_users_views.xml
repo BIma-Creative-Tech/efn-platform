@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="view_users_form_efn_home" model="ir.ui.view">
+        <field name="name">res.users.form.efn.home</field>
+        <field name="model">res.users</field>
+        <field name="inherit_id" ref="base.view_users_form"/>
+        <field name="arch" type="xml">
+            <xpath expr="//notebook" position="inside">
+                <page string="Beranda EFN" name="efn_home">
+                    <group>
+                        <field name="efn_home_density"/>
+                        <field name="efn_home_pinned_action_ids" widget="many2many_tags"/>
+                    </group>
+                </page>
+            </xpath>
+        </field>
+    </record>
+</odoo>

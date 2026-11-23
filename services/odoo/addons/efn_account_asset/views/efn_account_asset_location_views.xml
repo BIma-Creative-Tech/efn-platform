@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="view_efn_asset_location_list" model="ir.ui.view">
+        <field name="name">efn.account.asset.location.list</field>
+        <field name="model">efn.account.asset.location</field>
+        <field name="arch" type="xml">
+            <list string="Lokasi Aset">
+                <field name="complete_name"/>
+                <field name="code"/>
+                <field name="parent_id"/>
+                <field name="company_id" groups="base.group_multi_company"/>
+                <field name="active" column_invisible="True"/>
+            </list>
+        </field>
+    </record>
+
+    <record id="view_efn_asset_location_form" model="ir.ui.view">
+        <field name="name">efn.account.asset.location.form</field>
+        <field name="model">efn.account.asset.location</field>
+        <field name="arch" type="xml">
+            <form string="Lokasi Aset">
+                <sheet>
+                    <group>
+                        <group>
+                            <field name="name"/>
+                            <field name="code"/>
+                            <field name="parent_id"/>
+                            <field name="company_id" groups="base.group_multi_company"/>
+                            <field name="active"/>
+                        </group>
+                        <group>
+                            <field name="address"/>
+                            <field name="note"/>
+                        </group>
+                    </group>
+                    <notebook>
+                        <page string="Sub-lokasi" name="children">
+                            <field name="child_ids" readonly="1">
+                                <list>
+                                    <field name="name"/>
+                                    <field name="code"/>
+                                </list>
+                            </field>
+                        </page>
+                    </notebook>
+                </sheet>
+            </form>
+        </field>
+    </record>
+
+    <record id="action_efn_asset_location" model="ir.actions.act_window">
+        <field name="name">Lokasi Aset</field>
+        <field name="res_model">efn.account.asset.location</field>
+        <field name="view_mode">list,form</field>
+    </record>
+</odoo>

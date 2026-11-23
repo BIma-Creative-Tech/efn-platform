@@ -114,20 +114,26 @@ class TestEsbImport(TransactionCase):
             r("uom", "EA", {"esb_uom": "EA", "uom_xmlid": "uom.product_uom_unit", "ea_factor": 1}),
             r("uom", "KG", {"esb_uom": "KG", "uom_xmlid": "uom.product_uom_kgm", "ea_factor": None}),
         ]
+        # G61: pohon peran (tingkat atas tanpa induk brand), urut kedalaman seperti export.
         category = [
-            r("category", "Roti", {"name": "Roti", "parent_key": None}),
-            r("category", "Bahan", {"name": "Bahan", "parent_key": None}),
-        ]
+            r("category", "ZT Persediaan", {"name": "ZT Persediaan", "parent_key": None}),
+            r("category", "ZT Persediaan / Barang Jadi",
+              {"name": "Barang Jadi", "parent_key": k("category", "ZT Persediaan")}),
+            r("category", "ZT Persediaan / Bahan Baku",
+              {"name": "Bahan Baku", "parent_key": k("category", "ZT Persediaan")}),
+        ]  # fmt: skip
         pos_category = [
             r("pos_category", "Bakery", {"name": "Bakery", "parent_key": None}),
             r("pos_category", "Bakery/Roti", {"name": "Roti", "parent_key": k("pos_category", "Bakery")}),
         ]
         product = [
-            r("product", "ZFIN-1", {"default_code": "ZFIN-1", "name": "ZT FIN Roti", "categ_key": k("category", "Roti"),
+            r("product", "ZFIN-1", {"default_code": "ZFIN-1", "name": "ZT FIN Roti",
+                                    "categ_key": k("category", "ZT Persediaan / Barang Jadi"),
                                     "uom_esb": "EA", "uom_xmlid": "uom.product_uom_unit", "ea_factor": 1,
                                     "type": "consu", "is_storable": True, "purchase_ok": False, "sale_ok": False,
                                     "is_fin": True, "active": True, "batch_to_ea_ratio": 12}),
-            r("product", "ZRM1", {"default_code": "ZRM1", "name": "ZT Tepung", "categ_key": k("category", "Bahan"),
+            r("product", "ZRM1", {"default_code": "ZRM1", "name": "ZT Tepung",
+                                  "categ_key": k("category", "ZT Persediaan / Bahan Baku"),
                                   "uom_esb": "KG", "uom_xmlid": "uom.product_uom_kgm", "ea_factor": None,
                                   "type": "consu", "is_storable": True, "purchase_ok": True, "sale_ok": False,
                                   "is_fin": False, "active": True, "batch_to_ea_ratio": None}),
@@ -212,6 +218,8 @@ class TestEsbImport(TransactionCase):
 
     # ------------------------------------------------------------------------------------------ master
     def test_master_import_creates_records(self):
+        # G61: kategori yang sudah ada (nama + induk sama, mis. dibuat recategorize_pb.py) ditautkan, bukan digandakan.
+        existing_root = self.env["product.category"].create({"name": "ZT Persediaan"})
         bundle, result = self._import_master()
         ent = result.report["entities"]
         self.assertEqual(ent["branch"]["created"], 3)
@@ -231,8 +239,13 @@ class TestEsbImport(TransactionCase):
         fin = self._ref(X("product", "ZFIN-1"))
         self.assertEqual((fin._name, fin.company_id, fin.is_storable), ("product.template", self.pb, True))
         self.assertEqual(fin.uom_id, self.env.ref("uom.product_uom_unit"))
-        self.assertEqual(fin.categ_id, self._ref(X("category", "Roti")))
-        self.assertEqual(fin.categ_id.parent_id.name, BRAND.upper(), "kategori induk per brand")
+        self.assertEqual(fin.categ_id, self._ref(X("category", "ZT Persediaan / Barang Jadi")))
+        self.assertEqual(fin.categ_id.parent_id, existing_root, "induk = kategori yang sudah ada (ditautkan)")
+        self.assertFalse(existing_root.parent_id, "G61: tanpa induk brand")
+        self.assertEqual(self._ref(X("category", "ZT Persediaan")), existing_root)
+        self.assertEqual(
+            self.env["product.category"].search_count([("name", "=", "ZT Persediaan")]), 1, "tidak digandakan"
+        )
         self.assertAlmostEqual(fin.with_company(self.pb).standard_price, 3500)
         menu = self._ref(X("menu", "ZM01"))
         self.assertTrue(menu.available_in_pos)
@@ -259,7 +272,8 @@ class TestEsbImport(TransactionCase):
             self.assertEqual((kit.type, kit.product_tmpl_id), ("phantom", menu))
         imd = self.env["ir.model.data"].sudo().search([("module", "=", "efn_mig_esb"), ("name", "=like", f"{BRAND}_%")])
         self.assertTrue(all(imd.mapped("noupdate")))
-        expected_map = 3 + 1 + 2 + 2 + 2 + 2 + 3 + 1 + 1 + 1 + (2 if self.has_mrp else 0)
+        # G61: kategori 3 baris (pohon peran), sebelumnya 2.
+        expected_map = 3 + 1 + 2 + 2 + 2 + 2 + 3 + 1 + 1 + 1 + 1 + (2 if self.has_mrp else 0)
         self.assertEqual(len(result.map_rows), expected_map)
         self.assertEqual(
             {r["odoo_id"] for r in result.map_rows if r["esb_key"] in ("ZM01", "ZM01T")}, {menu.id}, "dua baris map"

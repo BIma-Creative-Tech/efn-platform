@@ -1,0 +1,82 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <!-- noupdate=1: centang `verified` oleh Finance tidak ditimpa upgrade. -->
+    <data noupdate="1">
+        <record id="seq_efn_account_batch_payment" model="ir.sequence">
+            <field name="name">EFN Batch Pembayaran</field>
+            <field name="code">efn.account.batch.payment</field>
+            <field name="prefix">BATCH/%(year)s/%(month)s/</field>
+            <field name="padding">4</field>
+            <field name="company_id" eval="False"/>
+        </record>
+
+        <!-- Tata letak: baseline sumber. Selain `generic`, BELUM DIVERIFIKASI -> ekspor diblokir (Q-G58-2). -->
+        <record id="format_generic" model="efn.account.batch.payment.format">
+            <field name="name">Generik (CSV)</field>
+            <field name="code">generic</field>
+            <field name="bank_label">Semua bank (unggah manual / olah ulang)</field>
+            <field name="verified" eval="True"/>
+        </record>
+        <record id="format_bca_mcm" model="efn.account.batch.payment.format">
+            <field name="name">BCA MCM Bulk Transfer</field>
+            <field name="code">bca_mcm</field>
+            <field name="bank_label">BCA (KlikBCA Bisnis / MCM)</field>
+            <field name="include_header" eval="False"/>
+            <field name="note">BELUM DIVERIFIKASI dengan contoh portal bank. Butuh Corporate ID + rekening sumber per company.</field>
+        </record>
+        <record id="format_mandiri_mcm" model="efn.account.batch.payment.format">
+            <field name="name">Mandiri MCM Bulk Payment</field>
+            <field name="code">mandiri_mcm</field>
+            <field name="bank_label">Bank Mandiri (Mandiri Cash Management)</field>
+            <field name="note">BELUM DIVERIFIKASI dengan contoh portal bank.</field>
+        </record>
+        <record id="format_bni" model="efn.account.batch.payment.format">
+            <field name="name">BNIDirect Bulk Transfer</field>
+            <field name="code">bni</field>
+            <field name="bank_label">BNI (BNIDirect)</field>
+            <field name="note">BELUM DIVERIFIKASI dengan contoh portal bank.</field>
+        </record>
+        <record id="format_bri" model="efn.account.batch.payment.format">
+            <field name="name">BRI CMS Bulk Transfer</field>
+            <field name="code">bri</field>
+            <field name="bank_label">BRI (Qlola/CMS)</field>
+            <field name="note">BELUM DIVERIFIKASI dengan contoh portal bank.</field>
+        </record>
+
+        <!-- efn_audit (pengganti pdp.audited.mixin): jejak status & ekspor; rekening sumber di-mask. -->
+        <record id="audit_rule_efn_account_batch_payment" model="efn.audit.rule">
+            <field name="name">EFN - Batch Pembayaran</field>
+            <field name="model_id" ref="model_efn_account_batch_payment"/>
+            <field name="log_create" eval="True"/>
+            <field name="log_write" eval="True"/>
+            <field name="log_unlink" eval="True"/>
+            <field name="capture_unlink_values" eval="True"/>
+            <field name="tracked_field_ids" eval="[(6, 0, [
+                ref('field_efn_account_batch_payment__state'),
+                ref('field_efn_account_batch_payment__export_sha256'),
+                ref('field_efn_account_batch_payment__exported_by_id'),
+                ref('field_efn_account_batch_payment__payment_ids'),
+                ref('field_efn_account_batch_payment__validated_by_id'),
+            ])]"/>
+        </record>
+        <record id="audit_rule_efn_account_batch_payment_format_company" model="efn.audit.rule">
+            <field name="name">EFN - Konfigurasi Format Transfer per Company</field>
+            <field name="model_id" ref="model_efn_account_batch_payment_format_company"/>
+            <field name="log_create" eval="True"/>
+            <field name="log_write" eval="True"/>
+            <field name="log_unlink" eval="True"/>
+            <field name="capture_unlink_values" eval="True"/>
+            <field name="masked_field_ids" eval="[(6, 0, [ref('field_efn_account_batch_payment_format_company__debit_account')])]"/>
+        </record>
+    </data>
+
+    <!-- File transfer sementara: hapus yang lebih tua dari 24 jam (dicek tiap jam). -->
+    <record id="ir_cron_efn_batch_payment_export_gc" model="ir.cron">
+        <field name="name">EFN: hapus file transfer batch pembayaran &gt; 24 jam</field>
+        <field name="model_id" ref="model_efn_account_batch_payment"/>
+        <field name="state">code</field>
+        <field name="code">model._efn_gc_export_files()</field>
+        <field name="interval_number">1</field>
+        <field name="interval_type">hours</field>
+    </record>
+</odoo>

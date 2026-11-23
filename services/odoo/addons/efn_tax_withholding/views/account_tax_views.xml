@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="view_tax_form_efn_withholding" model="ir.ui.view">
+        <field name="name">account.tax.form.efn.withholding</field>
+        <field name="model">account.tax</field>
+        <field name="inherit_id" ref="account.view_tax_form"/>
+        <field name="arch" type="xml">
+            <page name="advanced_options" position="before">
+                <page string="PPh (e-Bupot)" name="efn_withholding" invisible="type_tax_use == 'none'">
+                    <group>
+                        <group>
+                            <field name="efn_pph_kind"/>
+                            <field name="efn_bupot_object_code"
+                                   placeholder="24-104-01"
+                                   required="efn_pph_kind and active"/>
+                        </group>
+                        <div class="text-muted" colspan="2">
+                            PPh dipotong = tarif negatif (mis. -2 untuk PPh 23). Akun distribusi pajak = Hutang PPh
+                            terkait. Tarif dan kode objek mengikuti konsultan pajak (lihat README modul).
+                        </div>
+                    </group>
+                </page>
+            </page>
+        </field>
+    </record>
+</odoo>

@@ -1,0 +1,118 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- G54 (docs/fit-gap/G54_G55_G61_ODOO_SETUP.md §4; Q-G54-1 default "ya, payment_method_type=none"): metode
+     "QRIS (manual, cek mutasi)" per PT F&B/ritel EFN ber-POS (GL, PB, BCR, BCF, WTZ, IMD, CUP). SMD SENGAJA tidak
+     (aturan independensi supermarket).
+
+     - payment_method_type 'none', BUKAN 'qr_code': tipe qr_code mewajibkan journal_id.bank_account_id + qr_code_method
+       (pos_payment_method.py _check_payment_method, 19.0) dan QRIS CE id_qr (l10n_id_pos) menyimpan secret provider di
+       res.partner.bank (ditolak, lihat pos_payment_method_data.xml). Kasir memverifikasi mutasi/notifikasi merchant
+       sebelum menekan validasi. QRIS dinamis tetap lewat efn_pos_payment_gateway (Q-23/Q-29).
+     - Jurnal bank sendiri "QRIS (manual)" kode QRIS (unik per company) agar setoran QRIS direkonsiliasi terpisah dari
+       EDC. outstanding_account_id diisi wizard G54 (C-07, pola onchange CE: account_journal_payment_debit_account_id).
+     - noupdate="1": xmlid baru dibuat saat -u pada DB lama; nama/jurnal boleh diubah atau diarsipkan admin. -->
+<odoo noupdate="1">
+    <!-- ===== GL ===== -->
+    <record id="journal_qris_manual_rtl" model="account.journal">
+        <field name="name">QRIS (manual)</field>
+        <field name="code">QRIS</field>
+        <field name="type">bank</field>
+        <field name="company_id" ref="efn_setup_company.company_rtl"/>
+    </record>
+    <record id="pos_payment_method_qris_manual_rtl" model="pos.payment.method">
+        <field name="name">QRIS (manual, cek mutasi)</field>
+        <field name="company_id" ref="efn_setup_company.company_rtl"/>
+        <field name="journal_id" ref="journal_qris_manual_rtl"/>
+        <field name="payment_method_type">none</field>
+        <field name="split_transactions" eval="False"/>
+    </record>
+
+    <!-- ===== PB ===== -->
+    <record id="journal_qris_manual_fnb" model="account.journal">
+        <field name="name">QRIS (manual)</field>
+        <field name="code">QRIS</field>
+        <field name="type">bank</field>
+        <field name="company_id" ref="efn_setup_company.company_fnb"/>
+    </record>
+    <record id="pos_payment_method_qris_manual_fnb" model="pos.payment.method">
+        <field name="name">QRIS (manual, cek mutasi)</field>
+        <field name="company_id" ref="efn_setup_company.company_fnb"/>
+        <field name="journal_id" ref="journal_qris_manual_fnb"/>
+        <field name="payment_method_type">none</field>
+        <field name="split_transactions" eval="False"/>
+    </record>
+
+    <!-- ===== BCR ===== -->
+    <record id="journal_qris_manual_bcr" model="account.journal">
+        <field name="name">QRIS (manual)</field>
+        <field name="code">QRIS</field>
+        <field name="type">bank</field>
+        <field name="company_id" ref="efn_setup_company.company_bcr"/>
+    </record>
+    <record id="pos_payment_method_qris_manual_bcr" model="pos.payment.method">
+        <field name="name">QRIS (manual, cek mutasi)</field>
+        <field name="company_id" ref="efn_setup_company.company_bcr"/>
+        <field name="journal_id" ref="journal_qris_manual_bcr"/>
+        <field name="payment_method_type">none</field>
+        <field name="split_transactions" eval="False"/>
+    </record>
+
+    <!-- ===== BCF ===== -->
+    <record id="journal_qris_manual_bcf" model="account.journal">
+        <field name="name">QRIS (manual)</field>
+        <field name="code">QRIS</field>
+        <field name="type">bank</field>
+        <field name="company_id" ref="efn_setup_company.company_bcf"/>
+    </record>
+    <record id="pos_payment_method_qris_manual_bcf" model="pos.payment.method">
+        <field name="name">QRIS (manual, cek mutasi)</field>
+        <field name="company_id" ref="efn_setup_company.company_bcf"/>
+        <field name="journal_id" ref="journal_qris_manual_bcf"/>
+        <field name="payment_method_type">none</field>
+        <field name="split_transactions" eval="False"/>
+    </record>
+
+    <!-- ===== WTZ ===== -->
+    <record id="journal_qris_manual_wtz" model="account.journal">
+        <field name="name">QRIS (manual)</field>
+        <field name="code">QRIS</field>
+        <field name="type">bank</field>
+        <field name="company_id" ref="efn_setup_company.company_wtz"/>
+    </record>
+    <record id="pos_payment_method_qris_manual_wtz" model="pos.payment.method">
+        <field name="name">QRIS (manual, cek mutasi)</field>
+        <field name="company_id" ref="efn_setup_company.company_wtz"/>
+        <field name="journal_id" ref="journal_qris_manual_wtz"/>
+        <field name="payment_method_type">none</field>
+        <field name="split_transactions" eval="False"/>
+    </record>
+
+    <!-- ===== IMD ===== -->
+    <record id="journal_qris_manual_imd" model="account.journal">
+        <field name="name">QRIS (manual)</field>
+        <field name="code">QRIS</field>
+        <field name="type">bank</field>
+        <field name="company_id" ref="efn_setup_company.company_imd"/>
+    </record>
+    <record id="pos_payment_method_qris_manual_imd" model="pos.payment.method">
+        <field name="name">QRIS (manual, cek mutasi)</field>
+        <field name="company_id" ref="efn_setup_company.company_imd"/>
+        <field name="journal_id" ref="journal_qris_manual_imd"/>
+        <field name="payment_method_type">none</field>
+        <field name="split_transactions" eval="False"/>
+    </record>
+
+    <!-- ===== CUP ===== -->
+    <record id="journal_qris_manual_cup" model="account.journal">
+        <field name="name">QRIS (manual)</field>
+        <field name="code">QRIS</field>
+        <field name="type">bank</field>
+        <field name="company_id" ref="efn_setup_company.company_cup"/>
+    </record>
+    <record id="pos_payment_method_qris_manual_cup" model="pos.payment.method">
+        <field name="name">QRIS (manual, cek mutasi)</field>
+        <field name="company_id" ref="efn_setup_company.company_cup"/>
+        <field name="journal_id" ref="journal_qris_manual_cup"/>
+        <field name="payment_method_type">none</field>
+        <field name="split_transactions" eval="False"/>
+    </record>
+</odoo>

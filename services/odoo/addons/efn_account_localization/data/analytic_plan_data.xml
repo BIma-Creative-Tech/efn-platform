@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- G60-C (D-6): plan analitik global "Outlet"; akun per gudang outlet dibuat wizard (bukan data). -->
+<odoo noupdate="1">
+    <record id="analytic_plan_outlet" model="account.analytic.plan">
+        <field name="name">Outlet</field>
+        <field name="default_applicability">optional</field>
+        <field name="description">Laba-rugi per outlet (gudang outlet). Dicap otomatis pada jurnal tutup sesi POS (EFN G60).</field>
+    </record>
+</odoo>

@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- DEMO saja (database dengan data demo). Produksi: Finance mengisi akun & jurnal tangguhan per PT lewat
+     Pengaturan > Akuntansi > Entri Tangguhan. -->
+<odoo noupdate="1">
+    <function model="res.company" name="_efn_deferred_load_demo"/>
+</odoo>

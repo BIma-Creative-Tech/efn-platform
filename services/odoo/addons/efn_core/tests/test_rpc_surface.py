@@ -475,7 +475,10 @@ RPC_ALLOWLIST = {
     ("stock.picking", "button_validate"): "override CE (efn_agri: tolak validasi transfer QC tanpa inspeksi selesai)",
     ("stock.scrap", "do_scrap"): "override CE (efn_ck_production: alasan waste wajib)",
     ("account.move", "button_cancel"): "override CE (efn_intercompany: batalkan tagihan draft antar-PT)",
-    ("account.move", "button_draft"): "override CE (efn_intercompany: batalkan tagihan draft antar-PT)",
+    ("account.move", "button_draft"): (
+        "override CE (efn_intercompany: batalkan tagihan draft antar-PT; efn_account_deferred: cek lock date dulu, "
+        "entri turunan di-reset/dihapus dengan hak user)"
+    ),
     ("purchase.order", "button_approve"): "override CE (efn_intercompany: SO di PT penjual lewat user teknis)",
     ("purchase.order", "button_cancel"): "override CE (efn_intercompany: batalkan SO draft antar-PT)",
     ("purchase.order", "button_confirm"): "override CE (efn_intercompany: harga transfer sebelum konfirmasi)",
@@ -544,6 +547,91 @@ RPC_ALLOWLIST = {
         "efn.mgm.policy.outbox",
         "action_efn_retry",
     ): "G31: super() ke efn.loyalty.policy.outbox (Loyalty/Accounting Manager + check_access + company + state failed)",
+    # G56 efn_web_home: tanpa argumen; hanya data env.user + env.company dengan hak user (menu = load_menus user itu;
+    # sudo hanya nama pintasan milik user sendiri + metadata kategori modul terpasang). Tanpa data PT lain.
+    ("res.users", "efn_home_bootstrap"): "G56: tanpa argumen; env.user + env.company saja, hak user pemanggil",
+    # G54 efn_setup_pos (SEC-G54-01): wizard transient, ACL hanya POS manager + record rule company; action_run
+    # memanggil _efn_check_access (company diizinkan + POS manager; apply juga Accounting manager) sebelum sudo.
+    ("efn.pos.setup.wizard", "action_run"): "_efn_check_access",
+    ("efn.pos.setup.wizard", "default_get"): "G54: baca pos.config dari context dengan hak user, tanpa sudo",
+    # G59 efn_account_deferred: hanya membuka act_window entri turunan (ensure_one + check_access read, tanpa sudo).
+    ("account.move", "action_efn_open_deferred_entries"): "G59: ensure_one + check_access('read'), act_window saja",
+    # G57 efn_account_asset: _efn_check_manager = grup Asset Manager + check_access('write') + company ⊆ env.companies,
+    # dijalankan sebelum sudo; action_view_* = check_access('read') lalu act_window saja.
+    ("efn.account.asset", "action_confirm"): "_efn_check_manager",
+    ("efn.account.asset", "action_cancel"): "_efn_check_manager",
+    ("efn.account.asset", "action_reset_draft"): "_efn_check_manager",
+    ("efn.account.asset", "action_post_selected"): "_efn_check_manager",
+    ("efn.account.asset", "action_open_dispose_wizard"): "_efn_check_manager",
+    ("efn.account.asset", "action_open_revaluation_wizard"): "_efn_check_manager",
+    ("efn.account.asset", "action_open_partial_disposal_wizard"): "_efn_check_manager",
+    ("efn.account.asset", "action_view_partial_disposals"): "G57: check_access('read'), act_window saja",
+    ("efn.account.asset", "action_view_merged_assets"): "G57: check_access('read'), act_window saja",
+    ("efn.account.asset", "action_view_revaluations"): "G57: check_access('read'), act_window saja",
+    ("efn.account.asset.group", "action_efn_reseed"): "efn_check_asset_manager (seed hanya PT env.companies ber-CoA id)",
+    ("efn.account.asset.depreciation.line", "action_post_now"): "asset_id._efn_check_manager",
+    ("efn.account.asset.depreciation.line", "action_reverse"): "asset_id._efn_check_manager",
+    ("efn.account.asset.disposal.wizard", "action_dispose"): "asset_id._efn_check_manager",
+    ("efn.account.asset.revaluation.wizard", "action_revalue"): "asset_id._efn_check_manager",
+    ("efn.account.asset.partial.disposal.wizard", "action_retire"): "asset_id._efn_check_manager",
+    ("efn.account.asset.post.wizard", "action_post"): "efn_check_asset_manager + company ∩ env.companies",
+    ("efn.account.asset.register.wizard", "action_xlsx"): "_efn_check_access (grup aset/readonly + company)",
+    ("efn.account.asset.register.wizard", "action_pdf"): "_efn_check_access (grup aset/readonly + company)",
+    # G57 efn_petty_cash: 4-eyes; submit/cancel/reset = check_access('write') + state; approve/reject =
+    # _efn_check_approver; disburse/settle/close = _efn_check_finance; post = _efn_check_poster; view_* = read only.
+    ("efn.petty.cash.request", "action_submit"): "G57: check_access('write') + state draft",
+    ("efn.petty.cash.request", "action_cancel"): "G57: check_access('write') + state",
+    ("efn.petty.cash.request", "action_reset_to_draft"): "G57: check_access('write') + state",
+    ("efn.petty.cash.request", "action_approve"): "_efn_check_approver",
+    ("efn.petty.cash.request", "action_reject"): "_efn_check_approver",
+    ("efn.petty.cash.request", "action_disburse"): "_efn_check_finance",
+    ("efn.petty.cash.request", "action_return_balance"): "_efn_check_finance",
+    ("efn.petty.cash.request", "action_reimburse_shortfall"): "_efn_check_finance",
+    ("efn.petty.cash.request", "action_settle"): "_efn_check_finance",
+    ("efn.petty.cash.request", "action_open_realization"): "G57: check_access('read'), act_window saja",
+    ("efn.petty.cash.request", "action_view_moves"): "G57: check_access('read'), act_window saja",
+    ("efn.petty.cash.request", "action_view_realizations"): "G57: check_access('read'), act_window saja",
+    ("efn.petty.cash.realization", "action_submit"): "G57: check_access('write') + state",
+    ("efn.petty.cash.realization", "action_cancel"): "G57: check_access('write') + state",
+    ("efn.petty.cash.realization", "action_reset_to_draft"): "G57: check_access('write') + state",
+    ("efn.petty.cash.realization", "action_post"): "_efn_check_poster",
+    ("efn.petty.cash.realization", "action_view_bills"): "G57: check_access('read'), act_window saja",
+    ("efn.petty.cash.fund", "action_request_replenishment"): "G57: check_access('read') + kustodian/grup finance",
+    ("efn.petty.cash.fund", "action_close_fund"): "_efn_check_finance",
+    ("efn.petty.cash.fund", "action_view_requests"): "G57: check_access('read'), act_window saja",
+    ("efn.petty.cash.fund", "action_view_realizations"): "G57: check_access('read'), act_window saja",
+    ("efn.petty.cash.fund", "action_view_moves"): "G57: check_access('read'), act_window saja",
+    ("efn.petty.cash.type", "action_view_requests"): "G57: check_access('read'), act_window saja",
+    ("efn.petty.cash.report.wizard", "action_xlsx"): "_efn_check_access (grup finance/readonly + company)",
+    ("efn.petty.cash.report.wizard", "action_pdf"): "_efn_check_access (grup finance/readonly + company)",
+    # G58 efn_account_reconcile / efn_bank_import / efn_account_batch_payment.
+    ("account.bank.statement.line", "action_efn_open_match_wizard"): "_efn_check_reconcile_access",
+    ("account.bank.statement.line", "action_efn_auto_match"): "_efn_check_reconcile_access",
+    ("efn.bank.reconcile.wizard", "default_get"): "st_line._efn_check_reconcile_access",
+    ("efn.bank.reconcile.wizard", "action_search_more"): "_efn_check",
+    ("efn.bank.reconcile.wizard", "action_efn_suggest"): "_efn_check",
+    ("efn.bank.reconcile.wizard", "action_reconcile"): "_efn_check",
+    ("efn.account.reconcile.wizard", "default_get"): "_efn_validate_lines (grup user + check_access write + company)",
+    ("efn.account.reconcile.wizard", "action_reconcile"): "_efn_validate_lines",
+    ("efn.reconcile.account", "init"): "G58: hook ORM init (buat view SQL), tanpa argumen klien",
+    ("efn.reconcile.account", "action_open_lines"): "G58: check_access('read'), act_window tanpa sudo",
+    ("efn.bank.import.wizard", "action_import"): "_efn_check_access (grup user + read jurnal + create baris + company)",
+    ("efn.account.batch.payment", "action_validate"): "_efn_check_group (account.group_account_user + 4-eyes)",
+    ("efn.account.batch.payment", "action_open_payments"): "_efn_check_group (read)",
+    ("efn.account.batch.payment", "action_generate_export_file"): "_efn_check_group (validator ≠ pengekspor, keyring)",
+    ("efn.account.batch.payment", "action_draft"): "_efn_check_group",
+    ("account.payment", "action_efn_create_batch"): "G58: grup user + check_access('write') + company + satu jurnal",
+    ("account.payment", "action_post"): (
+        "override CE (efn_account_reconcile: tolak pembayaran ganda; efn_account_localization: tahan di atas ambang "
+        "persetujuan), lalu super() dengan hak user"
+    ),
+    # G60 efn_account_localization.
+    ("account.payment", "action_draft"): "override CE (G60: super() lalu gugurkan persetujuan)",
+    ("account.payment", "action_efn_request_approval"): "_efn_check_company_access + check_access('write') + state",
+    ("account.payment", "action_efn_approve"): "_efn_check_approver (Accounting Manager + 4-eyes + company)",
+    ("account.payment", "action_efn_reject"): "_efn_check_approver (Accounting Manager + 4-eyes + company)",
+    ("efn.outlet.analytic.wizard", "action_check"): "_efn_check_access (Accounting Manager + company)",
+    ("efn.outlet.analytic.wizard", "action_apply"): "_efn_check_access (Accounting Manager + company)",
 }
 
 MODEL_BASES = {"Model", "AbstractModel", "TransientModel"}

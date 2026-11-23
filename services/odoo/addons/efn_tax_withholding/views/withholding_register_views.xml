@@ -1,0 +1,85 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- G59-A: Daftar Pemotongan PPh (baris pajak PPh di jurnal posted) untuk input e-Bupot Unifikasi Coretax.
+     Tanpa model baru: list/pivot account.move.line, record rule multi-company CE berlaku. -->
+<odoo>
+    <record id="view_efn_withholding_register_list" model="ir.ui.view">
+        <field name="name">account.move.line.efn.withholding.register.list</field>
+        <field name="model">account.move.line</field>
+        <field name="priority">90</field>
+        <field name="arch" type="xml">
+            <list string="Daftar Pemotongan PPh" editable="bottom" create="false" delete="false">
+                <field name="company_id" column_invisible="True"/>
+                <field name="company_currency_id" column_invisible="True"/>
+                <field name="company_id" groups="base.group_multi_company" optional="hide" readonly="1"/>
+                <field name="date" readonly="1"/>
+                <field name="move_name" string="Dokumen" readonly="1"/>
+                <field name="partner_id" readonly="1"/>
+                <field name="efn_pph_partner_vat"/>
+                <field name="tax_line_id" string="Pajak" readonly="1"/>
+                <field name="efn_pph_object_code"/>
+                <field name="tax_base_amount" string="DPP" sum="Total DPP" readonly="1"/>
+                <field name="balance" string="PPh" sum="Total PPh" readonly="1"/>
+                <field name="efn_bupot_number"/>
+                <field name="efn_bupot_date"/>
+            </list>
+        </field>
+    </record>
+
+    <record id="view_efn_withholding_register_pivot" model="ir.ui.view">
+        <field name="name">account.move.line.efn.withholding.register.pivot</field>
+        <field name="model">account.move.line</field>
+        <field name="priority">90</field>
+        <field name="arch" type="xml">
+            <pivot string="Daftar Pemotongan PPh">
+                <field name="tax_line_id" type="row"/>
+                <field name="date" interval="month" type="col"/>
+                <field name="tax_base_amount" type="measure"/>
+                <field name="balance" type="measure"/>
+            </pivot>
+        </field>
+    </record>
+
+    <record id="view_efn_withholding_register_search" model="ir.ui.view">
+        <field name="name">account.move.line.efn.withholding.register.search</field>
+        <field name="model">account.move.line</field>
+        <field name="priority">90</field>
+        <field name="arch" type="xml">
+            <search string="Daftar Pemotongan PPh">
+                <field name="partner_id"/>
+                <field name="tax_line_id"/>
+                <field name="move_name"/>
+                <field name="efn_bupot_number"/>
+                <filter name="filter_date" string="Masa" date="date"/>
+                <filter name="without_bupot" string="Belum ada bukti potong"
+                        domain="[('efn_bupot_number', '=', False)]"/>
+                <separator/>
+                <filter name="group_by_tax" string="Pajak" context="{'group_by': 'tax_line_id'}"/>
+                <filter name="group_by_partner" string="Partner" context="{'group_by': 'partner_id'}"/>
+                <filter name="group_by_month" string="Masa (bulan)" context="{'group_by': 'date:month'}"/>
+            </search>
+        </field>
+    </record>
+
+    <record id="action_efn_withholding_register" model="ir.actions.act_window">
+        <field name="name">Daftar Pemotongan PPh</field>
+        <field name="res_model">account.move.line</field>
+        <field name="view_mode">list,pivot</field>
+        <field name="view_ids" eval="[(5, 0, 0),
+            (0, 0, {'view_mode': 'list', 'view_id': ref('view_efn_withholding_register_list')}),
+            (0, 0, {'view_mode': 'pivot', 'view_id': ref('view_efn_withholding_register_pivot')})]"/>
+        <field name="search_view_id" ref="view_efn_withholding_register_search"/>
+        <field name="domain">[('tax_line_id.efn_pph_kind', '!=', False), ('parent_state', '=', 'posted')]</field>
+        <field name="context">{'search_default_group_by_tax': 1, 'create': 0}</field>
+        <field name="help" type="html">
+            <p class="o_view_nocontent_smiling_face">Belum ada pemotongan PPh</p>
+            <p>Baris muncul setelah tagihan vendor dengan pajak PPh (tarif negatif, Jenis PPh terisi) diposting.</p>
+        </field>
+    </record>
+
+    <menuitem id="menu_efn_withholding_register"
+              name="Daftar Pemotongan PPh"
+              action="action_efn_withholding_register"
+              parent="account.account_reports_taxes_and_fiscal_menu"
+              sequence="40"
+              groups="account.group_account_user,account.group_account_manager"/>
+</odoo>

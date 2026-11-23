@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="view_efn_asset_revaluation_list" model="ir.ui.view">
+        <field name="name">efn.account.asset.revaluation.list</field>
+        <field name="model">efn.account.asset.revaluation</field>
+        <field name="arch" type="xml">
+            <list string="Revaluasi" create="false" edit="false" delete="false">
+                <field name="revaluation_date"/>
+                <field name="asset_id"/>
+                <field name="net_book_value_before"/>
+                <field name="new_value"/>
+                <field name="revaluation_amount"/>
+                <field name="remaining_life_after"/>
+                <field name="move_id"/>
+                <field name="currency_id" column_invisible="True"/>
+            </list>
+        </field>
+    </record>
+
+    <record id="view_efn_asset_revaluation_form" model="ir.ui.view">
+        <field name="name">efn.account.asset.revaluation.form</field>
+        <field name="model">efn.account.asset.revaluation</field>
+        <field name="arch" type="xml">
+            <form string="Revaluasi" create="false" edit="false" delete="false">
+                <sheet>
+                    <group>
+                        <group>
+                            <field name="asset_id"/>
+                            <field name="revaluation_date"/>
+                            <field name="net_book_value_before"/>
+                            <field name="new_value"/>
+                            <field name="revaluation_amount"/>
+                            <field name="surplus_movement"/>
+                            <field name="pl_movement"/>
+                            <field name="surplus_balance_after"/>
+                            <field name="loss_recognized_after"/>
+                        </group>
+                        <group>
+                            <field name="useful_life_before"/>
+                            <field name="remaining_life_after"/>
+                            <field name="journal_id"/>
+                            <field name="surplus_account_id"/>
+                            <field name="income_account_id"/>
+                            <field name="loss_account_id"/>
+                            <field name="move_id"/>
+                            <field name="currency_id" invisible="1"/>
+                        </group>
+                    </group>
+                    <group>
+                        <field name="note" nolabel="1" colspan="2"/>
+                    </group>
+                </sheet>
+            </form>
+        </field>
+    </record>
+
+    <record id="action_efn_asset_revaluation" model="ir.actions.act_window">
+        <field name="name">Revaluasi Aset</field>
+        <field name="res_model">efn.account.asset.revaluation</field>
+        <field name="view_mode">list,form</field>
+    </record>
+</odoo>

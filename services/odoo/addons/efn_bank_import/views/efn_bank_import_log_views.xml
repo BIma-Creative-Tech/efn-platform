@@ -1,0 +1,84 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="view_efn_bank_import_log_list" model="ir.ui.view">
+        <field name="name">efn.bank.import.log.list</field>
+        <field name="model">efn.bank.import.log</field>
+        <field name="arch" type="xml">
+            <list create="false" edit="false" delete="false"
+                  decoration-danger="state == 'failed'" decoration-warning="state == 'partial'">
+                <field name="create_date" string="Waktu Impor"/>
+                <field name="company_id" groups="base.group_multi_company" optional="hide"/>
+                <field name="journal_id"/>
+                <field name="template_id"/>
+                <field name="filename"/>
+                <field name="line_count"/>
+                <field name="duplicate_count" optional="show"/>
+                <field name="skipped_zero" optional="hide"/>
+                <field name="error_count"/>
+                <field name="state" widget="badge"/>
+                <field name="imported_by_id"/>
+            </list>
+        </field>
+    </record>
+
+    <record id="view_efn_bank_import_log_form" model="ir.ui.view">
+        <field name="name">efn.bank.import.log.form</field>
+        <field name="model">efn.bank.import.log</field>
+        <field name="arch" type="xml">
+            <form create="false" edit="false" delete="false">
+                <sheet>
+                    <widget name="web_ribbon" title="Diarsipkan" bg_color="text-bg-danger" invisible="active"/>
+                    <field name="active" invisible="1"/>
+                    <div class="oe_title">
+                        <h1><field name="name"/></h1>
+                    </div>
+                    <group>
+                        <group>
+                            <field name="journal_id"/>
+                            <field name="company_id" groups="base.group_multi_company"/>
+                            <field name="company_id" invisible="1"/>
+                            <field name="template_id"/>
+                            <field name="statement_id"/>
+                            <field name="filename"/>
+                            <field name="file_hash"/>
+                        </group>
+                        <group>
+                            <field name="create_date" string="Waktu Impor"/>
+                            <field name="imported_by_id"/>
+                            <field name="state"/>
+                            <field name="line_count"/>
+                            <field name="duplicate_count"/>
+                            <field name="skipped_zero"/>
+                            <field name="error_count"/>
+                        </group>
+                    </group>
+                    <separator string="Error per baris (kode, tanpa isi sel)"/>
+                    <field name="error_message" nolabel="1"/>
+                </sheet>
+                <chatter/>
+            </form>
+        </field>
+    </record>
+
+    <record id="view_efn_bank_import_log_search" model="ir.ui.view">
+        <field name="name">efn.bank.import.log.search</field>
+        <field name="model">efn.bank.import.log</field>
+        <field name="arch" type="xml">
+            <search>
+                <field name="filename"/>
+                <field name="journal_id"/>
+                <filter name="failed" string="Gagal" domain="[('state', '=', 'failed')]"/>
+                <filter name="partial" string="Sebagian" domain="[('state', '=', 'partial')]"/>
+                <separator/>
+                <filter name="archived" string="Diarsipkan" domain="[('active', '=', False)]"/>
+            </search>
+        </field>
+    </record>
+
+    <record id="action_efn_bank_import_log" model="ir.actions.act_window">
+        <field name="name">Log Impor Mutasi</field>
+        <field name="res_model">efn.bank.import.log</field>
+        <field name="view_mode">list,form</field>
+        <field name="search_view_id" ref="view_efn_bank_import_log_search"/>
+    </record>
+</odoo>

@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="res_config_settings_view_form_efn_deferred" model="ir.ui.view">
+        <field name="name">res.config.settings.view.form.efn.deferred</field>
+        <field name="model">res.config.settings</field>
+        <field name="inherit_id" ref="account.res_config_settings_view_form"/>
+        <field name="arch" type="xml">
+            <xpath expr="//block[@name='default_taxes_setting_container']" position="before">
+                <block title="Entri Tangguhan (EFN)" name="efn_deferred_setting_container"
+                       groups="account.group_account_manager">
+                    <setting id="efn_deferred_expense" string="Akun Beban Dibayar di Muka"
+                             company_dependent="1"
+                             help="Biaya dibayar di muka diparkir di sini sampai entri pengakuan tiap bulan.">
+                        <field name="efn_deferred_expense_account_id"/>
+                    </setting>
+                    <setting id="efn_deferred_revenue" string="Akun Pendapatan Diterima di Muka"
+                             company_dependent="1"
+                             help="Pendapatan diterima di muka diparkir di sini sampai entri pengakuan tiap bulan.">
+                        <field name="efn_deferred_revenue_account_id"/>
+                    </setting>
+                    <setting id="efn_deferred_journal" string="Jurnal Tangguhan"
+                             company_dependent="1"
+                             help="Jurnal Miscellaneous untuk entri penangguhan dan pengakuan.">
+                        <field name="efn_deferred_journal_id"/>
+                    </setting>
+                </block>
+            </xpath>
+        </field>
+    </record>
+</odoo>

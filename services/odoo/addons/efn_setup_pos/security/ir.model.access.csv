@@ -1,0 +1,3 @@
+id,name,model_id:id,group_id:id,perm_read,perm_write,perm_create,perm_unlink
+access_efn_pos_setup_wizard_manager,efn.pos.setup.wizard pos manager,model_efn_pos_setup_wizard,point_of_sale.group_pos_manager,1,1,1,1
+access_efn_pos_setup_wizard_line_manager,efn.pos.setup.wizard.line pos manager,model_efn_pos_setup_wizard_line,point_of_sale.group_pos_manager,1,1,1,1

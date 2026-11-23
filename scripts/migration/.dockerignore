@@ -9,6 +9,8 @@ tests/
 *.jsonl
 *.jsonl.gz
 *.csv
+# G61: tabel peran kategori = bagian kode (dibaca mapping.build_categories), wajib ikut image.
+!efn_mig/category_roles.csv
 requirements-dev.txt
 pytest.ini
 ruff.toml

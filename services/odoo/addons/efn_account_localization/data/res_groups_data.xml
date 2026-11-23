@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- G60-C (Q-G60-9 default): analitik terlihat untuk user akuntansi saja (setara centang "Analytic Accounting" di
+     Settings, tetapi dibatasi ke Invoicing ke atas). Catatan: upgrade modul `account` bisa menulis ulang implied_ids
+     grup ini; upgrade efn_account_localization sesudahnya memulihkan. -->
+<odoo>
+    <record id="account.group_account_invoice" model="res.groups">
+        <field name="implied_ids" eval="[(4, ref('analytic.group_analytic_accounting'))]"/>
+    </record>
+</odoo>

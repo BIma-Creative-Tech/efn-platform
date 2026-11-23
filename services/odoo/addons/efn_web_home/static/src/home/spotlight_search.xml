@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates xml:space="preserve">
+    <t t-name="efn_web_home.SpotlightSearch">
+        <div class="o_efn_home_spotlight">
+            <i class="fa fa-search o_efn_home_spotlight_icon" aria-hidden="true"/>
+            <input type="text"
+                   class="o_efn_home_spotlight_input"
+                   placeholder="Cari aplikasi, data, pengaturan… (Ctrl+K)"
+                   aria-label="Cari"
+                   t-on-click="onClick"
+                   t-on-input="onInput"
+                   t-on-keydown="onKeydown"/>
+            <kbd class="o_efn_home_spotlight_hint">Ctrl K</kbd>
+        </div>
+    </t>
+</templates>

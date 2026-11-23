@@ -1,0 +1,94 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates xml:space="preserve">
+    <!-- G56 (ADR-049): port dari core/custom_home_console home_console.xml; kelas o_hc_* -> o_efn_home_*. -->
+    <t t-name="efn_web_home.Home">
+        <div class="o_efn_home" t-att-class="{ 'o_efn_home_compact': isCompact }" t-att-style="rootStyle">
+
+            <header class="o_efn_home_header">
+                <div class="o_efn_home_brand">
+                    <img class="o_efn_home_logo" t-att-src="logoUrl" alt="Logo"/>
+                    <div>
+                        <div class="o_efn_home_hello">
+                            <t t-esc="greeting"/>,
+                            <span class="o_efn_home_user" t-esc="state.bootstrap.user.name"/>
+                        </div>
+                        <div class="o_efn_home_subline" t-esc="state.bootstrap.company.name"/>
+                    </div>
+                </div>
+                <EfnSpotlightSearch/>
+            </header>
+
+            <section t-if="announcement" class="o_efn_home_announcement">
+                <div class="o_efn_home_announcement_body" t-out="announcement"/>
+                <button class="btn btn-sm btn-light o_efn_home_announcement_close"
+                        title="Sembunyikan 24 jam" aria-label="Sembunyikan pengumuman"
+                        t-on-click="onDismissAnnouncement">
+                    <i class="fa fa-times"/>
+                </button>
+            </section>
+
+            <section t-if="pinned.length" class="o_efn_home_section">
+                <h3 class="o_efn_home_section_head">Pintasan</h3>
+                <div class="o_efn_home_chips">
+                    <t t-foreach="pinned" t-as="sc" t-key="sc.id">
+                        <button class="o_efn_home_chip" t-on-click="() => this.onClickShortcut(sc)">
+                            <i class="fa fa-thumb-tack"/>
+                            <span t-esc="sc.name"/>
+                        </button>
+                    </t>
+                </div>
+            </section>
+
+            <section t-if="recentApps.length" class="o_efn_home_section">
+                <h3 class="o_efn_home_section_head">Terakhir dibuka</h3>
+                <div class="o_efn_home_chips">
+                    <t t-foreach="recentApps" t-as="app" t-key="app.id">
+                        <button class="o_efn_home_chip" t-on-click="() => this.onClickApp(app)">
+                            <i class="fa fa-clock-o"/>
+                            <span t-esc="app.name"/>
+                        </button>
+                    </t>
+                </div>
+            </section>
+
+            <t t-foreach="state.grouped" t-as="group" t-key="group.key">
+                <section class="o_efn_home_section">
+                    <h3 class="o_efn_home_section_head">
+                        <t t-esc="group.label"/>
+                        <span class="o_efn_home_count" t-esc="group.apps.length"/>
+                    </h3>
+                    <div class="o_efn_home_cards">
+                        <t t-foreach="group.apps" t-as="app" t-key="app.id">
+                            <button class="o_efn_home_card" t-att-title="app.name"
+                                    t-att-data-menu-id="app.id"
+                                    t-on-click="() => this.onClickApp(app)">
+                                <div class="o_efn_home_card_icon">
+                                    <t t-if="app.icon">
+                                        <img t-att-src="app.icon" alt="" t-on-error="onIconError"/>
+                                        <span class="o_efn_home_tile d-none" t-esc="app.initial"/>
+                                    </t>
+                                    <span t-else="" class="o_efn_home_tile" t-esc="app.initial"/>
+                                </div>
+                                <div class="o_efn_home_card_name" t-esc="app.name"/>
+                            </button>
+                        </t>
+                    </div>
+                </section>
+            </t>
+
+            <section t-if="activities.length" class="o_efn_home_section">
+                <h3 class="o_efn_home_section_head">Aktivitas Anda</h3>
+                <ul class="o_efn_home_activities">
+                    <t t-foreach="activities" t-as="act" t-key="act.id">
+                        <li>
+                            <button class="o_efn_home_activity" t-on-click="() => this.onClickActivity(act)">
+                                <span class="o_efn_home_activity_date" t-esc="act.date_deadline or ''"/>
+                                <span t-esc="act.summary or '(tanpa ringkasan)'"/>
+                            </button>
+                        </li>
+                    </t>
+                </ul>
+            </section>
+        </div>
+    </t>
+</templates>

@@ -39,7 +39,9 @@ env:
     efn_setup_role efn_pos_bff_order efn_online_kds_bridge efn_online_transfer
     efn_mgm_policy efn_data_ask efn_insight efn_legacy_history
     efn_demand_forecast efn_assortment efn_replenishment efn_expiry_monitor efn_setup_supermarket efn_campaign efn_insight_sm
-    efn_setup_supermarket_online
+    efn_setup_supermarket_online efn_web_home efn_setup_menu
+    efn_account_asset efn_petty_cash efn_account_reconcile efn_bank_import efn_account_batch_payment
+    efn_tax_withholding efn_account_deferred efn_account_localization
   EFN_INSTALL_ONLY_MODULES: efn_setup_security
 
 jobs:
@@ -56,6 +58,7 @@ jobs:
       api: ${{ github.event_name == 'push' && 'true' || steps.filter.outputs.api }}
       web: ${{ github.event_name == 'push' && 'true' || steps.filter.outputs.web }}
       insight: ${{ github.event_name == 'push' && 'true' || steps.filter.outputs.insight }}
+      logingateway: ${{ github.event_name == 'push' && 'true' || steps.filter.outputs['login-gateway'] }}
       waunofficial: ${{ github.event_name == 'push' && 'true' || steps.filter.outputs['wa-unofficial'] }}
       odoo: ${{ github.event_name == 'push' && 'true' || steps.filter.outputs.odoo }}
       python: ${{ github.event_name == 'push' && 'true' || steps.filter.outputs.python }}
@@ -74,6 +77,7 @@ jobs:
             api:    ['services/api-gateway/**', 'services/odoo/addons/efn_campaign/tests/fixtures/**', 'services/segment-worker/tests/fixtures/**', '.github/workflows/ci.yml']
             web:    ['services/superapp-web/**', '.github/workflows/ci.yml']
             insight: ['services/insight-web/**', '.github/workflows/ci.yml']   # G42 dashboard Insight (docs/04 §26)
+            login-gateway: ['services/login-gateway/**', '.github/workflows/ci.yml']   # G62 halaman masuk staf (ADR-050)
             wa-unofficial: ['services/wa-unofficial/**', '.github/workflows/ci.yml']   # G50 WA tidak resmi (ADR-044)
             odoo:   ['services/odoo/**', 'scripts/check-odoo-deps.sh', '.github/workflows/ci.yml']
             python: ['services/ai-ocr-worker/**', 'services/etl/**', 'services/text2sql/**', 'services/esb-extract/**', 'infra/clickhouse/**', 'services/forecast-worker/**', 'scripts/migration/**', 'scripts/check-py-lock.sh', 'scripts/lock-python-deps.sh', 'services/segment-worker/**', 'services/odoo/addons/efn_campaign/**', 'services/api-gateway/src/behavior/dto/**', 'infra/postgres/init/20-platform-g50a.sql', '.github/workflows/ci.yml']
@@ -91,7 +95,8 @@ jobs:
     needs: changes
     if: >-
       needs.changes.outputs.api == 'true' || needs.changes.outputs.web == 'true' ||
-      needs.changes.outputs.insight == 'true' || needs.changes.outputs.waunofficial == 'true'
+      needs.changes.outputs.insight == 'true' || needs.changes.outputs.waunofficial == 'true' ||
+      needs.changes.outputs.logingateway == 'true'
     runs-on: ubuntu-24.04
     permissions:
       contents: read
@@ -99,7 +104,7 @@ jobs:
       fail-fast: false
       matrix:
         # insight-web: G42 (docs/04 §26, ADR-041); wa-unofficial: G50 (ADR-044, Baileys di-pin exact + lockfile)
-        service: [api-gateway, superapp-web, insight-web, wa-unofficial]
+        service: [api-gateway, superapp-web, insight-web, wa-unofficial, login-gateway]
     defaults:
       run:
         working-directory: services/${{ matrix.service }}
@@ -110,7 +115,8 @@ jobs:
         ${{ (matrix.service == 'api-gateway' && needs.changes.outputs.api == 'true') ||
         (matrix.service == 'superapp-web' && needs.changes.outputs.web == 'true') ||
         (matrix.service == 'insight-web' && needs.changes.outputs.insight == 'true') ||
-        (matrix.service == 'wa-unofficial' && needs.changes.outputs.waunofficial == 'true') }}
+        (matrix.service == 'wa-unofficial' && needs.changes.outputs.waunofficial == 'true') ||
+        (matrix.service == 'login-gateway' && needs.changes.outputs.logingateway == 'true') }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
         if: env.CHANGED == 'true'

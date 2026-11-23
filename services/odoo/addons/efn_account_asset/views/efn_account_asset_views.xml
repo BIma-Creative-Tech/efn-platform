@@ -1,0 +1,224 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Port views/fixed_asset_views.xml (odoo-platform, ADR-049). Tombol status hanya grup Manager (cek ulang di server). -->
+<odoo>
+    <record id="view_efn_asset_list" model="ir.ui.view">
+        <field name="name">efn.account.asset.list</field>
+        <field name="model">efn.account.asset</field>
+        <field name="arch" type="xml">
+            <list string="Aset Tetap" decoration-info="state == 'draft'" decoration-success="state == 'running'"
+                  decoration-muted="state in ('disposed', 'cancelled')">
+                <field name="code"/>
+                <field name="name"/>
+                <field name="group_id"/>
+                <field name="location_id"/>
+                <field name="acquisition_date"/>
+                <field name="quantity" optional="show"/>
+                <field name="acquisition_value"/>
+                <field name="unit_acquisition_value" optional="hide"/>
+                <field name="accumulated_depreciation"/>
+                <field name="net_book_value"/>
+                <field name="source_move_id" optional="hide"/>
+                <field name="company_id" groups="base.group_multi_company" optional="show"/>
+                <field name="state"/>
+                <field name="currency_id" column_invisible="True"/>
+            </list>
+        </field>
+    </record>
+
+    <record id="view_efn_asset_form" model="ir.ui.view">
+        <field name="name">efn.account.asset.form</field>
+        <field name="model">efn.account.asset</field>
+        <field name="arch" type="xml">
+            <form string="Aset Tetap">
+                <header>
+                    <button name="action_confirm" type="object" string="Konfirmasi" class="oe_highlight"
+                            invisible="state != 'draft'" groups="efn_account_asset.group_asset_manager"/>
+                    <button name="action_open_revaluation_wizard" type="object" string="Revaluasi"
+                            invisible="state != 'running'" groups="efn_account_asset.group_asset_manager"/>
+                    <button name="action_open_partial_disposal_wizard" type="object" string="Lepas Sebagian"
+                            invisible="state != 'running' or quantity &lt;= 1"
+                            groups="efn_account_asset.group_asset_manager"/>
+                    <button name="action_open_dispose_wizard" type="object" string="Disposal"
+                            invisible="state != 'running'" groups="efn_account_asset.group_asset_manager"/>
+                    <button name="action_cancel" type="object" string="Batalkan"
+                            invisible="state not in ('draft', 'running')"
+                            groups="efn_account_asset.group_asset_manager"/>
+                    <button name="action_reset_draft" type="object" string="Kembali ke Draft"
+                            invisible="state not in ('cancelled', 'running')"
+                            groups="efn_account_asset.group_asset_manager"/>
+                    <field name="state" widget="statusbar" statusbar_visible="draft,running,disposed"/>
+                </header>
+                <sheet>
+                    <div class="oe_button_box" name="button_box">
+                        <button name="action_view_merged_assets" type="object" class="oe_stat_button"
+                                icon="fa-compress" invisible="merged_count == 0">
+                            <field name="merged_count" widget="statinfo" string="Tergabung"/>
+                        </button>
+                        <button name="action_view_partial_disposals" type="object" class="oe_stat_button"
+                                icon="fa-scissors" invisible="partial_disposal_count == 0">
+                            <field name="partial_disposal_count" widget="statinfo" string="Pelepasan"/>
+                        </button>
+                        <button name="action_view_revaluations" type="object" class="oe_stat_button"
+                                icon="fa-line-chart" invisible="revaluation_count == 0">
+                            <field name="revaluation_count" widget="statinfo" string="Revaluasi"/>
+                        </button>
+                    </div>
+                    <div class="oe_title">
+                        <label for="code"/>
+                        <h1><field name="code" readonly="state != 'draft'"/></h1>
+                        <label for="name"/>
+                        <h2><field name="name"/></h2>
+                    </div>
+                    <group>
+                        <group string="Perolehan">
+                            <field name="acquisition_date" readonly="state != 'draft'"/>
+                            <field name="posting_date" readonly="state != 'draft'"/>
+                            <field name="depreciation_date_mode" readonly="state != 'draft'"/>
+                            <field name="quantity" readonly="state != 'draft'"/>
+                            <field name="original_quantity" invisible="not is_quantity_asset"/>
+                            <field name="retired_quantity" invisible="retired_quantity == 0"/>
+                            <field name="is_quantity_asset" invisible="1"/>
+                            <field name="acquisition_value" readonly="state != 'draft'"/>
+                            <field name="unit_acquisition_value" invisible="not is_quantity_asset"/>
+                            <field name="salvage_value" readonly="state != 'draft'"/>
+                            <field name="useful_life_months" readonly="state != 'draft'"/>
+                            <field name="depreciation_method" readonly="state != 'draft'"/>
+                            <field name="declining_factor" invisible="depreciation_method != 'declining'"
+                                   readonly="state != 'draft'"/>
+                            <field name="currency_id" invisible="1"/>
+                        </group>
+                        <group string="Penempatan">
+                            <field name="merged_into_id" invisible="not merged_into_id"/>
+                            <field name="group_id" readonly="state != 'draft'"/>
+                            <field name="location_id"/>
+                            <field name="custodian_id"/>
+                            <field name="source_move_id" invisible="not source_move_id"/>
+                            <field name="product_id" invisible="not product_id"/>
+                            <field name="company_id" groups="base.group_multi_company" readonly="state != 'draft'"/>
+                        </group>
+                    </group>
+                    <group string="Akuntansi">
+                        <group>
+                            <field name="asset_account_id" readonly="state != 'draft'"/>
+                            <field name="depreciation_account_id" readonly="state != 'draft'"/>
+                        </group>
+                        <group>
+                            <field name="expense_account_id" readonly="state != 'draft'"/>
+                            <field name="journal_id" readonly="state != 'draft'"/>
+                        </group>
+                    </group>
+                    <group string="Saldo">
+                        <field name="accumulated_depreciation"/>
+                        <field name="revaluation_value" invisible="revaluation_value == 0"/>
+                        <field name="revaluation_surplus_balance" invisible="revaluation_surplus_balance == 0"/>
+                        <field name="revaluation_loss_recognized" invisible="revaluation_loss_recognized == 0"/>
+                        <field name="net_book_value"/>
+                        <field name="unit_net_book_value" invisible="not is_quantity_asset"/>
+                        <field name="retired_cost" invisible="retired_cost == 0"/>
+                        <field name="opening_accumulated_depreciation"
+                               invisible="opening_accumulated_depreciation == 0"/>
+                        <field name="retired_accumulated_depreciation"
+                               invisible="retired_accumulated_depreciation == 0"/>
+                    </group>
+                    <group string="Disposal" invisible="state != 'disposed'">
+                        <field name="disposal_date"/>
+                        <field name="disposal_value"/>
+                        <field name="disposal_gain_loss"/>
+                        <field name="disposal_move_id"/>
+                    </group>
+                    <notebook>
+                        <page string="Jadwal Penyusutan" name="schedule">
+                            <field name="depreciation_line_ids" readonly="1">
+                                <list decoration-success="posted" decoration-muted="reversed">
+                                    <field name="sequence"/>
+                                    <field name="date"/>
+                                    <field name="amount"/>
+                                    <field name="posted"/>
+                                    <field name="reversed"/>
+                                    <field name="move_id"/>
+                                    <field name="currency_id" column_invisible="True"/>
+                                    <button name="action_post_now" type="object" string="Posting"
+                                            invisible="posted or reversed"
+                                            groups="efn_account_asset.group_asset_manager"/>
+                                    <button name="action_reverse" type="object" string="Balik"
+                                            invisible="not posted" groups="efn_account_asset.group_asset_manager"
+                                            confirm="Balik penyusutan terposting ini? Jurnal balik dibuat dan nilai buku aset dipulihkan."/>
+                                </list>
+                            </field>
+                        </page>
+                        <page string="Pelepasan Sebagian" name="partial" invisible="partial_disposal_count == 0">
+                            <field name="partial_disposal_ids" readonly="1">
+                                <list>
+                                    <field name="name"/>
+                                    <field name="disposal_date"/>
+                                    <field name="reason"/>
+                                    <field name="quantity"/>
+                                    <field name="quantity_after"/>
+                                    <field name="cost_removed"/>
+                                    <field name="accumulated_removed"/>
+                                    <field name="net_book_value_removed"/>
+                                    <field name="proceeds"/>
+                                    <field name="gain_loss"/>
+                                    <field name="move_id"/>
+                                    <field name="currency_id" column_invisible="True"/>
+                                </list>
+                            </field>
+                        </page>
+                        <page string="Catatan" name="notes">
+                            <field name="note"/>
+                        </page>
+                    </notebook>
+                </sheet>
+                <chatter/>
+            </form>
+        </field>
+    </record>
+
+    <record id="view_efn_asset_kanban" model="ir.ui.view">
+        <field name="name">efn.account.asset.kanban</field>
+        <field name="model">efn.account.asset</field>
+        <field name="arch" type="xml">
+            <kanban default_group_by="state">
+                <field name="currency_id"/>
+                <templates>
+                    <t t-name="card">
+                        <field name="code" class="fw-bold"/>
+                        <field name="name"/>
+                        <div>Nilai buku: <field name="net_book_value" widget="monetary"/></div>
+                    </t>
+                </templates>
+            </kanban>
+        </field>
+    </record>
+
+    <record id="view_efn_asset_search" model="ir.ui.view">
+        <field name="name">efn.account.asset.search</field>
+        <field name="model">efn.account.asset</field>
+        <field name="arch" type="xml">
+            <search>
+                <field name="code"/>
+                <field name="name"/>
+                <field name="group_id"/>
+                <field name="location_id"/>
+                <field name="custodian_id"/>
+                <field name="source_move_id"/>
+                <filter name="state_draft" string="Draft" domain="[('state', '=', 'draft')]"/>
+                <filter name="state_running" string="Berjalan" domain="[('state', '=', 'running')]"/>
+                <filter name="state_disposed" string="Dilepas" domain="[('state', '=', 'disposed')]"/>
+                <separator/>
+                <filter name="pooled_assets" string="Aset pool (multi-unit)" domain="[('is_quantity_asset', '=', True)]"/>
+                <filter name="from_bill" string="Dari tagihan vendor" domain="[('source_move_id', '!=', False)]"/>
+                <filter name="group_group" string="Kelompok" context="{'group_by': 'group_id'}"/>
+                <filter name="group_location" string="Lokasi" context="{'group_by': 'location_id'}"/>
+                <filter name="group_state" string="Status" context="{'group_by': 'state'}"/>
+            </search>
+        </field>
+    </record>
+
+    <record id="action_efn_asset" model="ir.actions.act_window">
+        <field name="name">Daftar Aset</field>
+        <field name="res_model">efn.account.asset</field>
+        <field name="view_mode">list,kanban,form</field>
+        <field name="search_view_id" ref="view_efn_asset_search"/>
+    </record>
+</odoo>

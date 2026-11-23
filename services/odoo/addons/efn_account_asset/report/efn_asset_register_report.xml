@@ -1,0 +1,82 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Laporan Daftar Aset (PDF). Ditulis ulang: kop CE web.external_layout (bukan custom_accounting_reports). Data dari
+     wizard._efn_register_data() (cek akses + record rule user). -->
+<odoo>
+    <record id="paperformat_efn_asset_register" model="report.paperformat">
+        <field name="name">Daftar Aset A4 Lanskap</field>
+        <field name="format">A4</field>
+        <field name="orientation">Landscape</field>
+        <field name="margin_top">30</field>
+        <field name="margin_bottom">15</field>
+        <field name="margin_left">7</field>
+        <field name="margin_right">7</field>
+        <field name="header_spacing">25</field>
+        <field name="dpi">90</field>
+    </record>
+
+    <template id="report_efn_asset_register">
+        <t t-call="web.html_container">
+            <t t-foreach="docs" t-as="o">
+                <t t-set="d" t-value="o._efn_register_data()"/>
+                <t t-call="web.external_layout">
+                    <div class="page" style="font-size: 9px;">
+                        <h4 t-out="d['title']"/>
+                        <p t-out="d['companies']"/>
+                        <table class="table table-sm table-bordered">
+                            <thead>
+                                <tr>
+                                    <th>No</th>
+                                    <th>Kode</th>
+                                    <th>Nama Aset</th>
+                                    <th>Kelompok</th>
+                                    <th>Tgl Perolehan</th>
+                                    <th class="text-end">Nilai Perolehan</th>
+                                    <th class="text-end">Akum. Awal Tahun</th>
+                                    <th class="text-end">YTD</th>
+                                    <th class="text-end">Akum. Akhir</th>
+                                    <th class="text-end">Nilai Buku</th>
+                                    <th>Status</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr t-foreach="d['rows']" t-as="row">
+                                    <td t-out="row['no']"/>
+                                    <td t-out="row['code']"/>
+                                    <td t-out="row['name']"/>
+                                    <td t-out="row['group']"/>
+                                    <td t-out="row['acq_date']"/>
+                                    <td class="text-end"><span t-out="row['acq_value']" t-options="{'widget': 'monetary', 'display_currency': d['currency']}"/></td>
+                                    <td class="text-end"><span t-out="row['opening']" t-options="{'widget': 'monetary', 'display_currency': d['currency']}"/></td>
+                                    <td class="text-end"><span t-out="row['ytd']" t-options="{'widget': 'monetary', 'display_currency': d['currency']}"/></td>
+                                    <td class="text-end"><span t-out="row['accum_end']" t-options="{'widget': 'monetary', 'display_currency': d['currency']}"/></td>
+                                    <td class="text-end"><span t-out="row['book']" t-options="{'widget': 'monetary', 'display_currency': d['currency']}"/></td>
+                                    <td t-out="row['state']"/>
+                                </tr>
+                                <tr class="fw-bold">
+                                    <td colspan="5">TOTAL</td>
+                                    <td class="text-end"><span t-out="d['totals']['acq_value']" t-options="{'widget': 'monetary', 'display_currency': d['currency']}"/></td>
+                                    <td class="text-end"><span t-out="d['totals']['opening']" t-options="{'widget': 'monetary', 'display_currency': d['currency']}"/></td>
+                                    <td class="text-end"><span t-out="d['totals']['ytd']" t-options="{'widget': 'monetary', 'display_currency': d['currency']}"/></td>
+                                    <td class="text-end"><span t-out="d['totals']['accum_end']" t-options="{'widget': 'monetary', 'display_currency': d['currency']}"/></td>
+                                    <td class="text-end"><span t-out="d['totals']['book']" t-options="{'widget': 'monetary', 'display_currency': d['currency']}"/></td>
+                                    <td/>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </t>
+            </t>
+        </t>
+    </template>
+
+    <record id="action_report_efn_asset_register" model="ir.actions.report">
+        <field name="name">Laporan Daftar Aset</field>
+        <field name="model">efn.account.asset.register.wizard</field>
+        <field name="report_type">qweb-pdf</field>
+        <field name="report_name">efn_account_asset.report_efn_asset_register</field>
+        <field name="report_file">efn_account_asset.report_efn_asset_register</field>
+        <field name="paperformat_id" ref="paperformat_efn_asset_register"/>
+        <field name="binding_model_id" eval="False"/>
+        <field name="print_report_name">'Daftar Aset'</field>
+    </record>
+</odoo>

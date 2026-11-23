@@ -54,7 +54,8 @@ def test_products_uom_fallback_from_bom(maps: Maps, source: FakeSource) -> None:
     fin = rows["FIN-001"]["data"]
     assert fin["uom_xmlid"] == "uom.product_uom_unit" and fin["is_fin"] and not fin["purchase_ok"]
     assert rows["FIN-001"]["xmlid"].startswith("efn_mig_esb.pb_pb_product_fin_001_")
-    assert rows["RM001"]["data"]["categ_key"] == xmlid("pb", "PB", "category", "Bahan")
+    rm_categ = xmlid("pb", "PB", "category", "Persediaan / Bahan Baku / Lokal - Dry")
+    assert rows["RM001"]["data"]["categ_key"] == rm_categ
 
 
 def test_menus_takeaway_merge_and_archive(source: FakeSource) -> None:

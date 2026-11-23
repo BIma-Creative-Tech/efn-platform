@@ -1,0 +1,79 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- G55 (docs/fit-gap/G54_G55_G61_ODOO_SETUP.md §G55.2/§G55.3). noupdate=0: -u account / -u mrp me-reset induk, urutan,
+     dan label menu CE; button_upgrade ikut meng-upgrade modul ini (depends account, mrp) sesudahnya -> diterapkan lagi.
+     xmlid akar Accounting = efn_setup_menu.menu_accounting_root (dipakai efn_web_home ROOT_MENU_GROUPS). -->
+<odoo noupdate="0">
+    <!-- Akar baru "Accounting". group_account_manager ikut karena hanya meng-imply group_account_invoice
+         (admin/manager tanpa group_account_user tetap melihat akar ini). Ikon = ikon CE akun (Q-G55-1). -->
+    <menuitem id="menu_accounting_root"
+              name="Accounting"
+              sequence="56"
+              web_icon="account,static/description/icon.png"
+              groups="account.group_account_readonly,account.group_account_manager"/>
+
+    <!-- Finance -> Kas & Bank -->
+    <menuitem id="menu_efn_cash_bank"
+              name="Kas &amp; Bank"
+              parent="account.menu_finance"
+              sequence="4"
+              groups="account.group_account_invoice"/>
+    <menuitem id="menu_efn_bank_statements"
+              name="Rekening Koran Bank"
+              parent="menu_efn_cash_bank"
+              action="account.action_bank_statement_tree"
+              sequence="10"/>
+    <menuitem id="menu_efn_cash_registers"
+              name="Register Kas"
+              parent="menu_efn_cash_bank"
+              action="account.action_view_bank_statement_tree"
+              sequence="20"/>
+    <menuitem id="menu_efn_internal_transfers"
+              name="Transfer Internal"
+              parent="menu_efn_cash_bank"
+              action="account.action_account_payments_transfer"
+              sequence="30"/>
+
+    <!-- Menu CE yang pindah ke Accounting (anak-anaknya, termasuk menu efn_account_reports/efn_intercompany, ikut). -->
+    <record id="account.menu_finance_entries" model="ir.ui.menu">
+        <field name="parent_id" ref="menu_accounting_root"/>
+        <field name="sequence">1</field>
+    </record>
+    <record id="account.account_audit_menu" model="ir.ui.menu">
+        <field name="parent_id" ref="menu_accounting_root"/>
+        <field name="sequence">5</field>
+    </record>
+    <record id="account.menu_finance_reports" model="ir.ui.menu">
+        <field name="parent_id" ref="menu_accounting_root"/>
+        <field name="sequence">10</field>
+    </record>
+    <record id="account.menu_finance_configuration" model="ir.ui.menu">
+        <field name="parent_id" ref="menu_accounting_root"/>
+        <field name="sequence">90</field>
+    </record>
+
+    <!-- G59-C (docs/fit-gap/G59_G60_ACCOUNTING_PORT.md §G59-C, D-3): entri/tagihan berulang = fitur CE
+         account.move.auto_post (monthly/quarterly/yearly + auto_post_until); hanya action + menu, tanpa modul baru. -->
+    <record id="action_efn_recurring_entries" model="ir.actions.act_window">
+        <field name="name">Entri Berulang</field>
+        <field name="res_model">account.move</field>
+        <field name="view_mode">list,form</field>
+        <field name="view_id" ref="account.view_move_tree"/>
+        <field name="search_view_id" ref="account.view_account_move_filter"/>
+        <field name="domain">[('auto_post', 'in', ('monthly', 'quarterly', 'yearly'))]</field>
+        <field name="context">{'create': 0}</field>
+        <field name="help" type="html">
+            <p class="o_view_nocontent_smiling_face">Belum ada entri berulang</p>
+            <p>Buka entri jurnal atau tagihan vendor, isi Auto-post = Monthly/Quarterly/Yearly dan "Auto-post until".
+               Salinan berikutnya dibuat dan diposting otomatis pada tanggalnya.</p>
+        </field>
+    </record>
+    <menuitem id="menu_efn_recurring_entries"
+              name="Entri Berulang"
+              parent="account.menu_finance_entries"
+              action="action_efn_recurring_entries"
+              sequence="15"
+              groups="account.group_account_user,account.group_account_manager"/>
+
+    <!-- Label Finance / Accounting / Jurnal & Penutupan / Produksi untuk semua bahasa terpasang (models/ir_ui_menu.py). -->
+    <function model="ir.ui.menu" name="_efn_apply_menu_labels"/>
+</odoo>

@@ -5786,3 +5786,33 @@ Halaman `/forecast` untuk PT brand F&B (kode ESB: PB, WTZ, BCF, BCR, IMD, CUP). 
 - **Belum**: WAPE backtest per run belum ada di mart (`dim_forecast_run` tanpa metrik; nilai ada di Odoo
   `efn.forecast.run.metric_wape_backtest`) dan evaluasi aktual vs forecast F&B butuh penjualan ESB harian setelah
   cutover; penanda DC di Odoo (`stock.warehouse.efn_is_dc`) untuk PB belum diisi.
+
+## 29. Login gateway staf (G62, ADR-050)
+
+Halaman masuk bermerek EFN: staf memilih tujuan (ERP Odoo / Insight) lalu diarahkan ke formulir login Odoo. Service
+**tidak menerima/menyimpan password**, tanpa cookie sesi, tanpa secret aplikasi. Runbook: `docs/runbooks/login-gateway.md`.
+
+- **Host:** `login.${TRAEFIK_DOMAIN}` hanya di entrypoint `wg-https` (dev `https://login.efn.local:9443`); router Traefik
+  `login`, middleware `internal-only` (subnet outlet + staf, sama dengan `erp.`), `secure-headers-insight`
+  (Referrer-Policy `no-referrer`), `ratelimit-login` (10/s, burst 40, RemoteAddr). CSP dikirim aplikasi.
+- **Container:** `login-gateway` (Next.js standalone, non-root, `read_only`, tmpfs `/tmp` + `/app/.next/cache`,
+  `cap_drop: [ALL]`, 256M, replika 1) listen **plaintext `127.0.0.1:3005`** (loopback namespace saja) +
+  `login-gateway-tls` (ghostunnel `0.0.0.0:3443` → `127.0.0.1:3005`, leaf `tls_login_gateway_*`, `--allow-cn=traefik`,
+  `--allow-cn=blackbox-exporter`, status `127.0.0.1:6077`). Traefik → sidecar: HTTPS + serversTransport
+  `efn-login-gateway` (serverName `login-gateway`, CA internal, sertifikat klien `traefik`). Sidecar
+  `depends_on: { login-gateway: { condition: service_started, restart: true } }` (recreate app = restart sidecar).
+- **Profil compose:** `core`. **Network:** `login-ingress` (`<EFN_SUBNET_BASE>.22.0/24`, internal) beranggota hanya
+  `traefik`, `login-gateway`, `blackbox-exporter`. Tanpa `internal`/`data`/`egress`/`insight-*`: gateway tidak menjangkau
+  Odoo, DB, broker, ClickHouse, maupun internet.
+- **Env (non-rahasia):** `NODE_ENV=production`, `HOSTNAME=127.0.0.1`, `PORT=3005`, `NEXT_TELEMETRY_DISABLED=1`,
+  `LOGIN_GATEWAY_ERP_URL` (default `https://erp.${TRAEFIK_DOMAIN}/web/login`), `LOGIN_GATEWAY_INSIGHT_URL` (default
+  `https://insight.${TRAEFIK_DOMAIN}/`). Dev overlay menambah port `:9443`; gladi lokal non-443 mengisi keduanya di `.env`.
+- **Allowlist redirect:** `GET /go/{erp|insight}` → 302 ke URL env persis. Segmen path hanya kunci allowlist; query, body,
+  header, dan Referer tidak pernah menjadi tujuan (cegah open redirect). URL kosong/bukan `https://` absolut/memuat
+  kredensial → tujuan nonaktif (503), log startup menyebut nama variabel saja.
+- **Health:** `GET /healthz` → 200 `{"status":"ok"}` tanpa detail. Prometheus job `probe-login`
+  (`https://login-gateway:3443/healthz`, mTLS CN `blackbox-exporter`); alert `EfnLoginGatewayDown` (warning, 15 menit).
+- **Gerbang:** `scripts/check-encryption.sh` §6b4b (tanpa secret, network tunggal, hardening, URL https, CN sidecar,
+  kunci TLS hanya sidecar). Image ikut build/scan/sign (`build-push.yml`) dan rantai rilis bertanda tangan
+  (`IMAGE_LOGIN_GATEWAY`: deploy.yml, `efn-deploy`, `deploy.sh`). Staging/prod: terbitkan ulang intermediate PKI dan pasang
+  ulang wrapper `efn-deploy` sebelum rilis pertama G62; DNS split `login.` → IP WireGuard; SAN `login.` di `ACME_DOMAINS`.

@@ -40,6 +40,9 @@
 #           (egress/internal/data), tanpa read_only/cap_drop ALL; insight-web-tls --allow-cn selain traefik/blackbox-exporter;
 #           CH_URL / EFN_INSIGHT_ODOO_URL / EFN_INSIGHT_URL bukan https://; INSIGHT_ENABLED bukan boolean, atau bukan
 #           default false di render prod (insight-web + odoo)
+#   - (G62) login-gateway dengan secret apa pun, di network selain login-ingress, tanpa read_only/cap_drop ALL, atau
+#           LOGIN_GATEWAY_*_URL bukan https://; network login-ingress beranggota selain traefik/login-gateway/
+#           blackbox-exporter; tls_login_gateway_key di luar login-gateway-tls; --allow-cn selain traefik/blackbox-exporter
 #   - (G44) odoo_api_key_forecast_* selain smd|pb atau di luar forecast-worker; clickhouse_password_forecast di luar
 #           clickhouse-init/forecast-worker (atau tidak di clickhouse-init); tls_forecast_worker_* di luar forecast-worker;
 #           network forecast-ch selain clickhouse/forecast-worker, forecast-rpc selain odoo-rpc-gateway/forecast-worker;
@@ -494,6 +497,27 @@ check_compose() {
              and ((($o.environment // {}).INSIGHT_ENABLED // "") | tostring | test("^(true|false)$")))' \
       <<< "$json" > /dev/null \
     || err "[$label] odoo: EFN_INSIGHT_URL wajib https:// dan INSIGHT_ENABLED boolean (docs/04 §26.2)"
+  # 6b4b) G62 (docs/04 §29, ADR-050): login-gateway tanpa secret aplikasi (tidak memegang password), hanya network
+  #       login-ingress (Traefik/blackbox), hardening, tujuan redirect https; kunci TLS hanya sidecar; mTLS CN terbatas.
+  jq -e '[.services | to_entries[] | select([.value.secrets[]? | (.source // .)] | index("tls_login_gateway_key") != null) | .key]
+         - ["login-gateway-tls"] | length == 0' <<< "$json" > /dev/null \
+    || err "[$label] secret tls_login_gateway_key di-mount ke service selain login-gateway-tls (docs/04 §29)"
+  jq -e '[.services | to_entries[] | select((.value.networks // {}) | has("login-ingress")) | .key]
+         - ["traefik", "login-gateway", "blackbox-exporter"] | length == 0' <<< "$json" > /dev/null \
+    || err "[$label] network login-ingress dipakai service selain traefik/login-gateway/blackbox-exporter (docs/04 §29)"
+  jq -e '(.services["login-gateway"] // null) as $w | $w == null
+         or (((($w.networks // {}) | keys) == ["login-ingress"])
+             and ((($w.secrets // []) | length) == 0)
+             and ($w.read_only == true)
+             and ((($w.cap_drop // []) | index("ALL")) != null)
+             and ((($w.environment // {}).LOGIN_GATEWAY_ERP_URL // "") | startswith("https://"))
+             and ((($w.environment // {}).LOGIN_GATEWAY_INSIGHT_URL // "") | tostring | (. == "" or startswith("https://"))))' \
+      <<< "$json" > /dev/null \
+    || err "[$label] login-gateway: wajib hanya network login-ingress, tanpa secret, read_only, cap_drop ALL, LOGIN_GATEWAY_*_URL https:// (docs/04 §29)"
+  jq -e '(.services["login-gateway-tls"] // null) as $t | $t == null
+         or ([$t.command[]? | select(startswith("--allow-cn=")) | ltrimstr("--allow-cn=")]
+             - ["traefik", "blackbox-exporter"] | length == 0)' <<< "$json" > /dev/null \
+    || err "[$label] login-gateway-tls: --allow-cn hanya traefik/blackbox-exporter (docs/04 §29)"
   # 6b5) G44 (docs/04 §28.2/§28.10, ADR-046): forecast-worker (overlay docker-compose.forecast.yml). API key Odoo forecast
   #      per PT HANYA forecast-worker dan hanya PT yang punya user teknis (smd, pb); clickhouse_password_forecast hanya
   #      clickhouse-init + forecast-worker (clickhouse-init WAJIB me-mount-nya); kunci klien mTLS hanya forecast-worker;
@@ -1071,7 +1095,7 @@ check_stack_files() {
   grep -qE '^[[:space:]]+network:[[:space:]]*"@EFN_STACK@_internal"[[:space:]]*$' "$tf" \
     || err "infra/traefik/traefik.yml: providers.docker.network wajib \"@EFN_STACK@_internal\" (K25-06)"
   local body
-  local net_re='efn_(internal|edge|data|egress|cache|socket-proxy|objstore|insight-[a-z]+|esb|egress-esb|forecast-[a-z]+|segment-[a-z]+|rmq|wa-[a-z]+|mail)([^a-z_-]|$)'
+  local net_re='efn_(internal|edge|data|egress|cache|socket-proxy|objstore|insight-[a-z]+|login-ingress|esb|egress-esb|forecast-[a-z]+|segment-[a-z]+|rmq|wa-[a-z]+|mail)([^a-z_-]|$)'
   body="$(grep -vE "$COMMENT_RE" "$tf" || true)"
   if grep -qE "$net_re" <<< "$body"; then
     err "infra/traefik/traefik.yml: nama network tetap efn_* (pakai @EFN_STACK@_<network>)"

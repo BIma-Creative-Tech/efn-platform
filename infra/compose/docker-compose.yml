@@ -5,6 +5,7 @@
 # Profiles: core (edge, odoo, bff, web, pg, redis, mq, minio) | data (clickhouse, metabase, etl) | ai (ollama, ocr-worker)
 #           observability (prometheus, loki, promtail, grafana, uptime-kuma) | ops (alertmanager + exporter)
 #           data juga memuat insight-web + insight-web-tls (G42, dashboard staf, ADR-041)
+#           core juga memuat login-gateway + login-gateway-tls (G62, halaman masuk staf, ADR-050)
 # Overlay opsional profil data: docker-compose.esb.yml (G41, ekstraksi ESB Core -> ClickHouse; satu-satunya egress ESB;
 #   G43: + service sekali jalan esb-migrate di profil `migrate`). docker-compose.migration.yml (G43) = kunci bundel +
 #   direktori pertukaran ke odoo HANYA selama jendela migrasi (docs/runbooks/migrasi-esb-odoo.md).
@@ -72,7 +73,7 @@ x-ghostunnel: &ghostunnel
 # nama bawaan compose) agar label traefik.docker.network dan skrip uji tidak bergantung pada `-p`.
 # Peta oktet ketiga (TETAP, dipakai turunan): 0 edge, 1 internal (TRUSTED_PROXIES, relabel Prometheus), 2 data,
 # 3 egress, 4 socket-proxy, 5 cache, 6 objstore, 7-8 overlay ESB, 9-10 insight, 11-12 overlay forecast,
-# 13-16 + 21 overlay wa-unofficial, 17-19 overlay segment, 20 mail (dev).
+# 13-16 + 21 overlay wa-unofficial, 17-19 overlay segment, 20 mail (dev), 22 login-ingress (G62).
 # PostgreSQL hanya di network `data` -> pg_hba memakai `samenet` (dicek check-encryption.sh), bukan CIDR literal.
 networks:
   edge:          # Traefik dan publik (80/443)
@@ -127,6 +128,13 @@ networks:
     internal: true
     ipam:
       config: [{ subnet: "${EFN_SUBNET_BASE:-172.30}.10.0/24" }]
+  # G62 (docs/04 §29, ADR-050): login-gateway hanya butuh jalur masuk. Anggota: traefik (-> login-gateway-tls :3443),
+  # blackbox-exporter (probe /healthz), login-gateway. Tanpa DB/broker/Odoo/ClickHouse/egress (dicek check-encryption.sh).
+  login-ingress:
+    name: ${EFN_STACK:-efn}_login-ingress
+    internal: true
+    ipam:
+      config: [{ subnet: "${EFN_SUBNET_BASE:-172.30}.22.0/24" }]
 
 volumes:
   traefik-acme:          # acme.json resolver HTTP-01 host publik (Traefik)
@@ -303,6 +311,8 @@ secrets:
   tls_superapp_web_key: { file: ../../secrets/tls_superapp_web_key.txt }
   tls_insight_web_crt: { file: ../../secrets/tls_insight_web_crt.txt }   # G42: sidecar insight-web-tls
   tls_insight_web_key: { file: ../../secrets/tls_insight_web_key.txt }
+  tls_login_gateway_crt: { file: ../../secrets/tls_login_gateway_crt.txt }   # G62: sidecar login-gateway-tls
+  tls_login_gateway_key: { file: ../../secrets/tls_login_gateway_key.txt }
   tls_ollama_crt: { file: ../../secrets/tls_ollama_crt.txt }
   tls_ollama_key: { file: ../../secrets/tls_ollama_key.txt }
   tls_metabase_crt: { file: ../../secrets/tls_metabase_crt.txt }
@@ -448,7 +458,8 @@ services:
       - ../traefik/dynamic:/etc/traefik/dynamic/base:ro
       - traefik-acme:/acme
     # insight-ingress (G42): satu-satunya jalur ke sidecar insight-web-tls; tanpa akses ke ClickHouse (insight-data)
-    networks: [edge, internal, socket-proxy, insight-ingress]
+    # login-ingress (G62): satu-satunya jalur ke sidecar login-gateway-tls
+    networks: [edge, internal, socket-proxy, insight-ingress, login-ingress]
     read_only: true
     tmpfs: [/tmp]
     cap_drop: [ALL]
@@ -529,8 +540,8 @@ services:
     init: true
     entrypoint: ["/bin/sh", "/opt/efn-acme/acme-dns.sh"]
     environment:
-      # G42: insight. (dashboard insight-web, wg-https saja) ikut sertifikat SAN yang sama
-      - ACME_DOMAINS=erp.${TRAEFIK_DOMAIN:-efn.local},bi.${TRAEFIK_DOMAIN:-efn.local},ops.${TRAEFIK_DOMAIN:-efn.local},status.${TRAEFIK_DOMAIN:-efn.local},insight.${TRAEFIK_DOMAIN:-efn.local}
+      # G42: insight. (dashboard insight-web, wg-https saja) ikut sertifikat SAN yang sama; G62: login. (login-gateway)
+      - ACME_DOMAINS=erp.${TRAEFIK_DOMAIN:-efn.local},bi.${TRAEFIK_DOMAIN:-efn.local},ops.${TRAEFIK_DOMAIN:-efn.local},status.${TRAEFIK_DOMAIN:-efn.local},insight.${TRAEFIK_DOMAIN:-efn.local},login.${TRAEFIK_DOMAIN:-efn.local}
       - ACME_EMAIL=${ACME_EMAIL:-ops@example.com}
       - ACME_DNS_PROVIDER=${ACME_DNS_PROVIDER:-cloudflare}
       # Staging ACME: https://acme-staging-v02.api.letsencrypt.org/directory (uji sebelum produksi, runbook §3)
@@ -1906,6 +1917,91 @@ services:
     labels:
       service: insight-web-tls
 
+  # G62 (docs/04 §29, ADR-050): halaman masuk staf bermerek EFN (Next.js standalone). Memilih tujuan (ERP / Insight) lalu
+  # redirect (GET /go/<tujuan>) ke URL dari allowlist env (LOGIN_GATEWAY_*_URL); TIDAK menerima password, tanpa cookie sesi, TANPA secret.
+  # Runbook: docs/runbooks/login-gateway.md. Pola sama dengan insight-web: Next.js listen 127.0.0.1:3005 (plaintext hanya
+  # di loopback namespace ini), TLS + mTLS oleh sidecar login-gateway-tls (:3443, CN traefik + blackbox-exporter).
+  # Network: login-ingress saja (Traefik/blackbox) - tanpa egress/internal/data/insight-*. Profil core: pintu masuk ERP
+  # (staf + kasir outlet) tidak boleh bergantung pada stack data (K25-02); tujuan Insight nonaktif bila URL kosong.
+  # Non-root: USER image (services/login-gateway/Dockerfile target runtime; gate Trivy DS-0002 di build-push).
+  # Replika 1: sidecar menempel ke satu container (pola superapp-web/insight-web).
+  login-gateway:
+    <<: *common
+    image: ${IMAGE_LOGIN_GATEWAY:-ghcr.io/${EFN_STACK:-efn}/login-gateway:dev}
+    build:
+      context: ../../services/login-gateway
+      target: runtime
+    profiles: ["core"]
+    environment:
+      NODE_ENV: production
+      HOSTNAME: 127.0.0.1
+      PORT: "3005"
+      NEXT_TELEMETRY_DISABLED: "1"
+      # Allowlist tujuan redirect (satu-satunya sumber URL; parameter browser tidak pernah menjadi tujuan). Wajib https
+      # absolut (aplikasi menolak selain itu -> tujuan nonaktif). Dev: :9443 (docker-compose.dev.yml); gladi lokal
+      # prod di port non-443: set di .env (lihat .env.example).
+      LOGIN_GATEWAY_ERP_URL: ${LOGIN_GATEWAY_ERP_URL:-https://erp.${TRAEFIK_DOMAIN:-efn.local}/web/login}
+      LOGIN_GATEWAY_INSIGHT_URL: ${LOGIN_GATEWAY_INSIGHT_URL:-https://insight.${TRAEFIK_DOMAIN:-efn.local}/}
+    networks: [login-ingress]
+    read_only: true
+    tmpfs: [/tmp, /app/.next/cache]
+    cap_drop: [ALL]
+    deploy:
+      resources:
+        limits: { memory: 256M }
+    labels:
+      service: login-gateway
+      traefik.enable: "true"
+      traefik.docker.network: ${EFN_STACK:-efn}_login-ingress
+      # ADR-023/ADR-050: HANYA wg-https + internal-only (subnet outlet + staf, sama dengan erp.: kasir outlet juga masuk
+      # ERP lewat halaman ini). secure-headers-insight = secure-headers + Referrer-Policy no-referrer, tanpa kamera/lokasi;
+      # CSP dari Next.js sendiri (lib/csp.ts).
+      traefik.http.routers.login.rule: Host(`login.${TRAEFIK_DOMAIN:-efn.local}`)
+      traefik.http.routers.login.entrypoints: wg-https
+      traefik.http.routers.login.tls: "true"   # sertifikat dari acme-dns (SEC-37), bukan resolver Traefik
+      traefik.http.routers.login.middlewares: internal-only@file,secure-headers-insight@file,ratelimit-login@file
+      traefik.http.services.login.loadbalancer.server.port: "3443"
+      traefik.http.services.login.loadbalancer.server.scheme: https
+      traefik.http.services.login.loadbalancer.serversTransport: efn-login-gateway@file
+    healthcheck:
+      # Loopback namespace sendiri; /healthz tanpa detail dan tanpa dependensi
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3005/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+  # Gotcha operasional (G62): sidecar `network_mode: service:<app>` harus di-recreate setiap kali app di-recreate
+  # (namespace lama hilang -> Traefik 502). depends_on dengan `restart: true` membuat compose me-restart sidecar ini saat
+  # login-gateway di-recreate/restart lewat compose.
+  login-gateway-tls:
+    <<: *ghostunnel
+    profiles: ["core"]
+    network_mode: "service:login-gateway"
+    depends_on:
+      login-gateway:
+        condition: service_started
+        restart: true
+    command:
+      - server
+      - --listen=0.0.0.0:3443
+      - --target=127.0.0.1:3005
+      - --cert=/run/secrets/tls_login_gateway_crt
+      - --key=/run/secrets/tls_login_gateway_key
+      - --cacert=/run/secrets/efn_ca_crt
+      - --allow-cn=traefik
+      - --allow-cn=blackbox-exporter
+      - --status=http://127.0.0.1:6077
+      - --quiet=conns
+    secrets: [efn_ca_crt, tls_login_gateway_crt, tls_login_gateway_key]
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:6077/_status"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    labels:
+      service: login-gateway-tls
+
   # ETL: user efn_etl (PostgreSQL, grant level kolom) dan efn_etl (ClickHouse, INSERT/SELECT mart).
   # Tidak membaca otp_pepper (SEC-16): hash member sudah dihitung BFF di PostgreSQL.
   # G13 (data-AI infra/metabase/provision.py): setup awal Metabase (admin dari secret), koneksi ClickHouse TLS strict,
@@ -2742,7 +2838,8 @@ services:
       - ../observability/blackbox.yml:/etc/blackbox/blackbox.yml:ro
       - ../observability/web-config.yml:/etc/blackbox/web-config.yml:ro
     # insight-ingress (G42): probe https://insight-web:3443/api/health (mTLS CN blackbox-exporter)
-    networks: [internal, data, cache, egress, insight-ingress]
+    # login-ingress (G62): probe https://login-gateway:3443/healthz (mTLS CN blackbox-exporter)
+    networks: [internal, data, cache, egress, insight-ingress, login-ingress]
     read_only: true
     cap_drop: [ALL]
     deploy:

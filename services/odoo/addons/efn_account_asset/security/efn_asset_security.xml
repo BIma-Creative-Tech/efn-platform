@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- G57 §1.6: rule global multi-company untuk 6 model tersimpan (bukan per grup). -->
+<odoo noupdate="1">
+    <record id="efn_asset_rule_company" model="ir.rule">
+        <field name="name">EFN aset tetap: multi-company</field>
+        <field name="model_id" ref="model_efn_account_asset"/>
+        <field name="domain_force">[('company_id', 'in', company_ids)]</field>
+    </record>
+    <record id="efn_asset_group_rule_company" model="ir.rule">
+        <field name="name">EFN kelompok aset: multi-company</field>
+        <field name="model_id" ref="model_efn_account_asset_group"/>
+        <field name="domain_force">[('company_id', 'in', company_ids)]</field>
+    </record>
+    <record id="efn_asset_location_rule_company" model="ir.rule">
+        <field name="name">EFN lokasi aset: multi-company</field>
+        <field name="model_id" ref="model_efn_account_asset_location"/>
+        <field name="domain_force">[('company_id', 'in', company_ids)]</field>
+    </record>
+    <record id="efn_asset_line_rule_company" model="ir.rule">
+        <field name="name">EFN baris penyusutan: multi-company</field>
+        <field name="model_id" ref="model_efn_account_asset_depreciation_line"/>
+        <field name="domain_force">[('company_id', 'in', company_ids)]</field>
+    </record>
+    <record id="efn_asset_reval_rule_company" model="ir.rule">
+        <field name="name">EFN revaluasi aset: multi-company</field>
+        <field name="model_id" ref="model_efn_account_asset_revaluation"/>
+        <field name="domain_force">[('company_id', 'in', company_ids)]</field>
+    </record>
+    <record id="efn_asset_partial_rule_company" model="ir.rule">
+        <field name="name">EFN pelepasan sebagian aset: multi-company</field>
+        <field name="model_id" ref="model_efn_account_asset_partial_disposal"/>
+        <field name="domain_force">[('company_id', 'in', company_ids)]</field>
+    </record>
+</odoo>

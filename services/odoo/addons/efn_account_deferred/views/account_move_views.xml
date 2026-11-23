@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="view_move_form_efn_deferred" model="ir.ui.view">
+        <field name="name">account.move.form.efn.deferred</field>
+        <field name="model">account.move</field>
+        <field name="inherit_id" ref="account.view_move_form"/>
+        <field name="arch" type="xml">
+            <xpath expr="//field[@name='invoice_line_ids']/list/field[@name='name']" position="after">
+                <field name="efn_deferred_start_date" optional="hide"/>
+                <field name="efn_deferred_end_date" optional="hide"/>
+            </xpath>
+            <div name="button_box" position="inside">
+                <button name="action_efn_open_deferred_entries" type="object"
+                        class="oe_stat_button" icon="fa-calendar"
+                        invisible="efn_deferred_generated_count == 0">
+                    <field name="efn_deferred_generated_count" widget="statinfo" string="Entri Tangguhan"/>
+                </button>
+            </div>
+        </field>
+    </record>
+</odoo>

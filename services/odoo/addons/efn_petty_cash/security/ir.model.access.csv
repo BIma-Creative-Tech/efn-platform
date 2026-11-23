@@ -1,0 +1,22 @@
+id,name,model_id:id,group_id:id,perm_read,perm_write,perm_create,perm_unlink
+access_efn_pc_type_user,efn.petty.cash.type user,model_efn_petty_cash_type,group_petty_cash_user,1,0,0,0
+access_efn_pc_type_finance,efn.petty.cash.type finance,model_efn_petty_cash_type,group_petty_cash_finance,1,1,1,1
+access_efn_pc_type_readonly,efn.petty.cash.type readonly,model_efn_petty_cash_type,account.group_account_readonly,1,0,0,0
+access_efn_pc_fund_user,efn.petty.cash.fund user,model_efn_petty_cash_fund,group_petty_cash_user,1,0,0,0
+access_efn_pc_fund_finance,efn.petty.cash.fund finance,model_efn_petty_cash_fund,group_petty_cash_finance,1,1,1,1
+access_efn_pc_fund_readonly,efn.petty.cash.fund readonly,model_efn_petty_cash_fund,account.group_account_readonly,1,0,0,0
+access_efn_pc_request_user,efn.petty.cash.request user,model_efn_petty_cash_request,group_petty_cash_user,1,1,1,0
+access_efn_pc_request_approver,efn.petty.cash.request approver,model_efn_petty_cash_request,group_petty_cash_approver,1,1,0,0
+access_efn_pc_request_finance,efn.petty.cash.request finance,model_efn_petty_cash_request,group_petty_cash_finance,1,1,1,1
+access_efn_pc_request_readonly,efn.petty.cash.request readonly,model_efn_petty_cash_request,account.group_account_readonly,1,0,0,0
+access_efn_pc_request_line_user,efn.petty.cash.request.line user,model_efn_petty_cash_request_line,group_petty_cash_user,1,1,1,1
+access_efn_pc_request_line_finance,efn.petty.cash.request.line finance,model_efn_petty_cash_request_line,group_petty_cash_finance,1,1,1,1
+access_efn_pc_request_line_readonly,efn.petty.cash.request.line readonly,model_efn_petty_cash_request_line,account.group_account_readonly,1,0,0,0
+access_efn_pc_realization_user,efn.petty.cash.realization user,model_efn_petty_cash_realization,group_petty_cash_user,1,1,1,0
+access_efn_pc_realization_finance,efn.petty.cash.realization finance,model_efn_petty_cash_realization,group_petty_cash_finance,1,1,1,1
+access_efn_pc_realization_readonly,efn.petty.cash.realization readonly,model_efn_petty_cash_realization,account.group_account_readonly,1,0,0,0
+access_efn_pc_realization_line_user,efn.petty.cash.realization.line user,model_efn_petty_cash_realization_line,group_petty_cash_user,1,1,1,1
+access_efn_pc_realization_line_finance,efn.petty.cash.realization.line finance,model_efn_petty_cash_realization_line,group_petty_cash_finance,1,1,1,1
+access_efn_pc_realization_line_readonly,efn.petty.cash.realization.line readonly,model_efn_petty_cash_realization_line,account.group_account_readonly,1,0,0,0
+access_efn_pc_report_wizard_finance,efn.petty.cash.report.wizard finance,model_efn_petty_cash_report_wizard,group_petty_cash_finance,1,1,1,1
+access_efn_pc_report_wizard_readonly,efn.petty.cash.report.wizard readonly,model_efn_petty_cash_report_wizard,account.group_account_readonly,1,1,1,0

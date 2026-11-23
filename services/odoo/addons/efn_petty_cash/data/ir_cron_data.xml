@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo noupdate="1">
+    <!-- Harian: pengingat realisasi lewat tenggat + pengingat isi ulang fund (efn_petty_cash.replenish_threshold_pct). -->
+    <record id="ir_cron_efn_petty_cash_reminder" model="ir.cron">
+        <field name="name">EFN Kas Kecil: pengingat realisasi &amp; pengisian ulang</field>
+        <field name="model_id" ref="model_efn_petty_cash_request"/>
+        <field name="state">code</field>
+        <field name="code">model._cron_efn_petty_cash_reminder()</field>
+        <field name="user_id" ref="base.user_root"/>
+        <field name="interval_number">1</field>
+        <field name="interval_type">days</field>
+        <field name="active" eval="True"/>
+    </record>
+</odoo>

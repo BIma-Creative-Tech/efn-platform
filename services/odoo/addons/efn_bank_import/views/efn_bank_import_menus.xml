@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- G58 §4.3: Finance > Kas & Bank (efn_setup_menu) dan Accounting > Configuration. -->
+<odoo>
+    <menuitem id="menu_efn_bank_import"
+              name="Impor Mutasi Bank"
+              parent="efn_setup_menu.menu_efn_cash_bank"
+              action="action_efn_bank_import_wizard"
+              sequence="15"
+              groups="account.group_account_user"/>
+    <menuitem id="menu_efn_bank_import_logs"
+              name="Log Impor Mutasi"
+              parent="efn_setup_menu.menu_efn_cash_bank"
+              action="action_efn_bank_import_log"
+              sequence="16"
+              groups="account.group_account_readonly,account.group_account_user"/>
+    <menuitem id="menu_efn_bank_import_templates"
+              name="Template Mutasi Bank"
+              parent="account.menu_finance_configuration"
+              action="action_efn_bank_import_template"
+              sequence="60"
+              groups="account.group_account_manager"/>
+</odoo>

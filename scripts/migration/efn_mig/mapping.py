@@ -14,8 +14,10 @@ from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass, field
 from datetime import date
 from decimal import Decimal
+from functools import cache
 from typing import Any
 
+from efn_mig.category_roles import SEP, CategoryRole, CategoryRoleError, load_roles, path_chain, role_for
 from efn_mig.xmlid import xmlid
 
 COMPANY_CODES = frozenset({"EFN", "GL", "PB", "BCR", "BCF", "WTZ", "FARM", "IMD", "CUP"})
@@ -295,11 +297,33 @@ def category_key(brand: str, company: str, path: str) -> str:
     return xmlid(brand, company, "category", path)
 
 
+@cache
+def category_roles() -> dict[str, CategoryRole]:
+    """Tabel peran G61 (`efn_mig/category_roles.csv`, ikut image). Tidak valid -> MapError (exit 2)."""
+    try:
+        return load_roles()
+    except CategoryRoleError as exc:
+        raise MapError(str(exc)) from None
+
+
+def product_role(product: Mapping[str, Any]) -> CategoryRole:
+    """Peran kategori ESB produk; kosong / tidak ada di tabel -> MapError (fail closed, G61)."""
+    try:
+        return role_for(category_roles(), product.get("category"))
+    except CategoryRoleError as exc:
+        raise MapError(f"produk {str(product.get('product_code'))[:40]}: {exc}") from None
+
+
 def build_categories(brand: str, company: str, products: Iterable[Mapping[str, Any]]) -> list[dict[str, Any]]:
-    names = sorted({norm_text(p.get("category")) for p in products} - {""})
-    return [
-        record("category", company, n, category_key(brand, company, n), {"name": n, "parent_key": None}) for n in names
-    ]
+    """G61: pohon kategori per peran (`Persediaan / Bahan Baku / Impor`, ...), bukan nama ESB datar. Setiap simpul =
+    satu baris (esb_key = path lengkap), urut kedalaman agar induk diimpor lebih dulu; tingkat atas parent_key null."""
+    paths = {node for p in products for node in path_chain(product_role(p).target_path)}
+    out = []
+    for path in sorted(paths, key=lambda x: (x.count(SEP), x)):
+        parent = path.rsplit(SEP, 1)[0] if SEP in path else None
+        data = {"name": path.rsplit(SEP, 1)[-1], "parent_key": category_key(brand, company, parent) if parent else None}
+        out.append(record("category", company, path, category_key(brand, company, path), data))
+    return out
 
 
 def pos_category_path(menu: Mapping[str, Any]) -> tuple[str, str]:
@@ -410,20 +434,22 @@ def build_products(
         uom = uom_by_code.get(code, "")
         mapped = umap.get(uom)
         use_default = mapped is None and default_uom is not None
-        cat = norm_text(p.get("category"))
+        role = product_role(p)
         is_fin = bool(p.get("is_fin"))
         ratio = p.get("batch_to_ea_ratio")
         data = {
             "default_code": code,
             "name": norm_text(p.get("product_name")) or code,
-            "categ_key": category_key(brand, company, cat) if cat else None,
+            "categ_key": category_key(brand, company, role.target_path),
             "uom_esb": uom or None,
             "uom_xmlid": mapped.uom_xmlid if mapped else (default_uom if use_default else None),
             "ea_factor": num(mapped.ea_factor) if mapped else None,
-            "type": "consu",
-            "is_storable": True,
-            "purchase_ok": not is_fin,
-            "sale_ok": False,
+            # G61: flag per peran (category_roles.csv). Aturan `supplierinfo` (A2): sumber supplierinfo/PO ESB belum
+            # diekspor (E11-E13) -> False; recategorize_pb.py memeriksa product.supplierinfo di Odoo.
+            "type": role.type,
+            "is_storable": role.is_storable,
+            "purchase_ok": role.purchase(has_supplier=False, is_fin=is_fin),
+            "sale_ok": role.sale_ok,
             "is_fin": is_fin,
             "active": bool(p.get("active", 1)),
             "batch_to_ea_ratio": num(ratio) if ratio is not None else None,

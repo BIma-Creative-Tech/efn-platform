@@ -19,7 +19,7 @@
 # Env wajib : TRAEFIK_DOMAIN ACME_EMAIL GHCR_USER GHCR_TOKEN APP_ENV PAYMENT_PROVIDER
 #             EFN_PUBLIC_BIND (IP host untuk 80/443 websecure)
 #             IMAGE_POSTGRES IMAGE_ODOO IMAGE_API_GATEWAY IMAGE_SUPERAPP_WEB IMAGE_INSIGHT_WEB IMAGE_AI_OCR_WORKER IMAGE_ETL
-#               IMAGE_TEXT2SQL IMAGE_MINIO IMAGE_METABASE IMAGE_FORECAST_WORKER (G44)
+#               IMAGE_TEXT2SQL IMAGE_MINIO IMAGE_METABASE IMAGE_FORECAST_WORKER (G44) IMAGE_LOGIN_GATEWAY (G62)
 #               (= <registry>/<svc>@sha256:<digest>; SEC-10: deploy by digest). Lewat efn-deploy nilainya HANYA dari
 #               manifest rilis bertanda tangan + `cosign verify` di host (SEC-42); env CI tidak bisa mengisinya.
 #             Pin root CA: EFN_PKI_ROOT_SHA256 (dari efn-deploy, atau dibaca dari /etc/efn/deploy.conf saat manual)
@@ -96,7 +96,7 @@ fi
   || die "PKI_SOURCE=${PKI_SOURCE} sudah dihapus (SEC-23); leaf selalu diterbitkan dari intermediate"
 DIGEST_RE='^[a-z0-9.-]+(:[0-9]+)?/[a-z0-9._/-]+@sha256:[a-f0-9]{64}$'
 for v in IMAGE_POSTGRES IMAGE_ODOO IMAGE_API_GATEWAY IMAGE_SUPERAPP_WEB IMAGE_INSIGHT_WEB IMAGE_AI_OCR_WORKER IMAGE_ETL \
-         IMAGE_TEXT2SQL IMAGE_MINIO IMAGE_METABASE IMAGE_FORECAST_WORKER; do
+         IMAGE_TEXT2SQL IMAGE_MINIO IMAGE_METABASE IMAGE_FORECAST_WORKER IMAGE_LOGIN_GATEWAY; do
   [[ "${!v:-}" =~ $DIGEST_RE ]] || die "$v harus <registry>/<image>@sha256:<64 hex> (dapat: '${!v:-}')"
 done
 [[ "$APP_ENV" =~ ^(production|staging)$ ]] || die "APP_ENV harus production|staging"
@@ -382,6 +382,7 @@ DOTENV=(
   "IMAGE_API_GATEWAY=${IMAGE_API_GATEWAY}"
   "IMAGE_SUPERAPP_WEB=${IMAGE_SUPERAPP_WEB}"
   "IMAGE_INSIGHT_WEB=${IMAGE_INSIGHT_WEB}"
+  "IMAGE_LOGIN_GATEWAY=${IMAGE_LOGIN_GATEWAY}"
   "IMAGE_AI_OCR_WORKER=${IMAGE_AI_OCR_WORKER}"
   "IMAGE_ETL=${IMAGE_ETL}"
   "IMAGE_TEXT2SQL=${IMAGE_TEXT2SQL}"

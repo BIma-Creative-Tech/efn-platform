@@ -1187,6 +1187,99 @@ Konsumsi:
 - lisensi `openupgradelib`;
 - tidak ada referensi Cybrosys yang relevan (tidak dicari lebih jauh).
 
+## 23 Nov 2026 — G54 / G55 / G61 (kesiapan POS, menu Finance/Accounting, kategori produk)
+
+Worktree `efn-platform-odoo`, branch `feat/odoo-completion`. Dokumen saja:
+`docs/fit-gap/G54_G55_G61_ODOO_SETUP.md`. Diverifikasi di source CE 19 lokal (subset) + GitHub `odoo/odoo@19.0` (base).
+Tidak ada referensi OCA/Cybrosys yang diperlukan.
+
+Rekomendasi untuk efn-odoo-engineer:
+- **G54 (tambah)** di `efn_setup_pos`:
+  - wizard `efn.pos.setup.wizard` dengan mode check/apply, per company, idempoten, apply butuh
+    `account.group_account_manager`;
+  - tunai per config: jurnal `<brand>C<nn>` (kode ≤ 5), akun kas otomatis 1111xxxx, loss/profit dari company;
+  - link EDC + QRIS manual (data baru, `payment_method_type=none`);
+  - Poin EFN hanya untuk config redeem;
+  - PB1 default di menu tanpa pajak;
+  - data EDC/Poin IMD/CUP + preset IMD/CUP.
+- **G55 (tambah)** modul `efn_setup_menu` (depends `account`, `mrp`; **tidak** ke `efn_account_reports`):
+  - `account.menu_finance` diberi label "Finance";
+  - root baru "Accounting" (grup readonly + manager) menampung entries/review/reporting/configuration;
+  - label diterapkan untuk semua bahasa terpasang lewat satu method kecil `ir.ui.menu._efn_apply_menu_labels`
+    (dipanggil `<function>` noupdate=0). `update_field_translations` menolak bahasa yang belum aktif.
+  - Upgrade `account`/`mrp` ikut memicu upgrade modul ini (`button_upgrade` rekursif).
+- **G61 (ubah)**:
+  - satu CSV pemetaan `scripts/migration/efn_mig/category_role_map.csv`, dipakai efn_mig (importer memiliki
+    `categ_id`/flag, jadi impor ulang akan mengembalikan struktur lama bila efn_mig tidak diubah) **dan** skrip
+    `g61_recategorize.py` (dry-run default);
+  - pohon bersama tanpa prefiks merek; SMD tidak disentuh;
+  - mengubah `type`/`is_storable` aman saat 0 move.
+- **Hapus/sederhanakan:** tidak ada. Kategori ESB lama yang kosong dihapus oleh skrip.
+
+Pertanyaan klien: Q-G54-1..3, Q-G55-1..2, Q-G61-1..2, Q-ESB16 (tabel di akhir dokumen fit-gap).
+Belum terverifikasi: daftar di akhir dokumen fit-gap (terjemahan id CE, menu modul non-subset di efn-prod,
+`_run_average_batch` tanpa move, `stock_landed_costs`).
+
+## 23 Nov 2026 — G59 / G60 (port accounting `odoo-platform`: PPh, deferred, recurring, voucher, MDR, outlet)
+
+Worktree `efn-platform-odoo`, branch `feat/odoo-completion`. Dokumen saja: `docs/fit-gap/G59_G60_ACCOUNTING_PORT.md`.
+ADR-049 (port), ADR-027, ADR-031. Diverifikasi di subset CE 19 lokal + GitHub `odoo/odoo@19.0` (`l10n_id` pajak/CoA,
+`l10n_account_withholding_tax`). Tidak overlap dengan G57/G58 (asumsi koordinasi di §0 dokumen).
+
+Rekomendasi untuk efn-odoo-engineer:
+- **Sederhanakan** `custom_tax_id` → `efn_tax_withholding`: PPh = pajak negatif CE + fiscal position. Hanya
+  `account.tax.efn_pph_kind/efn_bupot_object_code`, nomor bupot di baris pajak, dan list "Daftar Pemotongan PPh".
+  Drop engine aturan, DPP Nilai Lain (dobel dengan Coretax CE 11/12), NPWP/NIK, Faktur Pengganti.
+- **Port** `custom_account_deferred` → `efn_account_deferred`. Rename field ke `efn_*`. Wajib menyalin
+  `analytic_distribution` ke entri deferral/pengakuan.
+- **Hapus** `custom_accounting_recurring`: CE `auto_post` monthly/quarterly/yearly sudah menutupnya. Cukup tambah menu
+  "Entri Berulang" data-only di `efn_setup_menu`.
+- **Tambah** `efn_account_localization`, berisi:
+  - voucher/receipt (port), dengan 4-eyes `account.payment` di atas ambang per PT;
+  - `efn.mdr.rate` per metode bayar: estimasi MDR saat tutup sesi via override `_create_bank_payment_moves`, lalu true-up
+    di reconcile model G58. Tanpa BIN;
+  - plan analitik Outlet per gudang yang dicap ke baris P&L jurnal sesi POS.
+- **Gap terpisah:** `efn_account_reports` tanpa filter analitik. Usulan: filter P&L dari `account.analytic.line`.
+
+Pertanyaan klien: Q-G59-1..5, Q-G60-1..9 (tabel di dokumen). Belum terverifikasi: daftar di akhir dokumen.
+
+## 23 Nov 2026 — G57 / G58 (port accounting `odoo-platform`: aset, kas kecil, rekonsiliasi, impor mutasi, batch)
+
+Dokumen saja: `docs/fit-gap/G57_G58_ACCOUNTING_PORT.md`. ADR-049, ADR-031. Diverifikasi di subset CE 19 lokal + GitHub
+19.0 (`l10n_id` CoA, `requirements.txt`). Diselaraskan dengan G59/G60: MDR true-up = `account.reconcile.model` yang
+diterapkan wizard G58; persetujuan payment di G60.
+
+Rekomendasi untuk efn-odoo-engineer (tambah 5 modul):
+- `efn_account_asset`:
+  - port `custom_accounting_asset`;
+  - **baru**: tagihan vendor kategori G61 `Aset Tetap / …` membuat draf aset pool, dipicu kategori (akun `12210030`
+    dipakai bersama);
+  - seed 6 kelompok ke akun `l10n_id`, LVA tetap dibebankan;
+  - perbaiki nilai buku laporan register.
+- `efn_petty_cash`:
+  - buang `hr` (pemegang = partner/user);
+  - mesin persetujuan generik diganti empat mata;
+  - **baru**: fund imprest outlet;
+  - buang hook yang memberi grup ke semua user internal.
+- `efn_account_reconcile`:
+  - port; SQL view ringkasan wajib per company (sumber menjumlah lintas PT);
+  - ide generik Levi's: batas tanggal, isi otomatis setoran, tanpa auto-match tunai, write-off dari reconcile model.
+- `efn_bank_import`:
+  - CSV generik + BCA korporat;
+  - **buang** H2H dan bypass lock date (fail-closed);
+  - dedup per company + fingerprint baris.
+- `efn_account_batch_payment`:
+  - CSV aman;
+  - ekspor fail-closed bila keyring `efn_pii` terkunci;
+  - file tidak disimpan permanen;
+  - empat mata validasi ≠ ekspor;
+  - format bank diblokir sampai diverifikasi.
+
+Hapus/sederhanakan: parser/render publik → privat; deteksi duplikat pembayaran pakai `_fetch_duplicate_reference` CE;
+rantai konfigurasi `res.company` petty cash dibuang.
+
+Pertanyaan klien: Q-G57-1..6, Q-PC1..5, Q-G58-1..5 (§9). Belum terverifikasi: §10.
+
 ## 23 Nov 2026 — Kanal online SMD (pickup + pre-order), `efn_setup_supermarket_online`
 
 Worktree `efn-platform-smweb`, branch `feat/supermarket-web`. Keputusan user 23 Nov: SMD punya kanal online sendiri

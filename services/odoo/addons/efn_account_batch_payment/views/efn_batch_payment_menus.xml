@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- G58 §5.4: Finance > Vendors (account.menu_finance_payables) dan Accounting > Configuration. -->
+<odoo>
+    <menuitem id="menu_efn_batch_payment"
+              name="Batch Pembayaran"
+              parent="account.menu_finance_payables"
+              action="action_efn_batch_payment"
+              sequence="25"
+              groups="account.group_account_user"/>
+    <menuitem id="menu_efn_batch_payment_format"
+              name="Format File Transfer Bank"
+              parent="account.menu_finance_configuration"
+              action="action_efn_batch_payment_format"
+              sequence="61"
+              groups="account.group_account_manager"/>
+</odoo>

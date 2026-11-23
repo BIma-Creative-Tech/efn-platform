@@ -1,0 +1,53 @@
+esb_category,target_path,role,type,is_storable,sale_ok,purchase_ok,available_in_pos,note
+Inventory - Food & Beverage,Persediaan / Bahan Baku / Food & Beverage,persediaan,consu,true,false,true,false,A1 default bahan baku (bukan barang dagang jadi)
+Inventory - WIP,Persediaan / WIP,persediaan,consu,true,false,supplierinfo,false,A2 digabung dengan WIP; purchase_ok dari supplierinfo/PO
+FA LVA,Aset Tetap / LVA,aset_tetap,consu,false,false,true,false,A6 dibebankan (akun beban) sampai kebijakan Finance
+Packaging Material,Persediaan / Kemasan,persediaan,consu,true,false,true,false,A3 digabung dengan Packaging
+FA Office & Outlet Equipment,Aset Tetap / Peralatan Kantor & Outlet,aset_tetap,consu,false,false,true,false,
+FA Furniture & Fixture,Aset Tetap / Furnitur & Perlengkapan Tetap,aset_tetap,consu,false,false,true,false,
+Local - Dry,Persediaan / Bahan Baku / Lokal - Dry,persediaan,consu,true,false,true,false,
+Supplies,Perlengkapan / Operasional Toko,perlengkapan,consu,false,false,true,false,A4 dibebankan saat bill (non-stok)
+Import Ingredient,Persediaan / Bahan Baku / Impor,persediaan,consu,true,false,true,false,
+WIP,Persediaan / WIP,persediaan,consu,true,false,supplierinfo,false,A2 digabung dengan Inventory - WIP
+Indirect Material,Persediaan / Bahan Baku / Bahan Penolong,persediaan,consu,true,false,true,false,A5 storable sebagai bahan penolong
+Expense - Store Supplies,Perlengkapan / Operasional Toko,perlengkapan,consu,false,false,true,false,
+Local - Fresh,Persediaan / Bahan Baku / Lokal - Fresh,persediaan,consu,true,false,true,false,
+Uniform,Perlengkapan / Seragam,perlengkapan,consu,false,false,true,false,
+Tableware & Kitchenware,Perlengkapan / Peralatan Makan & Dapur,perlengkapan,consu,false,false,true,false,A4 dibebankan saat bill (non-stok)
+FIN,Persediaan / Barang Jadi,persediaan,consu,true,false,supplierinfo,false,A2 is_fin selalu purchase_ok=false
+Sparepart Machine,Perlengkapan / Suku Cadang,perlengkapan,consu,false,false,true,false,A4 dibebankan saat bill (non-stok)
+Packaging,Persediaan / Kemasan,persediaan,consu,true,false,true,false,A3 digabung dengan Packaging Material
+Local - Frozen,Persediaan / Bahan Baku / Lokal - Frozen,persediaan,consu,true,false,true,false,
+Marketing,Perlengkapan / Pemasaran,perlengkapan,consu,false,false,true,false,A7 default barang POSM (bukan jasa agensi)
+Local - Chill,Persediaan / Bahan Baku / Lokal - Chill,persediaan,consu,true,false,true,false,
+Supplies - Cleaning,Perlengkapan / Kebersihan & Keselamatan,perlengkapan,consu,false,false,true,false,
+Supplies - Production,Perlengkapan / Produksi,perlengkapan,consu,false,false,true,false,
+FA Building & Improvements,Aset Tetap / Bangunan & Renovasi,aset_tetap,consu,false,false,true,false,
+FA Machinery,Aset Tetap / Mesin,aset_tetap,consu,false,false,true,false,
+Supplies - Selling,Perlengkapan / Operasional Toko,perlengkapan,consu,false,false,true,false,
+Expense - Equipment Maintenance,Beban / Jasa / Pemeliharaan & Instalasi,jasa,service,false,false,true,false,
+Supplies - Packaging,Perlengkapan / Kemasan Habis Pakai,perlengkapan,consu,false,false,true,false,A3 habis pakai non-stok (plastik/kantong toko)
+Freight - Import,Beban / Jasa / Biaya Impor,jasa,service,false,false,true,false,A8 beban (landed cost butuh stock_landed_costs)
+FA Office & Outlet Equipment - Metal,Aset Tetap / Peralatan Kantor & Outlet,aset_tetap,consu,false,false,true,false,
+Supplies - Safety,Perlengkapan / Kebersihan & Keselamatan,perlengkapan,consu,false,false,true,false,
+Supplies - Marketing,Perlengkapan / Pemasaran,perlengkapan,consu,false,false,true,false,
+Expense - Water & Gas,Beban / Jasa / Utilitas,jasa,service,false,false,true,false,A9 default utilitas (jasa) bukan LPG dapur
+Expense - Other,Beban / Jasa / Lain-lain,jasa,service,false,false,true,false,
+Expense - Building Maintenance,Beban / Jasa / Pemeliharaan & Instalasi,jasa,service,false,false,true,false,
+Inventory - Merchandise,Persediaan / Merchandise,persediaan,consu,true,true,true,keep,
+Licensing / Sertification,Beban / Jasa / Perizinan & Sertifikasi,jasa,service,false,false,true,false,
+Expense - Maintenance Fee,Beban / Jasa / Pemeliharaan & Instalasi,jasa,service,false,false,true,false,
+Expense - Stationaries,Perlengkapan / Kantor & ATK,perlengkapan,consu,false,false,true,false,
+Expense - Office Supplies,Perlengkapan / Kantor & ATK,perlengkapan,consu,false,false,true,false,
+EXP - DOMESTIC DISTRIBUTION,Beban / Jasa / Pengiriman,jasa,service,false,false,true,false,
+Expense - Household,Perlengkapan / Operasional Toko,perlengkapan,consu,false,false,true,false,
+Expense - Furniture Maintenance,Beban / Jasa / Pemeliharaan & Instalasi,jasa,service,false,false,true,false,
+Expense - Computer supplies,Perlengkapan / Kantor & ATK,perlengkapan,consu,false,false,true,false,
+Expense - Printing,Beban / Jasa / Pemasaran & Cetak,jasa,service,false,false,true,false,
+FA - Software,Aset Tetap / Perangkat Lunak,aset_tetap,consu,false,false,true,false,A10 akun belum ada di CoA l10n_id (Finance)
+ONGKOS KIRIM,Beban / Jasa / Pengiriman,jasa,service,false,false,true,false,
+Expense - Reklame,Beban / Jasa / Pemasaran & Cetak,jasa,service,false,false,true,false,
+Expense - Production Supplies,Perlengkapan / Produksi,perlengkapan,consu,false,false,true,false,
+Sewa Peralatan,Beban / Jasa / Sewa,jasa,service,false,false,true,false,
+Expense - Printing Marketing,Beban / Jasa / Pemasaran & Cetak,jasa,service,false,false,true,false,
+JASA INSTALASI EQUIPMENT,Beban / Jasa / Pemeliharaan & Instalasi,jasa,service,false,false,true,false,A11 default beban (tidak dikapitalisasi)

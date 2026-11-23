@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates xml:space="preserve">
+    <!--
+        G56 (ADR-049): port dari core/custom_home_console navbar_apps_patch.xml.
+        Desktop: dropdown apps (anak pertama div.o_navbar_apps_menu di web.NavBar.AppsMenu, diverifikasi di source
+        Odoo 19.0 web/static/src/webclient/navbar/navbar.xml) diganti tombol yang membuka Beranda EFN.
+        Mode mobile (sidebar) dan PWA scoped app tidak diubah. Mode extension: tanpa t-name.
+    -->
+    <t t-inherit="web.NavBar.AppsMenu" t-inherit-mode="extension">
+        <xpath expr="//div[hasclass('o_navbar_apps_menu')]/*[1]" position="replace">
+            <button class="o_efn_home_apps_button"
+                    data-hotkey="h"
+                    title="Beranda"
+                    aria-label="Beranda"
+                    t-on-click="() => this.openEfnHome()">
+                <i class="oi oi-apps"/>
+            </button>
+        </xpath>
+    </t>
+</templates>

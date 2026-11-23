@@ -1,0 +1,200 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="view_efn_petty_cash_request_form" model="ir.ui.view">
+        <field name="name">efn.petty.cash.request.form</field>
+        <field name="model">efn.petty.cash.request</field>
+        <field name="arch" type="xml">
+            <form>
+                <header>
+                    <button name="action_submit" type="object" string="Ajukan" class="btn-primary"
+                            invisible="state != 'draft'"/>
+                    <button name="action_approve" type="object" string="Setujui" class="btn-primary"
+                            invisible="state != 'to_approve'" groups="efn_petty_cash.group_petty_cash_approver"/>
+                    <button name="action_reject" type="object" string="Kembalikan ke Draft"
+                            invisible="state != 'to_approve'" groups="efn_petty_cash.group_petty_cash_approver"/>
+                    <button name="action_disburse" type="object" string="Cairkan" class="btn-primary"
+                            invisible="state != 'approved'" groups="efn_petty_cash.group_petty_cash_finance"/>
+                    <button name="action_open_realization" type="object" string="Realisasi Baru" class="btn-primary"
+                            invisible="fund_id or state not in ('disbursed', 'in_realization')"/>
+                    <button name="action_return_balance" type="object" string="Kembalikan Sisa"
+                            invisible="fund_id or state not in ('disbursed', 'in_realization') or amount_outstanding &lt;= 0"
+                            groups="efn_petty_cash.group_petty_cash_finance"/>
+                    <button name="action_reimburse_shortfall" type="object" string="Ganti Kekurangan"
+                            invisible="fund_id or state not in ('disbursed', 'in_realization') or amount_outstanding &gt;= 0"
+                            groups="efn_petty_cash.group_petty_cash_finance"/>
+                    <button name="action_settle" type="object" string="Selesaikan" class="btn-primary"
+                            invisible="fund_id or state not in ('disbursed', 'in_realization') or amount_outstanding != 0"
+                            groups="efn_petty_cash.group_petty_cash_finance"/>
+                    <button name="action_cancel" type="object" string="Batalkan"
+                            invisible="state in ('disbursed', 'in_realization', 'settled', 'cancelled')"/>
+                    <button name="action_reset_to_draft" type="object" string="Kembali ke Draft"
+                            invisible="state not in ('cancelled', 'to_approve')"/>
+                    <field name="state" widget="statusbar" statusbar_visible="draft,to_approve,approved,disbursed,in_realization,settled"/>
+                </header>
+                <sheet>
+                    <div class="oe_button_box" name="button_box">
+                        <button name="action_view_realizations" type="object" class="oe_stat_button" icon="fa-list"
+                                invisible="realization_count == 0">
+                            <field name="realization_count" widget="statinfo" string="Realisasi"/>
+                        </button>
+                        <button name="action_view_moves" type="object" class="oe_stat_button" icon="fa-book"
+                                invisible="move_count == 0" groups="efn_petty_cash.group_petty_cash_finance">
+                            <field name="move_count" widget="statinfo" string="Entri Jurnal"/>
+                        </button>
+                    </div>
+                    <field name="is_overdue" invisible="1"/>
+                    <widget name="web_ribbon" title="Lewat Tenggat" bg_color="text-bg-danger" invisible="not is_overdue"/>
+                    <div class="oe_title">
+                        <h1><field name="name" readonly="1"/></h1>
+                    </div>
+                    <group>
+                        <group>
+                            <field name="fund_id" readonly="state != 'draft'" options="{'no_create': True}"/>
+                            <field name="is_replenishment" invisible="not fund_id"/>
+                            <field name="advance_type_id" readonly="state != 'draft' or fund_id" options="{'no_create': True}"
+                                   domain="[('kind', '!=', 'petty_cash')]"/>
+                            <field name="holder_partner_id" readonly="state != 'draft' or fund_id"/>
+                            <field name="holder_user_id" readonly="state != 'draft' or fund_id"/>
+                            <field name="purpose" readonly="state != 'draft'"/>
+                            <field name="company_id" groups="base.group_multi_company" readonly="state != 'draft'"/>
+                            <field name="currency_id" groups="base.group_multi_currency" readonly="state != 'draft' or fund_id"/>
+                            <field name="company_currency_id" invisible="1"/>
+                        </group>
+                        <group>
+                            <field name="request_date" readonly="state != 'draft'"/>
+                            <field name="amount_requested" readonly="state != 'draft' or is_replenishment"/>
+                            <field name="realization_deadline" invisible="fund_id"/>
+                            <field name="amount_disbursed"/>
+                            <field name="amount_realized" invisible="fund_id"/>
+                            <field name="amount_outstanding" invisible="fund_id"/>
+                            <field name="amount_outstanding_company" invisible="fund_id or currency_id == company_currency_id"/>
+                        </group>
+                    </group>
+                    <group string="Akuntansi (override jenis)" groups="efn_petty_cash.group_petty_cash_finance">
+                        <group>
+                            <field name="advance_account_id" readonly="state != 'draft'"/>
+                            <field name="bank_journal_id" readonly="state != 'draft'"/>
+                        </group>
+                        <group>
+                            <field name="disburse_move_id"/>
+                        </group>
+                    </group>
+                    <notebook>
+                        <page string="Rincian Estimasi" name="breakdown" invisible="is_replenishment">
+                            <field name="line_ids" readonly="state != 'draft'">
+                                <list editable="bottom">
+                                    <field name="sequence" widget="handle"/>
+                                    <field name="name"/>
+                                    <field name="account_id"/>
+                                    <field name="currency_id" column_invisible="1"/>
+                                    <field name="amount" sum="Total"/>
+                                </list>
+                            </field>
+                        </page>
+                        <page string="Realisasi yang Diisi Ulang" name="replenished" invisible="not is_replenishment">
+                            <field name="replenish_realization_ids" readonly="1">
+                                <list>
+                                    <field name="name"/>
+                                    <field name="date"/>
+                                    <field name="currency_id" column_invisible="1"/>
+                                    <field name="amount_total" sum="Total"/>
+                                    <field name="state" widget="badge"/>
+                                </list>
+                            </field>
+                        </page>
+                        <page string="Realisasi" name="realizations" invisible="fund_id">
+                            <field name="realization_ids" readonly="1">
+                                <list>
+                                    <field name="name"/>
+                                    <field name="date"/>
+                                    <field name="currency_id" column_invisible="1"/>
+                                    <field name="amount_total"/>
+                                    <field name="state" widget="badge"/>
+                                </list>
+                            </field>
+                        </page>
+                        <page string="Empat Mata" name="four_eyes">
+                            <group>
+                                <group>
+                                    <field name="maker_id"/>
+                                    <field name="editor_ids" widget="many2many_tags"/>
+                                </group>
+                                <group>
+                                    <field name="approved_by_id"/>
+                                    <field name="approved_at"/>
+                                    <field name="disbursed_by_id"/>
+                                </group>
+                            </group>
+                        </page>
+                    </notebook>
+                </sheet>
+                <chatter/>
+            </form>
+        </field>
+    </record>
+
+    <record id="view_efn_petty_cash_request_list" model="ir.ui.view">
+        <field name="name">efn.petty.cash.request.list</field>
+        <field name="model">efn.petty.cash.request</field>
+        <field name="arch" type="xml">
+            <list decoration-info="state == 'to_approve'" decoration-danger="is_overdue"
+                  decoration-muted="state in ('settled', 'cancelled')">
+                <field name="name"/>
+                <field name="holder_partner_id"/>
+                <field name="advance_type_id" optional="show"/>
+                <field name="fund_id" optional="show"/>
+                <field name="request_date"/>
+                <field name="realization_deadline" optional="show"/>
+                <field name="currency_id" column_invisible="1"/>
+                <field name="company_currency_id" column_invisible="1"/>
+                <field name="amount_requested" sum="Diajukan"/>
+                <field name="amount_outstanding_company" sum="Outstanding" optional="show"/>
+                <field name="is_overdue" column_invisible="1"/>
+                <field name="company_id" groups="base.group_multi_company" optional="hide"/>
+                <field name="state" widget="badge"/>
+            </list>
+        </field>
+    </record>
+
+    <record id="view_efn_petty_cash_request_search" model="ir.ui.view">
+        <field name="name">efn.petty.cash.request.search</field>
+        <field name="model">efn.petty.cash.request</field>
+        <field name="arch" type="xml">
+            <search>
+                <field name="name"/>
+                <field name="holder_partner_id"/>
+                <field name="advance_type_id"/>
+                <field name="fund_id"/>
+                <filter name="mine" string="Milik Saya"
+                        domain="['|', ('holder_user_id', '=', uid), ('maker_id', '=', uid)]"/>
+                <separator/>
+                <filter name="draft" string="Draft" domain="[('state', '=', 'draft')]"/>
+                <filter name="to_approve" string="Menunggu Persetujuan" domain="[('state', '=', 'to_approve')]"/>
+                <filter name="approved" string="Disetujui" domain="[('state', '=', 'approved')]"/>
+                <filter name="disbursed" string="Dicairkan" domain="[('state', 'in', ('disbursed', 'in_realization'))]"/>
+                <separator/>
+                <filter name="overdue" string="Lewat Tenggat" domain="[('is_overdue', '=', True)]"/>
+                <group>
+                    <filter name="group_holder" string="Pemegang" context="{'group_by': 'holder_partner_id'}"/>
+                    <filter name="group_type" string="Jenis" context="{'group_by': 'advance_type_id'}"/>
+                    <filter name="group_state" string="Status" context="{'group_by': 'state'}"/>
+                </group>
+            </search>
+        </field>
+    </record>
+
+    <record id="action_efn_petty_cash_request" model="ir.actions.act_window">
+        <field name="name">Pengajuan Kas Kecil &amp; Uang Muka</field>
+        <field name="res_model">efn.petty.cash.request</field>
+        <field name="view_mode">list,form</field>
+        <field name="search_view_id" ref="view_efn_petty_cash_request_search"/>
+    </record>
+
+    <record id="action_efn_petty_cash_request_to_approve" model="ir.actions.act_window">
+        <field name="name">Menunggu Persetujuan</field>
+        <field name="res_model">efn.petty.cash.request</field>
+        <field name="view_mode">list,form</field>
+        <field name="search_view_id" ref="view_efn_petty_cash_request_search"/>
+        <field name="context">{'search_default_to_approve': 1}</field>
+    </record>
+</odoo>

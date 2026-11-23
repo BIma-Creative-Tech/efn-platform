@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- G54 (docs/fit-gap/G54_G55_G61_ODOO_SETUP.md §2): wizard "Lengkapi konfigurasi POS".
+     Dibuka dari menu Point of Sale > Configuration dan dari menu Action (list/form) pos.config (binding). -->
+<odoo>
+    <record id="efn_pos_setup_wizard_view_form" model="ir.ui.view">
+        <field name="name">efn.pos.setup.wizard.form</field>
+        <field name="model">efn.pos.setup.wizard</field>
+        <field name="arch" type="xml">
+            <form string="Lengkapi konfigurasi POS">
+                <sheet>
+                    <group>
+                        <group>
+                            <field name="company_id" options="{'no_create': True, 'no_open': True}"/>
+                            <field name="config_ids" widget="many2many_tags" options="{'no_create': True}"
+                                   placeholder="Kosong = semua POS aktif company"/>
+                            <field name="mode" widget="radio"/>
+                        </group>
+                        <group string="Langkah apply" invisible="mode != 'apply'">
+                            <field name="opt_company_accounts"/>
+                            <field name="opt_cash"/>
+                            <field name="opt_edc"/>
+                            <field name="opt_qris_manual"/>
+                            <field name="opt_menu_taxes"/>
+                        </group>
+                    </group>
+                    <div class="alert alert-info" role="status" invisible="not summary">
+                        <field name="summary" nolabel="1"/>
+                    </div>
+                    <field name="line_ids" nolabel="1" invisible="not line_ids">
+                        <list decoration-danger="status == 'blocked'" decoration-warning="status == 'warning'"
+                              decoration-success="status == 'fixed'" create="false" delete="false">
+                            <field name="config_id"/>
+                            <field name="code"/>
+                            <field name="status"/>
+                            <field name="message"/>
+                        </list>
+                    </field>
+                </sheet>
+                <footer>
+                    <button name="action_run" type="object" string="Jalankan" class="btn-primary"/>
+                    <button special="cancel" string="Tutup"/>
+                </footer>
+            </form>
+        </field>
+    </record>
+
+    <record id="action_efn_pos_setup_wizard" model="ir.actions.act_window">
+        <field name="name">Lengkapi konfigurasi POS</field>
+        <field name="res_model">efn.pos.setup.wizard</field>
+        <field name="view_mode">form</field>
+        <field name="target">new</field>
+        <field name="binding_model_id" ref="point_of_sale.model_pos_config"/>
+        <field name="binding_view_types">list,form</field>
+        <field name="group_ids" eval="[(4, ref('point_of_sale.group_pos_manager'))]"/>
+    </record>
+
+    <menuitem id="menu_efn_pos_setup_wizard"
+              name="Lengkapi konfigurasi POS"
+              parent="point_of_sale.menu_point_config_product"
+              action="action_efn_pos_setup_wizard"
+              groups="point_of_sale.group_pos_manager"
+              sequence="90"/>
+</odoo>

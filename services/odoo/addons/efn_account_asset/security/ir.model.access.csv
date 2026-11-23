@@ -1,0 +1,25 @@
+id,name,model_id:id,group_id:id,perm_read,perm_write,perm_create,perm_unlink
+access_efn_asset_readonly,efn.account.asset readonly,model_efn_account_asset,account.group_account_readonly,1,0,0,0
+access_efn_asset_group_readonly,efn.account.asset.group readonly,model_efn_account_asset_group,account.group_account_readonly,1,0,0,0
+access_efn_asset_location_readonly,efn.account.asset.location readonly,model_efn_account_asset_location,account.group_account_readonly,1,0,0,0
+access_efn_asset_line_readonly,efn.account.asset.depreciation.line readonly,model_efn_account_asset_depreciation_line,account.group_account_readonly,1,0,0,0
+access_efn_asset_reval_readonly,efn.account.asset.revaluation readonly,model_efn_account_asset_revaluation,account.group_account_readonly,1,0,0,0
+access_efn_asset_partial_readonly,efn.account.asset.partial.disposal readonly,model_efn_account_asset_partial_disposal,account.group_account_readonly,1,0,0,0
+access_efn_asset_register_wiz_readonly,efn.account.asset.register.wizard readonly,model_efn_account_asset_register_wizard,account.group_account_readonly,1,1,1,1
+access_efn_asset_user,efn.account.asset user,model_efn_account_asset,group_asset_user,1,1,1,0
+access_efn_asset_group_user,efn.account.asset.group user,model_efn_account_asset_group,group_asset_user,1,0,0,0
+access_efn_asset_location_user,efn.account.asset.location user,model_efn_account_asset_location,group_asset_user,1,0,0,0
+access_efn_asset_line_user,efn.account.asset.depreciation.line user,model_efn_account_asset_depreciation_line,group_asset_user,1,0,0,0
+access_efn_asset_reval_user,efn.account.asset.revaluation user,model_efn_account_asset_revaluation,group_asset_user,1,0,0,0
+access_efn_asset_partial_user,efn.account.asset.partial.disposal user,model_efn_account_asset_partial_disposal,group_asset_user,1,0,0,0
+access_efn_asset_register_wiz_user,efn.account.asset.register.wizard user,model_efn_account_asset_register_wizard,group_asset_user,1,1,1,1
+access_efn_asset_manager,efn.account.asset manager,model_efn_account_asset,group_asset_manager,1,1,1,1
+access_efn_asset_group_manager,efn.account.asset.group manager,model_efn_account_asset_group,group_asset_manager,1,1,1,1
+access_efn_asset_location_manager,efn.account.asset.location manager,model_efn_account_asset_location,group_asset_manager,1,1,1,1
+access_efn_asset_line_manager,efn.account.asset.depreciation.line manager,model_efn_account_asset_depreciation_line,group_asset_manager,1,1,1,1
+access_efn_asset_reval_manager,efn.account.asset.revaluation manager,model_efn_account_asset_revaluation,group_asset_manager,1,1,1,1
+access_efn_asset_partial_manager,efn.account.asset.partial.disposal manager,model_efn_account_asset_partial_disposal,group_asset_manager,1,1,1,1
+access_efn_asset_disposal_wiz_manager,efn.account.asset.disposal.wizard manager,model_efn_account_asset_disposal_wizard,group_asset_manager,1,1,1,1
+access_efn_asset_reval_wiz_manager,efn.account.asset.revaluation.wizard manager,model_efn_account_asset_revaluation_wizard,group_asset_manager,1,1,1,1
+access_efn_asset_partial_wiz_manager,efn.account.asset.partial.disposal.wizard manager,model_efn_account_asset_partial_disposal_wizard,group_asset_manager,1,1,1,1
+access_efn_asset_post_wiz_manager,efn.account.asset.post.wizard manager,model_efn_account_asset_post_wizard,group_asset_manager,1,1,1,1

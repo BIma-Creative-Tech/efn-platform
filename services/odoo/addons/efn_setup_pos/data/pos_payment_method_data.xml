@@ -58,4 +58,22 @@
         <field name="journal_id" model="account.journal"
                search="[('type', '=', 'bank'), ('company_id', '=', ref('efn_setup_company.company_wtz'))]"/>
     </record>
+
+    <!-- G54 (docs/fit-gap/G54_G55_G61_ODOO_SETUP.md §4): PT F&B ESB Core IMD & CUP (G43). Record noupdate dengan xmlid
+         baru dibuat saat -u di DB lama (xmlid belum ada). outstanding_account_id diisi wizard G54 (C-07). -->
+    <record id="pos_payment_method_edc_imd" model="pos.payment.method">
+        <field name="name">Kartu Debit/Kredit (EDC manual)</field>
+        <field name="company_id" ref="efn_setup_company.company_imd"/>
+        <field name="payment_method_type">none</field>
+        <field name="journal_id" model="account.journal"
+               search="[('type', '=', 'bank'), ('company_id', '=', ref('efn_setup_company.company_imd'))]"/>
+    </record>
+
+    <record id="pos_payment_method_edc_cup" model="pos.payment.method">
+        <field name="name">Kartu Debit/Kredit (EDC manual)</field>
+        <field name="company_id" ref="efn_setup_company.company_cup"/>
+        <field name="payment_method_type">none</field>
+        <field name="journal_id" model="account.journal"
+               search="[('type', '=', 'bank'), ('company_id', '=', ref('efn_setup_company.company_cup'))]"/>
+    </record>
 </odoo>

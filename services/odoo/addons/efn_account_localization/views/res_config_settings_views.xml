@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="res_config_settings_view_form_inherit_efn_account_localization" model="ir.ui.view">
+        <field name="name">res.config.settings.view.form.inherit.efn.account.localization</field>
+        <field name="model">res.config.settings</field>
+        <field name="inherit_id" ref="account.res_config_settings_view_form"/>
+        <field name="arch" type="xml">
+            <xpath expr="//app[@name='account']" position="inside">
+                <block title="EFN: pembayaran, MDR, analitik Outlet (G60)" id="efn_account_localization">
+                    <setting id="efn_payment_approval" string="Ambang persetujuan pembayaran keluar"
+                             help="Pembayaran vendor >= ambang wajib disetujui Accounting Manager lain sebelum dikonfirmasi. 0 = nonaktif.">
+                        <field name="efn_payment_approval_threshold"/>
+                    </setting>
+                    <setting id="efn_mdr_journal" string="Jurnal estimasi MDR"
+                             help="Kosong = jurnal umum pertama PT. Tarif per metode bayar: Konfigurasi > Tarif MDR.">
+                        <field name="efn_mdr_journal_id" domain="[('company_id', '=', company_id), ('type', '=', 'general')]"/>
+                    </setting>
+                    <setting id="efn_outlet_plan" string="Plan analitik Outlet"
+                             help="Diisi wizard 'Siapkan Analitik Outlet'.">
+                        <field name="efn_outlet_analytic_plan_id"/>
+                    </setting>
+                </block>
+            </xpath>
+        </field>
+    </record>
+</odoo>

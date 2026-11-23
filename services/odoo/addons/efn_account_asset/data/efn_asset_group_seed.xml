@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- G57 §1.4: seed kelompok aset untuk setiap PT ber-CoA l10n_id. Sengaja TIDAK noupdate: dijalankan ulang setiap
+     -u efn_account_asset, idempoten (hanya mengisi field kosong; koreksi Finance tidak tertimpa). -->
+<odoo>
+    <function model="efn.account.asset.group" name="_efn_seed_groups"/>
+</odoo>

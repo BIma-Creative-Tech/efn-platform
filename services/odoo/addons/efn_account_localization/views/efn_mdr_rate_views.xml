@@ -1,0 +1,73 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="efn_mdr_rate_view_list" model="ir.ui.view">
+        <field name="name">efn.mdr.rate.list</field>
+        <field name="model">efn.mdr.rate</field>
+        <field name="arch" type="xml">
+            <list>
+                <field name="payment_method_id"/>
+                <field name="mdr_percent"/>
+                <field name="mdr_fixed"/>
+                <field name="account_id"/>
+                <field name="date_start"/>
+                <field name="date_end"/>
+                <field name="company_id" groups="base.group_multi_company"/>
+                <field name="currency_id" column_invisible="1"/>
+            </list>
+        </field>
+    </record>
+
+    <record id="efn_mdr_rate_view_form" model="ir.ui.view">
+        <field name="name">efn.mdr.rate.form</field>
+        <field name="model">efn.mdr.rate</field>
+        <field name="arch" type="xml">
+            <form>
+                <sheet>
+                    <div class="alert alert-info" role="alert">
+                        Tarif PLACEHOLDER sampai kontrak bank (Q-G60-5). Estimasi MDR dibukukan saat tutup sesi POS;
+                        selisih ke potongan bank dikoreksi saat rekonsiliasi settlement.
+                    </div>
+                    <group>
+                        <group>
+                            <field name="company_id" groups="base.group_multi_company"/>
+                            <field name="currency_id" invisible="1"/>
+                            <field name="payment_method_id"/>
+                            <field name="account_id"/>
+                        </group>
+                        <group>
+                            <field name="mdr_percent"/>
+                            <field name="mdr_fixed"/>
+                            <field name="date_start"/>
+                            <field name="date_end"/>
+                            <field name="active" invisible="1"/>
+                        </group>
+                    </group>
+                </sheet>
+            </form>
+        </field>
+    </record>
+
+    <record id="efn_mdr_rate_view_search" model="ir.ui.view">
+        <field name="name">efn.mdr.rate.search</field>
+        <field name="model">efn.mdr.rate</field>
+        <field name="arch" type="xml">
+            <search>
+                <field name="payment_method_id"/>
+                <filter name="inactive" string="Diarsipkan" domain="[('active', '=', False)]"/>
+            </search>
+        </field>
+    </record>
+
+    <record id="action_efn_mdr_rate" model="ir.actions.act_window">
+        <field name="name">Tarif MDR</field>
+        <field name="res_model">efn.mdr.rate</field>
+        <field name="view_mode">list,form</field>
+    </record>
+
+    <menuitem id="menu_efn_mdr_rate"
+              name="Tarif MDR"
+              parent="account.account_account_menu"
+              action="action_efn_mdr_rate"
+              sequence="20"
+              groups="account.group_account_manager"/>
+</odoo>

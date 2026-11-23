@@ -1,0 +1,33 @@
+// G56: gaya ringan halaman login EFN (hanya berlaku pada body.o_efn_login; field form tidak diubah).
+// Palet EFN: hijau tua #062e2a, emas #dfb422 (docs/design/brand-tokens.md).
+body.o_efn_login {
+    background: linear-gradient(180deg, #062e2a 0, #062e2a 220px, #f4f6f5 220px);
+
+    .o_database_list {
+        background: #ffffff !important;
+        border-top: 4px solid #dfb422 !important;
+        border-radius: 12px;
+        box-shadow: 0 6px 24px rgba(6, 46, 42, 0.18);
+    }
+
+    .o_efn_login_brand {
+        margin-bottom: 12px;
+    }
+
+    .o_efn_login_logo {
+        max-height: 56px;
+        max-width: 100%;
+        width: auto;
+    }
+
+    .btn-primary {
+        background-color: #0b5d4b;
+        border-color: #0b5d4b;
+
+        &:hover,
+        &:focus {
+            background-color: #062e2a;
+            border-color: #062e2a;
+        }
+    }
+}

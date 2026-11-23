@@ -233,7 +233,7 @@ services:
       - wa_unofficial_hash_key
 
   traefik:
-    networks: [edge, internal, socket-proxy, insight-ingress, wa-ingress]
+    networks: [edge, internal, socket-proxy, insight-ingress, login-ingress, wa-ingress]
 
   prometheus:
     networks: [internal, data, wa-ingress]
@@ -243,7 +243,7 @@ services:
   # Sertifikat wg-https (DNS-01) mencakup host admin. Hanya dipakai bila overlay aktif (production: tidak).
   acme-dns:
     environment:
-      - ACME_DOMAINS=erp.${TRAEFIK_DOMAIN:-efn.local},bi.${TRAEFIK_DOMAIN:-efn.local},ops.${TRAEFIK_DOMAIN:-efn.local},status.${TRAEFIK_DOMAIN:-efn.local},insight.${TRAEFIK_DOMAIN:-efn.local},wa-admin.${TRAEFIK_DOMAIN:-efn.local}
+      - ACME_DOMAINS=erp.${TRAEFIK_DOMAIN:-efn.local},bi.${TRAEFIK_DOMAIN:-efn.local},ops.${TRAEFIK_DOMAIN:-efn.local},status.${TRAEFIK_DOMAIN:-efn.local},insight.${TRAEFIK_DOMAIN:-efn.local},login.${TRAEFIK_DOMAIN:-efn.local},wa-admin.${TRAEFIK_DOMAIN:-efn.local}
 
 volumes:
   wa-unofficial-state:

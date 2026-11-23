@@ -1,0 +1,88 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="view_efn_petty_cash_type_list" model="ir.ui.view">
+        <field name="name">efn.petty.cash.type.list</field>
+        <field name="model">efn.petty.cash.type</field>
+        <field name="arch" type="xml">
+            <list>
+                <field name="sequence" widget="handle"/>
+                <field name="code"/>
+                <field name="name"/>
+                <field name="kind"/>
+                <field name="company_id" groups="base.group_multi_company"/>
+                <field name="advance_account_id"/>
+                <field name="bank_out_journal_id" optional="show"/>
+                <field name="limit_enforcement"/>
+                <field name="is_default"/>
+            </list>
+        </field>
+    </record>
+
+    <record id="view_efn_petty_cash_type_form" model="ir.ui.view">
+        <field name="name">efn.petty.cash.type.form</field>
+        <field name="model">efn.petty.cash.type</field>
+        <field name="arch" type="xml">
+            <form>
+                <sheet>
+                    <div class="oe_button_box" name="button_box">
+                        <button name="action_view_requests" type="object" class="oe_stat_button" icon="fa-list"
+                                invisible="request_count == 0">
+                            <field name="request_count" widget="statinfo" string="Pengajuan"/>
+                        </button>
+                    </div>
+                    <widget name="web_ribbon" title="Diarsipkan" bg_color="text-bg-danger" invisible="active"/>
+                    <div class="oe_title">
+                        <label for="name"/>
+                        <h1><field name="name" placeholder="mis. Kas Kecil Outlet"/></h1>
+                    </div>
+                    <group>
+                        <group>
+                            <field name="code" placeholder="KK"/>
+                            <field name="kind"/>
+                            <field name="company_id" groups="base.group_multi_company"/>
+                            <field name="currency_id" invisible="1"/>
+                            <field name="active" invisible="1"/>
+                        </group>
+                        <group>
+                            <field name="is_default"/>
+                            <field name="allow_third_party"/>
+                            <field name="realization_days" invisible="kind == 'petty_cash'"/>
+                            <field name="sequence_id"/>
+                        </group>
+                    </group>
+                    <div class="alert alert-warning" role="alert" invisible="advance_account_id">
+                        Akun uang muka belum diisi: pencairan dan posting akan ditolak. Buat akun aset lancar yang dapat
+                        direkonsiliasi (mis. "Uang Muka Kas Kecil" / "Uang Muka Karyawan") lalu isi di sini.
+                    </div>
+                    <group string="Akuntansi">
+                        <group>
+                            <field name="advance_account_id"/>
+                            <field name="bank_out_journal_id"/>
+                        </group>
+                        <group>
+                            <field name="expense_journal_id"/>
+                            <field name="payment_journal_id"/>
+                        </group>
+                    </group>
+                    <group string="Plafon" invisible="kind == 'petty_cash'">
+                        <group>
+                            <field name="limit_enforcement"/>
+                            <field name="block_when_overdue"/>
+                        </group>
+                        <group invisible="limit_enforcement == 'off'">
+                            <field name="limit_per_request"/>
+                            <field name="limit_outstanding"/>
+                            <field name="max_open_requests"/>
+                        </group>
+                    </group>
+                </sheet>
+            </form>
+        </field>
+    </record>
+
+    <record id="action_efn_petty_cash_type" model="ir.actions.act_window">
+        <field name="name">Jenis Kas Kecil &amp; Uang Muka</field>
+        <field name="res_model">efn.petty.cash.type</field>
+        <field name="view_mode">list,form</field>
+    </record>
+</odoo>

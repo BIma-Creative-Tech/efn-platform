@@ -1,0 +1,304 @@
+// G56 (ADR-049): port dari core/custom_home_console home_console.scss; kelas o_hc_* -> o_efn_home_*.
+// Aksen per PT di-set inline (--efn-home-accent) oleh komponen OWL.
+
+.o_navbar_apps_menu > button.o_efn_home_apps_button {
+    color: inherit;
+    background: transparent;
+    border: 0;
+    padding: 0 1rem;
+    height: 100%;
+    display: inline-flex;
+    align-items: center;
+    cursor: pointer;
+    font-size: 1.15rem;
+
+    &:hover,
+    &:focus-visible {
+        background: rgba(255, 255, 255, 0.1);
+        outline: none;
+    }
+}
+
+.o_efn_home {
+    --efn-home-accent: #0b5d4b;
+    --efn-home-bg: #f6f7f7;
+    --efn-home-card: #ffffff;
+    --efn-home-text: #22302d;
+    --efn-home-muted: #66736f;
+    --efn-home-border: #e2e6e5;
+
+    box-sizing: border-box;
+    height: 100%;
+    width: 100%;
+    background: var(--efn-home-bg);
+    color: var(--efn-home-text);
+    padding: 32px 48px 64px;
+    overflow-y: auto;
+    overflow-x: hidden;
+
+    &.o_efn_home_compact {
+        padding: 20px 24px 48px;
+    }
+}
+
+.o_efn_home_header {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 24px;
+    margin-bottom: 24px;
+}
+
+.o_efn_home_brand {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+}
+
+.o_efn_home_logo {
+    width: 48px;
+    height: 48px;
+    object-fit: contain;
+    border-radius: 12px;
+    background: var(--efn-home-card);
+    padding: 4px;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
+}
+
+.o_efn_home_hello {
+    font-size: 20px;
+    font-weight: 600;
+}
+
+.o_efn_home_user {
+    color: var(--efn-home-accent);
+}
+
+.o_efn_home_subline {
+    font-size: 13px;
+    color: var(--efn-home-muted);
+}
+
+.o_efn_home_spotlight {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    background: var(--efn-home-card);
+    border: 1px solid var(--efn-home-border);
+    border-radius: 12px;
+    padding: 10px 16px;
+    flex: 1 1 360px;
+    max-width: 560px;
+
+    &:focus-within {
+        border-color: var(--efn-home-accent);
+    }
+}
+
+.o_efn_home_spotlight_icon {
+    color: var(--efn-home-muted);
+}
+
+.o_efn_home_spotlight_input {
+    flex: 1;
+    border: none;
+    outline: none;
+    background: transparent;
+    font-size: 14px;
+    color: var(--efn-home-text);
+}
+
+.o_efn_home_spotlight_hint {
+    color: var(--efn-home-muted);
+    font-size: 11px;
+    background: var(--efn-home-bg);
+    border: 1px solid var(--efn-home-border);
+    border-radius: 4px;
+    padding: 2px 6px;
+}
+
+.o_efn_home_announcement {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 16px;
+    background: var(--efn-home-accent);
+    color: #fff;
+    border-radius: 12px;
+    padding: 14px 18px;
+    margin-bottom: 24px;
+
+    .o_efn_home_announcement_body {
+        flex: 1;
+    }
+}
+
+.o_efn_home_section {
+    margin-bottom: 28px;
+}
+
+.o_efn_home_section_head {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin: 0 0 12px;
+    font-size: 14px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--efn-home-muted);
+    font-weight: 600;
+}
+
+.o_efn_home_count {
+    font-size: 11px;
+    background: var(--efn-home-card);
+    border: 1px solid var(--efn-home-border);
+    border-radius: 999px;
+    padding: 2px 8px;
+}
+
+.o_efn_home_chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.o_efn_home_chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    background: var(--efn-home-card);
+    border: 1px solid var(--efn-home-border);
+    border-radius: 999px;
+    padding: 6px 14px;
+    font-size: 13px;
+    color: var(--efn-home-text);
+
+    i {
+        color: var(--efn-home-accent);
+        font-size: 11px;
+    }
+
+    &:hover {
+        border-color: var(--efn-home-accent);
+    }
+}
+
+.o_efn_home_cards {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
+    gap: 24px 12px;
+
+    .o_efn_home_compact & {
+        grid-template-columns: repeat(auto-fill, minmax(80px, 1fr));
+        gap: 18px 8px;
+    }
+}
+
+.o_efn_home_card {
+    background: transparent;
+    border: 0;
+    border-radius: 12px;
+    padding: 10px 6px;
+    text-align: center;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 10px;
+    transition: transform 100ms ease;
+
+    &:hover {
+        transform: scale(1.04);
+    }
+
+    &:focus-visible {
+        outline: 2px solid var(--efn-home-accent);
+        outline-offset: 2px;
+    }
+}
+
+.o_efn_home_card_icon {
+    width: 64px;
+    height: 64px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+
+    img {
+        max-width: 56px;
+        max-height: 56px;
+        object-fit: contain;
+    }
+}
+
+// Fallback netral: tile huruf awal (tanpa aset ikon pihak lain).
+.o_efn_home_tile {
+    width: 56px;
+    height: 56px;
+    border-radius: 14px;
+    background: var(--efn-home-accent);
+    color: #fff;
+    font-size: 24px;
+    font-weight: 600;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+
+    &.d-none {
+        display: none !important;
+    }
+}
+
+.o_efn_home_card_name {
+    font-size: 12px;
+    font-weight: 500;
+    line-height: 1.25;
+    word-break: break-word;
+}
+
+.o_efn_home_activities {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.o_efn_home_activity {
+    width: 100%;
+    text-align: left;
+    background: var(--efn-home-card);
+    border: 1px solid var(--efn-home-border);
+    border-radius: 10px;
+    padding: 10px 14px;
+    display: flex;
+    gap: 14px;
+    align-items: baseline;
+    font-size: 13px;
+
+    &:hover {
+        border-color: var(--efn-home-accent);
+    }
+}
+
+.o_efn_home_activity_date {
+    color: var(--efn-home-muted);
+    font-size: 12px;
+    min-width: 90px;
+}
+
+@media (max-width: 768px) {
+    .o_efn_home {
+        padding: 16px 16px 40px;
+    }
+    .o_efn_home_header {
+        flex-direction: column;
+        align-items: stretch;
+    }
+    .o_efn_home_cards {
+        grid-template-columns: repeat(4, 1fr);
+        gap: 18px 8px;
+    }
+}

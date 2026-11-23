@@ -1,0 +1,70 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <!-- Centang "bukan duplikat" di sebelah memo, tempat operator yang diblokir sedang melihat. -->
+    <record id="view_account_payment_form_efn_duplicate_checked" model="ir.ui.view">
+        <field name="name">account.payment.form.efn.duplicate.checked</field>
+        <field name="model">account.payment</field>
+        <field name="inherit_id" ref="account.view_account_payment_form"/>
+        <field name="arch" type="xml">
+            <field name="memo" position="after">
+                <field name="efn_duplicate_checked" invisible="state != 'draft'"/>
+            </field>
+        </field>
+    </record>
+
+    <record id="view_efn_unapplied_payment_list" model="ir.ui.view">
+        <field name="name">account.payment.list.efn.unapplied</field>
+        <field name="model">account.payment</field>
+        <field name="priority">99</field>
+        <field name="arch" type="xml">
+            <list string="Pembayaran Belum Teralokasi" create="false" default_order="date desc">
+                <field name="date"/>
+                <field name="name" string="Pembayaran"/>
+                <field name="company_id" groups="base.group_multi_company" optional="hide"/>
+                <field name="partner_id"/>
+                <field name="payment_type"/>
+                <field name="memo" string="Keterangan"/>
+                <field name="journal_id"/>
+                <field name="amount" sum="Total"/>
+                <field name="currency_id" column_invisible="True"/>
+                <field name="state"/>
+            </list>
+        </field>
+    </record>
+
+    <record id="view_efn_unapplied_payment_search" model="ir.ui.view">
+        <field name="name">account.payment.search.efn.unapplied</field>
+        <field name="model">account.payment</field>
+        <field name="priority">99</field>
+        <field name="arch" type="xml">
+            <search string="Pembayaran Belum Teralokasi">
+                <field name="partner_id"/>
+                <field name="memo"/>
+                <field name="journal_id"/>
+                <filter name="outbound" string="Pembayaran Vendor" domain="[('payment_type', '=', 'outbound')]"/>
+                <filter name="inbound" string="Penerimaan Pelanggan" domain="[('payment_type', '=', 'inbound')]"/>
+                <separator/>
+                <filter name="date" string="Tanggal" date="date"/>
+                <group>
+                    <filter name="by_partner" string="Partner" context="{'group_by': 'partner_id'}"/>
+                    <filter name="by_journal" string="Jurnal" context="{'group_by': 'journal_id'}"/>
+                </group>
+            </search>
+        </field>
+    </record>
+
+    <record id="action_efn_unapplied_payments" model="ir.actions.act_window">
+        <field name="name">Pembayaran Belum Teralokasi</field>
+        <field name="res_model">account.payment</field>
+        <field name="view_mode">list,form</field>
+        <field name="view_id" ref="view_efn_unapplied_payment_list"/>
+        <field name="domain">[('efn_is_unapplied', '=', True)]</field>
+        <field name="context">{'search_default_outbound': 1}</field>
+        <field name="search_view_id" ref="view_efn_unapplied_payment_search"/>
+        <field name="help" type="html">
+            <p class="o_view_nocontent_smiling_face">Semua pembayaran sudah teralokasi ke dokumen.</p>
+            <p>Pembayaran di sini sudah di-post tetapi tidak melunasi faktur/tagihan apa pun. Dokumen yang mestinya
+               dibayar tetap terbaca "Not Paid" — pemicu pembayaran ganda.</p>
+        </field>
+    </record>
+</odoo>

@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="view_warehouse_efn_outlet_analytic" model="ir.ui.view">
+        <field name="name">stock.warehouse.form.efn.outlet.analytic</field>
+        <field name="model">stock.warehouse</field>
+        <field name="inherit_id" ref="stock.view_warehouse"/>
+        <field name="arch" type="xml">
+            <xpath expr="//field[@name='code']" position="after">
+                <field name="efn_analytic_account_id"
+                       groups="account.group_account_readonly,account.group_account_manager"/>
+            </xpath>
+        </field>
+    </record>
+</odoo>

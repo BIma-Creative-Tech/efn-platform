@@ -8,7 +8,10 @@
     # 19.0.1.13.0 (G22 L-79): baris metode masuk/keluar jurnal Poin EFN tiap PT diisi akun liabilitas/kliring Poin EFN
     # PT (setiap install/upgrade, hanya yang kosong) -> porsi Poin EFN pesanan online berjurnal (W-12).
     # 19.0.1.14.0 (G24 W-40, docs/04 §16.1): PT POS WTZ - EDC manual, Poin EFN (akun/jurnal _wtz), preset bawa pulang.
-    "version": "19.0.1.14.0",
+    # 19.0.1.15.0 (G54, docs/fit-gap/G54_G55_G61_ODOO_SETUP.md): wizard "Lengkapi konfigurasi POS"
+    # (efn.pos.setup.wizard, cek P01..P19 + apply C-01..C-09); data EDC/Poin EFN/preset IMD & CUP, QRIS manual per PT
+    # (bukan SMD). Record noupdate ber-xmlid baru dibuat saat -u -> tanpa migrasi.
+    "version": "19.0.1.15.0",
     "category": "EFN/Setup",
     "author": "Era Food and Nourishment",
     "license": "LGPL-3",
@@ -60,6 +63,11 @@
         "data/pos_loyalty_points_link.xml",
         # G19 W-14: preset F&B per layanan (dine-in = PB1 + SC 5%, bawa pulang = tanpa SC, PB1 0 % sesuai 18-1).
         "data/pos_fnb_service_presets.xml",
+        # G54: QRIS manual (payment_method_type none) per PT ber-POS kecuali SMD + wizard kesiapan POS.
+        "data/pos_payment_method_qris_manual_data.xml",
+        "security/ir.model.access.csv",
+        "security/efn_pos_setup_wizard_security.xml",
+        "wizard/efn_pos_setup_wizard_views.xml",
     ],
     "demo": [
         "demo/pos_demo.xml",

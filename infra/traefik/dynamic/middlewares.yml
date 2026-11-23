@@ -110,13 +110,21 @@ http:
         burst: 60
         period: 1s
 
+    # G62 halaman masuk staf login. (wg-https, RemoteAddr peer WireGuard; satu outlet ber-NAT = satu IP). Halaman statis
+    # kecil + redirect; tidak ada formulir password (ADR-050), jadi batas ini hanya meredam banjir request.
+    ratelimit-login:
+      rateLimit:
+        average: 10
+        burst: 40
+        period: 1s
+
     # Allowlist WireGuard (SEC-21, ADR-023 butir 3). Lapisan kedua setelah entrypoint wg-https yang hanya
     # di-bind ke IP WireGuard host. RemoteAddr (tanpa ipStrategy): akses WireGuard langsung tidak membawa XFF.
     # Host internal TIDAK boleh di-proxy Cloudflare; DNS-nya menunjuk IP WireGuard server (split DNS).
     # Tidak ada subnet Docker di sini: tidak ada service internal yang perlu memanggil Odoo/BI lewat Traefik.
     # Dev: EFN_INTERNAL_EXTRA_CIDR=172.16.0.0/12 (bridge Docker Desktop) diset di docker-compose.dev.yml.
     #
-    # internal-only : erp. (Odoo/POS) = subnet outlet + subnet staf
+    # internal-only : erp. (Odoo/POS) + login. (G62, pintu masuk ERP) = subnet outlet + subnet staf
     internal-only:
       ipAllowList:
         sourceRange:

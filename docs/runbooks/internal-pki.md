@@ -112,3 +112,9 @@ membuat ulang CA dev + semua leaf → `up -d --force-recreate` seluruh stack.
 deploy pertama yang memuat G44 — tanpa itu `deploy.sh` berhenti di langkah PKI untuk SEMUA service, bukan hanya
 forecast. Dev: `gen-secrets.sh` membuat ulang CA dev + semua leaf → `up -d --force-recreate` seluruh stack. Leaf saja
 (setelah intermediate mencakupnya): `bash scripts/gen-pki.sh forecast-worker`. Runbook: [forecast-worker.md](forecast-worker.md).
+
+## Gelombang 62: service PKI baru `login-gateway` (server)
+Sidecar `login-gateway-tls` (:3443, `--allow-cn=traefik`/`blackbox-exporter`) memakai leaf `serverAuth`
+(`tls_login_gateway_crt/_key`). Sama dengan G44: **staging/prod terbitkan ulang intermediate** (§service-baru) sebelum
+deploy pertama yang memuat G62. Dev/stack lokal non-production: `gen-secrets.sh` membuat ulang CA dev + semua leaf →
+`up -d --force-recreate` seluruh stack. Runbook: [login-gateway.md](login-gateway.md).

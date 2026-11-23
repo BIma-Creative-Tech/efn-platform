@@ -1,0 +1,74 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="view_efn_bank_import_template_list" model="ir.ui.view">
+        <field name="name">efn.bank.import.template.list</field>
+        <field name="model">efn.bank.import.template</field>
+        <field name="arch" type="xml">
+            <list>
+                <field name="sequence" widget="handle"/>
+                <field name="code"/>
+                <field name="name"/>
+                <field name="bank_id"/>
+                <field name="company_id" groups="base.group_multi_company"/>
+                <field name="encoding"/>
+                <field name="delimiter"/>
+                <field name="date_format"/>
+                <field name="active" column_invisible="1"/>
+            </list>
+        </field>
+    </record>
+
+    <record id="view_efn_bank_import_template_form" model="ir.ui.view">
+        <field name="name">efn.bank.import.template.form</field>
+        <field name="model">efn.bank.import.template</field>
+        <field name="arch" type="xml">
+            <form>
+                <sheet>
+                    <widget name="web_ribbon" title="Diarsipkan" bg_color="text-bg-danger" invisible="active"/>
+                    <div class="oe_title">
+                        <h1><field name="name" placeholder="mis. CSV Internet Banking Bank X"/></h1>
+                    </div>
+                    <group>
+                        <group>
+                            <field name="code"/>
+                            <field name="bank_id"/>
+                            <field name="company_id" groups="base.group_multi_company"/>
+                            <field name="active" invisible="1"/>
+                            <field name="sequence"/>
+                        </group>
+                        <group>
+                            <field name="encoding"/>
+                            <field name="delimiter"/>
+                            <field name="has_header"/>
+                            <field name="date_format"/>
+                            <field name="decimal_separator"/>
+                            <field name="thousand_separator"/>
+                        </group>
+                    </group>
+                    <group string="Pemetaan kolom (1-based; -1 = tidak dipakai)">
+                        <group>
+                            <field name="date_column_index"/>
+                            <field name="ref_column_index"/>
+                            <field name="balance_column_index"/>
+                        </group>
+                        <group>
+                            <field name="signed_amount_column_index"/>
+                            <field name="amount_credit_column_index"/>
+                            <field name="amount_debit_column_index"/>
+                        </group>
+                    </group>
+                    <p class="text-muted">
+                        File BCA KlikBCA Bisnis (CSV) dikenali otomatis dari judul "Informasi Rekening" atau baris
+                        kolom "Tanggal Transaksi, Keterangan, Cabang, Jumlah, Saldo", apa pun pemetaan kolom di atas.
+                    </p>
+                </sheet>
+            </form>
+        </field>
+    </record>
+
+    <record id="action_efn_bank_import_template" model="ir.actions.act_window">
+        <field name="name">Template Mutasi Bank</field>
+        <field name="res_model">efn.bank.import.template</field>
+        <field name="view_mode">list,form</field>
+    </record>
+</odoo>

@@ -1,0 +1,6 @@
+id,name,model_id:id,group_id:id,perm_read,perm_write,perm_create,perm_unlink
+access_efn_reconcile_account_readonly,efn.reconcile.account readonly,model_efn_reconcile_account,account.group_account_readonly,1,0,0,0
+access_efn_reconcile_account_user,efn.reconcile.account user,model_efn_reconcile_account,account.group_account_user,1,0,0,0
+access_efn_account_reconcile_wizard_user,efn.account.reconcile.wizard user,model_efn_account_reconcile_wizard,account.group_account_user,1,1,1,1
+access_efn_bank_reconcile_wizard_user,efn.bank.reconcile.wizard user,model_efn_bank_reconcile_wizard,account.group_account_user,1,1,1,1
+access_efn_bank_reconcile_wizard_line_user,efn.bank.reconcile.wizard.line user,model_efn_bank_reconcile_wizard_line,account.group_account_user,1,1,1,1

@@ -1,0 +1,112 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="view_efn_batch_payment_list" model="ir.ui.view">
+        <field name="name">efn.account.batch.payment.list</field>
+        <field name="model">efn.account.batch.payment</field>
+        <field name="arch" type="xml">
+            <list>
+                <field name="name"/>
+                <field name="date"/>
+                <field name="company_id" groups="base.group_multi_company" optional="hide"/>
+                <field name="journal_id"/>
+                <field name="batch_type"/>
+                <field name="payment_count"/>
+                <field name="amount_total" sum="Total"/>
+                <field name="currency_id" column_invisible="1"/>
+                <field name="state" widget="badge"
+                       decoration-info="state == 'draft'"
+                       decoration-warning="state == 'validated'"
+                       decoration-primary="state == 'sent'"
+                       decoration-success="state == 'reconciled'"/>
+            </list>
+        </field>
+    </record>
+
+    <record id="view_efn_batch_payment_form" model="ir.ui.view">
+        <field name="name">efn.account.batch.payment.form</field>
+        <field name="model">efn.account.batch.payment</field>
+        <field name="arch" type="xml">
+            <form string="Batch Pembayaran">
+                <header>
+                    <button name="action_validate" type="object" string="Validasi" class="btn-primary"
+                            invisible="state != 'draft'" groups="account.group_account_user"/>
+                    <button name="action_generate_export_file" type="object" string="Buat File Transfer"
+                            class="btn-primary" invisible="state not in ('validated', 'sent')"
+                            groups="account.group_account_manager"
+                            help="Empat mata: harus orang lain selain validator. File tersedia 24 jam."/>
+                    <button name="action_draft" type="object" string="Reset ke Draft"
+                            invisible="state == 'draft'" groups="account.group_account_manager"/>
+                    <field name="state" widget="statusbar" statusbar_visible="draft,validated,sent,reconciled"/>
+                </header>
+                <sheet>
+                    <div class="oe_button_box" name="button_box">
+                        <button name="action_open_payments" type="object" class="oe_stat_button" icon="fa-money">
+                            <field name="payment_count" widget="statinfo" string="Pembayaran"/>
+                        </button>
+                    </div>
+                    <div class="oe_title">
+                        <h1><field name="name" readonly="1"/></h1>
+                    </div>
+                    <group>
+                        <group>
+                            <field name="journal_id" readonly="state != 'draft'" options="{'no_create': True}"/>
+                            <field name="batch_type" readonly="state != 'draft'"/>
+                            <field name="date" readonly="state != 'draft'"/>
+                            <field name="company_id" groups="base.group_multi_company"/>
+                            <field name="company_id" invisible="1"/>
+                        </group>
+                        <group>
+                            <field name="export_format_id" options="{'no_create': True}"/>
+                            <field name="amount_total"/>
+                            <field name="currency_id" invisible="1"/>
+                            <field name="validated_by_id" invisible="not validated_by_id"/>
+                            <field name="exported_by_id" invisible="not exported_by_id"/>
+                            <field name="exported_at" invisible="not exported_at"/>
+                            <field name="export_sha256" invisible="not export_sha256"/>
+                        </group>
+                    </group>
+                    <field name="payment_ids" readonly="state != 'draft'"
+                           domain="[('journal_id', '=', journal_id), ('payment_type', '=', batch_type), ('state', 'in', ('in_process', 'paid')), ('efn_batch_payment_id', '=', False)]">
+                        <list>
+                            <field name="name"/>
+                            <field name="date"/>
+                            <field name="partner_id"/>
+                            <field name="efn_partner_bank_masked"/>
+                            <field name="amount"/>
+                            <field name="currency_id" column_invisible="1"/>
+                            <field name="state"/>
+                            <field name="is_matched"/>
+                        </list>
+                    </field>
+                </sheet>
+                <chatter/>
+            </form>
+        </field>
+    </record>
+
+    <record id="view_efn_batch_payment_search" model="ir.ui.view">
+        <field name="name">efn.account.batch.payment.search</field>
+        <field name="model">efn.account.batch.payment</field>
+        <field name="arch" type="xml">
+            <search>
+                <field name="name"/>
+                <field name="journal_id"/>
+                <filter name="draft" string="Draft" domain="[('state', '=', 'draft')]"/>
+                <filter name="validated" string="Divalidasi" domain="[('state', '=', 'validated')]"/>
+                <filter name="sent" string="Terkirim" domain="[('state', '=', 'sent')]"/>
+            </search>
+        </field>
+    </record>
+
+    <record id="action_efn_batch_payment" model="ir.actions.act_window">
+        <field name="name">Batch Pembayaran</field>
+        <field name="res_model">efn.account.batch.payment</field>
+        <field name="view_mode">list,form</field>
+        <field name="search_view_id" ref="view_efn_batch_payment_search"/>
+        <field name="help" type="html">
+            <p class="o_view_nocontent_smiling_face">Belum ada batch pembayaran</p>
+            <p>Kelompokkan pembayaran posted satu jurnal bank lalu buat file transfer massal. Validasi dan pembuatan file
+               dilakukan dua orang berbeda.</p>
+        </field>
+    </record>
+</odoo>

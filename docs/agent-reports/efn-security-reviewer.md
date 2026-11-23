@@ -42,3 +42,9 @@ tanpa flag; `brs` ditandatangani (HMAC + sig3); kelas PT/BR benar; tidak ada jal
 - **SEC-G52-05 (Info):** unik global `(esb_brand, esb_branch_id)` → oracle/penyerobotan pemetaan antar PT Bacha; data tetap fail closed.
 - **SEC-G52-06 (Info):** SEC-IR-01 masih terbuka; `SQL_efn_brs` menambah pemicu galat saat versi campuran.
 - Belum terverifikasi: test/harness tidak dijalankan; override compose lokal efn-prod tidak diperiksa; upgrade DB demo nyata.
+
+## 2026-11-23 — Review feat/odoo-completion (G54/G55/G56/G61/G62)
+0 Critical / 0 High / 1 Medium / 5 Low / 2 Info. Medium SEC-G54-01 (action_run/default_get wizard di luar RPC_ALLOWLIST) dan Low SEC-G54-02, SEC-G61-02 sudah diperbaiki efn-lead di branch yang sama. Laporan: `docs/reviews/SECURITY_REVIEW_2026-11-23_odoo-completion.md`.
+
+## 2026-11-23 — Review port accounting G57–G60
+0 Critical / 2 High / 5 Medium / 5 Low / 5 Info. High SEC-G60-01 (persetujuan payment bisa ditulis lewat RPC) dan SEC-G58-01 (status batch bisa dipalsukan), serta Medium SEC-G57-01/02/03, SEC-G58-02, SEC-G60-02 diperbaiki engineer + test regresi, diverifikasi efn-lead di container. Laporan: `docs/reviews/SECURITY_REVIEW_2026-11-23_accounting-port.md`.
