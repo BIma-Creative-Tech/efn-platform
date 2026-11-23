@@ -61,7 +61,9 @@ generik per nama dasar produk (251 nama → kata kunci Inggris di `QUERIES`; alk
   (hanya lewat API resmi + langganan EFN; scraping = pelanggaran hak cipta/ToS). Key hanya dari env, tidak disimpan.
 - Hanya kata kunci produk generik yang dikirim ke luar (tanpa data pribadi). Foto diunduh, dipotong persegi, maks 1024 px.
 - **Review visual wajib** (contact sheet): pencarian stok kadang meleset (run pertama 69/251 salah, mis. "Ikan
-  Tenggiri" → kucing). Perbaiki kata kunci lalu `--only "Nama A,Nama B" --refresh`. Kandidat bertag merek/alkohol dibuang.
+  Tenggiri" → kucing; run kedua dengan kata kunci baru: 50/69 cocok). Perbaiki kata kunci lalu
+  `--only "Nama A,Nama B" --refresh`. Kandidat bertag merek/alkohol dibuang. Yang tetap meleset tidak dipasang
+  (produk memakai ikon lorong); demo 23 Nov: 19 nama, mis. Kondisioner, Kapur Barus, Kerupuk Udang, Tepung Tapioka.
 
 ```bash
 PIXABAY_API_KEY=... python scripts/brand-catalog/fetch_smd_images.py --out /tmp/smdimg   # ±5 menit
