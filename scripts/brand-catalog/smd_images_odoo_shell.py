@@ -27,7 +27,7 @@ for t in T.search([("company_id", "=", company.id)]):
         continue
     data = (root / "images" / manifest[base]["file"]).read_bytes()
     b64 = base64.b64encode(data)
-    if t.image_1920 and hashlib.sha1(base64.b64decode(t.image_1920)).hexdigest() == hashlib.sha1(data).hexdigest():
+    if t.image_1920 and hashlib.sha256(base64.b64decode(t.image_1920)).digest() == hashlib.sha256(data).digest():
         same += 1
         continue
     credit = manifest[base]
