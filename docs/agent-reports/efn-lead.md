@@ -85,7 +85,7 @@ company_code `v_esb_movement_daily` = PT cabang asal (alternatif dua baris asal/
   -04 k-anon bisa dipalsukan, -06 pemberitahuan app/label store, -07 IPv6 /64.
 - efn-prod: smd = merge lokal `b4a3a7c` (a03d89f + V-01). Migrasi PG 20, clickhouse-init, image `:e2e` baru (rollback
   `:pre-v01`), flag di `prod-local.overrides` (backup `.bak-20261123`): ONLINE_CHANNELS=SMD,PB, BEHAVIOR_TRACKING_ENABLED,
-  BEHAVIOR_ANON_VISIT_ENABLED, ETL_ENABLE_BEHAVIOR, ETL_BEHAVIOR_AGG_INTERVAL_SECONDS=900. Kanal PB Odoo id 6 (150 menu,
+  BEHAVIOR_ANON_VISIT_ENABLED, ETL_ENABLE_BEHAVIOR, ETL_BEHAVIOR_AGG_INTERVAL_SECONDS=900. Kanal PB Odoo id 6 (298 menu = semua menu POS terjual sejak 1 Agu 2026,
   harga median ESB di pricelist demo, `stock_check=none`), user `efn_online_pb` + key 30 hari (rotasi manual ±23 Des).
 - Data demo: `scripts/dev/seed_demo_visitors.py` (14 hari, `subject_key` `demo:`, consented=0). WAJIB cleanup 3 langkah
   (docstring skrip) sebelum gladi data nyata. Rekening transfer PB = PLACEHOLDER.
