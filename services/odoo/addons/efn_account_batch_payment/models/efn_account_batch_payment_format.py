@@ -73,9 +73,10 @@ class EfnAccountBatchPaymentFormat(models.Model):
         configs = self.env["efn.account.batch.payment.format.company"].search(
             [("format_id", "=", self.id), ("company_id", "=", batch.company_id.id)]
         )
-        return configs.filtered(lambda c: c.journal_id == batch.journal_id)[:1] or configs.filtered(
-            lambda c: not c.journal_id
-        )[:1]
+        return (
+            configs.filtered(lambda c: c.journal_id == batch.journal_id)[:1]
+            or configs.filtered(lambda c: not c.journal_id)[:1]
+        )
 
     def _efn_render(self, batch):
         """``(bytes, filename)`` file transfer batch. Menolak (UserError) sebelum menulis apa pun bila data tidak
@@ -163,10 +164,7 @@ class EfnAccountBatchPaymentFormat(models.Model):
     def _efn_render_mandiri_mcm(self, batch, rows):
         return (
             ["No", "Beneficiary Account", "Beneficiary Name", "Amount", "Remark", "Value Date"],
-            [
-                [i + 1, r["account"], r["holder"], r["amount"], r["memo"], r["date"]]
-                for i, r in enumerate(rows)
-            ],
+            [[i + 1, r["account"], r["holder"], r["amount"], r["memo"], r["date"]] for i, r in enumerate(rows)],
         )
 
     def _efn_render_bni(self, batch, rows):

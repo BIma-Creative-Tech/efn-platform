@@ -182,9 +182,11 @@ class EfnBankImportTemplate(models.Model):
             if not row or all(str(c).strip() == "" for c in row):
                 continue
             needed = [self.date_column_index]
-            needed += [self.signed_amount_column_index] if signed else [
-                i for i in (self.amount_credit_column_index, self.amount_debit_column_index) if i and i > 0
-            ]
+            needed += (
+                [self.signed_amount_column_index]
+                if signed
+                else [i for i in (self.amount_credit_column_index, self.amount_debit_column_index) if i and i > 0]
+            )
             if any(idx > len(row) for idx in needed if idx and idx > 0):
                 errors.append((n, ERR_COLUMN))
                 continue

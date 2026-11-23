@@ -45,7 +45,9 @@ class EfnAccountAssetPostWizard(models.TransientModel):
             "params": {
                 "type": "success" if count else "warning",
                 "title": _("Posting Penyusutan"),
-                "message": _("%(count)s baris penyusutan diposting sampai %(date)s.", count=count, date=self.cutoff_date),
+                "message": _(
+                    "%(count)s baris penyusutan diposting sampai %(date)s.", count=count, date=self.cutoff_date
+                ),
                 "sticky": False,
                 "next": {"type": "ir.actions.act_window_close"},
             },

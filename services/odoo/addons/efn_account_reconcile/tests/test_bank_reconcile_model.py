@@ -83,9 +83,7 @@ class TestEfnBankReconcileModel(EfnReconcileCommon):
 
     def test_regex_line_reads_the_fee_from_the_narrative(self):
         _aml, st = self._settlement()
-        model = self._model(
-            [{"account_id": self.mdr.id, "amount_type": "regex", "amount_string": r"DDR: ([\d.,]+)"}]
-        )
+        model = self._model([{"account_id": self.mdr.id, "amount_type": "regex", "amount_string": r"DDR: ([\d.,]+)"}])
         writeoffs = st._efn_reconcile_model_writeoffs(model, 10_000.0)
         self.assertAlmostEqual(writeoffs[0]["balance"], 10_000.0, places=2)
 
@@ -96,9 +94,7 @@ class TestEfnBankReconcileModel(EfnReconcileCommon):
 
     def test_percentage_of_statement_line(self):
         _aml, st = self._settlement(gross=1_000_000.0, net=1_000_000.0)
-        model = self._model(
-            [{"account_id": self.mdr.id, "amount_type": "percentage_st_line", "amount_string": "0.5"}]
-        )
+        model = self._model([{"account_id": self.mdr.id, "amount_type": "percentage_st_line", "amount_string": "0.5"}])
         writeoffs = st._efn_reconcile_model_writeoffs(model, 20_000.0)
         self.assertAlmostEqual(writeoffs[0]["balance"], 5_000.0, places=2)
 

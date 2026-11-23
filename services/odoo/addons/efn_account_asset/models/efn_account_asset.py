@@ -138,7 +138,12 @@ class EfnAccountAsset(models.Model):
     )
     partial_disposal_count = fields.Integer(compute="_compute_partial_disposal_count")
     revaluation_value = fields.Monetary(
-        string="Revaluasi Kumulatif", default=0.0, currency_field="currency_id", readonly=True, copy=False, tracking=True
+        string="Revaluasi Kumulatif",
+        default=0.0,
+        currency_field="currency_id",
+        readonly=True,
+        copy=False,
+        tracking=True,
     )
     revaluation_surplus_balance = fields.Monetary(
         string="Saldo Surplus Revaluasi",
@@ -166,9 +171,7 @@ class EfnAccountAsset(models.Model):
 
     # ---------------------------------------------------------------- akun
     asset_account_id = fields.Many2one("account.account", string="Akun Aset", check_company=True)
-    depreciation_account_id = fields.Many2one(
-        "account.account", string="Akun Akumulasi Penyusutan", check_company=True
-    )
+    depreciation_account_id = fields.Many2one("account.account", string="Akun Akumulasi Penyusutan", check_company=True)
     expense_account_id = fields.Many2one("account.account", string="Akun Beban Penyusutan", check_company=True)
     journal_id = fields.Many2one(
         "account.journal", string="Jurnal Penyusutan", check_company=True, domain="[('type', '=', 'general')]"

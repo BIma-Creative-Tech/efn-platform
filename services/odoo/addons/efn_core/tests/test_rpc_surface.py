@@ -568,7 +568,10 @@ RPC_ALLOWLIST = {
     ("efn.account.asset", "action_view_partial_disposals"): "G57: check_access('read'), act_window saja",
     ("efn.account.asset", "action_view_merged_assets"): "G57: check_access('read'), act_window saja",
     ("efn.account.asset", "action_view_revaluations"): "G57: check_access('read'), act_window saja",
-    ("efn.account.asset.group", "action_efn_reseed"): "efn_check_asset_manager (seed hanya PT env.companies ber-CoA id)",
+    (
+        "efn.account.asset.group",
+        "action_efn_reseed",
+    ): "efn_check_asset_manager (seed hanya PT env.companies ber-CoA id)",
     ("efn.account.asset.depreciation.line", "action_post_now"): "asset_id._efn_check_manager",
     ("efn.account.asset.depreciation.line", "action_reverse"): "asset_id._efn_check_manager",
     ("efn.account.asset.disposal.wizard", "action_dispose"): "asset_id._efn_check_manager",

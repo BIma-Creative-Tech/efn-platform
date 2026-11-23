@@ -99,7 +99,7 @@ class EfnAccountAssetDisposalWizard(models.TransientModel):
         if surplus > 0 and (not self.surplus_account_id or not self.retained_earnings_account_id):
             raise UserError(
                 _(
-                    "Aset membawa surplus revaluasi %(amount)s: akun surplus revaluasi dan akun laba ditahan wajib diisi.",
+                    "Aset membawa surplus revaluasi %(amount)s: akun surplus revaluasi dan akun laba ditahan wajib diisi.",  # noqa: E501 - string terjemahan utuh
                     amount=surplus,
                 )
             )

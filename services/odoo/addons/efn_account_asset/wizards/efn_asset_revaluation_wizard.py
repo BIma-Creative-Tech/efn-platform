@@ -40,7 +40,9 @@ class EfnAccountAssetRevaluationWizard(models.TransientModel):
         string="Nilai Buku Saat Ini", related="asset_id.net_book_value", currency_field="currency_id"
     )
     revaluation_date = fields.Date(required=True, default=fields.Date.context_today)
-    new_value = fields.Monetary(string="Nilai Baru", required=True, default=_default_new_value, currency_field="currency_id")
+    new_value = fields.Monetary(
+        string="Nilai Baru", required=True, default=_default_new_value, currency_field="currency_id"
+    )
     revaluation_amount = fields.Monetary(
         string="Penyesuaian", compute="_compute_revaluation_amount", currency_field="currency_id"
     )

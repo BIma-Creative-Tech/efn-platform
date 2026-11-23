@@ -1,4 +1,7 @@
-"""Branding beranda per PT (port dari core/custom_home_console/models/res_company.py, ADR-049; field diberi awalan efn_)."""
+"""Branding beranda per PT (port dari core/custom_home_console/models/res_company.py, ADR-049).
+
+Field diberi awalan efn_.
+"""
 
 from odoo import fields, models
 

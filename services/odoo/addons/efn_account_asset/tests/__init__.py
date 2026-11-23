@@ -1,5 +1,1 @@
-from . import test_asset
-from . import test_quantity_asset
-from . import test_asset_bill
-from . import test_asset_security
-from . import test_asset_register
+from . import test_asset, test_asset_bill, test_asset_register, test_asset_security, test_quantity_asset

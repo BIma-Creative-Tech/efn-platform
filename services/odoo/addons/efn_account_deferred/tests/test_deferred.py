@@ -41,8 +41,18 @@ class TestEfnDeferred(AccountTestInvoicingCommon):
             }
         )
 
-    def _bill(self, price, start, end, bill_date=None, account=None, taxes=None, analytic=None, company=None,
-              move_type="in_invoice"):
+    def _bill(
+        self,
+        price,
+        start,
+        end,
+        bill_date=None,
+        account=None,
+        taxes=None,
+        analytic=None,
+        company=None,
+        move_type="in_invoice",
+    ):
         company = company or self.company
         line = {
             "name": "Sewa Outlet Uji",
@@ -173,9 +183,7 @@ class TestEfnDeferred(AccountTestInvoicingCommon):
         self.assertEqual(len(self._of_type(generated, "recognition")), 12)
 
     def test_revenue_invoice_uses_unearned_account(self):
-        invoice = self._bill(
-            1200.0, date(2025, 1, 1), date(2025, 3, 31), account=self.revenue, move_type="out_invoice"
-        )
+        invoice = self._bill(1200.0, date(2025, 1, 1), date(2025, 3, 31), account=self.revenue, move_type="out_invoice")
         invoice.action_post()
         generated = invoice.efn_deferred_generated_ids
         self.assertIn(self.unearned, generated.line_ids.account_id)

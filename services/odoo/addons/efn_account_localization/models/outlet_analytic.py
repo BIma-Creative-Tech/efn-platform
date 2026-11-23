@@ -1,7 +1,8 @@
 """G60-C: helper analitik Outlet (fungsi murni + cap baris laba-rugi).
 
 Ditulis ulang dari ide `_levis_merge_ou_distribution` (odoo-platform
-`custom_levis_localization/models/purchase_order.py`), dengan perbedaan: kunci yang SUDAH memuat akun dari plan Outlet tidak ditambah lagi (plan-aware), dan hanya baris
+`custom_levis_localization/models/purchase_order.py`), dengan perbedaan: kunci yang SUDAH memuat akun dari plan
+Outlet tidak ditambah lagi (plan-aware), dan hanya baris
 laba-rugi (``internal_group`` income/expense) yang dicap (Q-G60-8: cukup laba-rugi).
 """
 
@@ -34,8 +35,9 @@ def stamp_outlet(lines, outlet):
     ditimpa. :returns: baris yang dicap.
     """
     pnl = lines.filtered(
-        lambda line: line.account_id.internal_group in PNL_GROUPS
-        and line.display_type not in ("line_section", "line_note")
+        lambda line: (
+            line.account_id.internal_group in PNL_GROUPS and line.display_type not in ("line_section", "line_note")
+        )
     )
     if not outlet or not pnl:
         return pnl.browse()

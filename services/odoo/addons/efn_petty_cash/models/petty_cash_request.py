@@ -472,9 +472,11 @@ class EfnPettyCashRequest(models.Model):
         if pc_type.block_when_overdue:
             today = fields.Date.context_today(self)
             overdue = peers.filtered(
-                lambda r: r.realization_deadline
-                and r.realization_deadline < today
-                and not r.currency_id.is_zero(r.amount_outstanding)
+                lambda r: (
+                    r.realization_deadline
+                    and r.realization_deadline < today
+                    and not r.currency_id.is_zero(r.amount_outstanding)
+                )
             )
             if overdue:
                 problems.append(_("Masih ada uang muka lewat tenggat: %s.", ", ".join(overdue.mapped("name"))))

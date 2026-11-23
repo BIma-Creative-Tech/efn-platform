@@ -199,8 +199,10 @@ class AccountMove(models.Model):
         turunan posted di periode terkunci, tolak dengan pesan yang menyebut entrinya (sebelum move asal diubah)."""
         for move in self:
             locked = move.efn_deferred_generated_ids.filtered(
-                lambda m: m.state == "posted"
-                and m.company_id._get_lock_date_violations(m.date, sale=False, purchase=False, tax=False)
+                lambda m: (
+                    m.state == "posted"
+                    and m.company_id._get_lock_date_violations(m.date, sale=False, purchase=False, tax=False)
+                )
             )
             if locked:
                 raise UserError(
