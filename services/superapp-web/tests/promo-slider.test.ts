@@ -1,6 +1,6 @@
 /** Promo Super-App web: slider hero + pop-up (docs/04 §18.4). */
 import { describe, expect, it } from 'vitest';
-import { brandChannelMap, localDay, parsePromoFeed, parsePromoLink, parseSeen, pickPopup, promoHref, promoImageUrl, type PromoItem } from '@/lib/promo';
+import { brandChannelMap, localDay, parsePromoFeed, parsePromoLink, parseSeen, promoForCompanies, pickPopup, promoHref, promoImageUrl, type PromoItem } from '@/lib/promo';
 
 const SHA = 'a'.repeat(64);
 const it1 = (id: string, extra: Record<string, unknown> = {}) => ({ id, title: `Promo ${id}`, subtitle: 'x', cta_label: 'Lihat', link: { type: 'brand', brand: 'PB' }, image_sha: SHA, ...extra });
@@ -62,5 +62,17 @@ describe('brandChannelMap (semua brand)', () => {
       { channel_code: 'GL', company_code: 'GL', brand_code: null },
     ]);
     expect(m).toMatchObject({ PB: 'PB', BACHA: 'BCR', BCR: 'BCR', GL: 'GL' });
+  });
+});
+
+describe('promoForCompanies (keputusan 23 Nov 2026: promo hanya di tenant PT pemilik)', () => {
+  it('PB tidak tampil di supermarket, SMD tidak tampil di holding/PB, Bacha = BCR+BCF', async () => {
+    const { BRANDS } = await import('@/lib/brands');
+    const f = parsePromoFeed({ banners: [it1('PB-3'), it1('SMD-1'), it1('BCF-2')], popups: [it1('PB-2'), it1('SMD-5')] })!;
+    const ids = (c: readonly string[]) => { const r = promoForCompanies(f, c); return [...r.banners, ...r.popups].map((p) => p.id); };
+    expect(ids(BRANDS.supermarket.companies)).toEqual(['SMD-1', 'SMD-5']);
+    expect(ids(BRANDS.parisbaguette.companies)).toEqual(['PB-3', 'PB-2']);
+    expect(ids(BRANDS.bacha.companies)).toEqual(['BCF-2']);
+    expect(ids(BRANDS.efn.companies)).toEqual(['PB-3', 'BCF-2', 'PB-2']);
   });
 });
