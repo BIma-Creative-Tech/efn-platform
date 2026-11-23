@@ -1409,6 +1409,9 @@ services:
       # BEHAVIOR_TRACKING_ENABLED / PROMO_CAMPAIGN_ENABLED / WA_UNOFFICIAL_ENABLED = OFF; deploy-validate menolak true
       # tanpa ref persetujuan (+ izin Superadmin EFN_ALLOW_FEATURE_ON). Runbook: docs/runbooks/supermarket-campaign-channels.md
       BEHAVIOR_TRACKING_ENABLED: ${BEHAVIOR_TRACKING_ENABLED:-false}
+      # V-01 (keputusan pemilik proyek 23 Nov 2026): log kunjungan anonim tanpa consent; efektif hanya bila
+      # BEHAVIOR_TRACKING_ENABLED=true (GET /v1/config features.visit_log). Default false.
+      BEHAVIOR_ANON_VISIT_ENABLED: ${BEHAVIOR_ANON_VISIT_ENABLED:-false}
       BEHAVIOR_SUBJECT_PEPPER_FILE: /run/secrets/behavior_subject_pepper
       BEHAVIOR_DEVICE_PEPPER_FILE: /run/secrets/behavior_device_pepper
       BEHAVIOR_RL_DEVICE_PER_MIN: ${BEHAVIOR_RL_DEVICE_PER_MIN:-120}

@@ -300,6 +300,26 @@ Kode: `efn_etl/behavior.py`. DDL: `infra/clickhouse/init/16-g50-behavior.sql`. G
 - Belum: skema `behavior.*` dibuat BFF paralel (kolom diasumsikan, grant kolom = verifikasi saat deploy); event `purchase`
   belum ada di kontrak §28.6; pemetaan `outlet_code` -> `warehouse_id` untuk row policy Insight (G47) belum.
 
+### V-01: log kunjungan anonim (keputusan pemilik proyek 23 Nov 2026)
+
+- Staging `behavior.event_raw` + kolom `consented` (false = anonim, subject_key domain `anon:` dari BFF) dan `page` (enum
+  halaman event `page_view`). ETL menyalin ke `fact_visitor_event.consented` (UInt8, baris lama = 1) dan `.page`
+  (`ADD COLUMN IF NOT EXISTS` di DDL 16). Fail closed: anonim + `member` / fitur member (`wishlist_*`, `notify_me_request`,
+  `price_alert_set`) / turunan server (`cart_abandon`, `purchase`) / `page` di luar enum -> halaman batal.
+- Agregat `agg_visitor_*` dihitung dari SEMUA visitor. Baru: `agg_visitor_page_daily` (halaman x kanal x hari; baris
+  `page = '*'` = semua visitor hari itu). Segmen (`v_seg_*` -> segment-worker) HANYA `consented = 1`.
+- Insight: view `efn_dwh.v_vis_*` (`init/23-v01-visitor-insight.sql`) -> `efn_insight.v_vis_*`
+  (`access/insight-visitor-access.sql`, row policy `access/insight-visitor-policy.sh`, setting `SQL_efn_vcodes`/`SQL_efn_vsig`).
+- **Demo (SMD + PB)** — tidak ada env ETL baru; nyalakan:
+  1. BFF: `BEHAVIOR_TRACKING_ENABLED=true` + `BEHAVIOR_ANON_VISIT_ENABLED=true` (`GET /v1/config` -> `features.visit_log`).
+  2. ETL: `ETL_ENABLE_BEHAVIOR=true` (job `behavior_erasure`, `behavior_events`, `behavior_agg`). Agregat dihitung ulang tiap
+     `ETL_BEHAVIOR_AGG_INTERVAL_SECONDS` (bawaan 3600; demo boleh 900 = minimum).
+  3. Insight: tidak ada flag baru (`INSIGHT_ENABLED=true` saja); SMD butuh `INSIGHT_SM_ENABLED=true` + persona
+     category/exec/marketing. PB tampil untuk sesi ber-kode PB tanpa pembatasan cabang (tidak bergantung
+     `INSIGHT_FNB_PERSONA_ENABLED`).
+  4. `clickhouse-init` dijalankan ulang (DDL 16/23 + access + policy) dan migrasi PG 20 (BFF) sebelum ETL baru jalan:
+     ETL membaca `e.consented, e.page` -> tanpa kolom/grant itu job `behavior_events` gagal (heartbeat error, data tidak hilang).
+
 ## G47: EFN Insight supermarket (docs/04 §28.13 v20.3, ADR-041 §3.3-§3.4 Proposed, fit-gap G47 C-1..C-7)
 
 - Modul: `efn_etl/sm.py` (SQL, transform, logika murni), `efn_etl/sm_cycle.py` (job khusus), `efn_etl/sm_kpi.py`

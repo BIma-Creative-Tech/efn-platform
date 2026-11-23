@@ -71,3 +71,23 @@ company_code `v_esb_movement_daily` = PT cabang asal (alternatif dua baris asal/
 ### Riwayat
 - 21 Nov 2026 — konsolidasi worktree; review Insight 11 poin (`fix/insight-review`).
 - 20–21 Nov 2026 — adopsi Claude Standard Kit (#120), gitleaks main hijau (#129).
+
+## V-01 log kunjungan visitor anonim (23 Nov 2026)
+
+- Keputusan pemilik proyek: kunjungan web+app dicatat tanpa banner (anonim), tampil di Insight; demo SMD + PB; kanal online
+  PB diaktifkan di efn-prod lokal; Insight diisi data kunjungan DEMO. Amandemen ADR-047 §6b, docs/04 v21.4 (L-250..L-255).
+- Branch `feat/visitor-log` (worktree `efn-platform-visitor`) + efn-mobile `feat/visitor-tracking` (apps/superapp). Belum
+  di-push/PR.
+- Verifikasi: jest BFF 1153 (fixture lintas service hijau dgn repo lengkap), vitest web 630, vitest insight 911, pytest ETL
+  hijau + ruff, jest mobile 153 + tsc; DDL ClickHouse 24.8 idempoten (2x) + SQL agregat diuji di container sekali pakai.
+- Review: QA (3 perbaikan kecil), security (0 High, SEC-V01-01 Medium diperbaiki: ID anonim `efn_vid` terpisah + server
+  hanya mengakui consent versi teks aktif; SEC-V01-05 filter segmen dihapus). Sisa Low: SEC-V01-03 rotasi ID harian,
+  -04 k-anon bisa dipalsukan, -06 pemberitahuan app/label store, -07 IPv6 /64.
+- efn-prod: smd = merge lokal `b4a3a7c` (a03d89f + V-01). Migrasi PG 20, clickhouse-init, image `:e2e` baru (rollback
+  `:pre-v01`), flag di `prod-local.overrides` (backup `.bak-20261123`): ONLINE_CHANNELS=SMD,PB, BEHAVIOR_TRACKING_ENABLED,
+  BEHAVIOR_ANON_VISIT_ENABLED, ETL_ENABLE_BEHAVIOR, ETL_BEHAVIOR_AGG_INTERVAL_SECONDS=900. Kanal PB Odoo id 6 (298 menu = semua menu POS terjual sejak 1 Agu 2026,
+  harga median ESB di pricelist demo, `stock_check=none`), user `efn_online_pb` + key 30 hari (rotasi manual ±23 Des).
+- Data demo: `scripts/dev/seed_demo_visitors.py` (14 hari, `subject_key` `demo:`, consented=0). WAJIB cleanup 3 langkah
+  (docstring skrip) sebelum gladi data nyata. Rekening transfer PB = PLACEHOLDER.
+- Belum: APK app belum dibangun ulang; UI `/visitors` belum dilihat dengan login; segment-worker tidak dinyalakan (tidak
+  ada data consented); DPO/Legal Q-SM48.

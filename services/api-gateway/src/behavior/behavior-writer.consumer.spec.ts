@@ -64,7 +64,37 @@ describe('BehaviorWriterConsumer (behavior.event → PG staging)', () => {
     expect(ins.params[17]).toEqual(['SMD', 'SMD']);
     expect(ins.text).toContain('company_code');
     expect(ins.text).not.toContain('ingested_at');
+    // V-01: page per event (kolom ke-19), consented per batch (ke-20); pesan pra-V-01 tanpa `consented` = true
+    expect(ins.params[18]).toEqual([null, null]);
+    expect(ins.params[19]).toBe(true);
     expect(ctx.db.find('INSERT INTO platform.processed_message')[0]!.params[0]).toBe('bff.behavior-writer');
+  });
+
+  it('V-01: batch anonim (consented=false) + page_view ditulis dengan consented=false dan page', async () => {
+    const ctx = setup();
+    const pv = event({ type: 'page_view', page: 'promo', product_id: null, duration_s: null, stock_status: null, price_idr: null });
+    expect(await ctx.consumer.handle(message([pv, event()], { consented: false }), { userId: 'efn-bff' })).toEqual({ status: 'written', inserted: 2, deduped: 0 });
+    const ins = ctx.db.find('INSERT INTO behavior.event_raw')[0]!;
+    expect(ins.text).toContain('consented');
+    expect(ins.params[6]).toEqual(['page_view', 'product_view']);
+    expect(ins.params[18]).toEqual(['promo', null]);
+    expect(ins.params[19]).toBe(false);
+  });
+
+  it('V-01: payload anonim/page tidak konsisten → DLQ', async () => {
+    const ctx = setup();
+    for (const bad of [
+      message([event()], { consented: false, subject_kind: 'member' }),
+      message([event({ type: 'wishlist_add' })], { consented: false }),
+      message([event({ type: 'price_alert_set' })], { consented: false }),
+      message([event()], { consented: 'false' }),
+      message([event({ type: 'page_view', product_id: null })]),
+      message([event({ type: 'page_view', product_id: null, page: '/checkout?x=1' })]),
+      message([event({ page: 'home' })]),
+    ]) {
+      await expect(ctx.consumer.handle(bad, { userId: 'efn-bff' })).rejects.toBeInstanceOf(PermanentMessageError);
+    }
+    expect(ctx.db.find('INSERT INTO behavior.event_raw')).toHaveLength(0);
   });
 
   it('PT diturunkan ulang dari pemetaan kanal saat tulis; kanal sementara tak terpetakan → PT tervalidasi dari pesan', async () => {

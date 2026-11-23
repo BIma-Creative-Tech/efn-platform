@@ -19,8 +19,9 @@ export default function PelacakanPage() {
         <strong>DRAFT</strong>: teks persetujuan menunggu tinjauan DPO/Legal.
       </p>
       <p className="muted">
-        Pelacakan aktivitas bersifat pilihan. Menolak atau mematikannya tidak mengurangi layanan belanja, poin, atau pesanan Anda.
-        Anda bisa mengubah pilihan ini kapan saja.
+        Rekomendasi dan promo personal (pelacakan yang dikaitkan dengan Anda) bersifat pilihan. Menolak atau mematikannya tidak
+        mengurangi layanan belanja, poin, atau pesanan Anda. Anda bisa mengubah pilihan ini kapan saja. Bila fitur kunjungan anonim
+        aktif, kunjungan tetap dicatat tanpa identitas; penjelasannya tampil di bawah.
       </p>
       <TrackingSettings />
     </div>

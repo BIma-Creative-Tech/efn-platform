@@ -28,7 +28,7 @@ export function FunnelBars({ steps }: { steps: readonly FunnelStep[] }): ReactNo
         <summary>Tampilkan sebagai tabel</summary>
         <div className="table-wrap" tabIndex={0} role="region" aria-label="Tabel funnel pengunjung">
           <table className="table">
-            <caption className="sr-only">Funnel pengunjung (jumlah perangkat-hari ber-consent)</caption>
+            <caption className="sr-only">Funnel pengunjung (jumlah perangkat-hari)</caption>
             <thead>
               <tr>
                 <th scope="col">Tahap</th>

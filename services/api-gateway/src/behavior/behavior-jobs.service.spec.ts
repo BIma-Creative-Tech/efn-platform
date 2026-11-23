@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { FakeDb, testConfig } from '../common/testing/fakes';
 import { BehaviorJobsService } from './behavior-jobs.service';
 import { eraseBehaviorMember, exportBehaviorMember, withdrawBehaviorTracking } from './behavior-privacy';
-import { deterministicUuid, memberSubjectKey } from './subject-key';
+import { anonSubjectKey, deterministicUuid, deviceKey, memberSubjectKey } from './subject-key';
 
 describe('BehaviorJobsService', () => {
   function setup(opts: { lock?: boolean; candidates?: Record<string, unknown>[]; dedupFresh?: boolean; env?: Record<string, string> } = {}) {
@@ -51,6 +51,9 @@ describe('BehaviorJobsService', () => {
     expect(ins.params[3]).toBe(expected);
     expect(ins.params.slice(6)).toEqual(['app', 'SMD']);
     expect(ins.text).not.toContain("'server'");
+    // V-01: kandidat hanya dari cart_add subject ber-consent; baris turunan ditandai consented
+    expect(ctx.db.find('WITH last_add')[0]!.text).toContain("type = 'cart_add' AND consented");
+    expect(ins.text).toMatch(/consented\)\s+VALUES/);
     const again = setup({ candidates: [cand], dedupFresh: false });
     expect((await again.svc.runOnce()).cartAbandon).toBe(0);
     expect(again.db.find('INSERT INTO behavior.event_raw')).toHaveLength(0);
@@ -138,5 +141,21 @@ describe('behavior-privacy (erasure/DSAR/penarikan consent)', () => {
     expect(d.find('DELETE FROM behavior.device_link')).toHaveLength(1);
     const exp = await exportBehaviorMember(db(true), MEMBER, null);
     expect(exp).toEqual({ linked_devices: [], events: [], truncated: false });
+  });
+
+  it('V-01: erasure/export DSAR tidak menyentuh subject anonim (domain HMAC terpisah, tidak pernah di subject_member/device_link)', async () => {
+    const devicePepper = 'd'.repeat(32);
+    const deviceId = randomUUID();
+    const linked = deviceKey(devicePepper, deviceId);
+    const anon = anonSubjectKey(devicePepper, deviceId);
+    expect(anon).not.toBe(linked);
+    const d = db(true, [linked], [linked]);
+    await eraseBehaviorMember(d, MEMBER, PEPPER, REQUEST);
+    const touched = d.queries.flatMap((q) => q.params.flat() as unknown[]);
+    expect(touched).toContain(linked);
+    expect(touched).not.toContain(anon);
+    const e = db(true, [linked], [linked]);
+    await exportBehaviorMember(e, MEMBER, PEPPER);
+    expect(e.queries.flatMap((q) => q.params.flat() as unknown[])).not.toContain(anon);
   });
 });

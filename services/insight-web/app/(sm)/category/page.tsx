@@ -90,7 +90,7 @@ export default async function CategoryPage({ searchParams }: { searchParams: SmS
           label="Harga di atas pasar, banyak dilihat"
           value={sigCount === null ? ERR : visitorOff ? 'Pelacakan perilaku belum aktif' : `${sigCount >= 100 ? '100+' : sigCount} SKU`}
           muted={sigCount === null || visitorOff}
-          note={!visitorOff && sigCount !== null ? 'Hanya pengunjung yang menyetujui pelacakan' : undefined}
+          note={!visitorOff && sigCount !== null ? 'Semua pengunjung, termasuk anonim' : undefined}
           info="SKU dengan harga di atas batas 'di atas pasar' (median Price Hunter 30 hari) yang dilihat oleh sedikitnya 10 pengunjung. Definisi sinyal final menunggu ADR-047."
         />
       </KpiRow>
@@ -293,7 +293,7 @@ export default async function CategoryPage({ searchParams }: { searchParams: SmS
           >
             {({ rows, names }) => (
               <>
-                <p className="muted small">Hanya mencakup pengunjung yang menyetujui pelacakan. Angka di bawah 10 pengunjung ditekan.</p>
+                <p className="muted small">Mencakup semua pengunjung, termasuk kunjungan anonim (V-01). Angka di bawah 10 pengunjung ditekan.</p>
                 <SmTable
                   caption="SKU banyak dilihat dengan harga di atas pasar"
                   rows={rows}

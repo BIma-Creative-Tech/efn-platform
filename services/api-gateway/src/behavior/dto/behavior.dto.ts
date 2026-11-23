@@ -17,8 +17,19 @@ export const CLIENT_EVENT_TYPES = [
   'search',
   'notify_me_request',
   'price_alert_set',
+  'page_view',
 ] as const;
 export type ClientEventType = (typeof CLIENT_EVENT_TYPES)[number];
+
+/** V-01: nilai `page` untuk `page_view` (enum tertutup; URL/path mentah tidak pernah diterima). */
+export const PAGE_VALUES = ['home', 'category', 'product', 'search', 'cart', 'checkout', 'promo', 'store', 'account', 'order', 'other'] as const;
+export type PageValue = (typeof PAGE_VALUES)[number];
+
+/**
+ * V-01: tipe fitur MEMBER yang tidak diterima dari subject anonim (tanpa consent) → `rejected code: invalid`.
+ * Fitur ini butuh akun; event anonim tidak pernah ditautkan ke member.
+ */
+export const MEMBER_ONLY_EVENT_TYPES: ReadonlySet<string> = new Set(['wishlist_add', 'wishlist_remove', 'notify_me_request', 'price_alert_set']);
 /** `cart_abandon` hanya diturunkan server (ADR-047 §3.2), klien yang mengirimnya ditolak `invalid`. */
 export type EventType = ClientEventType | 'cart_abandon';
 
@@ -44,7 +55,7 @@ const CHANNEL_CODE_RE = /^[A-Z0-9-]{1,8}$/;
 const OUTLET_CODE_RE = /^[A-Za-z0-9_-]{1,16}$/;
 const VERSION_RE = /^[A-Za-z0-9._@-]{1,32}$/;
 const TOP_KEYS = new Set(['schema_version', 'device_id', 'channel', 'events']);
-const EVENT_KEYS = new Set(['event_id', 'type', 'client_ts', 'channel_code', 'outlet_code', 'product_id', 'duration_s', 'qty', 'query', 'result_count']);
+const EVENT_KEYS = new Set(['event_id', 'type', 'client_ts', 'channel_code', 'outlet_code', 'product_id', 'duration_s', 'qty', 'query', 'result_count', 'page']);
 const CONSENT_KEYS = new Set(['device_id', 'granted', 'version']);
 
 /** `unknown_channel` (revisi G50-A): `channel_code` tidak terpetakan ke PT → event tidak disimpan tanpa PT. */
@@ -61,6 +72,8 @@ export interface ParsedEvent {
   qty: number | null;
   query: string | null;
   result_count: number | null;
+  /** V-01: hanya untuk `page_view` (wajib), null untuk tipe lain. */
+  page: PageValue | null;
 }
 
 export interface ParsedBatch {
@@ -139,6 +152,18 @@ export function parseEvent(raw: unknown, nowMs: number): ParsedEvent | 'invalid'
   } else if (o.query !== undefined || o.result_count !== undefined) {
     return 'invalid'; // §28.6: `query` hanya untuk type=search
   }
+  let page: PageValue | null = null;
+  let storedProductId = productId;
+  if (type === 'page_view') {
+    // V-01: `page` wajib (enum); `product_id` opsional hanya bila page=product, lalu DIABAIKAN (null) — `product_view`
+    // tetap event utama produk, sehingga page_view tidak menghitung ganda produk dan tidak ditolak unknown_product.
+    if (typeof o.page !== 'string' || !(PAGE_VALUES as readonly string[]).includes(o.page)) return 'invalid';
+    page = o.page as PageValue;
+    if (productId !== null && page !== 'product') return 'invalid';
+    storedProductId = null;
+  } else if (o.page !== undefined) {
+    return 'invalid'; // V-01: `page` hanya untuk type=page_view
+  }
   if (Math.abs(nowMs - ts) > CLIENT_TS_SKEW_MS) return 'stale';
   return {
     event_id: o.event_id.toLowerCase(),
@@ -146,11 +171,12 @@ export function parseEvent(raw: unknown, nowMs: number): ParsedEvent | 'invalid'
     client_ts: new Date(ts).toISOString(),
     channel_code: o.channel_code,
     outlet_code: outlet,
-    product_id: productId,
+    product_id: storedProductId,
     duration_s: duration,
     qty,
     query,
     result_count: resultCount,
+    page,
   };
 }
 

@@ -16,8 +16,10 @@ GRANT USAGE ON SCHEMA behavior TO efn_etl;
 -- Staging event (partisi harian, retensi 7 hari oleh BFF). Grant pada tabel induk berlaku untuk query lewat induk;
 -- partisi baru tidak perlu grant tersendiri selama ETL selalu membaca lewat `behavior.event_raw`.
 GRANT SELECT (event_id, subject_key, subject_kind, company_code, channel, channel_code, outlet_code, type, product_id,
-              duration_s, qty, query, result_count, stock_status, price_idr, received_at, ingested_at)
+              duration_s, qty, query, result_count, stock_status, price_idr, received_at, ingested_at, consented, page)
     ON behavior.event_raw TO efn_etl;
+-- V-01 (23 Nov 2026): `consented` (false = log kunjungan anonim; view segmen ClickHouse wajib filter consented = 1) dan
+-- `page` (enum halaman untuk page_view).
 
 -- Antrean erasure perilaku (append-only, milik BFF, retensi >= 100 hari > TTL ClickHouse 90 hari).
 GRANT SELECT (id, subject_key, request_id, created_at) ON behavior.subject_erasure TO efn_etl;

@@ -16,6 +16,10 @@ hilang dari ClickHouse.
 
 PDP: ETL tidak memegang pepper (SEC-16) — `subject_key` sudah HMAC dari BFF dan divalidasi hex sha256 (fail closed).
 Tidak ada device ID mentah, member_id, IP, user agent, GPS. `query` disanitasi ulang (defense in depth).
+
+V-01 (keputusan pemilik proyek 23 Nov 2026): kunjungan anonim tanpa consent ikut dicatat. Kolom staging `consented`
+(false = anonim, subject_key domain `anon:` dari BFF) dan `page` (event `page_view`). Anonim tidak pernah `member`
+(fail closed). Agregat dihitung dari semua visitor; segmen hanya `consented = 1` (view v_seg_*).
 """
 
 from __future__ import annotations
@@ -53,8 +57,18 @@ CLIENT_EVENT_TYPES = (
     "search",
     "notify_me_request",
     "price_alert_set",
+    "page_view",  # V-01
 )
 SERVER_EVENT_TYPES = ("cart_abandon", "purchase")
+# V-01: tipe yang tidak boleh datang dari subjek anonim = fitur member + turunan server (cart_abandon/purchase hanya
+# subjek consented). Cermin CHECK `event_raw_anon_check` staging PG; ETL mengulang (fail closed).
+ANON_FORBIDDEN_TYPES = frozenset(
+    {"wishlist_add", "wishlist_remove", "notify_me_request", "price_alert_set", *SERVER_EVENT_TYPES}
+)
+# V-01: enum `page` event page_view (kontrak V-01 = CHECK staging PG).
+PAGES = frozenset(
+    {"home", "category", "product", "search", "cart", "checkout", "promo", "store", "account", "order", "other"}
+)
 EVENT_TYPES = frozenset(CLIENT_EVENT_TYPES + SERVER_EVENT_TYPES)
 CHANNELS = frozenset({"web", "app"})
 SUBJECT_KINDS = frozenset({"device", "member"})
@@ -79,7 +93,7 @@ _SPACES_RE = re.compile(r"\s+")
 SQL_BEHAVIOR_EVENTS = """
 SELECT e.event_id::text AS event_id, e.subject_key, e.subject_kind, e.company_code, e.channel, e.channel_code,
        e.outlet_code, e.type, e.product_id, e.duration_s, e.qty, e.query, e.result_count, e.stock_status, e.price_idr,
-       e.received_at, e.ingested_at,
+       e.consented, e.page, e.received_at, e.ingested_at,
        e.ingested_at AS _cursor_ts, (e.subject_key || ':' || e.event_id::text) AS _cursor_key
 FROM behavior.event_raw e
 WHERE e.ingested_at >= %(cursor_ts)s
@@ -104,6 +118,8 @@ EVENT_COLUMNS = (
     "result_count",
     "stock_status",
     "price_idr",
+    "consented",
+    "page",
     "received_at",
     "event_date",
     "ingested_at",
@@ -142,6 +158,16 @@ def _opt_nonneg_int(value: Any) -> int | None:
     return number if number >= 0 else None
 
 
+def consented_flag(value: Any) -> int:
+    """V-01: `event_raw.consented` (boolean NOT NULL DEFAULT true) -> 1/0. NULL -> 0 (fail safe: tidak pernah masuk
+    segmen). Nilai lain -> ValueError (halaman batal)."""
+    if value is None or value is False or (type(value) is int and value == 0):
+        return 0
+    if value is True or (type(value) is int and value == 1):
+        return 1
+    raise ValueError("event_raw.consented bukan boolean")
+
+
 def business_date(value: datetime) -> date:
     return to_utc(value).astimezone(JAKARTA).date()
 
@@ -169,7 +195,20 @@ def transform_behavior_event(row: dict[str, Any]) -> list[Any]:
     event_type = str(row.get("type") or "").strip()
     if event_type not in EVENT_TYPES:
         raise ValueError("event_raw.type di luar kontrak")
+    consented = consented_flag(row.get("consented"))
+    if not consented and (kind == "member" or event_type in ANON_FORBIDDEN_TYPES):
+        # V-01: kunjungan anonim tidak pernah tertaut member dan tidak memakai fitur member.
+        raise ValueError("event_raw anonim melanggar kontrak V-01")
+    page = ""
+    if event_type == "page_view":
+        page = str(row.get("page") or "").strip()
+        if page not in PAGES:
+            raise ValueError("event_raw.page di luar kontrak")
     is_search = event_type == "search"
+    # product_id pada page_view hanya bermakna untuk page=product (kontrak V-01); selain itu diabaikan.
+    product_id = _clamp_int(row.get("product_id"), 2**32 - 1)
+    if event_type == "page_view" and page != "product":
+        product_id = 0
     stock_status = str(row.get("stock_status") or "").strip()
     received_at = to_utc(row["received_at"])
     return [
@@ -181,13 +220,15 @@ def transform_behavior_event(row: dict[str, Any]) -> list[Any]:
         channel_code,
         outlet_code,
         event_type,
-        _clamp_int(row.get("product_id"), 2**32 - 1),
+        product_id,
         _clamp_int(row.get("duration_s"), MAX_DURATION_S),
         _clamp_int(row.get("qty"), MAX_QTY),
         sanitize_query(row.get("query")) if is_search else "",
         _opt_nonneg_int(row.get("result_count")) if is_search else None,
         stock_status if stock_status in STOCK_STATUSES else "",
         _opt_nonneg_int(row.get("price_idr")),
+        consented,
+        page,
         received_at,
         business_date(received_at),
         to_utc(row["ingested_at"]),
@@ -267,10 +308,27 @@ GROUP BY event_date, company_code, channel, channel_code, query
 HAVING uniqExact(subject_key) >= {k:UInt32}
 """
 
+# V-01: halaman per kanal x hari (page_view) + baris page='*' = semua visitor hari itu (event apa pun).
+SQL_AGG_PAGE = """
+INSERT INTO efn_dwh.agg_visitor_page_daily
+    (day, company_code, channel, page, visitors, views, computed_at)
+SELECT event_date, company_code, channel, page, uniqExact(subject_key), count(), now64(6)
+FROM efn_dwh.fact_visitor_event FINAL
+WHERE event_date >= {start:Date} AND event_date < {end:Date} AND event_type = 'page_view' AND page != ''
+GROUP BY event_date, company_code, channel, page
+UNION ALL
+SELECT event_date, company_code, channel, '*', uniqExact(subject_key), countIf(event_type = 'page_view'), now64(6)
+FROM efn_dwh.fact_visitor_event FINAL
+WHERE event_date >= {start:Date} AND event_date < {end:Date}
+GROUP BY event_date, company_code, channel
+"""
+
+# Semua agregat dihitung dari SEMUA visitor (anonim + consented, kontrak V-01); tanpa filter `consented`.
 AGG_STATEMENTS = (
     ("agg_visitor_product_daily", SQL_AGG_PRODUCT),
     ("agg_visitor_funnel_daily", SQL_AGG_FUNNEL),
     ("agg_visitor_search_daily", SQL_AGG_SEARCH),
+    ("agg_visitor_page_daily", SQL_AGG_PAGE),
 )
 SQL_LAST_AGG = "SELECT max(computed_at), count() FROM efn_dwh.agg_visitor_funnel_daily"
 

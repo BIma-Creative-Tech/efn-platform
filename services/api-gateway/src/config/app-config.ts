@@ -2138,6 +2138,17 @@ export class AppConfig {
   get behaviorTrackingEnabled(): boolean {
     return this.bool('BEHAVIOR_TRACKING_ENABLED', false);
   }
+  /**
+   * V-01 (keputusan pemilik proyek 23 Nov 2026): log kunjungan anonim tanpa consent (default false). Efektif hanya bila
+   * `BEHAVIOR_TRACKING_ENABLED=true` — pakai `behaviorVisitLogEnabled`.
+   */
+  get behaviorAnonVisitEnabled(): boolean {
+    return this.bool('BEHAVIOR_ANON_VISIT_ENABLED', false);
+  }
+  /** V-01: `POST /v1/events` menerima event anonim (dan `GET /v1/config` `features.visit_log`) bila kedua flag aktif. */
+  get behaviorVisitLogEnabled(): boolean {
+    return this.behaviorTrackingEnabled && this.behaviorAnonVisitEnabled;
+  }
   /** ADR-047 §3.3: pepper `subject_key = HMAC(pepper, member_id)` (secret `behavior_subject_pepper`). */
   get behaviorSubjectPepper(): string {
     return this.secret('BEHAVIOR_SUBJECT_PEPPER');

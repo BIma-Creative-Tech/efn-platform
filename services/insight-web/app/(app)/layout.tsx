@@ -12,6 +12,7 @@ import { getConfig } from '@/lib/runtime';
 import { loadShellData } from '@/lib/shell-data';
 import { navGroups, smdAllowed } from '@/lib/sm-personas';
 import { freshnessStatus } from '@/lib/thresholds';
+import { withVisitorNav } from '@/lib/visitor';
 
 export const dynamic = 'force-dynamic';
 
@@ -28,7 +29,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   const esbCodes = esbCodesOf(session.codes);
   const smd = smdAllowed(session, cfg.smEnabled);
   const odoo = odooHomeUrl(cfg);
-  const groups = navGroups(session, cfg.smEnabled, cfg.fnbEnabled);
+  const groups = withVisitorNav(navGroups(session, cfg.smEnabled, cfg.fnbEnabled), session, cfg.smEnabled);
 
   // G52 (§28.15.9): sesi ber-cabang (kepala toko F&B) = cangkang minimal. Tanpa FilterBar global dan tanpa kesegaran tingkat PT:
   // query itu memakai view kelas PT yang memang kosong untuk sesi ber-cabang (halaman Toko memegang hari + cabang sendiri).

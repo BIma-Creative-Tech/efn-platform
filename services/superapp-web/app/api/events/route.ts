@@ -6,6 +6,9 @@
  *   event dikirim sebagai perangkat saja: consent perangkat TIDAK otomatis menjadi consent akun (ADR-047 §3.1).
  * - Pemetaan: 202 diteruskan (`disabled: true` = klien berhenti); 404/501 = fitur belum aktif -> `disabled: true`;
  *   403 -> `tracking_consent_required`; 429 -> 429 + `Retry-After`; 400/413/422 -> 400 (batch dibuang klien).
+ * - V-01: event anonim (tanpa consent, `features.visit_log`) memakai jalur yang sama; Bearer tidak diteruskan tanpa `?link=1`
+ *   (klien hanya menandainya bila consent aktif) dan BFF mengabaikan Bearer untuk identitas anonim. Route ini tidak
+ *   meneruskan IP/UA di luar yang sudah dilakukan `bffFetch` (rate limit). Field `page` divalidasi enum oleh `sanitizeEvents`.
  * - Tidak me-log body/ID perangkat.
  */
 import type { NextRequest } from 'next/server';

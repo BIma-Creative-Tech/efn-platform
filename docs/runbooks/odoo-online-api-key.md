@@ -122,6 +122,23 @@ kanal = kode PT, pola G20 L-48), web tenant `supermarket` (`https://supermarket.
 menjalankan `19-platform-g44.sql` (CHECK kode PT + SMD; deploy.sh mewajibkannya). Batas daftar `CHANNELS` skrip rotasi
 dinaikkan 8 → 16 kode (6 kanal + QR/BOOKING/PROMO = 11 kode untuk `--all`).
 
+**Kanal PB di efn-prod lokal (demo V-01), keputusan pemilik proyek 23 Nov 2026:** gladi lokal saja, **bukan**
+production. Langkah 1–2 di atas dikerjakan skrip idempoten `scripts/dev/activate_pb_online_demo.py` (ORM CE 19 +
+`efn_online_order`/`efn_online_transfer`; tidak bergantung pada `efn_setup_online`, yang tidak terpasang di efn-prod):
+```bash
+# pratinjau (rollback), lalu jalankan sungguhan; aman diulang
+docker exec -i -e PB_ONLINE_DRY_RUN=1 efn-prod-odoo-1 odoo shell -c /etc/odoo/odoo.conf -d efn_odoo --no-http \
+  < scripts/dev/activate_pb_online_demo.py
+docker exec -i efn-prod-odoo-1 odoo shell -c /etc/odoo/odoo.conf -d efn_odoo --no-http \
+  < scripts/dev/activate_pb_online_demo.py
+```
+Hasil: kanal `PB` aktif (`bank_transfer`, F&B tanpa cek stok/reservasi, outlet wajib FP), 5 outlet pickup
+`P002/P010/P018/P024/P027` (FP non-dine-in, ambil 09:00–21:00 WIB), user teknis `efn_online_pb` **tanpa API key**,
+produk PB kategori POS `T Package - *` (aktif, dapat dijual, harga > 0) dipublikasikan. Rekening transfer = PLACEHOLDER
+fiktif (`Bank Contoh DEMO`), wajib diganti rekening PT terverifikasi Finance sebelum dipakai di luar gladi. Key pertama
+dibuat terpisah oleh lead (langkah 3–4 versi lokal); skrip tidak menghapus apa pun dan tidak mengubah record yang
+sudah ada selain mengisi field kosong (perbedaan dicetak sebagai `PB-ONLINE PERINGATAN`).
+
 **PT/kanal baru di luar tabel di atas** (mis. entitas ke-8): butuh perubahan repo dulu — baris `scripts/secrets.list`
 (`host:disabled`), secret top-level `infra/compose/docker-compose.yml`, overlay `docker-compose.online-<kode>.yml`
 (pola file yang ada), kode di `EFN_ONLINE_CHANNEL_CODES` (`scripts/lib/deploy-validate.sh`) **dan** `ALLOWED_CHANNELS`

@@ -37,6 +37,8 @@ const ICON_PATHS: Record<string, string> = {
   calendar: 'M4 6h16v14H4zM4 10h16M8 3v4M16 3v4',
   search: 'M11 4a7 7 0 1 0 0.01 0M20 20l-4-4',
   book: 'M5 4h12a2 2 0 0 1 2 2v14H7a2 2 0 0 1-2-2zM5 18a2 2 0 0 1 2-2h12M9 8h6',
+  // V-01: halaman Pengunjung.
+  users: 'M9 4a4 4 0 1 0 0.01 0M2 20a7 7 0 0 1 14 0M17 6a3 3 0 1 1 0 6M18 14a5 5 0 0 1 4 6',
 };
 
 export function Icon({ name, size = 18 }: { name: string; size?: number }): ReactNode {

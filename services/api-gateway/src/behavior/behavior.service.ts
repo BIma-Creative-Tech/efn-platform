@@ -10,16 +10,26 @@ import { KV_STORE, KvStore } from '../common/redis/kv-store';
 import { AuthUser } from '../common/security/access-token.service';
 import { UNKNOWN_TEXT_SHA256 } from '../privacy/consent.service';
 import { BEHAVIOR_EVENT_QUEUE, BehaviorEventMessage, BehaviorQueueEvent, behaviorIdempotencyKey } from './behavior-message';
-import { memberConsentGranted } from './behavior-privacy';
+import { ERASURE_CONSENT_VERSION, memberConsentGranted } from './behavior-privacy';
 import { resolveChannelCompanies } from './channel-company';
-import { MAX_BODY_BYTES, ParsedEvent, RejectCode, parseDeviceConsent, parseEventBatch } from './dto/behavior.dto';
-import { deviceKey, memberSubjectKey } from './subject-key';
+import { MAX_BODY_BYTES, MEMBER_ONLY_EVENT_TYPES, ParsedEvent, RejectCode, parseDeviceConsent, parseEventBatch } from './dto/behavior.dto';
+import { anonSubjectKey, deviceKey, memberSubjectKey } from './subject-key';
+
+/** V-01: `consented` = subject ber-consent `tracking` (perilaku lama); `anonymous` = log kunjungan tanpa consent. */
+export type IngestMode = 'consented' | 'anonymous';
 
 export interface IngestResponse {
   accepted: number;
   duplicates?: number;
   rejected?: { index: number; code: RejectCode }[];
   disabled?: true;
+  mode?: IngestMode;
+}
+
+interface Subject {
+  key: string;
+  kind: 'device' | 'member';
+  consented: boolean;
 }
 
 /** Batas pencatatan consent device per IP per menit (anti spam baris append-only). */
@@ -40,7 +50,8 @@ export function trackingConsentRequired(): ApiError {
  * (`device_key` HMAC), tanpa IP/user agent di payload maupun tabel (IP hanya sebagai kunci rate limit ter-hash).
  *
  * Alur `POST /v1/events`: flag → batas ukuran → validasi → rate limit (event/menit per device & per IP) → consent gate
- * (akun `tracking` bila Bearer; selain itu consent device) → pengayaan server (harga salinan katalog, status stok cache
+ * (akun `tracking` bila Bearer; selain itu consent device; V-01: tanpa consent + `BEHAVIOR_ANON_VISIT_ENABLED` → subject
+ * anonim `consented=false`, tipe fitur member ditolak `invalid`) → pengayaan server (harga salinan katalog, status stok cache
  * `ocat:stk:*`, tanpa memanggil Odoo) → publish `behavior.event` (confirm channel) → 202.
  */
 @Injectable()
@@ -102,11 +113,21 @@ export class BehaviorService {
       throw err;
     }
 
-    const subject = await this.resolveSubject(dKey, user);
+    const subject = await this.resolveSubject(batch.deviceId, dKey, user);
     const rejected = [...batch.rejected];
-    const enriched = await this.enrich(batch.events, rejected);
+    let events = batch.events;
+    if (!subject.consented) {
+      // V-01: fitur member (wishlist, notify-me, price alert) tidak diterima dari subject anonim
+      events = [];
+      for (const e of batch.events) {
+        if (MEMBER_ONLY_EVENT_TYPES.has(e.event.type)) rejected.push({ index: e.index, code: 'invalid' });
+        else events.push(e);
+      }
+    }
+    const enriched = await this.enrich(events, rejected);
     rejected.sort((a, b) => a.index - b.index);
-    const res: IngestResponse = { accepted: enriched.length, duplicates: batch.duplicates, rejected };
+    const mode: IngestMode = subject.consented ? 'consented' : 'anonymous';
+    const res: IngestResponse = { accepted: enriched.length, duplicates: batch.duplicates, rejected, mode };
     if (enriched.length === 0) return res;
 
     const batchId = randomUUID();
@@ -116,6 +137,7 @@ export class BehaviorService {
       received_at: new Date(nowMs).toISOString(),
       subject_key: subject.key,
       subject_kind: subject.kind,
+      consented: subject.consented,
       channel: batch.channel,
       events: enriched,
     };
@@ -144,10 +166,14 @@ export class BehaviorService {
    *   tautan device ↔ member + pemetaan subject dicatat.
    * - Tanpa Bearer: consent device terbaru wajib `granted`; bila device tertaut ke member yang consent `tracking`-nya
    *   masih aktif → subject member, selain itu subject device.
+   * - V-01 (keputusan pemilik proyek 23 Nov 2026): tanpa consent di atas (termasuk Bearer tanpa consent akun) dan
+   *   `behaviorVisitLogEnabled` → subject ANONIM `anonSubjectKey` (`consented=false`): Bearer diabaikan untuk identitas,
+   *   tidak ada `device_link`/`subject_member`. Penarikan consent device (baris `granted=false` biasa) tetap boleh anonim
+   *   (penarikan = berhenti penautan/profiling), KECUALI baris erasure akun (`version='erasure'`, SEC-G50-07) → 403.
+   *   Flag mati → 403 `tracking_consent_required` seperti sebelumnya.
    */
-  private async resolveSubject(dKey: string, user: AuthUser | null): Promise<{ key: string; kind: 'device' | 'member' }> {
-    if (user) {
-      if (!(await memberConsentGranted(this.db, user.memberId, 'tracking'))) throw trackingConsentRequired();
+  private async resolveSubject(deviceId: string, dKey: string, user: AuthUser | null): Promise<Subject> {
+    if (user && (await memberConsentGranted(this.db, user.memberId, 'tracking'))) {
       const sKey = memberSubjectKey(this.config.behaviorSubjectPepper, user.memberId);
       await this.db.tx(async (q) => {
         await q.query(
@@ -157,13 +183,24 @@ export class BehaviorService {
         );
         await q.query(`INSERT INTO behavior.subject_member (subject_key, member_id) VALUES ($1, $2) ON CONFLICT DO NOTHING`, [sKey, user.memberId]);
       });
-      return { key: sKey, kind: 'member' };
+      return { key: sKey, kind: 'member', consented: true };
     }
-    const consent = await this.db.query<{ granted: boolean }>(
-      `SELECT granted FROM behavior.device_consent WHERE device_key = $1 ORDER BY created_at DESC, id DESC LIMIT 1`,
+    // Bearer tanpa consent akun: perilaku lama (403) bila log kunjungan mati; bila aktif, consent device dibaca hanya untuk
+    // cek baris erasure sebelum dicatat anonim (consent device TIDAK menjadi subject saat Bearer ada, ADR-047 §3.3)
+    if (user && !this.config.behaviorVisitLogEnabled) throw trackingConsentRequired();
+    const consent = await this.db.query<{ granted: boolean; version: string }>(
+      `SELECT granted, version FROM behavior.device_consent WHERE device_key = $1 ORDER BY created_at DESC, id DESC LIMIT 1`,
       [dKey],
     );
-    if (consent.rows[0]?.granted !== true) throw trackingConsentRequired();
+    const latest = consent.rows[0];
+    // SEC-V01-01: consent device hanya berlaku untuk versi teks consent `tracking` yang AKTIF. Versi lama atau teks aktif
+    // tidak dikonfigurasi → tidak ada subject consented/penautan member (anonim bila visit_log aktif, selain itu 403).
+    const activeVersion = this.activeTrackingVersion();
+    const deviceConsented = latest?.granted === true && activeVersion !== null && latest.version === activeVersion;
+    if (user || !deviceConsented) {
+      if (!this.config.behaviorVisitLogEnabled || latest?.version === ERASURE_CONSENT_VERSION) throw trackingConsentRequired();
+      return { key: anonSubjectKey(this.config.behaviorDevicePepper, deviceId), kind: 'device', consented: false };
+    }
     const link = await this.db.query<{ member_id: string }>(
       `SELECT l.member_id::text AS member_id FROM behavior.device_link l
          JOIN platform.member m ON m.id = l.member_id AND m.deleted_at IS NULL
@@ -173,9 +210,18 @@ export class BehaviorService {
     const memberId = link.rows[0]?.member_id;
     if (memberId && (await memberConsentGranted(this.db, memberId, 'tracking'))) {
       await this.db.query(`UPDATE behavior.device_link SET last_seen_at = now() WHERE member_id = $1 AND device_key = $2`, [memberId, dKey]);
-      return { key: memberSubjectKey(this.config.behaviorSubjectPepper, memberId), kind: 'member' };
+      return { key: memberSubjectKey(this.config.behaviorSubjectPepper, memberId), kind: 'member', consented: true };
     }
-    return { key: dKey, kind: 'device' };
+    return { key: dKey, kind: 'device', consented: true };
+  }
+
+  /** Versi teks consent `tracking` aktif; null bila belum/salah dikonfigurasi (tidak melempar di jalur ingest). */
+  private activeTrackingVersion(): string | null {
+    try {
+      return this.config.consentActiveText('tracking')?.version ?? null;
+    } catch {
+      return null;
+    }
   }
 
   /** Pengayaan server (tidak dipercaya dari klien): harga dari salinan katalog, status stok dari cache Redis. */
@@ -234,6 +280,7 @@ export class BehaviorService {
         result_count: event.result_count,
         stock_status: stock,
         price_idr: price,
+        page: event.page,
       });
     }
     return out;

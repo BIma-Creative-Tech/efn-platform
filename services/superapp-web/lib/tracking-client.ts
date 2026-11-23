@@ -3,14 +3,23 @@
  * origin sendiri (`/api/events`, `/api/events/consent`, `/api/me/tracking-consent`).
  *
  * - Pilihan consent perangkat disimpan di cookie first-party `efn_tc` (+ cermin localStorage). ID perangkat (UUID v4 acak)
- *   di cookie `efn_did` (+ cermin localStorage), HANYA dibuat/disimpan setelah BFF mencatat persetujuan.
- * - Menolak -> tidak ada ID, tidak ada panggilan server (kontrak `POST /v1/events/consent` butuh `device_id`).
+ *   di cookie `efn_did` (+ cermin localStorage): ID CONSENT, hanya dipakai bila `trackingActive()`.
+ * - V-01 (23 Nov 2026): bila `features.visit_log` true, ID ANONIM di kunci TERPISAH `efn_vid` (atribut sama) dibuat saat
+ *   kunjungan pertama TANPA consent; mode anonim tidak pernah memakai/mengirim `efn_did` (SEC-V01-01), termasuk saat consent
+ *   tidak aktif karena versi teks naik / `efn_tc` hilang. Server membalas `mode`; bila klien anonim tetapi server `consented`,
+ *   `efn_vid` diganti UUID baru. `?link=1` hanya bila consent aktif. Event fitur member (wishlist/notify-me/price alert)
+ *   hanya bila consent. Saat setuju, ID consent baru dibuat (tidak pernah dari `efn_vid`).
+ * - Menolak -> tidak ada panggilan server bila sebelumnya tidak pernah setuju (kontrak `POST /v1/events/consent` butuh
+ *   `device_id`); log anonim berjalan terus. Bila sebelumnya setuju: ID consent dihapus + penarikan dicatat.
  * - Semua akses storage dibungkus try/catch (mode privat/diblokir). Tanpa console.* (UU PDP).
  * - Akun login: event dikirim dengan `?link=1` hanya bila consent akun `tracking` aktif (tombol eksplisit member).
  */
 import {
   buildEvent,
+  isMemberOnlyEvent,
+  anonymousModeLeaked,
   isUuidV4,
+  parseMode,
   parseChoice,
   serializeChoice,
   TRACKING_TEXT,
@@ -21,7 +30,8 @@ import {
   type SendResult,
 } from './tracking';
 
-const DID_KEY = 'efn_did';
+const DID_KEY = 'efn_did'; // ID consent
+const VID_KEY = 'efn_vid'; // ID anonim (V-01); tidak pernah dipakai sebagai efn_did dan sebaliknya
 const CHOICE_KEY = 'efn_tc';
 const DID_MAX_AGE = 180 * 24 * 3600; // = retensi device_link (ADR-047 §3.2)
 const CHOICE_MAX_AGE = 365 * 24 * 3600;
@@ -123,8 +133,61 @@ export function newUuid(): string | null {
   return null;
 }
 
+/** Consent perangkat aktif (mode `consented`). */
 export function isTrackingActive(): boolean {
   return trackingActive(readChoice(), readDeviceId());
+}
+
+// ---------- log kunjungan anonim (V-01) ----------
+
+let visitLog = false;
+
+/** Nyalakan/matikan log anonim sesuai `features.visit_log`. Mengaktifkan kembali pengirim yang berhenti. */
+export function setVisitLog(v: boolean): void {
+  if (visitLog !== v) {
+    visitLog = v;
+    getSender().resume();
+  }
+}
+
+export function isVisitLogEnabled(): boolean {
+  return visitLog;
+}
+
+/** ID anonim (`efn_vid`), TERPISAH dari ID consent `efn_did` (SEC-V01-01). */
+export function readVisitorId(): string | null {
+  const v = storeGet(VID_KEY);
+  return isUuidV4(v) ? v : null;
+}
+
+/** Dibuat + disimpan saat kunjungan pertama (tanpa consent). `null` bila tak ada CSPRNG: log dimatikan. Tidak menyentuh `efn_did`. */
+export function ensureVisitorId(): string | null {
+  const existing = readVisitorId();
+  if (existing) return existing;
+  const id = newUuid();
+  if (!id) return null;
+  storeSet(VID_KEY, id, DID_MAX_AGE);
+  return id;
+}
+
+/** Ganti ID anonim (pertahanan: server membalas `mode: consented` untuk event anonim). */
+function rotateVisitorId(): void {
+  storeDel(VID_KEY);
+  ensureVisitorId();
+}
+
+/**
+ * ID untuk batch berikutnya, ditentukan saat kirim: consent aktif -> `efn_did`; selain itu (termasuk versi teks naik atau
+ * `efn_tc` hilang) -> `efn_vid` bila log anonim menyala. Mode anonim TIDAK PERNAH memakai `efn_did`.
+ */
+function currentSendId(): string | null {
+  if (isTrackingActive()) return readDeviceId();
+  return visitLog ? ensureVisitorId() : null;
+}
+
+/** Ada sesuatu yang boleh dikirim: consent aktif, atau log anonim menyala. */
+function canSend(): boolean {
+  return visitLog || isTrackingActive();
 }
 
 // ---------- pengirim ----------
@@ -132,10 +195,16 @@ export function isTrackingActive(): boolean {
 let linked = false;
 let sender: TrackingSender | null = null;
 
+/** `?link=1` (bawa sesi member) HANYA bila consent perangkat aktif DAN consent akun aktif; event anonim tidak pernah ditautkan. */
+function linkSuffix(): string {
+  return linked && isTrackingActive() ? '?link=1' : '';
+}
+
 async function sendBody(body: string): Promise<SendResult> {
+  const sentMode = isTrackingActive() ? 'consented' : 'anonymous';
   let res: Response;
   try {
-    res = await fetch(`/api/events${linked ? '?link=1' : ''}`, {
+    res = await fetch(`/api/events${linkSuffix()}`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', accept: 'application/json' },
       body,
@@ -147,7 +216,9 @@ async function sendBody(body: string): Promise<SendResult> {
     return { kind: 'retry' };
   }
   if (res.status === 202 || res.status === 200) {
-    const data = (await res.json().catch(() => null)) as { disabled?: unknown } | null;
+    const data = (await res.json().catch(() => null)) as { disabled?: unknown; mode?: unknown } | null;
+    // Pertahanan SEC-V01-01: kirim anonim tetapi server menganggap consent -> buang ID anonim ini.
+    if (anonymousModeLeaked(sentMode, parseMode(data))) rotateVisitorId();
     return { kind: 'ok', disabled: data?.disabled === true };
   }
   if (res.status === 429) {
@@ -165,7 +236,7 @@ async function sendBody(body: string): Promise<SendResult> {
 function getSender(): TrackingSender {
   if (!sender) {
     sender = new TrackingSender({
-      getDeviceId: readDeviceId,
+      getDeviceId: currentSendId,
       send: sendBody,
       now: () => Date.now(),
     });
@@ -173,10 +244,16 @@ function getSender(): TrackingSender {
   return sender;
 }
 
-/** Catat satu event (no-op bila tracking tidak aktif). Tidak pernah melempar. */
+/**
+ * Catat satu event. Consent aktif -> semua tipe. Tanpa consent -> hanya bila `visit_log` menyala DAN tipe bukan fitur member
+ * (ID perangkat dibuat saat itu juga). Selain itu no-op. Fire-and-forget; tidak pernah melempar.
+ */
 export function trackEvent(input: EventInput): void {
   try {
-    if (!isTrackingActive()) return;
+    if (!isTrackingActive()) {
+      if (!visitLog || isMemberOnlyEvent(input.type)) return;
+      if (!ensureVisitorId()) return;
+    }
     const id = newUuid();
     if (!id) return;
     const s = getSender();
@@ -194,11 +271,11 @@ export function flushNow(): Promise<number> {
 /** Saat halaman tersembunyi/ditutup: `sendBeacon` (tanpa menunggu), jatuh ke fetch keepalive bila tidak tersedia. */
 export function flushOnHide(): void {
   try {
-    if (!isTrackingActive()) return;
+    if (!canSend()) return;
     const s = getSender();
     const body = s.takeForBeacon();
     if (!body) return;
-    const url = `/api/events${linked ? '?link=1' : ''}`;
+    const url = `/api/events${linkSuffix()}`;
     const ok = typeof navigator.sendBeacon === 'function' && navigator.sendBeacon(url, new Blob([body], { type: 'application/json' }));
     if (!ok) s.beaconFailed();
   } catch {
@@ -217,7 +294,7 @@ export function setLinked(v: boolean): void {
 /** Mulai flush periodik + `visibilitychange`/`pagehide`. Mengembalikan fungsi pembersih. */
 export function startFlushing(): () => void {
   const timer = window.setInterval(() => {
-    if (isTrackingActive()) void getSender().flush();
+    if (canSend()) void getSender().flush();
   }, FLUSH_INTERVAL_MS);
   const onVis = () => {
     if (document.visibilityState === 'hidden') flushOnHide();
@@ -256,7 +333,9 @@ const SAVE_ERROR = 'Pilihan belum tersimpan. Periksa koneksi lalu coba lagi.';
 
 /** Setuju: server mencatat dulu; ID perangkat baru disimpan SETELAH berhasil. */
 export async function grantDeviceConsent(): Promise<ConsentActionResult> {
-  const id = readDeviceId() ?? newUuid();
+  // ID consent: pakai ulang hanya bila sebelumnya memang consent (mis. versi teks naik); selain itu SELALU baru agar tidak
+  // menyambung ke ID anonim (V-01).
+  const id = (readChoice()?.granted ? readDeviceId() : null) ?? newUuid();
   if (!id) return { ok: false, message: 'Peramban ini tidak mendukung pelacakan yang aman, jadi tetap dimatikan.' };
   const r = await postDeviceConsent(id, true);
   if (r.disabled) return { ok: false, disabled: true, message: 'Fitur ini sedang tidak aktif.' };
@@ -273,8 +352,10 @@ export async function grantDeviceConsent(): Promise<ConsentActionResult> {
  * ke server (upaya terbaik; kegagalan server tidak membatalkan penarikan lokal). Tanpa ID -> tidak ada panggilan server.
  */
 export async function declineDeviceConsent(): Promise<ConsentActionResult> {
-  const id = readDeviceId();
-  storeDel(DID_KEY);
+  // Hanya ID consent yang dihapus/ditarik; ID anonim (log kunjungan) dibiarkan dan log anonim berjalan terus.
+  const wasGranted = readChoice()?.granted === true;
+  const id = wasGranted ? readDeviceId() : null;
+  if (wasGranted) storeDel(DID_KEY);
   storeSet(CHOICE_KEY, serializeChoice({ granted: false, version: TRACKING_TEXT.version }), CHOICE_MAX_AGE);
   getSender().reset();
   notify();

@@ -9,13 +9,18 @@ ClickHouse (ADR-003; BFF tidak pernah menulis ClickHouse).
   R-L01 (PDP: DSAR export/erasure), R-S04 (rate limit device + IP, batas batch/ukuran, respons tidak membocorkan status
   member).
 - **Flag:** `BEHAVIOR_TRACKING_ENABLED=false` (default semua env; **production OFF** sampai DPO: Q-SM16/17/26).
+  `BEHAVIOR_ANON_VISIT_ENABLED=false` (V-01, default semua env) — log kunjungan anonim tanpa consent, efektif hanya
+  bersama `BEHAVIOR_TRACKING_ENABLED=true`.
+- **V-01 (keputusan pemilik proyek 23 Nov 2026):** "kunjungan visitor tidak masuk PDP" → kunjungan web/app dicatat
+  **tanpa banner consent** sebagai subject anonim (lihat bagian V-01 di bawah). Penautan akun, segmen, dan kampanye tetap
+  hanya untuk subject ber-consent `tracking`.
 
 ## Kontrak API
 | Endpoint | Auth | Ringkas |
 |---|---|---|
 | `POST /v1/events/consent` | publik | `{device_id (uuid v4), granted, version}` → `202 {recorded, granted}`; grant hanya versi teks aktif (`CONSENT_TRACKING_VERSION`/`_TEXT_SHA256`) → `409 stale_text` / `503 consent_unavailable`; penarikan selalu diterima + hapus tautan device. Flag mati → `202 {recorded:false, disabled:true}`. Rate limit 30/menit/IP. |
-| `POST /v1/events` | publik atau Bearer | Body §28.6 (≤ 50 event, ≤ 32 KB, `additionalProperties:false`, `client_ts` ±24 jam). `202 {accepted, duplicates, rejected[{index, code: invalid|stale|unknown_channel|unknown_product}]}`. Flag mati → `202 {accepted:0, disabled:true}`. Tanpa consent → `403 tracking_consent_required` (bentuk `{error:{code,message}}`). 429 + `Retry-After`. Broker mati → 503. |
-| `GET /v1/config` | publik | `{features:{tracking, wishlist, restock_alert, price_alert, campaign_inbox}, tracking_consent:{version}|null}`; `tracking` hanya true bila flag aktif **dan** teks consent dikonfigurasi. |
+| `POST /v1/events` | publik atau Bearer | Body §28.6 (≤ 50 event, ≤ 32 KB, `additionalProperties:false`, `client_ts` ±24 jam). `202 {accepted, duplicates, rejected[{index, code: invalid|stale|unknown_channel|unknown_product}], mode: consented|anonymous}`. Flag mati → `202 {accepted:0, disabled:true}`. Tanpa consent dan `visit_log` mati, atau device dengan baris erasure → `403 tracking_consent_required` (bentuk `{error:{code,message}}`). 429 + `Retry-After`. Broker mati → 503. V-01: tipe `page_view` + field `page`. |
+| `GET /v1/config` | publik | `{features:{tracking, visit_log, wishlist, restock_alert, price_alert, campaign_inbox, notify_channels}, tracking_consent:{version}|null}`; `tracking` hanya true bila flag aktif **dan** teks consent dikonfigurasi; `visit_log` true bila `BEHAVIOR_TRACKING_ENABLED` **dan** `BEHAVIOR_ANON_VISIT_ENABLED` (tidak butuh teks consent). |
 
 ## Desain
 - `device_key = HMAC(behavior_device_pepper, device_id)`, `subject_key = HMAC(behavior_subject_pepper, member_id)`
@@ -58,9 +63,40 @@ ClickHouse (ADR-003; BFF tidak pernah menulis ClickHouse).
   `event_raw` (tanpa `batch_id`/`client_ts`) dan `subject_erasure` (`id, subject_key, request_id, created_at`); tanpa akses
   `device_link`/`device_consent`/`subject_member`/`erased_subject`.
 
+## V-01 — log kunjungan anonim (keputusan pemilik proyek 23 Nov 2026)
+- **Gate** (`BehaviorService.resolveSubject`): consent device `granted` **untuk versi teks consent `tracking` aktif**
+  (`CONSENT_TRACKING_VERSION`; SEC-V01-01) atau consent `tracking` akun → perilaku lama, `consented=true`. Consent device
+  versi lama, atau teks aktif tidak dikonfigurasi → tidak menautkan member (anonim bila `visit_log` aktif, selain itu 403). Selain itu, bila `visit_log` aktif → subject anonim `anonSubjectKey = HMAC(behavior_device_pepper,
+  "efn:anon:v1:" + device_id)` (domain berbeda dari `device_key`), `subject_kind=device`, `consented=false`, **Bearer
+  diabaikan untuk identitas** (tidak ada `device_link`/`subject_member`, member id tidak pernah masuk payload). Bearer tanpa
+  consent akun → anonim walau consent device ada (consent device tidak menjadi subject saat login, ADR-047 §3.3).
+- **Penarikan vs erasure:** baris `device_consent granted=false` biasa → tetap boleh anonim (penarikan = berhenti
+  penautan/profiling). Baris erasure akun (`version='erasure'`, SEC-G50-07) → `403` sampai consent baru. Flag mati → `403`
+  lama.
+- **Tipe:** anonim boleh semua tipe klien kecuali `wishlist_add|wishlist_remove|notify_me_request|price_alert_set`
+  (fitur member) → `rejected invalid`. `page_view` wajib `page` ∈ `home|category|product|search|cart|checkout|promo|
+  store|account|order|other` (enum, bukan URL); `product_id` hanya boleh bila `page=product` dan **diabaikan** (disimpan
+  null — `product_view` tetap event utama produk, tidak ada hitung ganda/unknown_product). `page` di tipe lain → invalid.
+- **Antrean & staging:** pesan `behavior.event` membawa `consented` (pesan lama tanpa field = `true`) dan `page` per event;
+  consumer menolak (DLQ) anonim non-device, anonim + tipe fitur member, `page` tidak konsisten. `behavior.event_raw`
+  kolom `consented boolean NOT NULL DEFAULT true`, `page text` + CHECK enum, CHECK `(type='page_view') = (page IS NOT
+  NULL)`, CHECK anonim ⇒ device & bukan tipe member/turunan kampanye; grant ETL per kolom + `consented, page`.
+- **Tidak dipakai segmen/kampanye/DSAR:** `cart_abandon` hanya dari `cart_add` `consented`; `purchase` hanya member
+  ber-consent (`consented=true`). Segmen: jaminan = view segmen ClickHouse `v_seg_*` memfilter `consented = 1` + ETL
+  gagal-tutup (milik efn-data-ai-engineer); ingest segmen BFF tidak memfilter (SEC-V01-05: kunci anonim beda domain HMAC,
+  filter staging tidak pernah menolak apa pun), dan `anonSubjectKey` tidak pernah ada di `subject_member` sehingga
+  dispatcher tidak dapat memetakannya ke member. DSAR export/erasure hanya memakai kunci dari `subject_member`/`device_link` + HMAC
+  member → event anonim tidak tersentuh (tidak tertaut ke orang).
+- Retensi sama (staging 7 hari, mentah ClickHouse 90 hari); IP/UA/URL/referrer tidak disimpan; query tetap `redactQuery`.
+- **Risiko:** R-L13 (profiling: anonim tidak pernah ditautkan/segmen), R-L01 (keputusan pemilik bahwa kunjungan anonim di
+  luar PDP belum dikonfirmasi DPO/Legal — pseudonim device tetap berpotensi data pribadi menurut ADR-047 §1.2), R-S04.
+
 ## Belum / catatan
 - Consumer memakai koneksi AMQP `efn-bff` (kontrak §28.7 menyebut user `efn-behavior`) — usulan kontrak di laporan.
 - `duplicates` di respons = duplikat dalam batch saja; duplikat lintas batch didedup consumer (tidak dilaporkan).
-- Penghitung agregat tanpa pengenal untuk pengunjung tanpa consent (ADR-047 §3.1 no. 5) belum dibangun (menunggu Q-SM16).
+- Penghitung agregat tanpa pengenal untuk pengunjung tanpa consent (ADR-047 §3.1 no. 5) digantikan V-01 (log anonim
+  ber-pseudonim); kontrak docs/04 §28.6 + ADR-047 belum diperbarui (architect).
+- V-01: ETL (`services/etl/efn_etl/behavior.py` `EVENT_TYPES`, kolom `consented`/`page`), DDL ClickHouse, view segmen
+  `consented = 1`, `deploy-validate.sh`/`check-encryption.sh` untuk flag baru → agent lain.
 - Kelas rate limit CATALOG untuk burst (§28.6) belum diterapkan terpisah; batas event/menit device & IP berlaku.
 - Job ETL `fact_visitor_event` + erasure ClickHouse milik efn-data-ai-engineer.

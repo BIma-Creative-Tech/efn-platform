@@ -25,6 +25,7 @@ Mati secara default: `INSIGHT_ENABLED` harus tepat `true`. Bila tidak, semua hal
 | `GET /api/export/<tabel>?<filter>` | CSV (BOM, escape formula C3). Tabel: `branch-rank flow-outliers flow-products top-menu menu-mix-branch pay-methods pay-branches dist-matrix dist-gap mov-category dq-freshness dq-alias dq-no-sales dq-non-ea dq-last-run`. Cakupan = sesi, data = pemuat yang sama dengan halaman. 401/503/500 tanpa badan. |
 | `/`, `/flow`, `/sales`, `/payments`, `/distribution`, `/data-quality`, `/forecast`, `/glosarium` | halaman F&B/gabungan (Forecast: ESB belum ada, SMD sudah). Path mengikuti §26.8; `/glosarium` = daftar istilah. |
 | `/exec`, `/store`, `/dc`, `/category`, `/marketing` | halaman Supermarket per persona |
+| `/visitors` | Pengunjung lintas PT (V-01): SMD + PT F&B sesi |
 | `/belum-aktif`, `/sesi-berakhir`, `/keluar` | halaman informasi publik |
 
 ## Navigasi (review pemilik proyek 21 Nov 2026)
@@ -65,6 +66,19 @@ Tiga halaman F&B dari data ESB di grup sidebar Food & Beverage (item teratas), a
   alias siklik ClickHouse; kontrak §28.15.9 hanya meringkas keluaran. Parameter baru: `yoy_from`, `yoy_to`, `m_from`, `ref_day` (semua `Date`).
 - YoY: "n/a" + catatan bila `first_day` penjualan PT > awal rentang tahun lalu (`fexec_yoy_coverage`, `lib/fnb-vm.ts yoyStatus`); gagal memuat cakupan juga "n/a".
 - Halaman penolakan baru `/fnb-belum-aktif`; `smRouteDenial` kini juga menolak sesi tanpa kode SM (kepala toko F&B tidak boleh membuka `/store` supermarket).
+
+## Pengunjung lintas PT (V-01, keputusan pemilik proyek 23 Nov 2026)
+Halaman `/visitors` (grup Ringkasan, item "Pengunjung"): log kunjungan web & aplikasi Super-App, **termasuk pengunjung anonim tanpa consent**,
+untuk demo SMD dan PB. Isi: pengunjung (perangkat-hari) & tampilan halaman per hari per PT, halaman teratas, funnel lihat produk -> keranjang ->
+checkout -> beli, produk paling dilihat vs dibeli (konversi), pencarian teratas & tanpa hasil; filter periode, PT, kanal web/app.
+- **Hak akses = aturan sesi yang ada, tanpa flag baru** (`lib/visitor.ts visitorCodes`): kode ESB sesi bila sesi tidak dibatasi cabang (`brs` kosong;
+  tidak bergantung `INSIGHT_FNB_PERSONA_ENABLED`) + `SMD` bila `INSIGHT_SM_ENABLED` dan persona category/exec/marketing. Tanpa kode -> `/tidak-berwenang`.
+- **Cakupan ClickHouse**: view `efn_insight.v_vis_*` (kunci `company_code`) dengan row policy sendiri: `SQL_efn_vcodes` (kode pengunjung sesi) +
+  `SQL_efn_vsig = SHA256(KEY|visitor|vcodes)` (`lib/scope.ts scopeSettingsVisitor`). Filter `pt` di URL hanya mempersempit (`company_code IN {codes}`).
+- Katalog `lib/queries-visitor.ts` (7 query `vis_*`), serializer `lib/ch-params-visitor.ts`, eksekusi `chQueryVis` (`lib/clickhouse.ts`).
+- k-anonim: produk dan kata kunci hanya bila >= `K_ANON` (10) perangkat (literal di SQL; kata kunci juga sudah >= k di agregat ETL).
+- Demo: lihat `services/etl/README.md` bagian V-01 (flag BFF + `ETL_ENABLE_BEHAVIOR=true` + `clickhouse-init`).
+- Belum: query belum dijalankan ke ClickHouse 24.8; satuan "unik" = perangkat-hari (bukan unik per periode); ekspor CSV halaman ini belum.
 
 ## Filter (URL, divalidasi server; tidak valid -> bawaan + pemberitahuan)
 **Perilaku (21 Nov 2026): filter langsung berlaku**, tanpa tombol Terapkan. Chip brand ("Semua" eksplisit) dan preset tanggal memakai `router.push` seketika;

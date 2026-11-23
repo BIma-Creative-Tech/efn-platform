@@ -1,5 +1,5 @@
 
-# KONTRAK ANTAR-SERVICE (v21.3 — 23 Nov 2026, kanal online SMD (pickup + pre-order, tanpa QR meja/reservasi) + tenant web `supermarket` §12.1/§13.5/§28.8 — dibangun; v21.2 — 23 Nov 2026, G53 §28.16 forecast F&B di insight-web `/forecast`: view `efn_insight.v_esb_forecast_daily` (policy ESB kelas PT, 15 policy), query `fnb_fc_*`, env `INSIGHT_FNB_DC_CODES` — dibangun G53; v21.1 — 22 Nov 2026, G52 §28.15 Insight F&B persona dari data ESB: halaman `/fnb/exec`, `/fnb/store`, `/fnb/marketing` (query `fexec_*`/`fstore_*`/`fmkt_*`), sidebar Ringkasan = Ikhtisar + halaman bersama di grup F&B dan Supermarket, grup persona pindah ke `efn_insight` 19.0.3.0.0 (xmlid tetap), model `efn.insight.esb.branch` + `res.users.efn_insight_esb_branch_ids`, kepala toko F&B dibatasi cabang (klaim `brs` `"<brand>:<id>"`, pencabutan cakupan PT penuh tanpa bergantung flag), token `eit3`/`eis3`, `SQL_efn_brs` + `SQL_efn_sig3`, policy ESB kelas PT/BR (14), 4 view `v_esb_store_*`, flag `INSIGHT_FNB_PERSONA_ENABLED`/`INSIGHT_ACCEPT_EIT2`, L-237..L-249, Q-INS-F1..Q-INS-F4 — kontrak, belum dibangun; v21.0 — 21 Nov 2026, G51 §28.14 SMD end-to-end: SMD sebagai filter halaman F&B Insight untuk persona `exec` (cabang `sm:<id>`, omzet termasuk PPN, basis campuran berlabel), view `v_sm_payment_daily`/`v_sm_product_sales_daily`/`v_sm_forecast_daily`/`v_sm_lot_stock` + `v_sm_product_list.shelf_life_days`, policy SM 33, store hanya bersama exec (SEC-G51-01), rekonstruksi stok `ETL_SM_STOCK_RECONSTRUCT_DAYS` (default 0), histori forecast as-of demo, seed A1–A7 demo saja, deploy `--renew-anon-volumes`, outlet online opsional, L-219..L-236, Q-SM46..Q-SM47 (terjawab 21 Nov) — dibangun G51; v20.5 — 21 Nov 2026, G47 review: L-216 store + marketing/dc, sesi Insight 2 jam L-217, kartu fase 2 L-218; v20.4 — 21 Nov 2026, G47 §28.13: koreksi fit-gap C-1..C-9 diserap dari kode (L-204..L-215), keputusan pemilik proyek 21 Nov: `kpi_admin` tanpa SoD kode, penerimaan outlet SMD dua langkah; v20.3 — 20 Nov 2026, G47 §28.13 Insight supermarket per persona: token `eit2`/`eis2` (`wids`, persona, `cats`), `SQL_efn_sig2`, row policy outlet + persona, mart `fact_replenishment`/`fact_dc_fill_rate`/`fact_dc_purchase_line`/`agg_sm_stock_daily`/`fact_lot_expiry`/`fact_campaign_result`, view `efn_insight.v_sm_*`, pemetaan `outlet_code` (Q-SM37), konfigurasi KPI per PT `efn.insight.sm.kpi` → `dim_sm_kpi_config`, Omzet termasuk PPN, L-186..L-203, Q-SM40..Q-SM45 — kontrak, belum dibangun; v20.2 dipakai PR #117 G50; v20.0 — 18 Nov 2026, Supermarket §28: forecast API worker→Odoo, usulan replenishment DC, assortment, event perilaku `POST /v1/events`, queue `behavior.event`/`promo.campaign.requested`/`notify.restock`/`notify.price_alert`/`notify.email`/`notify.wa_unofficial`, wishlist/notify-me/price alert, flag (ADR-044..048 Proposed, belum dibangun; §27 + L-127..L-143 dicadangkan G43); v18.0 — 18 Nov 2026, G42 §26 Insight web + SSO Odoo (token eit1 HMAC sekali pakai via POST form, cookie eis1, row policy `efn_insight_scope`, ADR-041 Proposed); v17.0 — 17 Nov 2026, G41 §25 ESB Core → datamart ClickHouse (esb-extract GET-only per brand, ADR-040 Proposed); v16.2 — 1 Nov 2026, G39 §24 asisten analisis "Analisis bertahap" (text2sql POST /v1/analyze: rencana ≤3 query → eksekusi per PT → ringkasan AI); v16.1 — 1 Nov 2026, G38 §23 Text-to-SQL "Tanya Data" (Odoo → text2sql → 9router/Ollama → ClickHouse per PT); v16.0 — 1 Nov 2026, G37 §22 gateway LLM 9router + fallback Ollama untuk OCR tahap 2 (K25-01, ADR-037); v15.1 — 31 Okt 2026, G33 §20.11 notifikasi reward MGM + layar referral Super-App; v15.0 — 30 Okt 2026, G32 §21 mart & dashboard waste/yield (K25-08); v14.1 — 30 Okt 2026, G31b §20.10 dasar MGM per baris (`excluded_categ_ids`); v14.0 — 30 Okt 2026, G31 §20 engine MGM: referral, akrual, settle, clawback; v13.0 — 29 Okt 2026, G30 §19 kebijakan MGM per PT (K25-10); v11.0 — 25 Okt 2026, G26 §17 pesanan online wajib lunas: VA, e-wallet, transfer + bukti, kiosk; v10.1 — 24 Okt 2026, G24 §16 entitas WTZ Wetzel's Pretzels; v10.0 — 21 Okt 2026, G23 §15 reservasi meja & pre-order berjadwal; v9.1 — 19 Okt 2026, G22 §14 sinkron r15 K1–K3 + L-82; v9.0 — 19 Okt 2026, G22 §14; v8.0 — G21 §13; v7.0 — G20 §12; v6.0 — G19 §11; v5.1 — 10 Okt 2026, privasi G18 L-21; v5.0 — 9 Okt 2026; §8 v3.x, §9 v4.x Fase 1, §10 v5.0 Fase 3 penjualan online; **§27 G43 v19.1** migrasi ESB → Odoo + arsip histori `efn_legacy_history`, ADR-042 Accepted)
+# KONTRAK ANTAR-SERVICE (v21.4 — 23 Nov 2026, V-01 log kunjungan anonim (keputusan pemilik proyek): `page_view` + `page`, mode anonim `POST /v1/events` (`mode` di respons), `features.visit_log`, flag `BEHAVIOR_ANON_VISIT_ENABLED`, kolom `consented`/`page`, agregat `agg_visitor_page_daily`, view segmen `consented = 1` §28.6–§28.10, L-250..L-255, Q-SM48, ADR-047 §6b — kontrak, belum dibangun; v21.3 — 23 Nov 2026, kanal online SMD (pickup + pre-order, tanpa QR meja/reservasi) + tenant web `supermarket` §12.1/§13.5/§28.8 — dibangun; v21.2 — 23 Nov 2026, G53 §28.16 forecast F&B di insight-web `/forecast`: view `efn_insight.v_esb_forecast_daily` (policy ESB kelas PT, 15 policy), query `fnb_fc_*`, env `INSIGHT_FNB_DC_CODES` — dibangun G53; v21.1 — 22 Nov 2026, G52 §28.15 Insight F&B persona dari data ESB: halaman `/fnb/exec`, `/fnb/store`, `/fnb/marketing` (query `fexec_*`/`fstore_*`/`fmkt_*`), sidebar Ringkasan = Ikhtisar + halaman bersama di grup F&B dan Supermarket, grup persona pindah ke `efn_insight` 19.0.3.0.0 (xmlid tetap), model `efn.insight.esb.branch` + `res.users.efn_insight_esb_branch_ids`, kepala toko F&B dibatasi cabang (klaim `brs` `"<brand>:<id>"`, pencabutan cakupan PT penuh tanpa bergantung flag), token `eit3`/`eis3`, `SQL_efn_brs` + `SQL_efn_sig3`, policy ESB kelas PT/BR (14), 4 view `v_esb_store_*`, flag `INSIGHT_FNB_PERSONA_ENABLED`/`INSIGHT_ACCEPT_EIT2`, L-237..L-249, Q-INS-F1..Q-INS-F4 — kontrak, belum dibangun; v21.0 — 21 Nov 2026, G51 §28.14 SMD end-to-end: SMD sebagai filter halaman F&B Insight untuk persona `exec` (cabang `sm:<id>`, omzet termasuk PPN, basis campuran berlabel), view `v_sm_payment_daily`/`v_sm_product_sales_daily`/`v_sm_forecast_daily`/`v_sm_lot_stock` + `v_sm_product_list.shelf_life_days`, policy SM 33, store hanya bersama exec (SEC-G51-01), rekonstruksi stok `ETL_SM_STOCK_RECONSTRUCT_DAYS` (default 0), histori forecast as-of demo, seed A1–A7 demo saja, deploy `--renew-anon-volumes`, outlet online opsional, L-219..L-236, Q-SM46..Q-SM47 (terjawab 21 Nov) — dibangun G51; v20.5 — 21 Nov 2026, G47 review: L-216 store + marketing/dc, sesi Insight 2 jam L-217, kartu fase 2 L-218; v20.4 — 21 Nov 2026, G47 §28.13: koreksi fit-gap C-1..C-9 diserap dari kode (L-204..L-215), keputusan pemilik proyek 21 Nov: `kpi_admin` tanpa SoD kode, penerimaan outlet SMD dua langkah; v20.3 — 20 Nov 2026, G47 §28.13 Insight supermarket per persona: token `eit2`/`eis2` (`wids`, persona, `cats`), `SQL_efn_sig2`, row policy outlet + persona, mart `fact_replenishment`/`fact_dc_fill_rate`/`fact_dc_purchase_line`/`agg_sm_stock_daily`/`fact_lot_expiry`/`fact_campaign_result`, view `efn_insight.v_sm_*`, pemetaan `outlet_code` (Q-SM37), konfigurasi KPI per PT `efn.insight.sm.kpi` → `dim_sm_kpi_config`, Omzet termasuk PPN, L-186..L-203, Q-SM40..Q-SM45 — kontrak, belum dibangun; v20.2 dipakai PR #117 G50; v20.0 — 18 Nov 2026, Supermarket §28: forecast API worker→Odoo, usulan replenishment DC, assortment, event perilaku `POST /v1/events`, queue `behavior.event`/`promo.campaign.requested`/`notify.restock`/`notify.price_alert`/`notify.email`/`notify.wa_unofficial`, wishlist/notify-me/price alert, flag (ADR-044..048 Proposed, belum dibangun; §27 + L-127..L-143 dicadangkan G43); v18.0 — 18 Nov 2026, G42 §26 Insight web + SSO Odoo (token eit1 HMAC sekali pakai via POST form, cookie eis1, row policy `efn_insight_scope`, ADR-041 Proposed); v17.0 — 17 Nov 2026, G41 §25 ESB Core → datamart ClickHouse (esb-extract GET-only per brand, ADR-040 Proposed); v16.2 — 1 Nov 2026, G39 §24 asisten analisis "Analisis bertahap" (text2sql POST /v1/analyze: rencana ≤3 query → eksekusi per PT → ringkasan AI); v16.1 — 1 Nov 2026, G38 §23 Text-to-SQL "Tanya Data" (Odoo → text2sql → 9router/Ollama → ClickHouse per PT); v16.0 — 1 Nov 2026, G37 §22 gateway LLM 9router + fallback Ollama untuk OCR tahap 2 (K25-01, ADR-037); v15.1 — 31 Okt 2026, G33 §20.11 notifikasi reward MGM + layar referral Super-App; v15.0 — 30 Okt 2026, G32 §21 mart & dashboard waste/yield (K25-08); v14.1 — 30 Okt 2026, G31b §20.10 dasar MGM per baris (`excluded_categ_ids`); v14.0 — 30 Okt 2026, G31 §20 engine MGM: referral, akrual, settle, clawback; v13.0 — 29 Okt 2026, G30 §19 kebijakan MGM per PT (K25-10); v11.0 — 25 Okt 2026, G26 §17 pesanan online wajib lunas: VA, e-wallet, transfer + bukti, kiosk; v10.1 — 24 Okt 2026, G24 §16 entitas WTZ Wetzel's Pretzels; v10.0 — 21 Okt 2026, G23 §15 reservasi meja & pre-order berjadwal; v9.1 — 19 Okt 2026, G22 §14 sinkron r15 K1–K3 + L-82; v9.0 — 19 Okt 2026, G22 §14; v8.0 — G21 §13; v7.0 — G20 §12; v6.0 — G19 §11; v5.1 — 10 Okt 2026, privasi G18 L-21; v5.0 — 9 Okt 2026; §8 v3.x, §9 v4.x Fase 1, §10 v5.0 Fase 3 penjualan online; **§27 G43 v19.1** migrasi ESB → Odoo + arsip histori `efn_legacy_history`, ADR-042 Accepted)
 
 Status: **Draft untuk Fase 0 / PoC**. Mengikuti rekomendasi ADR yang masih `Proposed`. Semua service (Odoo, BFF, Next.js, worker) wajib memakai nama, path, dan payload di dokumen ini. Perubahan kontrak = ubah dokumen ini dulu.
 
@@ -3847,7 +3847,7 @@ forecast v2 tidak mulai dari `category_mean` (histori < 56 hari). Status: **diba
   `duplicates` = duplikat **dalam batch** saja; duplikat lintas batch didedup consumer (tidak dilaporkan ke klien).
 - Dedup: unik `(subject_key, event_id)` di `behavior.event_dedup` (consumer, satu transaksi dengan `processed_message`).
 - Penghitung agregat tanpa pengenal untuk pengunjung tanpa consent (ADR-047 §3.1 no. 5) **belum dibangun** (menunggu
-  Q-SM16).
+  Q-SM16). **V-01 (23 Nov 2026): digantikan log kunjungan anonim di bawah; tidak dibangun.**
 - **Event server `purchase` (L-185, keputusan lead 20 Nov 2026):** BFF menerbitkan `purchase` saat pesanan online lunas
   (`order.paid`), satu event per baris (`product_id`, `qty`, `price_idr` = harga satuan, `channel_code`, `outlet_code`,
   `company_code`), lewat jalur behavior yang sama (`behavior.event` → `event_raw`), **hanya bila consent `tracking` akun
@@ -3860,6 +3860,44 @@ forecast v2 tidak mulai dari `category_mean` (histori < 56 hari). Status: **diba
   bisa masuk segmen "belum beli"). **Sampai L-185 dibangun**, segmen "sudah beli" (`viewed_not_bought`,
   `wishlist_idle`, `oos_viewed`, `price_sensitive`) hanya berbasis `checkout_start` (bukan pembayaran lunas), sehingga
   anggota segmen cenderung berlebih.
+
+#### 28.6.1 V-01 — log kunjungan anonim (keputusan pemilik proyek 23 Nov 2026; ADR-047 §6b, Proposed) — kontrak, belum dibangun
+Keputusan: *"kunjungan visitor tidak masuk PDP; ada log visitor dan masuk ke Insight; demo di SMD dan PB"*. Teks ini
+**menggantikan** kalimat §28.6 di atas bila bertentangan (khususnya "klien yang menolak consent tidak memanggil server dan
+tidak membuat ID" dan consent gate `403`), **hanya** bila `features.visit_log = true`.
+
+- **Gerbang:** `BEHAVIOR_ANON_VISIT_ENABLED` (BFF, default `false`) efektif hanya bila `BEHAVIOR_TRACKING_ENABLED=true`.
+  `GET /v1/config` → `features.visit_log` (§28.8a). Klien mengirim event tanpa consent **hanya** bila `visit_log = true`.
+- **Device ID:** UUIDv4 acak first-party dibuat klien saat kunjungan pertama **tanpa menunggu consent** (web: cookie
+  `efn_did` dengan atribut ADR-047 §3.1 no. 3 + salinan `localStorage`; app: SecureStore/AsyncStorage). Mekanisme kirim
+  tidak berubah: field `device_id` di body.
+- **Penentuan mode per request** (urutan):
+
+| Kondisi | Hasil | `consented` | `subject_key` |
+|---|---|---|---|
+| Baris `device_consent` terbaru `version='erasure'` | `403 tracking_consent_required` (seperti sekarang) | — | — |
+| Bearer valid + consent `tracking` akun aktif, **atau** device consent `granted=true` terbaru | perilaku lama (`mode: "consented"`) | `true` | member / `device_key` lama (ADR-047 §3.3) |
+| Tidak ada consent (termasuk device yang **menarik** consent, `granted=false`) **dan** `visit_log` aktif | anonim (`mode: "anonymous"`); **Bearer diabaikan untuk identitas** (tidak ada `device_link`, tidak memakai member id) | `false` | `hex(HMAC-SHA256(behavior_device_pepper, "efn:anon:v1:" + device_id))` (implementasi `subject-key.ts`) — domain berbeda dari `device_key` consent |
+| Tidak ada consent **dan** `visit_log` mati | `403 tracking_consent_required` (perilaku lama) | — | — |
+
+- Header `Authorization` tidak valid tetap `401` (tidak diturunkan ke anonim). Rate limit per device memakai kunci
+  device yang sama untuk mode anonim maupun consent agar satu device tidak mendapat dua kuota.
+- **Event baru `page_view`:** field wajib `page` ∈ {`home`, `category`, `product`, `search`, `cart`, `checkout`, `promo`,
+  `store`, `account`, `order`, `other`}; `product_id` opsional **hanya** bila `page=product` (boleh diabaikan server;
+  `product_view` tetap event utama produk). `page` di tipe selain `page_view` → baris ditolak `invalid`.
+  `additionalProperties: false` tetap; tanpa URL, path, referrer, judul halaman.
+- **Tipe yang ditolak dalam mode anonim** (fitur member): `wishlist_add`, `wishlist_remove`, `notify_me_request`,
+  `price_alert_set` → `rejected[].code = "invalid"`. Tipe lain (termasuk `page_view`, `product_view`, `cart_*`,
+  `checkout_start`, `search`) diterima.
+- **Respons** `202` sama dengan §28.6 + field **`mode: "consented" | "anonymous"`**; flag tracking mati tetap
+  `202 { "accepted": 0, "disabled": true }` (tanpa `mode`).
+- **Tidak berubah:** `cart_abandon` dan `purchase` (event server) hanya untuk subjek consented; pengayaan server,
+  sanitasi `query` (`redactQuery`), batas batch/ukuran; tanpa IP, user agent, URL lengkap, referrer di payload maupun
+  tabel (IP hanya kunci rate-limit ter-hash di Redis).
+- **Klien:** `page_view` per navigasi + event lama; batch ≤ 50, flush periodik + saat tab disembunyikan / app ke
+  background; fire-and-forget (gagal kirim tidak boleh mengganggu belanja/checkout, buang setelah retry terbatas).
+  Banner consent `tracking` tetap untuk penautan akun & promo personal (teks disesuaikan: kunjungan dicatat anonim,
+  setuju = rekomendasi/promo personal); menolak ≠ berhenti log anonim. Teks final = Q-SM33.
 
 ### 28.6a Staging PostgreSQL `behavior.*`, retensi, dan erasure (G50, v20.2)
 Migrasi `infra/postgres/init/20-platform-g50a.sql` (idempoten, juga jalur upgrade DB versi awal). Pemilik skema
@@ -3894,6 +3932,24 @@ Migrasi `infra/postgres/init/20-platform-g50a.sql` (idempoten, juga jalur upgrad
   `ETL_BEHAVIOR_K_MIN`=10 subjek) TTL 2 tahun, dihitung ulang 3 hari terakhir tiap jam. View DEFINER
   `efn_segment.v_subject_product_daily`, `v_subject_search_daily`, `v_product`, `v_market_price` untuk user
   `efn_segment_reader` (readonly=2, grant per view). Tidak ada tulis BFF → ClickHouse (ADR-003).
+- **V-01 (23 Nov 2026, L-252..L-254; belum dibangun):**
+  - PG `behavior.event_raw`: kolom baru **`consented boolean NOT NULL DEFAULT true`** dan **`page text NULL`** (CHECK
+    `page IS NULL OR page IN (<enum §28.6.1>)`, dan `page IS NOT NULL` hanya bila `type = 'page_view'`); CHECK `type`
+    ditambah `page_view`. Migrasi idempoten pola `20-platform-g50a.sql` (`ADD COLUMN IF NOT EXISTS`, drop/recreate
+    CHECK bernama). Grant `SELECT` per kolom `efn_etl` ditambah `consented`, `page`.
+  - Erasure DSAR **tidak** menyentuh event anonim (tidak tertaut ke orang; tidak ada `subject_key` anonim di
+    `subject_erasure`). Event anonim hilang lewat retensi (staging 7 hari, ClickHouse TTL 90 hari).
+  - ClickHouse `efn_dwh.fact_visitor_event`: **`consented UInt8`**, **`page LowCardinality(String)`** (DDL idempoten
+    `ADD COLUMN IF NOT EXISTS`; baris lama = `consented 1`, `page ''`).
+  - Agregat baru **`efn_dwh.agg_visitor_page_daily(company_code, channel, day, page, visitors, views)`** —
+    `visitors` = jumlah `subject_key` unik, `views` = jumlah `page_view`; TTL 2 tahun, tanpa `subject_key`, hitung ulang
+    3 hari terakhir seperti agregat lain. `agg_visitor_product_daily`, `agg_visitor_funnel_daily`,
+    `agg_visitor_search_daily` dihitung dari **semua** pengunjung (anonim + consented); ambang k
+    (`ETL_BEHAVIOR_K_MIN`) tetap.
+  - View segmen **`efn_segment.v_seg_*` / `v_subject_*`** (user `efn_segment_reader`) **wajib** `WHERE consented = 1`;
+    test akses ClickHouse memverifikasi bahwa baris anonim tidak terbaca.
+  - Insight halaman "Pengunjung" (SMD + PB) hanya membaca `agg_visitor_*` lewat view `efn_insight` (tanpa
+    `subject_key`); nama view/query ditetapkan di spesifikasi Insight V-01 (belum ditulis).
 
 ### 28.7 Queue RabbitMQ baru (diselaraskan implementasi G50, v20.2)
 Konvensi §4 berlaku (quorum, DLQ `<queue>.dlq`, `x-delivery-limit 10`, `message_id` = `idempotency_key`, `user_id`
@@ -3903,7 +3959,7 @@ consumer BFF hanya didaftarkan bila flag fiturnya aktif.
 
 | Queue | Publisher (user RMQ) | Consumer (user RMQ) | `idempotency_key` | Payload ringkas |
 |---|---|---|---|---|
-| `behavior.event` | BFF behavior (`efn-bff`) | BFF `bff.behavior-writer` (**`efn-bff`**, L-171; bukan `efn-behavior`) | `behavior:<batch_id>` (UUIDv4 per request) | `{ schema_version: 1, batch_id, received_at (RFC3339 UTC), subject_key (hex64), subject_kind: "device"|"member", channel: "web"|"app", events:[{ event_id, type, client_ts, channel_code, company_code, outlet_code|null, product_id|null, duration_s|null, qty|null, query|null, result_count|null, stock_status: "in_stock"|"low"|"out"|null, price_idr|null }] }` → insert batch ke PG `behavior.event_raw` (§28.6a) |
+| `behavior.event` | BFF behavior (`efn-bff`) | BFF `bff.behavior-writer` (**`efn-bff`**, L-171; bukan `efn-behavior`) | `behavior:<batch_id>` (UUIDv4 per request) | `{ schema_version: 1, batch_id, received_at (RFC3339 UTC), subject_key (hex64), subject_kind: "device"|"member"|"anon", consented: bool, channel: "web"|"app", events:[{ event_id, type, client_ts, channel_code, company_code, outlet_code|null, product_id|null, page|null, duration_s|null, qty|null, query|null, result_count|null, stock_status: "in_stock"|"low"|"out"|null, price_idr|null }] }` → insert batch ke PG `behavior.event_raw` (§28.6a). **V-01 (L-253):** `subject_kind: "anon"` ⇔ `consented: false`; pesan tanpa `consented` (publisher lama) = `true`; writer menolak (DLQ) kombinasi tidak konsisten. `schema_version` tetap 1 (field tambahan opsional) |
 | `promo.campaign.requested` | BFF campaign-sync (`efn-bff`) lewat **outbox platform** setelah klaim outbox Odoo (Odoo tidak publish ke RabbitMQ) | BFF `bff.campaign-dispatcher` (`efn-bff`) | `campaign:<company_code>:<odoo_campaign_id>:<approval_rev>` (= `platform.campaign.campaign_key`) | Payload kampanye tervalidasi **tanpa kode voucher** + `schema_version`, `idempotency_key` (§28.7b). Pesan hanya pemicu; dispatcher membaca ulang `platform.campaign` |
 | `notify.restock` | BFF **`AlertWatcherService`** (`efn-bff`, L-173; hanya produk dengan alert aktif) | BFF `bff.alert-dispatcher` (`efn-bff`) | `restock:<channel_code>:<outlet_code>:<product_id>:<restock_seq>` | `{ schema_version: 1, idempotency_key, channel_code, outlet_code, product_id, detected_at }` |
 | `notify.price_alert` | BFF **`AlertWatcherService`** (`efn-bff`) | BFF `bff.alert-dispatcher` (`efn-bff`) | `price:<channel_code>:<product_id>:<price_version>` | `{ schema_version: 1, idempotency_key, channel_code, product_id, new_price_idr, detected_at }` |
@@ -4110,6 +4166,10 @@ Semua `Cache-Control: no-store`. Flag fitur mati → endpoint `404`. Galat berbe
 - `features.tracking` = `BEHAVIOR_TRACKING_ENABLED` **dan** teks consent `tracking` dikonfigurasi; `tracking_consent`
   = `null` bila `tracking` false. `wishlist`/`restock_alert`/`price_alert` = flag masing-masing; `campaign_inbox` =
   `PROMO_CAMPAIGN_ENABLED`. Tanpa data member. Klien wajib mengabaikan kunci tambahan; kunci yang tidak ada = mati.
+- **`features.visit_log`** (V-01, L-251): `true` bila `BEHAVIOR_TRACKING_ENABLED` **dan** `BEHAVIOR_ANON_VISIT_ENABLED`
+  aktif. Bila `true`, klien membuat device ID dan mengirim event anonim tanpa menunggu consent (§28.6.1).
+  `features.tracking` tetap arti lama (banner consent & penautan akun tersedia); keduanya independen — `visit_log=true`
+  dengan `tracking=false` (teks consent belum dikonfigurasi) = log anonim tanpa banner.
 - **`features.notify_channels`** (ditambahkan QA G50): kanal yang boleh dipilih untuk notify-me/price alert —
   `push` (selalu `true` bila fitur alert aktif), `email` = `EMAIL_ENABLED`, `wa_unofficial` = `WA_UNOFFICIAL_ENABLED`
   (dan hash key tersedia). Klien hanya menampilkan kanal bernilai `true`; BFF tetap menolak kanal mati dengan
@@ -4177,6 +4237,7 @@ Semua `Cache-Control: no-store`. Flag fitur mati → endpoint `404`. Galat berbe
 | `efn_assortment.enforce` | Odoo param | `true` | `true` | — (mematikan butuh alasan teraudit) |
 | `efn_expiry_monitor.enabled` | Odoo param | `false` | boleh `true` | Ambang per kategori diisi (Q-SM28; fit-gap Q-SM9) |
 | `BEHAVIOR_TRACKING_ENABLED` | BFF | `false` | **OFF** (gated) | `BEHAVIOR_TRACKING_DPO_APPROVAL_REF` terisi (DPO: dasar, teks banner, DPIA, retensi — Q-SM16/17/26/33) **+** nama variabel di `EFN_ALLOW_FEATURE_ON` |
+| `BEHAVIOR_ANON_VISIT_ENABLED` (V-01, L-250) | BFF | `false` | **OFF** (gated) | Efektif hanya bila `BEHAVIOR_TRACKING_ENABLED=true`. Production: ref persetujuan DPO atas log anonim (Q-SM48; boleh ref yang sama dengan `BEHAVIOR_TRACKING_DPO_APPROVAL_REF` bila DPO mencakupnya) **+** nama variabel di `EFN_ALLOW_FEATURE_ON` (pola L-180). Demo SMD + PB di efn-dev/stg/gladi |
 | `ETL_ENABLE_BEHAVIOR` | ETL | `false` | ditolak selama `BEHAVIOR_TRACKING_ENABLED` mati | sama dengan tracking |
 | `PROMO_CAMPAIGN_ENABLED` | BFF | `false` | **OFF** (gated) | `PROMO_CAMPAIGN_APPROVAL_REF` terisi (DPO profiling + Marketing approver + Finance anggaran voucher) **+** `EFN_ALLOW_FEATURE_ON`; dan pemblokir §28.7b diperbaiki |
 | `efn_campaign.enabled` (+ override `.<KODE>`) | Odoo param | `false` | ikut `PROMO_CAMPAIGN_ENABLED` | mati → RPC bot `422 disabled`, tombol Setujui ditolak |
@@ -4194,7 +4255,8 @@ security review; implementasi devsecops menyusul) termasuk `EFN_GATED_FEATURES`:
 `PROMO_CAMPAIGN_APPROVAL_REF`, `WA_UNOFFICIAL_RISK_ACCEPTANCE_REF`, `EMAIL_DPA_APPROVAL_REF`) terisi di manifest rilis **dan** (2) nama variabelnya
 dicantumkan Superadmin di `EFN_ALLOW_FEATURE_ON` (`/etc/efn/deploy.conf`, dipin host) — manifest bertanda tangan saja
 tidak cukup. `ETL_ENABLE_BEHAVIOR` / `SEGMENT_ENABLED` ditolak selama fitur sumbernya mati. `CAMPAIGN_COMPANIES` =
-subset kode PT §12.1.
+subset kode PT §12.1. **V-01 (L-250):** `BEHAVIOR_ANON_VISIT_ENABLED` masuk `EFN_GATED_FEATURES` dengan pola yang sama
+(implementasi devsecops; belum ada di `deploy-validate.sh`); `true` ditolak bila `BEHAVIOR_TRACKING_ENABLED` mati.
 
 `deploy-validate`/`check-encryption` (devsecops): flag boolean tervalidasi; secret G50 hanya di service yang tercantum:
 | Secret | Service |
@@ -4271,6 +4333,12 @@ tanpa tag management (hanya dibuat bila secret bukan placeholder).
 | L-183 | G50: dispatcher kampanye & alert at-most-once per member (crash setelah commit = notifikasi terlewat, inbox tetap ada; tidak pernah dobel). |
 | L-185 | G50 (keputusan lead, menutup Q-SM35): BFF menerbitkan event server `purchase` per baris saat pesanan online lunas (`order.paid`) lewat jalur behavior, hanya bila consent `tracking` akun aktif; tidak diterima dari klien; CHECK `event_raw.type` ditambah `purchase`. Pembelian POS belum tercakup (batasan). |
 | L-184 | G50: `member_bound` di BFF = notifikasi + inbox tanpa kode; daftar kartu/`partner_id` tidak dikirim ke BFF sampai pemetaan partner↔member ditetapkan (Q-SM30). Erasure partner atas kartu `member_bound` belum punya hook (ikut Q-SM30). |
+| L-250 | **V-01 (keputusan pemilik proyek 23 Nov 2026: "kunjungan visitor tidak masuk PDP; ada log visitor dan masuk ke Insight; demo di SMD dan PB")**: log kunjungan anonim untuk semua pengunjung tanpa banner = ADR-047 opsi B parsial (§6b); flag `BEHAVIOR_ANON_VISIT_ENABLED` default `false`, efektif hanya bila `BEHAVIOR_TRACKING_ENABLED=true`, gated production (pola L-180, Q-SM48). Penautan akun, profil member, segmen, kampanye tetap butuh consent `tracking` (opsi A). §28.6.1, §28.10. |
+| L-251 | V-01: `GET /v1/config` `features.visit_log`; `POST /v1/events` mode anonim (`subject_key` = HMAC `behavior_device_pepper` atas `"anon:" + device_id`, Bearer diabaikan untuk identitas, device yang menarik consent tetap boleh anonim, erasure tetap `403`), respons + `mode: "consented"|"anonymous"`; event anonim menolak `wishlist_*`, `notify_me_request`, `price_alert_set`. §28.6.1, §28.8a. |
+| L-252 | V-01: event `page_view` + field `page` (enum 11 nilai; `product_id` hanya bila `page=product`); `page` dilarang di tipe lain; tanpa URL/path/referrer. Kolom PG `event_raw.page`, ClickHouse `fact_visitor_event.page`. §28.6.1, §28.6a. |
+| L-253 | V-01: kolom `consented` (PG `boolean NOT NULL DEFAULT true`, ClickHouse `UInt8`); payload `behavior.event` + `subject_kind: "anon"` dan `consented` (opsional, default `true`, `schema_version` tetap 1). Erasure DSAR tidak menyentuh event anonim. §28.6a, §28.7. |
+| L-254 | V-01: agregat `agg_visitor_page_daily(company_code, channel, day, page, visitors, views)`; agregat produk/funnel/pencarian dari semua pengunjung, ambang k tetap; view segmen `efn_segment.*` wajib `consented = 1` (diuji); Insight "Pengunjung" SMD + PB hanya dari `agg_visitor_*`. §28.6a. |
+| L-255 | V-01: tidak ada IP, user agent, URL lengkap, referrer di payload/staging/ClickHouse (IP hanya kunci rate-limit ter-hash). Risiko residual R-L13 (device_id pseudonim dapat dianggap data pribadi oleh regulator) dicatat di ADR-047 §6b; **catatan wajib untuk DPO sebelum production** (Q-SM48). |
 
 **Pertanyaan fit-gap (tidak diduplikasi, lihat `docs/fit-gap/G45_SUPERMARKET.md` §7):** Q-SM1 kode/nama/NPWP PT (`SMD`,
 §12.1) · Q-SM2 data outlet & DC · Q-SM3 timbangan & pemindai GS1 · Q-SM4 kewenangan & batas markdown · **Q-SM5 pajak**
@@ -4331,6 +4399,12 @@ Q-SM11 jadwal kirim & cut-off · Q-SM12 markdown di online · Q-SM13 izin alkoho
   data perilaku lama device/akun yang belum kedaluwarsa (`subject_key` = HMAC deterministik dari `member_id`/`device_id`).
   Apakah diterima, atau pencabutan wajib memutus permanen (mis. salt per periode consent / hapus event saat cabut —
   ±1–2 hari-engineer + dampak segmen)?
+
+**Pertanyaan baru V-01 (23 Nov 2026):**
+- **Q-SM48** (DPO + Legal) Log kunjungan anonim V-01 (device ID pseudonim tanpa consent, tanpa penautan, retensi mentah
+  90 hari): diterima di luar consent sesuai keputusan pemilik proyek, cukup disebut di kebijakan privasi, atau perlu
+  pemberitahuan penyimpanan perangkat (cookie/localStorage)? Nomor dokumen persetujuan untuk gate production
+  `BEHAVIOR_ANON_VISIT_ENABLED`. Default sampai dijawab: jalan di efn-dev/stg/gladi (demo SMD + PB), **OFF production**.
 
 ### 28.13 G47 — EFN Insight supermarket per persona: token `eit2`/`eis2`, mart, view `v_sm_*`, row policy outlet (v20.3, 20 Nov 2026; v20.4, 21 Nov 2026; ADR-041 §3.3–§3.4, Proposed)
 
