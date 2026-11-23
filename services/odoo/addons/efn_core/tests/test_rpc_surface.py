@@ -635,6 +635,9 @@ RPC_ALLOWLIST = {
     ("account.payment", "action_efn_reject"): "_efn_check_approver (Accounting Manager + 4-eyes + company)",
     ("efn.outlet.analytic.wizard", "action_check"): "_efn_check_access (Accounting Manager + company)",
     ("efn.outlet.analytic.wizard", "action_apply"): "_efn_check_access (Accounting Manager + company)",
+    # efn_setup_pos: override CE gabung meja; sudo hanya parent_id bila POS User + config_id milik company user
+    # bersesi opened + meja di lantai config itu (SECURITY_REVIEW_2026-11-23_pos-table-merge SEC-01/02).
+    ("restaurant.table", "set_parent_id"): "_efn_cashier_may_link (override CE, sudo hanya parent_id)",
 }
 
 MODEL_BASES = {"Model", "AbstractModel", "TransientModel"}
