@@ -6,11 +6,15 @@ sehingga TIDAK PERNAH masuk view segmen/kampanye (`v_seg_*` memfilter consented 
 
 Jalankan di container ETL (kredensial ClickHouse milik ETL, TLS; ADR-003: pengecualian operasional demo, bukan jalur API):
     docker exec -i efn-prod-etl-1 python - --days 14 < scripts/dev/seed_demo_visitors.py
-Bersihkan (WAJIB sebelum gladi data nyata):
-    docker exec -i efn-prod-etl-1 python - --cleanup --days 14 < scripts/dev/seed_demo_visitors.py
-
-Cleanup menghapus baris fakta `demo:` lalu menghapus dan menghitung ulang agregat harian pada jendela itu dari fakta yang
-tersisa (data nyata ikut dihitung ulang, tidak hilang).
+Bersihkan (WAJIB sebelum gladi data nyata), 3 langkah:
+    1) docker exec -i efn-prod-etl-1 python - --cleanup < scripts/dev/seed_demo_visitors.py
+       (hapus fakta `demo:`; mencetak jendela tanggal LO..HI_EXCL)
+    2) admin ClickHouse (ETL sengaja tanpa ALTER DELETE pada agregat):
+       docker exec efn-prod-clickhouse-1 sh -c 'clickhouse-client --user efn --password "$(cat /run/secrets/clickhouse_password)" \
+         --multiquery -q "ALTER TABLE efn_dwh.agg_visitor_product_daily DELETE WHERE day >= {LO} AND day < {HI_EXCL}; ..."'
+       (keempat tabel agg_visitor_*_daily, SETTINGS mutations_sync = 2)
+    3) docker exec -i efn-prod-etl-1 python - --recompute --from LO --to HI_EXCL < scripts/dev/seed_demo_visitors.py
+Data nyata pada jendela itu ikut dihitung ulang dari fakta yang tersisa (tidak hilang).
 """
 
 from __future__ import annotations
@@ -32,7 +36,7 @@ PROFILES = {
     "SMD": {
         "company_id": 11,
         "outlets": ["SMD01", "SMD02", "SMD03", "SMD04", "SMD05"],
-        "visitors": (120, 200),
+        "visitors": (450, 650),
         "terms": ["telur", "beras 5kg", "minyak goreng", "susu uht", "daging sapi", "alpukat", "salmon", "roti",
                   "gula pasir", "kopi", "apel fuji", "ayam fillet"],
         "zero_terms": ["kimchi", "tempe organik", "oat milk", "matcha bubuk"],
@@ -40,7 +44,7 @@ PROFILES = {
     "PB": {
         "company_id": 4,
         "outlets": ["P002", "P010", "P018", "P024", "P027"],
-        "visitors": (80, 150),
+        "visitors": (300, 450),
         "terms": ["croissant", "roti tawar", "cheese cake", "tiramisu", "kopi", "sandwich", "donat", "baguette",
                   "red velvet", "milk bread"],
         "zero_terms": ["gluten free", "vegan cake", "kue ulang tahun custom"],
@@ -82,12 +86,16 @@ def visitor_events(rng: random.Random, code: str, prof: dict, day: date, prods: 
         ev("page_view", "promo")
     if rng.random() < 0.6:
         ev("page_view", "category")
-    if rng.random() < 0.4:
+    if rng.random() < 0.5:
         ev("page_view", "search")
+        # kata kunci condong (Zipf): beberapa kata dominan agar lolos ambang k-anon Insight (>= 10 perangkat/hari/kanal)
         if rng.random() < 0.2:
-            ev("search", query=rng.choice(prof["zero_terms"]), rc=0)
+            terms = prof["zero_terms"]
+            ev("search", query=rng.choices(terms, weights=[1 / (i + 1) for i in range(len(terms))])[0], rc=0)
         else:
-            ev("search", query=rng.choice(prof["terms"]), rc=rng.randint(1, 24))
+            terms = prof["terms"]
+            ev("search", query=rng.choices(terms, weights=[1 / (i + 1) for i in range(len(terms))])[0],
+               rc=rng.randint(1, 24))
     # popularitas produk condong (Zipf kasar): indeks kecil lebih sering
     viewed = {prods[min(int(rng.paretovariate(1.2)) - 1, len(prods) - 1)] for _ in range(rng.randint(1, 4))}
     for pid, price in viewed:
@@ -117,6 +125,9 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--days", type=int, default=14)
     ap.add_argument("--cleanup", action="store_true")
+    ap.add_argument("--recompute", action="store_true")
+    ap.add_argument("--from", dest="recompute_from")
+    ap.add_argument("--to", dest="recompute_to")
     ap.add_argument("--companies", default="SMD,PB")
     ap.add_argument("--seed", type=int, default=20261123)
     a = ap.parse_args()
@@ -127,13 +138,26 @@ def main() -> None:
     codes = [c for c in a.companies.split(",") if c in PROFILES]
 
     if a.cleanup:
-        client.command("DELETE FROM efn_dwh.fact_visitor_event WHERE startsWith(subject_key, {p:String})",
-                       parameters={"p": DEMO_PREFIX})
-        for name, _sql in AGG_STATEMENTS:
-            client.command(f"DELETE FROM efn_dwh.{name} WHERE day >= {{s:Date}} AND day < {{e:Date}}",
-                           parameters={"s": start, "e": end})
-        recompute(client, start, end, settings.behavior_k_min)
-        print(f"cleanup selesai; agregat {start}..{end} dihitung ulang dari data nyata")
+        lo, hi, n = client.query(
+            "SELECT min(event_date), max(event_date), count() FROM efn_dwh.fact_visitor_event "
+            "WHERE startsWith(subject_key, {p:String})", parameters={"p": DEMO_PREFIX}).result_rows[0]
+        if not n:
+            print("tidak ada baris demo")
+            return
+        # ALTER DELETE = hak erasure milik ETL (lightweight DELETE tidak di-grant). Prefix literal konstan, bukan input.
+        client.command(f"ALTER TABLE efn_dwh.fact_visitor_event DELETE WHERE startsWith(subject_key, '{DEMO_PREFIX}') "
+                       "SETTINGS mutations_sync = 2")
+        hi_excl = hi + timedelta(days=1)
+        tables = ", ".join(name for name, _sql in AGG_STATEMENTS)
+        print(f"{n} baris fakta demo dihapus ({lo}..{hi}).")
+        print(f"LANGKAH 2 (admin ClickHouse; ETL sengaja tanpa ALTER DELETE agregat): hapus {tables} dengan "
+              f"day >= '{lo}' AND day < '{hi_excl}', lalu LANGKAH 3: --recompute --from {lo} --to {hi_excl}")
+        return
+
+    if a.recompute:
+        recompute(client, date.fromisoformat(a.recompute_from), date.fromisoformat(a.recompute_to),
+                  settings.behavior_k_min)
+        print(f"agregat {a.recompute_from}..{a.recompute_to} dihitung ulang dari fakta yang tersisa")
         return
 
     rng = random.Random(a.seed)

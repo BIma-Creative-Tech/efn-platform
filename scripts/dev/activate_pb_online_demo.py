@@ -20,7 +20,7 @@ Yang dibuat untuk company PB (efn_brand_code = PB):
   partner generik + tim Super-App, pricelist IDR, pembulatan Rp1, jurnal bank TTPO (titipan) + TRFO (transfer, dengan
   rekening bank PLACEHOLDER milik partner PT, diverifikasi/"trusted" oleh admin), kalender ambil 09:00-21:00 WIB,
   user teknis efn_online_pb (Internal User + grup kanal, TANPA API key), kanal PB aktif, 5 outlet pickup (FP
-  non-dine-in), publikasi produk PB (aktif, sale_ok, list_price > 0, pos.category "T Package - *").
+  non-dine-in), publikasi ±150 menu PB terlaris (histori ESB) dengan harga median ESB di pricelist DEMO kanal.
 """
 
 import os
@@ -41,7 +41,6 @@ OUTLETS = (  # (kode gudang = kode outlet, urutan)
 )
 NOT_OUTLETS = ("P004", "P013", "P037", "P038", "P041")  # CK + gudang: tidak boleh jadi outlet online
 FP_NON_DINE_IN_ID = 2  # "F&B Non-Dine-in (tanpa SC, PB1 0%)" company PB di efn-prod
-POS_CATEG_PATTERN = "T Package - %"
 # Rekening tujuan transfer: PLACEHOLDER fiktif (bukan rekening nyata). Wajib diganti rekening PT yang diverifikasi
 # Finance sebelum dipakai di luar gladi lokal. Nomor 10 digit (validasi efn_online_transfer: 6..20 digit).
 BANK_NAME = "Bank Contoh DEMO (bukan rekening nyata)"
@@ -379,15 +378,38 @@ summary.append("outlet: " + "; ".join(outlet_rows))
 
 # ---------------------------------------------------------------- publikasi produk
 Template = env["product.template"].sudo()
-candidates = Template.search(
-    [
-        ("company_id", "=", company.id),
-        ("active", "=", True),
-        ("sale_ok", "=", True),
-        ("list_price", ">", 0),
-        ("pos_categ_ids.name", "=like", POS_CATEG_PATTERN),
-    ]
+# Revisi lead 23 Nov 2026: list_price PB di efn-prod hasil migrasi = placeholder (Rp0/Rp1), kategori POS "T Package"
+# hampir semua Rp0. Kandidat = menu PB paling laku di histori ESB (efn_legacy_sales_line, sejak PB_DEMO_SINCE, >= 20
+# baris), tanpa tas/add-on/paket kiosk; harga = median harga jual ESB, ditulis sebagai item pricelist DEMO kanal
+# (master produk tidak diubah).
+PB_DEMO_SINCE = "2026-08-01"
+PB_DEMO_LIMIT = 150
+env.cr.execute(
+    """
+    SELECT pp.product_tmpl_id, percentile_disc(0.5) WITHIN GROUP (ORDER BY l.price) AS med, count(*) AS n
+      FROM efn_legacy_sales_line l
+      JOIN product_product pp ON pp.id = l.product_id
+      JOIN product_template t ON t.id = pp.product_tmpl_id
+     WHERE l.company_id = %s AND l.price >= 5000 AND l.date >= %s
+       AND t.active AND t.sale_ok AND t.company_id = %s
+       AND (t.name->>'en_US') !~* '(BAG|ADD ON|ADD-ON|KIOSK|OJOL|TIKTOK|VOUCHER|PACKAGE|PAKET|TOTE|DELIVERY|CHARGE)'
+     GROUP BY pp.product_tmpl_id
+    HAVING count(*) >= 20
+     ORDER BY n DESC
+     LIMIT %s
+    """,
+    (company.id, PB_DEMO_SINCE, company.id, PB_DEMO_LIMIT),
 )
+demo_prices = {tmpl_id: float(med) for tmpl_id, med, _n in env.cr.fetchall()}
+candidates = Template.browse(list(demo_prices))
+Item = env["product.pricelist.item"].sudo()
+items_new = 0
+for tmpl in candidates:
+    if not Item.search_count([("pricelist_id", "=", pricelist.id), ("product_tmpl_id", "=", tmpl.id)]):
+        Item.create({"pricelist_id": pricelist.id, "applied_on": "1_product", "product_tmpl_id": tmpl.id,
+                     "compute_price": "fixed", "fixed_price": round(demo_prices[tmpl.id])})
+        items_new += 1
+say(f"pricelist demo: {items_new} item harga baru (median ESB sejak {PB_DEMO_SINCE})")
 eligible = candidates.filtered(lambda t: not t.taxes_id or t.taxes_id._filter_taxes_by_company(company))
 skipped_tax = len(candidates) - len(eligible)
 if skipped_tax:
