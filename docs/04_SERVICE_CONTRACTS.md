@@ -3641,8 +3641,10 @@ DEFAULT now64(3)`.
 - `company_code` purchase = PT cabang (header `branchID`); stock_opening = PT cabang (`cfg.company_for(branch_id)`).
 - Pembaca (export) memakai pola §25.4: `FINAL` **dan** hanya versi slice ber-checkpoint (`extract_checkpoint` entitas
   `purchase_line` scope `*`, entitas `stock_opening` scope `<branch_id>`).
-- `v_esb_data_quality` (+2 cek): `purchase_unmapped` (30 hari, value = jumlah baris `map_source != 'header'`),
-  `stock_opening_missing_branch` (cabang aktif tanpa checkpoint `stock_opening` pada `opening_date` terakhir).
+- **View terpisah `efn_dwh.v_esb_g65_quality`** (bukan tambahan `v_esb_data_quality`: view itu INVOKER dan dibaca
+  `metabase_reader`/`efn_insight_definer` yang sengaja tanpa hak atas tabel G65; hanya `mig_rw`; DDL menang) dengan 2 cek:
+  `purchase_unmapped` (30 hari, value = jumlah baris `map_source != 'header'`), `stock_opening_missing_branch` (cabang aktif
+  tanpa checkpoint `stock_opening` pada `opening_date` terakhir). `reconcile` butir 7 membaca kedua view (QA 24 Nov).
 
 #### 27.13.3 Akses ClickHouse & konfigurasi
 - `esb_writer` (§25.7): `SELECT, INSERT` pada `fact_esb_purchase_line`, `fact_esb_stock_opening` (per tabel). Kolom baru

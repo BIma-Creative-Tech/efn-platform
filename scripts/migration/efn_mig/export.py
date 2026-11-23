@@ -305,7 +305,7 @@ def master_records(
         if "supplierinfo" in out:
             out["supplierinfo"] += m.build_supplierinfos(
                 brand, company, latest, set(data.supplier_codes), codes, maps.uom, run.purchase_discount_mode,
-                result.purchase,
+                result.purchase, uom_by_code,
             )  # fmt: skip
         if "cost" in out:
             out["cost"] += company_costs(brand, company, data, inputs, latest, result.cost_mixed_uom, maps.uom)

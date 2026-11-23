@@ -48,3 +48,12 @@ tanpa flag; `brs` ditandatangani (HMAC + sig3); kelas PT/BR benar; tidak ada jal
 
 ## 2026-11-23 — Review port accounting G57–G60
 0 Critical / 2 High / 5 Medium / 5 Low / 5 Info. High SEC-G60-01 (persetujuan payment bisa ditulis lewat RPC) dan SEC-G58-01 (status batch bisa dipalsukan), serta Medium SEC-G57-01/02/03, SEC-G58-02, SEC-G60-02 diperbaiki engineer + test regresi, diverifikasi efn-lead di container. Laporan: `docs/reviews/SECURITY_REVIEW_2026-11-23_accounting-port.md`.
+
+## 2026-11-24 — Review G65 histori pembelian + stok awal ESB (`feat/esb-migration-purchase-stock`)
+0 Critical / 0 High / 0 Medium / 4 Low / 4 Info. **Verdict: boleh merge.** Laporan: `docs/reviews/SECURITY_REVIEW_2026-11-24_g65-esb-purchase-stock.md`.
+- **SEC-G65-01 (Low, PLAUSIBLE):** `purchaseDate` recap tidak dicek = hari slice (`transform_g65.py:131-153`); bila filter tanggal ESB diabaikan → duplikat lintas hari, supplierinfo/histori salah. Saran: cek pola `check_branch`.
+- **SEC-G65-02 (Low, PLAUSIBLE):** slice `stock_opening` 0 baris tetap `done` + checkpoint (`extract_g65.py:75-97`) → stok outlet hilang tanpa peringatan. Saran: error / `STOCK_BRANCH_EMPTY` di validator.
+- **SEC-G65-03 (Low):** `LOCATION_SUSPECT` production hanya di validator; laporan bertanda tangan tidak mengikat `APP_ENV` (`validate.py:445-448`, `bundle.py:409`, `importer.py:262-280`). Saran: ikat `production` di laporan atau cek ulang di `prepass_stock`. Wajib sebelum cutover production.
+- **SEC-G65-04 (Low, PDP):** inventaris PDP belum mencakup `supplier_name` G65 (ClickHouse, raw_doc, `efn.legacy.purchase.line`, supplierinfo).
+- Info: fallback PT default `company_for` untuk brand multi-PT; `snapshot` di luar jendela backfill; cakupan `zero_missing`; whitelist stock-movement.
+- Belum terverifikasi: test tidak dijalankan; `git diff` tidak dijalankan (file dibaca dari tree worktree); perilaku server ESB untuk filter tanggal/`branchCode`.

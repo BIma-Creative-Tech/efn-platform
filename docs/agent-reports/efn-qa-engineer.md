@@ -1190,3 +1190,37 @@ Verifikasi hanya dengan membaca kode (tanpa runtime). Dikecualikan atas perminta
 3. `FilterBar` masih menampilkan chip cabang `sm:` yang tertinggal di URL (hanya tampil, server menolak); kosmetik.
 4. UAT G52 belum ditulis di `docs/testing/UAT_SCENARIOS.md` (di luar permintaan ini): sarankan skenario OTP tidak relevan; yang perlu: kepala toko tanpa cabang (`no_branch`), store+marketing (store dibuang), eit2 saat `INSIGHT_ACCEPT_EIT2=false`, pt=SMD di /fnb/exec.
 5. Aturan `cids` sesi dual-domain memuat id company SM di `SQL_efn_cids` view ESB: aman (policy ESB hanya cek format + sig), tetapi sig menutup string apa adanya; tidak ada mismatch.
+
+---
+
+# Review QA G65 — histori pembelian, harga beli supplier, HPP cutover, stok awal (24 Nov 2026)
+
+Verifikasi hanya dengan membaca kode (tanpa runtime; pytest/ruff/Odoo test TIDAK dijalankan oleh saya). Cakupan: esb-extract, DDL 23-g65, akses CH, `scripts/migration`, `efn_legacy_history`.
+
+## Antarmuka tiga sisi: cocok
+- DDL `23-g65...sql` vs `source.py` (`PURCHASE_COLUMNS`, `OPENING_COLUMNS`) vs `transform_g65.py` (`G65_TABLES`): semua kolom ada, tipe sejalan; pola checkpoint `(brand, day/scope, _version) IN (...finished_at)` sama dengan sales.
+- `mapping.HISTORY_KEYS/OPTIONAL_KEYS["legacy_purchase_line"]` = `esb_import/mapping.py` (identik); `DATA_KEYS["quant"]` = `QUANT_DATA_KEYS`; `supplierinfo` esb_key/xmlid dihitung sama di kedua sisi.
+- `odoo_totals.legacy_purchase_line` (`importer.compute`, key `month, company_code, branch_name`, `rows/qty/total`) = `reconcile._purchase_key` + `PURCHASE_LINE_SUMS`; `odoo_totals.quant` (`company_code, location_key, product_key, quantity, value`) = `_item2_stock`.
+- Grant `esb_writer` (SELECT dim_esb_supplier untuk `load_suppliers`) dan `mig_rw` ada; metabase/insight/forecast tidak diberi hak atas tabel G65.
+
+## Temuan dan perbaikan
+| # | P | Temuan | Sisi (file:line) | Tindakan |
+|---|---|---|---|---|
+| 1 | P2 | Harga supplierinfo per PACK dikirim apa adanya dengan `uom_xmlid` = Unit (PACK=6 EA dan EA sama-sama Unit di `uom_map`); importer tidak mengonversi harga (`supplierinfo_plan`) -> Odoo membaca harga per Unit (selisih x6). Qty stok sudah dikonversi, harga belum. | `mapping.py build_supplierinfos` vs `esb_import/mapping.py supplierinfo_plan` | DIPERBAIKI: `build_supplierinfos(..., product_uoms)` mengonversi `price / ea_beli x ea_produk` bila xmlid sama dan teks beda; `export.py master_records` meneruskan `uom_by_code`. Test baru `test_supplierinfo_price_converted_to_product_uom_same_xmlid`. |
+| 2 | P2 | `cost` sumber `purchase_last`/`bom_last_hpp` dengan satuan beda: importer hanya mengonversi bila `uom.jsonl`/`product.jsonl` ada di bundel yang sama (`_Run.uoms/products`, importer.py:578-579, 1044). Bundel G65 (`--step cost`) tidak membawa keduanya -> `convert_price` diam-diam tanpa konversi -> HPP per PACK jadi HPP per Unit. | `importer.py:1044` vs `mapping.build_costs` | DIPERBAIKI sebagian di export: `_price_in_product_uom` mengonversi satuan keluarga sama (xmlid sama). Test baru `test_cost_purchase_last_and_bom_converted_to_product_uom_same_xmlid`. Kasus xmlid beda (G vs KG) tetap apa adanya -> LAPORAN (lihat risiko 2). |
+| 3 | P3 | Kontrak §27.13.2 menyebut cek kualitas ditambah ke `v_esb_data_quality`, DDL membuat view terpisah `v_esb_g65_quality`; `source.data_quality` hanya membaca view lama -> cek G65 tidak pernah muncul di rekonsiliasi butir 7. | `23-g65...sql:85` vs `source.py data_quality` | DIPERBAIKI: `data_quality` membaca kedua view; kontrak §27.13.2 diselaraskan ke DDL. |
+| 4 | P3 | Kontrak §27.13.1 menulis header `currencyID`; kode memakai `currencySign` (keputusan lead). | docs/04 §27.13.1 vs `normalize.PURCHASE_HEADER_FIELDS` | Lapor (dokumen belum diubah). |
+
+## Test yang ditambah
+- `scripts/migration/tests/test_g65.py`: 2 test (konversi harga supplierinfo; konversi HPP purchase_last/bom satuan keluarga sama + kasus xmlid beda tidak ditebak). Belum dijalankan.
+
+## Sisa risiko / butir terbuka
+1. **P2 `IDR_CODES = {"", "IDR"}`** (`mapping.py`): bila `currencySign` IDR di ESB ternyata `Rp`, SEMUA baris dianggap non-IDR (supplierinfo kosong, histori kosong; hanya muncul sebagai `skipped.currency` besar + peringatan). Verifikasi nilai `currencySign` IDR di dry-run (probe lead hanya menyebut `currencyID` 1=IDR).
+2. **P2 HPP/harga satuan xmlid beda** (mis. beli G, produk KG): `cost` tetap apa adanya dengan `source_uom=G`; importer bundel `cost` tanpa master tidak bisa mengonversi. Saran: importer memuat `uom.jsonl` dari Odoo/ir.model.data atau export menolak (masuk `cost_mixed_uom`). Keputusan desain.
+3. **P3 `char:32` pada `purchase_num`/`esb_product_code`** (`efn_legacy_purchase_line._efn_upsert_spec`) vs extractor `text(..., 64)`: nilai >32 karakter menolak SELURUH irisan company x bulan (`ROW_ERRORS`) bukan satu baris. Cek panjang PO nyata di dry-run.
+4. **P3 `reconcile --final`**: `run_totals` menghitung `legacy_purchase_line` untuk semua bulan yang diminta; bulan yang pernah dimuat tetapi tidak ada di bundel parent run akan tampil selisih pemblokir (sama seperti sales_line).
+5. **P3 HPP stock_opening** (`opening_costs`): rata-rata tertimbang memakai SEMUA baris cabang company termasuk cabang `skip` dan lokasi `location_map=skip` (Damage/Expired). Bisa menurunkan/menaikkan HPP; pertimbangkan filter sama dengan `build_quants`.
+6. **P3 xmlid supplierinfo** `f"{supplier}_{code}"`: kode berunderscore dapat bertabrakan (`A_B`+`C` vs `A`+`B_C`); validator hanya cek duplikat `(company, supplier, product)`, bukan duplikat xmlid.
+7. `check_branch` stock_opening gagal untuk semua cabang bila API tidak mengembalikan `branchID` ([B]); terlihat langsung di slice error dry-run.
+8. Presisi arsip: `price_unit`/`pricelist_price` Float(16,2) vs sumber 4 desimal; rekonsiliasi hanya qty + total.
+9. UAT G65 belum ditulis di `docs/testing/UAT_SCENARIOS.md` (di luar permintaan ini): usulan skenario: PO tanpa header (map_source name/none), harga 0/qty negatif tidak jadi supplierinfo, snapshot cabang gagal -> gerbang `STOCK_CHECKPOINT_MISSING`, cost_as_of != cutover -> exit 4, re-run stok = 0 move, stock.move >= cutover -> ditolak, PACK vs EA.

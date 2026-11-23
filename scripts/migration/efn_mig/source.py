@@ -282,12 +282,19 @@ class ClickHouseSource:
         )
 
     def data_quality(self, brand: str) -> list[dict[str, Any]]:
-        return self._rows(
-            "SELECT check_name, company_code, item, value, last_day FROM efn_dwh.v_esb_data_quality "
-            "WHERE brand = {brand:String} ORDER BY check_name, item LIMIT 500",
-            {"brand": brand},
-            ("check_name", "company_code", "item", "value", "last_day"),
-        )
+        columns = ("check_name", "company_code", "item", "value", "last_day")
+        # G65: cek `purchase_unmapped` / `stock_opening_missing_branch` di view TERPISAH (23-g65-esb-purchase-stock.sql;
+        # hanya mig_rw yang boleh membacanya), bukan v_esb_data_quality.
+        return [
+            row
+            for view in ("v_esb_data_quality", "v_esb_g65_quality")
+            for row in self._rows(
+                f"SELECT {', '.join(columns)} FROM efn_dwh.{view} "  # noqa: S608
+                "WHERE brand = {brand:String} ORDER BY check_name, item LIMIT 500",
+                {"brand": brand},
+                columns,
+            )
+        ]
 
     # ---------------------------------------------------------------- writeback
     def insert_map(self, rows: list[list[Any]]) -> None:

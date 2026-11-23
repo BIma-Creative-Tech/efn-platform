@@ -116,6 +116,25 @@ def test_supplier_discount_modes() -> None:
         params(purchase_statuses=())
 
 
+def test_supplierinfo_price_converted_to_product_uom_same_xmlid() -> None:
+    """QA G65: PACK (=6 EA) dan EA sama-sama Unit -> harga per PACK harus dikonversi ke per EA (bukan apa adanya)."""
+    umap = maps_with().uom
+    rows = [
+        purchase(date(2026, 11, 1), "PO1", code="PCK1", price="600", qty="10", uom="PACK"),
+        purchase(date(2026, 11, 2), "PO2", code="KGP", price="9000", qty="1", uom="KG"),
+    ]
+    latest = m.latest_purchases(rows, m.PURCHASE_PRICE_STATUSES, date(2025, 12, 1), CUTOVER)
+    out = m.build_supplierinfos("pb", "PB", latest, {"SUP1"}, {"PCK1", "KGP"}, umap, "nominal", None,
+                                {"PCK1": "EA", "KGP": "KG"})  # fmt: skip
+    by = {r["esb_key"]: r["data"] for r in out}
+    assert by["SUP1|PCK1"]["price"] == 100 and by["SUP1|PCK1"]["uom_esb"] == "EA"
+    assert by["SUP1|PCK1"]["uom_xmlid"] == "uom.product_uom_unit"
+    assert by["SUP1|KGP"]["price"] == 9000 and by["SUP1|KGP"]["uom_esb"] == "KG"  # satuan sama: apa adanya
+    # Tanpa product_uoms (perilaku lama): apa adanya per satuan beli.
+    raw = m.build_supplierinfos("pb", "PB", latest, {"SUP1"}, {"PCK1"}, umap, "nominal")
+    assert raw[0]["data"]["price"] == 600 and raw[0]["data"]["uom_esb"] == "PACK"
+
+
 def test_year_before_leap_day() -> None:
     assert m.year_before(date(2028, 2, 29)) == date(2027, 2, 28)
     assert m.year_before(CUTOVER) == date(2025, 12, 1)
@@ -151,6 +170,19 @@ def test_opening_cost_mixed_uom_falls_through() -> None:
     assert m.opening_costs(rows, {"RM001"}, mixed) == {} and mixed == {"RM001"}
     out = m.build_costs("pb", "PB", [], {"RM001"}, rows, {"RM001": (D(90), "KG")}, CUTOVER, mixed)
     assert out[0]["data"]["source"] == "purchase_last"
+
+
+def test_cost_purchase_last_and_bom_converted_to_product_uom_same_xmlid() -> None:
+    """QA G65: bundel `cost` tanpa uom.jsonl tidak bisa dikonversi importer -> export mengonversi PACK -> EA."""
+    umap = maps_with().uom
+    out = m.build_costs("pb", "PB", [], {"PCK1", "KGP"}, (), {"PCK1": (D(600), "PACK"), "KGP": (D(9000), "KG")},
+                        CUTOVER, None, {"PCK1": "EA", "KGP": "KG"}, umap)  # fmt: skip
+    by = {r["esb_key"]: r["data"] for r in out}
+    assert by["PCK1"]["standard_price"] == 100 and by["PCK1"]["source_uom"] == "EA"
+    assert by["KGP"]["standard_price"] == 9000 and by["KGP"]["source_uom"] == "KG"
+    # Satuan beda xmlid (G vs KG): tidak ditebak, apa adanya (importer/validator yang menangani).
+    kept = m.build_costs("pb", "PB", [], {"KGP"}, (), {"KGP": (D(9), "G")}, CUTOVER, None, {"KGP": "KG"}, umap)
+    assert kept[0]["data"]["source_uom"] == "G"
 
 
 def _master(

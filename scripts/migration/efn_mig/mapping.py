@@ -785,6 +785,24 @@ def opening_costs(
     return out
 
 
+def _price_in_product_uom(
+    price: Decimal,
+    uom: str,
+    code: str,
+    product_uoms: Mapping[str, str] | None,
+    umap: Mapping[str, UomMap] | None,
+) -> tuple[Decimal, str]:
+    """Harga per `uom` -> per satuan produk bila satuan beda teks tetapi `uom_xmlid` sama (PACK = 6 EA, keduanya Unit):
+    `price / ea_sumber × ea_produk` (kebalikan `to_product_qty`). Selain itu apa adanya (importer mengonversi bila
+    bundel memuat uom.jsonl/product.jsonl). QA G65: bundel `cost` tanpa master tidak membawa `uom.jsonl`, sehingga
+    importer tidak bisa mengonversi; tanpa ini harga per PACK menjadi HPP per Unit."""
+    target = (product_uoms or {}).get(code, "")
+    src, dst = (umap or {}).get(uom), (umap or {}).get(target)
+    if not uom or not target or uom == target or src is None or dst is None or src.uom_xmlid != dst.uom_xmlid:
+        return price, uom
+    return price / src.ea_factor * dst.ea_factor, target
+
+
 def build_costs(
     brand: str,
     company: str,
@@ -805,10 +823,10 @@ def build_costs(
     for code, (price, uom) in opening_costs(opening, product_codes, mixed_uom, product_uoms, umap).items():
         found[code] = (price, uom, "stock_opening")
     for code, (price, uom) in bom_last_hpp(lines, product_codes).items():
-        found.setdefault(code, (price, uom, "bom_last_hpp"))
+        found.setdefault(code, (*_price_in_product_uom(price, uom, code, product_uoms, umap), "bom_last_hpp"))
     for code, (price, uom) in (purchase_last or {}).items():
         if code in product_codes and price > 0:
-            found.setdefault(code, (price, uom, "purchase_last"))
+            found.setdefault(code, (*_price_in_product_uom(price, uom, code, product_uoms, umap), "purchase_last"))
     return [
         record(
             "cost",
@@ -932,9 +950,13 @@ def build_supplierinfos(
     umap: Mapping[str, UomMap],
     discount_mode: str,
     skips: PurchaseSkips | None = None,
+    product_uoms: Mapping[str, str] | None = None,
 ) -> list[dict[str, Any]]:
     """`product.supplierinfo` per company × supplier × produk (L-253). Supplier/produk tidak ada di master atau satuan
-    beli tidak ada di uom_map -> dilewati (`skips.unmapped`). `sequence` per produk: date_start terbaru = 1."""
+    beli tidak ada di uom_map -> dilewati (`skips.unmapped`). `sequence` per produk: date_start terbaru = 1.
+    `product_uoms` (kode -> satuan ESB produk): satuan beli beda teks tetapi `uom_xmlid` sama dengan satuan produk
+    (PACK = 6 EA, keduanya Unit) -> harga dikonversi ke satuan produk (`price / ea_beli × ea_produk`, kebalikan
+    `to_product_qty`); tanpa ini harga per PACK akan terbaca per Unit oleh Odoo (QA G65)."""
     picked: dict[str, list[tuple[date, str, Mapping[str, Any], UomMap]]] = defaultdict(list)
     for (comp, supplier, code), ((day, _, _), row) in latest.items():
         if comp != company:
@@ -955,12 +977,17 @@ def build_supplierinfos(
     for code in sorted(picked):
         ordered = sorted(picked[code], key=lambda x: (-x[0].toordinal(), x[1]))
         for seq, (day, supplier, row, mapped) in enumerate(ordered, start=1):
+            price = dec(row.get("price"))
+            target = umap.get((product_uoms or {}).get(code, ""))
+            if target is not None and target.esb_uom != mapped.esb_uom and target.uom_xmlid == mapped.uom_xmlid:
+                price = round(price / mapped.ea_factor * target.ea_factor, 4)
+                mapped = target
             data = {
                 "partner_key": xmlid(brand, company, "supplier", supplier),
                 "product_key": xmlid(brand, company, "product", code),
                 "supplier_code": supplier,
                 "product_code": code,
-                "price": num(dec(row.get("price"))),
+                "price": num(price),
                 "discount": num(supplier_discount(row, discount_mode)),
                 "currency": "IDR",
                 "min_qty": 0,
