@@ -5,6 +5,66 @@ ADR terkait (semua `Proposed`): ADR-003, ADR-006, ADR-007, ADR-008, ADR-010, ADR
 
 **Tidak ada yang dijalankan.** Mesin penulis tidak punya Python; semua kode, test, dan SQL belum pernah dieksekusi. Validasi pertama terjadi di CI / oleh QA.
 
+## V-01 23 Nov 2026 — log kunjungan anonim: ClickHouse, ETL, halaman Insight "Pengunjung" (SMD + PB)
+
+Branch `feat/visitor-log` (worktree `efn-platform-visitor`). Keputusan pemilik proyek 23 Nov 2026 (kontrak lead V-01): kunjungan web &
+app dicatat tanpa consent, tampil di Insight. BFF/web/PG dikerjakan agent lain paralel (PG `behavior.event_raw.consented/page` +
+`page_view` sudah ada di `infra/postgres/init/20-platform-g50a.sql`, grant ETL kolom sudah di sana dan di
+`services/etl/sql/platform-behavior-grants.sql` — tidak saya ubah). `docs/04` tidak diubah. **Tidak ada yang dijalankan** (tanpa shell).
+
+### File
+- `infra/clickhouse/init/16-g50-behavior.sql`: `fact_visitor_event.consented UInt8 DEFAULT 1` + `page LowCardinality(String) DEFAULT ''`
+  (di CREATE + `ALTER ... ADD COLUMN IF NOT EXISTS ... AFTER`), tabel baru `agg_visitor_page_daily` (TTL 2 th, tanpa subject_key),
+  `v_seg_subject_product_daily` / `v_seg_subject_search_daily` / `v_seg_product` memfilter `consented = 1`.
+- `infra/clickhouse/init/23-v01-visitor-insight.sql` (baru): view `efn_dwh.v_vis_page_daily|funnel_daily|product_daily|search_daily`
+  (kunci `company_code`, hanya agregat anonim).
+- `infra/clickhouse/access/insight-visitor-access.sql` (baru): grant definer minimum + `efn_insight.v_vis_*` (DEFINER, kolom eksplisit).
+- `infra/clickhouse/access/insight-visitor-policy.sh` (baru) + 3 baris di `clickhouse-init.sh` (disourcing setelah policy SM, sebelum
+  `unset INSIGHT_KEY`): row policy `efn_insight_scope` 4 view, predikat `company_code ∈ SQL_efn_vcodes` + `SQL_efn_vsig =
+  SHA256(KEY|visitor|vcodes)`, `--log_queries=0`, jumlah dikunci 4.
+- `infra/clickhouse/access/etl-access.sql`: `GRANT SELECT, INSERT ON agg_visitor_page_daily TO etl_writer` (tanpa ALTER DELETE).
+  `segment-access.sql`: komentar saja (filter ada di view sumber).
+- `services/etl/efn_etl/behavior.py`: baca `e.consented, e.page`; `page_view` di tipe klien; fail closed: anonim + `member` / fitur member /
+  `cart_abandon`/`purchase` (cermin `event_raw_anon_check` PG) / `page` di luar enum; `product_id` page_view hanya untuk `page=product`;
+  `consented_flag` (NULL -> 0, bukan boolean -> galat); agregat `SQL_AGG_PAGE` (per halaman + baris `page='*'` semua visitor).
+- `services/etl/tests/test_behavior.py` (diperbarui + kasus negatif V-01), `services/etl/tests/test_insight_visitor_access.py` (baru: kolom,
+  closure grant, sumber anonim, predikat + cermin Python dan negatif: PT lain, kode dipalsukan, sig3/kunci lain, kode non-kanonik,
+  setting hilang).
+- Insight: `lib/visitor.ts` (baru, murni: `visitorCodes`, `withVisitorNav`, `parseVisitorFilters`, view-model), `lib/queries-visitor.ts`
+  (7 query `vis_*`), `lib/ch-params-visitor.ts`, `lib/scope.ts` (`scopeSettingsVisitor`), `lib/clickhouse.ts` (`chQueryVis`),
+  `app/(vis)/layout.tsx` + `app/(vis)/visitors/page.tsx`, `(app)`/`(sm)` layout memakai `withVisitorNav`, ikon `users`,
+  `tests/visitor.test.ts`. Teks "hanya pengunjung ber-consent" di Marketing/Kategori SM + caption FunnelBars dikoreksi (agregat kini
+  semua visitor).
+- README: `services/etl/README.md` (bagian V-01 + langkah demo), `services/insight-web/README.md` (bagian Pengunjung + tabel rute).
+
+### Flag / env untuk demo
+Tidak ada env baru di ETL/Insight. Nyalakan: BFF `BEHAVIOR_TRACKING_ENABLED=true` + `BEHAVIOR_ANON_VISIT_ENABLED=true`; ETL
+`ETL_ENABLE_BEHAVIOR=true` (opsional `ETL_BEHAVIOR_AGG_INTERVAL_SECONDS=900` agar agregat cepat terlihat); Insight `INSIGHT_ENABLED=true`
+(+ `INSIGHT_SM_ENABLED=true` untuk SMD). Jalankan ulang `clickhouse-init` dan migrasi PG 20 sebelum ETL versi ini.
+
+### Keputusan kecil
+1. **PB tanpa bergantung `INSIGHT_FNB_PERSONA_ENABLED`**: satu halaman lintas PT `/visitors` di grup Ringkasan; PT yang boleh = kode ESB sesi
+   bila `brs` kosong (= hak halaman F&B tingkat PT yang sudah ada) + `SMD` bila `INSIGHT_SM_ENABLED` dan persona category/exec/marketing (=
+   persona `v_sm_visitor_funnel_daily`). Kepala toko F&B ber-cabang dan persona store/dc SMD tidak melihat.
+2. **Family view + tanda tangan sendiri** (`v_vis_*`, `SQL_efn_vcodes/vsig`) alih-alih menambah ke manifest ESB/SM: tidak mengubah jumlah policy
+   ESB (15) / SM (33) dan test lintas-tim yang menguncinya (branch `feat/esb-daily-aggregates` sedang mengubah file ESB yang sama), dan satu
+   katalog query cukup untuk PB + SMD. Domain tanda tangan berbeda ("visitor", setting lain) -> tidak bisa dipakai lintas view.
+3. Satuan "pengunjung" = **perangkat-hari** (Σ per hari; funnel/produk juga Σ per outlet), label jujur di UI (pola Q-SM41). "Pengunjung unik
+   per hari" diambil dari baris `page='*'` agar tidak menjumlah halaman. Perangkat yang memberi consent di tengah hari terhitung dua (kunci
+   `anon:` != kunci consent).
+4. k-anonim: produk `HAVING viewers_n >= 10`, kata kunci `HAVING subjects_n >= 10` (literal `K_ANON`), di atas k-anonim agregat ETL.
+5. Baris lama `fact_visitor_event` = `consented 1` (DEFAULT), sesuai kontrak PG `DEFAULT true`.
+
+### Belum terverifikasi
+- pytest/ruff (ETL), vitest/tsc/eslint/build (Insight) belum dijalankan; DDL 16/23 + access + policy belum dijalankan ke ClickHouse 24.8
+  (terutama `ADD COLUMN IF NOT EXISTS ... AFTER`, `INSERT ... SELECT ... UNION ALL` dengan parameter `{start:Date}` berulang, alias
+  `toString(p.cc) AS company_code`, `LEFT JOIN` nama produk, `HAVING` alias di query Insight). Harness perilaku row policy v_vis_* belum
+  dibuat (hanya cermin Python).
+- Paritas DTO BFF (`CLIENT_EVENT_TYPES` + `page_view`) vs CHECK PG diuji `test_behavior_pg_ddl_parity.py`; bergantung pekerjaan BFF.
+- UI halaman `/visitors` belum dilihat di browser/pembaca layar; ekspor CSV halaman ini belum; nama produk PB bergantung `dim_product`
+  (produk online PB harus ada di Odoo/ETL dims).
+- Unik per periode (bukan perangkat-hari) dan pemetaan outlet untuk PB belum.
+
 ## Gelombang 52 — sisi ClickHouse persona F&B: 4 view Toko, sig3 + kelas PT/BR, 14 policy (22 Nov 2026)
 
 Branch `feat/insight-nav-dual-menu` (worktree `efn-platform-nav`). Kontrak `docs/04` §28.15.6–§28.15.8 (v21.1,

@@ -11,13 +11,16 @@
 import 'server-only';
 import { buildChSearchParams, ParamError, type ParamBag } from './ch-params';
 import { buildSmSearchParams, type SmParamBag } from './ch-params-sm';
+import { buildVisSearchParams, type VisParamBag } from './ch-params-visitor';
+import { VIS_QUERIES, type VisQueryName } from './queries-visitor';
+import { visitorCodes } from './visitor';
 import { esbCodesOf } from './claims';
 import { log, newRef } from './log';
 import type { QueryName } from './queries';
 import { QUERIES } from './queries';
 import { SM_QUERIES, type SmQueryName } from './queries-sm';
 import { getChPassword, getConfig, getKey, getPageQueryLimiter } from './runtime';
-import { scopeSettings, scopeSettingsSm } from './scope';
+import { scopeSettings, scopeSettingsSm, scopeSettingsVisitor } from './scope';
 import { Semaphore, concurrencyFromEnv } from './semaphore';
 import type { Session } from './session';
 import { exportConcurrencyFromEnv } from './user-limits';
@@ -175,5 +178,33 @@ export async function chQuerySm<T>(
     session,
     pool,
     () => getConfig().smEnabled === true,
+  );
+}
+
+/**
+ * Query halaman Pengunjung (V-01): cakupan SQL_efn_vcodes/vsig = kode pengunjung SESI (lib/visitor.ts visitorCodes), bukan
+ * filter URL. `bag.codes` (pilihan pengguna) wajib ⊆ kode sesi; selain itu ParamError (tanpa query).
+ */
+export async function chQueryVis<T>(
+  name: VisQueryName,
+  session: Pick<Session, 'codes' | 'roles' | 'brs' | 'sub'>,
+  bag: VisParamBag,
+  pool: ChPool = 'page',
+): Promise<T[]> {
+  return execute<T>(
+    name,
+    VIS_QUERIES[name].sql,
+    (scopeKey) => {
+      const codes = visitorCodes(session, getConfig().smEnabled);
+      if (codes.length === 0) throw new ParamError('sesi tanpa kode pengunjung');
+      const picked = bag.codes;
+      if (!Array.isArray(picked) || picked.length === 0 || picked.some((c) => !codes.includes(c))) {
+        throw new ParamError('kode PT di luar cakupan sesi');
+      }
+      return buildVisSearchParams(name, scopeSettingsVisitor(codes, scopeKey), bag);
+    },
+    session,
+    pool,
+    () => true,
   );
 }

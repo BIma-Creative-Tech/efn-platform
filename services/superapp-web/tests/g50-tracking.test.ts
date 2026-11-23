@@ -6,10 +6,13 @@ import {
   clampRetryAfter,
   coerceFeatures,
   EventQueue,
+  isMemberOnlyEvent,
   isUuidV4,
   MAX_BODY_BYTES,
   needsDecision,
   NO_FEATURES,
+  PAGES,
+  pageForPath,
   parseBatchResponse,
   parseChoice,
   parseFeatures,
@@ -20,6 +23,7 @@ import {
   TRACKING_VERSION_RE,
   trackingActive,
   TrackingSender,
+  VISIT_LOG_TEXT,
   VisibleTimer,
   type SendResult,
   type TrackedEvent,
@@ -126,8 +130,67 @@ describe('buildEvent', () => {
   });
   it('tipe tak dikenal / event_id bukan uuid ditolak', () => {
     // @ts-expect-error tipe sengaja salah
-    expect(buildEvent({ type: 'page_view', channelCode: 'GL' }, uuid(), NOW)).toBeNull();
+    expect(buildEvent({ type: 'bukan_tipe', channelCode: 'GL' }, uuid(), NOW)).toBeNull();
     expect(buildEvent({ type: 'checkout_start', channelCode: 'GL' }, 'bukan-uuid', NOW)).toBeNull();
+  });
+});
+
+describe('V-01 page_view & log kunjungan anonim', () => {
+  it('page_view wajib page enum, tanpa product_id/query, hanya field kontrak', () => {
+    const e = buildEvent({ type: 'page_view', channelCode: 'SMD', page: 'home' }, uuid(), NOW)!;
+    expect(Object.keys(e).sort()).toEqual(['channel_code', 'client_ts', 'event_id', 'outlet_code', 'page', 'type']);
+    expect(buildEvent({ type: 'page_view', channelCode: 'SMD' }, uuid(), NOW)).toBeNull();
+    // @ts-expect-error nilai di luar enum
+    expect(buildEvent({ type: 'page_view', channelCode: 'SMD', page: '/belanja?q=susu' }, uuid(), NOW)).toBeNull();
+    for (const p of PAGES) expect(buildEvent({ type: 'page_view', channelCode: 'PB', page: p }, uuid(), NOW)).not.toBeNull();
+  });
+  it('page dilarang untuk tipe lain', () => {
+    expect(buildEvent({ type: 'checkout_start', channelCode: 'GL', page: 'cart' }, uuid(), NOW)).toBeNull();
+    expect(buildEvent({ type: 'product_view', channelCode: 'GL', productId: 1, page: 'product' }, uuid(), NOW)).toBeNull();
+  });
+  it('sanitizeEvents: page_view valid lolos, page palsu / kunci asing ditolak', () => {
+    const pv = buildEvent({ type: 'page_view', channelCode: 'SMD', page: 'cart' }, uuid(), NOW)!;
+    expect(sanitizeEvents([pv])).toHaveLength(1);
+    expect(sanitizeEvents([{ ...pv, page: 'https://x.test/a?b=1' }])).toBeNull();
+    expect(sanitizeEvents([{ ...pv, url: '/keranjang' }])).toBeNull();
+    expect(sanitizeEvents([{ ...ev(), page: 'home' }])).toBeNull();
+  });
+  it('pageForPath: pemetaan route -> enum, tidak pernah mengembalikan path mentah', () => {
+    expect(pageForPath('/')).toBe('home');
+    expect(pageForPath('/belanja')).toBe('category');
+    expect(pageForPath('/belanja', true)).toBe('search');
+    expect(pageForPath('/belanja/123')).toBe('product');
+    expect(pageForPath('/keranjang')).toBe('cart');
+    expect(pageForPath('/checkout')).toBe('checkout');
+    expect(pageForPath('/promo/lebaran')).toBe('promo');
+    expect(pageForPath('/pesanan')).toBe('order');
+    expect(pageForPath('/pesanan/55')).toBe('order');
+    for (const p of ['/akun', '/akun/privasi', '/masuk', '/keluar', '/inbox', '/wishlist']) expect(pageForPath(p)).toBe('account');
+    expect(pageForPath('/meja')).toBe('store');
+    expect(pageForPath('/reservasi/saya')).toBe('store');
+    expect(pageForPath('/pantau-harga/9')).toBe('other');
+    expect(pageForPath('/privasi/pelacakan')).toBe('other');
+    expect(pageForPath('/BELANJA/1')).toBe('product');
+    for (const p of ['/x', '//', '/belanja/../akun', '/belanja?q=a']) expect(PAGES).toContain(pageForPath(p));
+  });
+  it('fitur member tidak pernah anonim; event lain boleh', () => {
+    for (const t of ['wishlist_add', 'wishlist_remove', 'notify_me_request', 'price_alert_set'] as const) expect(isMemberOnlyEvent(t)).toBe(true);
+    for (const t of ['page_view', 'product_view', 'cart_add', 'cart_remove', 'search', 'checkout_start'] as const) expect(isMemberOnlyEvent(t)).toBe(false);
+  });
+  it('features.visit_log: hanya boolean true; hilang = mati; coerceFeatures konsisten', () => {
+    expect(parseFeatures({ features: { tracking: true, visit_log: true } }).visitLog).toBe(true);
+    expect(parseFeatures({ features: { visit_log: 'true' } }).visitLog).toBe(false);
+    expect(parseFeatures({ features: { tracking: true } }).visitLog).toBe(false);
+    expect(parseFeatures(null).visitLog).toBe(false);
+    expect(coerceFeatures({ visitLog: true }).visitLog).toBe(true);
+    expect(coerceFeatures({ visitLog: 1 }).visitLog).toBe(false);
+    expect(NO_FEATURES.visitLog).toBe(false);
+  });
+  it('teks log anonim terpisah dari teks consent (versi/hash consent tidak berubah)', () => {
+    expect(TRACKING_TEXT.version).toBe('tracking@2026-11-20');
+    expect(VISIT_LOG_TEXT.notice).toMatch(/anonim/);
+    expect(VISIT_LOG_TEXT.notice).toMatch(/IP/);
+    expect(VISIT_LOG_TEXT.consentHint).toMatch(/Menolak tidak menghentikan/);
   });
 });
 

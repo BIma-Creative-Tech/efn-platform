@@ -546,6 +546,7 @@ DOTENV=(
   # G50 (docs/04 §28.10): kampanye supermarket; kosong = default compose (SEMUA MATI). Production true = ref persetujuan
   # + EFN_ALLOW_FEATURE_ON (deploy-validate efn_validate_g50_config). Overlay wa-unofficial/segment TIDAK disertakan.
   "BEHAVIOR_TRACKING_ENABLED=${BEHAVIOR_TRACKING_ENABLED:-false}"
+  "BEHAVIOR_ANON_VISIT_ENABLED=${BEHAVIOR_ANON_VISIT_ENABLED:-false}"
   "BEHAVIOR_TRACKING_DPO_APPROVAL_REF=${BEHAVIOR_TRACKING_DPO_APPROVAL_REF:-}"
   "CONSENT_TRACKING_VERSION=${CONSENT_TRACKING_VERSION:-}"
   "CONSENT_TRACKING_TEXT_SHA256=${CONSENT_TRACKING_TEXT_SHA256:-}"

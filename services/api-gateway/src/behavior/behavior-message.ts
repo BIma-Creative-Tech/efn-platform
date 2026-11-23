@@ -1,7 +1,7 @@
 import { PermanentMessageError } from '../common/amqp/amqp.service';
 import { isCompanyCode } from '../loyalty/loyalty.service';
 import { isUuid } from '../common/validation';
-import { CLIENT_EVENT_TYPES, ClientEventType, MAX_EVENTS_PER_BATCH } from './dto/behavior.dto';
+import { CLIENT_EVENT_TYPES, ClientEventType, MAX_EVENTS_PER_BATCH, MEMBER_ONLY_EVENT_TYPES, PAGE_VALUES, PageValue } from './dto/behavior.dto';
 
 /** docs/04 §28.7: queue `behavior.event` (DLQ `behavior.event.dlq`), `message_id` = `behavior:<batch_id>`. */
 export const BEHAVIOR_EVENT_QUEUE = 'behavior.event';
@@ -33,6 +33,8 @@ export interface BehaviorQueueEvent {
   result_count: number | null;
   stock_status: 'in_stock' | 'low' | 'out' | null;
   price_idr: number | null;
+  /** V-01: hanya `page_view` (wajib di sana), null untuk tipe lain. */
+  page: PageValue | null;
 }
 
 export interface BehaviorEventMessage {
@@ -41,6 +43,12 @@ export interface BehaviorEventMessage {
   received_at: string;
   subject_key: string;
   subject_kind: 'device' | 'member';
+  /**
+   * V-01: `true` = subject ber-consent `tracking` (device/akun; boleh dipakai segmen/kampanye); `false` = log kunjungan
+   * anonim (subject `anonSubjectKey`, selalu `subject_kind=device`, tidak pernah segmen/DSAR). Pesan lama tanpa field ini
+   * (antrean/outbox sebelum V-01) dibaca sebagai `true` — semua pesan pra-V-01 memang ber-consent.
+   */
+  consented: boolean;
   channel: 'web' | 'app';
   events: BehaviorQueueEvent[];
 }
@@ -70,6 +78,10 @@ export function parseBehaviorMessage(payload: unknown): BehaviorEventMessage {
   if (typeof o.subject_key !== 'string' || !HEX64.test(o.subject_key)) throw new PermanentMessageError('subject_key tidak valid');
   if (o.subject_kind !== 'device' && o.subject_kind !== 'member') throw new PermanentMessageError('subject_kind tidak valid');
   if (o.channel !== 'web' && o.channel !== 'app') throw new PermanentMessageError('channel tidak valid');
+  if (o.consented !== undefined && typeof o.consented !== 'boolean') throw new PermanentMessageError('consented tidak valid');
+  const consented = o.consented !== false;
+  // Anonim tidak pernah subject member (pertahanan berlapis; CHECK serupa di staging PG)
+  if (!consented && o.subject_kind !== 'device') throw new PermanentMessageError('subject anonim harus device');
   if (!Array.isArray(o.events) || o.events.length === 0 || o.events.length > MAX_EVENTS_PER_BATCH) {
     throw new PermanentMessageError('events tidak valid');
   }
@@ -92,7 +104,9 @@ export function parseBehaviorMessage(payload: unknown): BehaviorEventMessage {
       (e.query === null || (typeof e.query === 'string' && e.query.length <= 64)) &&
       nullableInt(e.result_count, 0, 1_000_000) &&
       (e.stock_status === null || (typeof e.stock_status === 'string' && STOCK.includes(e.stock_status))) &&
-      nullableInt(e.price_idr, 0, Number.MAX_SAFE_INTEGER);
+      nullableInt(e.price_idr, 0, Number.MAX_SAFE_INTEGER) &&
+      validPage(e.type, e.page) &&
+      (consented || !MEMBER_ONLY_EVENT_TYPES.has(String(e.type)));
     if (!ok) throw new PermanentMessageError('event tidak valid');
     return {
       event_id: String(e.event_id).toLowerCase(),
@@ -108,6 +122,7 @@ export function parseBehaviorMessage(payload: unknown): BehaviorEventMessage {
       result_count: (e.result_count as number | null) ?? null,
       stock_status: (e.stock_status as BehaviorQueueEvent['stock_status']) ?? null,
       price_idr: (e.price_idr as number | null) ?? null,
+      page: (e.page as PageValue | null | undefined) ?? null,
     };
   });
   return {
@@ -116,7 +131,14 @@ export function parseBehaviorMessage(payload: unknown): BehaviorEventMessage {
     received_at: o.received_at,
     subject_key: o.subject_key,
     subject_kind: o.subject_kind,
+    consented,
     channel: o.channel,
     events,
   };
+}
+
+/** V-01: `page_view` wajib `page` ∈ PAGE_VALUES; tipe lain tanpa `page` (absen/null — pesan pra-V-01 tidak membawanya). */
+function validPage(type: unknown, page: unknown): boolean {
+  if (type === 'page_view') return typeof page === 'string' && (PAGE_VALUES as readonly string[]).includes(page);
+  return page === undefined || page === null;
 }

@@ -7,7 +7,7 @@
 import { useEffect, useState, useSyncExternalStore } from 'react';
 import Link from 'next/link';
 import { apiFetch, goToLogin } from '@/lib/cart-client';
-import { parseChoice, TRACKING_TEXT } from '@/lib/tracking';
+import { parseChoice, TRACKING_TEXT, VISIT_LOG_TEXT } from '@/lib/tracking';
 import {
   choiceSnapshot,
   declineDeviceConsent,
@@ -104,6 +104,18 @@ export function TrackingSettings() {
         {msg && <p className={`alert ${msg.kind === 'ok' ? 'alert-success' : 'alert-error'}`}>{msg.text}</p>}
       </div>
 
+      {features.visitLog && (
+        <section className="card stack" aria-labelledby="trk-anon-title">
+          <h2 id="trk-anon-title" style={{ margin: 0, fontSize: '1.125rem' }}>
+            Kunjungan anonim
+          </h2>
+          <p style={{ margin: 0 }}>{VISIT_LOG_TEXT.notice}</p>
+          <p className="hint" style={{ margin: 0 }}>
+            Rincian dan masa simpan ada di <Link href="/privasi">Kebijakan Privasi</Link>.
+          </p>
+        </section>
+      )}
+
       <section className="card stack" aria-labelledby="trk-device-title">
         <h2 id="trk-device-title" style={{ margin: 0, fontSize: '1.125rem' }}>
           Perangkat ini
@@ -112,7 +124,7 @@ export function TrackingSettings() {
           {TRACKING_TEXT.body}
         </p>
         <p className="hint" style={{ margin: 0 }} id="trk-device-status">
-          Status: <strong>{deviceOn ? 'Aktif' : 'Tidak aktif'}</strong> · versi teks {TRACKING_TEXT.version}. {!deviceOn && TRACKING_TEXT.whenOff}
+          Status: <strong>{deviceOn ? 'Aktif' : 'Tidak aktif'}</strong> · versi teks {TRACKING_TEXT.version}. {!deviceOn && (features.visitLog ? VISIT_LOG_TEXT.whenOff : TRACKING_TEXT.whenOff)}
         </p>
         <div className={styles.row}>
           <button type="button" className="btn" disabled={busy || deviceOn} aria-describedby="trk-device-status" onClick={() => void setDevice(true)}>

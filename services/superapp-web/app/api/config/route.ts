@@ -1,5 +1,6 @@
 /**
- * GET /api/config -> BFF GET /v1/config (docs/04 §28.6: `features.tracking`; §28.10 flag wishlist/alert). Publik.
+ * GET /api/config -> BFF GET /v1/config (docs/04 §28.6: `features.tracking`, V-01 `features.visit_log`; §28.10 flag
+ * wishlist/alert). Publik.
  * Dinormalisasi ke `{ features }` (lib/tracking.ts `parseFeatures`). BFF mati / endpoint tidak ada -> SEMUA fitur mati
  * (200, bukan error): banner & tombol G50 tidak tampil, belanja tetap jalan.
  */

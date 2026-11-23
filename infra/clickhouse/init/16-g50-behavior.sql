@@ -22,7 +22,13 @@
 -- masuk staging) -> re-run / overlap window idempoten. event_date = tanggal WIB dari received_at (waktu server, bukan
 -- client_ts). Partisi harian -> TTL membuang partisi utuh tepat di hari ke-90 (ttl_only_drop_parts).
 -- event_type: product_view|wishlist_add|wishlist_remove|cart_add|cart_remove|checkout_start|search|notify_me_request|
---             price_alert_set + turunan server cart_abandon|purchase (ASUMSI G50, lihat laporan).
+--             price_alert_set|page_view (V-01) + turunan server cart_abandon|purchase (ASUMSI G50, lihat laporan).
+-- V-01 (keputusan pemilik proyek 23 Nov 2026, log kunjungan anonim tanpa consent):
+--   consented = 1 event subjek ber-consent `tracking` (perilaku lama), 0 = kunjungan anonim (subject_key HMAC domain
+--               `anon:` dari BFF, tidak pernah tertaut member). Baris lama = 1 (DEFAULT). Segmen/kampanye HANYA
+--               consented = 1 (view v_seg_* di bawah); agregat agg_visitor_* dihitung dari SEMUA visitor.
+--   page      = halaman event page_view (home|category|product|search|cart|checkout|promo|store|account|order|other),
+--               '' untuk tipe lain.
 CREATE TABLE IF NOT EXISTS efn_dwh.fact_visitor_event
 (
     event_id      UUID,
@@ -40,6 +46,8 @@ CREATE TABLE IF NOT EXISTS efn_dwh.fact_visitor_event
     result_count  Nullable(UInt32),
     stock_status  LowCardinality(String),           -- in_stock|low|out|'' (pengayaan server saat event)
     price_idr     Nullable(Int64),                  -- harga saat event (pengayaan server)
+    consented     UInt8 DEFAULT 1,                  -- V-01: 1 = ber-consent, 0 = kunjungan anonim
+    page          LowCardinality(String) DEFAULT '', -- V-01: halaman page_view, '' selain itu
     received_at   DateTime64(3, 'UTC'),
     event_date    Date,
     ingested_at   DateTime64(6, 'UTC'),
@@ -51,6 +59,10 @@ PARTITION BY event_date
 ORDER BY (company_code, event_date, subject_key, event_id)
 TTL event_date + INTERVAL 90 DAY
 SETTINGS ttl_only_drop_parts = 1;
+
+-- V-01: tabel yang dibuat sebelum 23 Nov 2026 (idempoten; metadata saja, baris lama membaca DEFAULT).
+ALTER TABLE efn_dwh.fact_visitor_event ADD COLUMN IF NOT EXISTS consented UInt8 DEFAULT 1 AFTER price_idr;
+ALTER TABLE efn_dwh.fact_visitor_event ADD COLUMN IF NOT EXISTS page LowCardinality(String) DEFAULT '' AFTER consented;
 
 -- ============================================================== Agregat harian anonim (TTL 2 tahun)
 -- Dihitung ETL dengan INSERT ... SELECT di server (data tidak lewat proses ETL) untuk N hari terakhir
@@ -128,9 +140,31 @@ ORDER BY (company_code, day, channel, channel_code, query)
 TTL day + INTERVAL 2 YEAR
 SETTINGS ttl_only_drop_parts = 1;
 
+-- V-01: halaman per kanal x hari dari event page_view (anonim + consented). Baris page = '*' = SEMUA visitor hari itu
+-- (subjek berbeda dengan event apa pun; views = jumlah page_view) -> "pengunjung unik per hari" tanpa menjumlah halaman.
+-- '*' bukan nilai enum halaman, jadi tidak bertabrakan. Unik = per subject_key: perangkat yang memberi consent di tengah
+-- hari terhitung dua (kunci anonim `anon:` != kunci consent) — batas yang diterima V-01.
+CREATE TABLE IF NOT EXISTS efn_dwh.agg_visitor_page_daily
+(
+    day           Date,
+    company_code  LowCardinality(String),
+    channel       LowCardinality(String),
+    page          LowCardinality(String),
+    visitors      UInt64,
+    views         UInt64,
+    computed_at   DateTime64(6, 'UTC'),
+    _loaded_at    DateTime DEFAULT now()
+)
+ENGINE = ReplacingMergeTree(computed_at)
+PARTITION BY toYYYYMM(day)
+ORDER BY (company_code, day, channel, page)
+TTL day + INTERVAL 2 YEAR
+SETTINGS ttl_only_drop_parts = 1;
+
 -- ============================================================== View sumber segment-worker (efn_dwh.v_seg_*)
 -- Dibungkus view DEFINER efn_segment.* (access/segment-access.sql). Semua item SELECT teratas memakai AS. Tanpa nama
 -- produk, tanpa query pencarian (segmen hanya butuh jumlah), tanpa id event.
+-- V-01: WAJIB `consented = 1` — kunjungan anonim tidak pernah dipakai segmen/kampanye (kontrak V-01).
 
 -- Per subjek x produk x hari. last_* = 1970-01-01 bila tidak ada event jenis itu (worker memperlakukan sebagai None).
 CREATE OR REPLACE VIEW efn_dwh.v_seg_subject_product_daily AS
@@ -158,7 +192,7 @@ FROM
     SELECT event_date, company_code, subject_key, subject_kind, product_id, event_type, duration_s, stock_status,
            price_idr, received_at
     FROM efn_dwh.fact_visitor_event FINAL
-    WHERE product_id != 0
+    WHERE product_id != 0 AND consented = 1
 ) AS e
 GROUP BY e.event_date, e.company_code, e.subject_key, e.product_id;
 
@@ -175,7 +209,7 @@ FROM
 (
     SELECT event_date, company_code, subject_key, subject_kind, result_count
     FROM efn_dwh.fact_visitor_event FINAL
-    WHERE event_type = 'search'
+    WHERE event_type = 'search' AND consented = 1
 ) AS e
 GROUP BY e.event_date, e.company_code, e.subject_key;
 
@@ -185,7 +219,7 @@ SELECT
     v.company_code AS company_code,
     v.product_id AS product_id,
     p.category AS category
-FROM (SELECT DISTINCT company_code, product_id FROM efn_dwh.fact_visitor_event WHERE product_id != 0) AS v
+FROM (SELECT DISTINCT company_code, product_id FROM efn_dwh.fact_visitor_event WHERE product_id != 0 AND consented = 1) AS v
 INNER JOIN (SELECT product_id, category FROM efn_dwh.dim_product FINAL) AS p ON p.product_id = v.product_id;
 
 -- Harga pasar Price Hunter tervalidasi 30 hari per produk (ADR-047 §3.2). Pemetaan laporan -> produk lewat

@@ -11,6 +11,16 @@ export function deviceKey(pepper: string, deviceId: string): string {
   return createHmac('sha256', pepper).update(`efn:device:v1:${deviceId.toLowerCase()}`, 'utf8').digest('hex');
 }
 
+/**
+ * V-01 (keputusan pemilik proyek 23 Nov 2026): subject log kunjungan ANONIM (tanpa consent).
+ * `subject_key = hex(HMAC-SHA256(behavior_device_pepper, "efn:anon:v1:" + device_id lowercase))` — prefix domain berbeda
+ * dari `deviceKey` sehingga event anonim tidak pernah berbagi subject_key dengan device ber-consent (tidak ikut
+ * `device_link`, `subject_member`, segmen, DSAR) dan tidak dapat dikorelasikan tanpa pepper.
+ */
+export function anonSubjectKey(pepper: string, deviceId: string): string {
+  return createHmac('sha256', pepper).update(`efn:anon:v1:${deviceId.toLowerCase()}`, 'utf8').digest('hex');
+}
+
 export function memberSubjectKey(pepper: string, memberId: string): string {
   return createHmac('sha256', pepper).update(`efn:subject:v1:${memberId.toLowerCase()}`, 'utf8').digest('hex');
 }

@@ -3,11 +3,13 @@
  *
  * - Teks & versi consent `tracking` = DRAFT, MENUNGGU DPO/Legal (Q-SM16/17/26). Mengubah `body` = versi baru.
  *   BFF mencatat `text_sha256` dari env teks aktif; versi/hash di sini HARUS sama dengan env BFF (lihat laporan).
- * - Device ID = UUID v4 acak first-party, dibuat HANYA setelah pengguna setuju (ADR-047 §3.1 no. 3).
+ * - Device ID = UUID v4 acak first-party. V-01 (23 Nov 2026): bila `features.visit_log`, dibuat saat kunjungan pertama TANPA
+ *   consent untuk log anonim (tanpa penautan akun/segmen); ID consent baru selalu dibuat saat pengguna setuju (ADR-047 §3.1 no. 3).
  * - Payload event mengikuti allowlist kontrak (`additionalProperties: false`): tidak ada IP/UA/GPS/PII.
  *   `query` pencarian dikirim apa adanya (server yang meredaksi, §28.6).
  * - Tanpa console.log apa pun di jalur ini (UU PDP).
  */
+import { isChannelCode } from './catalog';
 
 export const TRACKING_TEXT = {
   purpose: 'tracking',
@@ -20,6 +22,20 @@ export const TRACKING_TEXT = {
     'dan kata pencarian) memakai kode acak perangkat, untuk memahami minat saya dan menyusun penawaran yang lebih relevan. ' +
     'Kode ini tidak memuat nama atau nomor HP. Saya dapat menarik persetujuan kapan saja.',
   whenOff: 'Anda tetap dapat berbelanja seperti biasa; aktivitas Anda tidak dicatat.',
+} as const;
+
+/**
+ * Log kunjungan anonim (V-01, keputusan pemilik proyek 23 Nov 2026; kontrak BFF `features.visit_log`). BUKAN teks consent:
+ * tidak ikut versi/hash `TRACKING_TEXT` (mengubahnya tidak membuat versi consent baru). Menunggu tinjauan DPO/Legal.
+ */
+export const VISIT_LOG_TEXT = {
+  notice:
+    'Kunjungan Anda (halaman yang dibuka, produk yang dilihat, kata pencarian, isi keranjang) dicatat secara anonim memakai kode ' +
+    'acak perangkat, untuk memahami cara pengunjung memakai situs. Kami tidak mencatat alamat IP atau jenis peramban, dan catatan ' +
+    'anonim ini tidak dikaitkan dengan akun maupun dipakai untuk promo personal.',
+  consentHint: 'Bila Anda setuju, kami juga memakai aktivitas Anda untuk rekomendasi dan promo personal. Menolak tidak menghentikan pencatatan anonim.',
+  whenOff:
+    'Anda tetap dapat berbelanja seperti biasa. Kunjungan tetap dicatat anonim, tanpa kaitan ke akun dan tanpa promo personal.',
 } as const;
 
 export const TRACKING_VERSION_RE = /^[A-Za-z0-9._@-]{1,32}$/;
@@ -91,6 +107,8 @@ export interface Features {
   priceAlert: boolean;
   /** Kotak masuk & voucher kampanye (`features.campaign_inbox`, G50). */
   campaignInbox: boolean;
+  /** Log kunjungan anonim tanpa consent (`features.visit_log`, V-01). Server hanya true bila tracking juga aktif. */
+  visitLog: boolean;
   /** Kanal notifikasi yang boleh dipilih member untuk notify-me. */
   channels: { push: boolean; email: boolean; wa_unofficial: boolean };
 }
@@ -101,6 +119,7 @@ export const NO_FEATURES: Features = {
   restock: false,
   priceAlert: false,
   campaignInbox: false,
+  visitLog: false,
   channels: { push: false, email: false, wa_unofficial: false },
 };
 
@@ -124,6 +143,7 @@ export function parseFeatures(data: unknown): Features {
     restock: flag(f, 'restock_alert', 'restock_alerts', 'restock') === true,
     priceAlert: flag(f, 'price_alert', 'price_alerts') === true,
     campaignInbox: flag(f, 'campaign_inbox') === true,
+    visitLog: flag(f, 'visit_log') === true,
     channels: {
       push: (flag(f, 'push') ?? flag(notifyChannels, 'push')) !== false,
       email: (flag(f, 'email') ?? flag(notifyChannels, 'email')) === true,
@@ -143,6 +163,7 @@ export function coerceFeatures(data: unknown): Features {
     restock: o.restock === true,
     priceAlert: o.priceAlert === true,
     campaignInbox: o.campaignInbox === true,
+    visitLog: o.visitLog === true,
     channels: { push: ch.push === true, email: ch.email === true, wa_unofficial: ch.wa_unofficial === true },
   };
 }
@@ -159,8 +180,86 @@ export const EVENT_TYPES = [
   'search',
   'notify_me_request',
   'price_alert_set',
+  'page_view',
 ] as const;
 export type EventType = (typeof EVENT_TYPES)[number];
+
+/** Fitur member: tidak pernah dicatat anonim (kontrak V-01; BFF menolaknya `invalid`), hanya bila consent aktif. */
+export const MEMBER_ONLY_EVENT_TYPES: readonly EventType[] = ['wishlist_add', 'wishlist_remove', 'notify_me_request', 'price_alert_set'];
+
+export function isMemberOnlyEvent(type: EventType): boolean {
+  return MEMBER_ONLY_EVENT_TYPES.includes(type);
+}
+
+/** Enum `page` kontrak V-01. Hanya nilai ini yang boleh dikirim; URL/path/query mentah TIDAK PERNAH. */
+export const PAGES = ['home', 'category', 'product', 'search', 'cart', 'checkout', 'promo', 'store', 'account', 'order', 'other'] as const;
+export type Page = (typeof PAGES)[number];
+
+/**
+ * Pemetaan route -> enum `page`. Hanya segmen pertama/kedua path yang dibaca; hasilnya selalu anggota `PAGES`.
+ * `hasSearchQuery`: halaman daftar `/belanja` dengan kata pencarian = `search`, selain itu `category`.
+ *   /                      -> home          /keranjang            -> cart
+ *   /belanja               -> category|search  /pesanan, /pesanan/x -> order
+ *   /belanja/[id]          -> product       /akun*, /masuk, /keluar, /inbox, /wishlist -> account
+ *   /meja*, /reservasi*    -> store         /promo*               -> promo
+ *   /checkout*             -> checkout (cadangan; checkout saat ini di dalam /keranjang)   lainnya -> other
+ */
+export function pageForPath(pathname: string, hasSearchQuery = false): Page {
+  const segs = (typeof pathname === 'string' ? pathname : '').split('?')[0]!.split('/').filter(Boolean);
+  const first = segs[0]?.toLowerCase();
+  switch (first) {
+    case undefined:
+      return 'home';
+    case 'belanja':
+      return segs.length >= 2 ? 'product' : hasSearchQuery ? 'search' : 'category';
+    case 'keranjang':
+      return 'cart';
+    case 'checkout':
+      return 'checkout';
+    case 'promo':
+      return 'promo';
+    case 'pesanan':
+      return 'order';
+    case 'akun':
+    case 'masuk':
+    case 'keluar':
+    case 'inbox':
+    case 'wishlist':
+      return 'account';
+    case 'meja':
+    case 'reservasi':
+      return 'store';
+    default:
+      return 'other';
+  }
+}
+
+/**
+ * Pilih `channel_code` untuk `page_view`: `?channel=` bila bentuknya valid (kode kanal, <= 8 karakter sesuai kontrak),
+ * selain itu kode kanal brand HANYA bila brand punya tepat satu kanal (`brand_code` != kode kanal untuk brand multi-kanal,
+ * mis. Bacha). Selain itu `null` (event tidak dikirim).
+ */
+export function pickEventChannel(requested: string | null | undefined, brandChannels: readonly string[]): string | null {
+  const ok = (v: unknown): v is string => isChannelCode(v) && v.length <= 8;
+  if (ok(requested)) return requested;
+  const only = brandChannels.length === 1 ? brandChannels[0] : undefined;
+  return ok(only) ? only : null;
+}
+
+/** Mode respons `POST /v1/events` (V-01): `consented` | `anonymous`; nilai lain/hilang -> null. */
+export function parseMode(data: unknown): 'consented' | 'anonymous' | null {
+  const m = data && typeof data === 'object' ? (data as Record<string, unknown>).mode : undefined;
+  return m === 'consented' || m === 'anonymous' ? m : null;
+}
+
+/** Pertahanan: klien mengirim anonim tetapi server memperlakukan sebagai consent -> ID anonim harus diganti. */
+export function anonymousModeLeaked(sent: 'consented' | 'anonymous', received: 'consented' | 'anonymous' | null): boolean {
+  return sent === 'anonymous' && received === 'consented';
+}
+
+export function isPage(v: unknown): v is Page {
+  return typeof v === 'string' && (PAGES as readonly string[]).includes(v);
+}
 
 export const MAX_BATCH_EVENTS = 50;
 export const MAX_BODY_BYTES = 32 * 1024;
@@ -177,6 +276,8 @@ export interface TrackedEvent {
   qty?: number;
   query?: string;
   result_count?: number;
+  /** Hanya `page_view`. */
+  page?: Page;
 }
 
 export interface EventInput {
@@ -188,6 +289,7 @@ export interface EventInput {
   qty?: number;
   query?: string;
   resultCount?: number;
+  page?: Page;
 }
 
 const ALLOWED_EVENT_KEYS: readonly string[] = [
@@ -201,6 +303,7 @@ const ALLOWED_EVENT_KEYS: readonly string[] = [
   'qty',
   'query',
   'result_count',
+  'page',
 ];
 
 function posInt(v: unknown): number | undefined {
@@ -225,6 +328,12 @@ export function buildEvent(input: EventInput, eventId: string, now: Date): Track
     channel_code: input.channelCode,
     outlet_code: outlet,
   };
+  if (input.type === 'page_view') {
+    if (!isPage(input.page)) return null;
+    ev.page = input.page; // product_id sengaja tidak dikirim: `product_view` tetap event utama produk
+    return ev;
+  }
+  if (input.page !== undefined) return null; // `page` dilarang untuk tipe lain
   const needsProduct = input.type !== 'checkout_start' && input.type !== 'search';
   if (needsProduct) {
     const pid = posInt(input.productId);
@@ -268,6 +377,7 @@ export function sanitizeEvents(raw: unknown): TrackedEvent[] | null {
         qty: o.qty as number | undefined,
         query: o.query as string | undefined,
         resultCount: o.result_count as number | undefined,
+        page: o.page as Page | undefined,
       },
       o.event_id as string,
       new Date(o.client_ts),

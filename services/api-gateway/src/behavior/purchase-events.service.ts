@@ -124,6 +124,7 @@ export class PurchaseEventsService implements OnModuleInit, OnModuleDestroy {
         received_at: receivedAt,
         subject_key: subject,
         subject_kind: 'member',
+        consented: true, // V-01: hanya member ber-consent `tracking` (filter query di runOnce)
         channel,
         events: events.slice(i, i + MAX_EVENTS_PER_BATCH),
       };
@@ -162,5 +163,6 @@ export function purchaseEvents(part: PaidPartRow): BehaviorQueueEvent[] {
     result_count: null,
     stock_status: null,
     price_idr: v.price,
+    page: null,
   }));
 }

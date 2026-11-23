@@ -59,6 +59,12 @@ export class BehaviorController {
 export interface PublicConfig {
   features: {
     tracking: boolean;
+    /**
+     * V-01 (keputusan pemilik proyek 23 Nov 2026): log kunjungan anonim aktif (`BEHAVIOR_TRACKING_ENABLED` +
+     * `BEHAVIOR_ANON_VISIT_ENABLED`). Klien mengirim event tanpa consent hanya bila true; `tracking` tetap berarti banner
+     * consent/penautan akun tersedia.
+     */
+    visit_log: boolean;
     wishlist: boolean;
     restock_alert: boolean;
     price_alert: boolean;
@@ -91,6 +97,7 @@ export class PublicConfigController {
     return {
       features: {
         tracking,
+        visit_log: this.config.behaviorVisitLogEnabled,
         wishlist: this.config.wishlistEnabled,
         restock_alert: this.config.restockAlertEnabled,
         price_alert: this.config.priceAlertEnabled,

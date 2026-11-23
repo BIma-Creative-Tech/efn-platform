@@ -54,6 +54,21 @@ export default async function PrivasiPage() {
         </li>
       </ul>
 
+      <h2>Kunjungan anonim (bila fitur aktif)</h2>
+      <p>
+        Saat Anda membuka situs atau aplikasi, kami mencatat kunjungan <strong>tanpa meminta persetujuan dan tanpa identitas</strong>:
+        jenis halaman yang dibuka (mis. beranda, kategori, keranjang), produk yang dilihat beserta lama melihat, kata pencarian dan
+        jumlah hasilnya (nomor atau data pribadi di dalam kata pencarian disamarkan), serta penambahan/pengurangan isi keranjang dan
+        mulai checkout. Pengenalnya hanya kode acak perangkat; di server kode itu disimpan sebagai sidik satu arah. Kami{' '}
+        <strong>tidak mencatat alamat IP, jenis peramban, alamat halaman lengkap, maupun halaman asal</strong>. Catatan anonim ini
+        tidak pernah dikaitkan dengan akun atau nomor HP Anda dan tidak dipakai untuk promo personal. Wishlist dan pengingat harga/stok
+        hanya dicatat bila Anda menyetujui <Link href="/privasi/pelacakan">pelacakan</Link>.
+      </p>
+      <ul>
+        <li>Penampungan sementara: 7 hari. Catatan kunjungan mentah: 90 hari. Ringkasan harian tanpa identitas: 2 tahun.</li>
+        <li>Menolak persetujuan pelacakan tidak menghentikan pencatatan anonim ini; yang berhenti adalah penautan ke akun dan promo personal.</li>
+      </ul>
+
       <h2>Tujuan dan dasar pemrosesan</h2>
       <ul>
         <li>Autentikasi dan keamanan akun; pesan layanan (OTP, status laporan, poin) — pelaksanaan perjanjian.</li>

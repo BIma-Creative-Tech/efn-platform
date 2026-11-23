@@ -9,7 +9,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import Link from 'next/link';
 import { apiFetch } from '@/lib/cart-client';
 import { coerceFeatures, NO_FEATURES, type Features } from '@/lib/tracking';
-import { choiceSnapshot, isTrackingActive, setLinked, startFlushing, subscribeTracking } from '@/lib/tracking-client';
+import { choiceSnapshot, isTrackingActive, setLinked, setVisitLog, startFlushing, subscribeTracking } from '@/lib/tracking-client';
 import styles from './engage.module.css';
 
 interface Ctx {
@@ -45,7 +45,9 @@ export function EngageProvider({ loggedIn, children }: { loggedIn: boolean; chil
     // Satu panggilan per muat penuh halaman (provider hidup di layout, tidak dipasang ulang saat navigasi klien).
     void apiFetch<{ features?: unknown }>('/api/config').then((r) => {
       if (!active) return;
-      setFeatures(r.ok ? coerceFeatures(r.data?.features) : NO_FEATURES);
+      const f = r.ok ? coerceFeatures(r.data?.features) : NO_FEATURES;
+      setVisitLog(f.visitLog); // sebelum render ulang: pencatat anak langsung boleh mengirim event anonim
+      setFeatures(f);
       setReady(true);
     });
     return () => {
@@ -59,7 +61,10 @@ export function EngageProvider({ loggedIn, children }: { loggedIn: boolean; chil
     timer.current = window.setTimeout(() => setToast(null), 8000);
   }, []);
 
-  const disableTracking = useCallback(() => setFeatures((f) => ({ ...f, tracking: false })), []);
+  const disableTracking = useCallback(() => {
+    setVisitLog(false); // visit_log efektif hanya bila tracking aktif di server
+    setFeatures((f) => ({ ...f, tracking: false, visitLog: false }));
+  }, []);
 
   useEffect(
     () => () => {
@@ -90,16 +95,20 @@ export function EngageProvider({ loggedIn, children }: { loggedIn: boolean; chil
   );
 }
 
-/** Pengirim event: hanya berjalan bila flag `tracking` menyala dan perangkat sudah setuju. Tidak merender apa pun. */
+/**
+ * Pengirim event: berjalan bila perangkat sudah setuju (flag `tracking`) ATAU log kunjungan anonim menyala (`visit_log`, V-01).
+ * Penautan akun hanya bila consent aktif. Tidak merender apa pun.
+ */
 function TrackingRuntime() {
   const { features, loggedIn } = useEngage();
   const choice = useSyncExternalStore(subscribeTracking, choiceSnapshot, () => 'ssr');
   const active = features.tracking && choice !== 'ssr' && isTrackingActive();
+  const flushing = active || features.visitLog;
 
   useEffect(() => {
-    if (!active) return;
+    if (!flushing) return;
     return startFlushing();
-  }, [active]);
+  }, [flushing]);
 
   // Tautan akun: hanya bila member SUDAH mengaktifkan consent akun `tracking` (tombol eksplisit di pengaturan).
   useEffect(() => {

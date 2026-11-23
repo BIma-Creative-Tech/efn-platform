@@ -44,6 +44,15 @@ describe('AppConfig G50-A', () => {
     expect(() => testConfig({ PROMO_CAMPAIGN_ENABLED: 'true', CAMPAIGN_COMPANIES: 'SMD' }).assertStartupSecrets()).toThrow(/ODOO_API_KEY_CAMPAIGN_SMD/);
   });
 
+  it('V-01: BEHAVIOR_ANON_VISIT_ENABLED default false dan efektif hanya bersama BEHAVIOR_TRACKING_ENABLED', () => {
+    expect(testConfig().behaviorAnonVisitEnabled).toBe(false);
+    expect(testConfig().behaviorVisitLogEnabled).toBe(false);
+    expect(testConfig({ BEHAVIOR_ANON_VISIT_ENABLED: 'true' }).behaviorAnonVisitEnabled).toBe(true);
+    expect(testConfig({ BEHAVIOR_ANON_VISIT_ENABLED: 'true' }).behaviorVisitLogEnabled).toBe(false);
+    expect(testConfig({ BEHAVIOR_TRACKING_ENABLED: 'true' }).behaviorVisitLogEnabled).toBe(false);
+    expect(testConfig({ BEHAVIOR_TRACKING_ENABLED: 'true', BEHAVIOR_ANON_VISIT_ENABLED: 'true' }).behaviorVisitLogEnabled).toBe(true);
+  });
+
   it('consent purpose tracking dibaca dari CONSENT_TRACKING_*', () => {
     expect(testConfig({ CONSENT_TRACKING_VERSION: 'tracking@1', CONSENT_TRACKING_TEXT_SHA256: 'b'.repeat(64) }).consentActiveText('tracking')).toEqual({
       version: 'tracking@1',

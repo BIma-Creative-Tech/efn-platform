@@ -66,6 +66,8 @@ def _row(**over: Any) -> dict[str, Any]:
         "result_count": None,
         "stock_status": "out",
         "price_idr": 12500,
+        "consented": True,
+        "page": None,
         "received_at": datetime(2026, 11, 19, 18, 30, tzinfo=UTC),
         "ingested_at": datetime(2026, 11, 19, 18, 31, tzinfo=UTC),
         "_cursor_ts": datetime(2026, 11, 19, 18, 31, tzinfo=UTC),
@@ -108,11 +110,12 @@ def test_columns_match_ddl_ttl_and_grants() -> None:
     fact = DDL.split("efn_dwh.fact_visitor_event", 1)[1].split(";", 1)[0]
     assert "ReplacingMergeTree(ingested_at)" in fact
     assert "TTL event_date + INTERVAL 90 DAY" in fact
-    tables = ("fact_visitor_event", "agg_visitor_product_daily", "agg_visitor_funnel_daily", "agg_visitor_search_daily")
-    for table in tables:
+    aggs = tuple(table for table, _sql in AGG_STATEMENTS)
+    assert "agg_visitor_page_daily" in aggs  # V-01
+    for table in ("fact_visitor_event", *aggs):
         assert f"GRANT SELECT, INSERT ON efn_dwh.{table} TO etl_writer;" in ETL_ACCESS
     assert "GRANT ALTER DELETE ON efn_dwh.fact_visitor_event TO etl_writer;" in ETL_ACCESS
-    for table in ("agg_visitor_product_daily", "agg_visitor_funnel_daily", "agg_visitor_search_daily"):
+    for table in aggs:
         assert f"GRANT ALTER DELETE ON efn_dwh.{table}" not in ETL_ACCESS
         body = DDL.split(f"efn_dwh.{table}", 1)[1].split(";", 1)[0]
         assert "TTL day + INTERVAL 2 YEAR" in body
@@ -142,6 +145,53 @@ def test_transform_valid_row() -> None:
     # 18:30 UTC = 01:30 WIB hari berikutnya.
     assert out["event_date"] == date(2026, 11, 20)
     assert out["ingested_at"] == datetime(2026, 11, 19, 18, 31, tzinfo=UTC)
+    assert out["consented"] == 1 and out["page"] == ""
+
+
+# ---------------------------------------------------------------- V-01 kunjungan anonim
+def _anon(**over: Any) -> dict[str, Any]:
+    return _row(consented=False, subject_kind="device", **over)
+
+
+def test_transform_anonymous_page_view() -> None:
+    out = dict(zip(EVENT_COLUMNS, transform_behavior_event(_anon(type="page_view", page="home")), strict=True))
+    assert out["consented"] == 0 and out["page"] == "home" and out["event_type"] == "page_view"
+    assert out["product_id"] == 0  # product_id hanya bermakna untuk page=product
+    out = dict(zip(EVENT_COLUMNS, transform_behavior_event(_anon(type="page_view", page="product")), strict=True))
+    assert out["page"] == "product" and out["product_id"] == 123
+
+
+@pytest.mark.parametrize("event_type", ["product_view", "cart_add", "cart_remove", "checkout_start", "search"])
+def test_transform_anonymous_allowed_types(event_type: str) -> None:
+    out = dict(zip(EVENT_COLUMNS, transform_behavior_event(_anon(type=event_type, query="susu")), strict=True))
+    assert out["consented"] == 0 and out["subject_kind"] == "device"
+
+
+def test_transform_page_ignored_for_other_types_and_null_consent_is_not_consented() -> None:
+    out = dict(zip(EVENT_COLUMNS, transform_behavior_event(_row(page="home")), strict=True))
+    assert out["page"] == ""  # page hanya untuk page_view
+    out = dict(zip(EVENT_COLUMNS, transform_behavior_event(_row(subject_kind="device", consented=None)), strict=True))
+    assert out["consented"] == 0  # NULL -> fail safe (tidak pernah masuk segmen)
+    out = dict(zip(EVENT_COLUMNS, transform_behavior_event(_row(consented=1)), strict=True))
+    assert out["consented"] == 1
+
+
+def test_segment_views_only_read_consented_events() -> None:
+    """V-01: setiap view v_seg_* yang membaca fact_visitor_event memfilter consented = 1."""
+    for view in ("v_seg_subject_product_daily", "v_seg_subject_search_daily", "v_seg_product"):
+        body = DDL.split(f"CREATE OR REPLACE VIEW efn_dwh.{view} AS", 1)[1].split(";", 1)[0]
+        assert "efn_dwh.fact_visitor_event" in body, view
+        assert "consented = 1" in body, view
+    assert "ADD COLUMN IF NOT EXISTS consented UInt8 DEFAULT 1" in DDL  # baris lama = consented
+    assert "ADD COLUMN IF NOT EXISTS page LowCardinality(String) DEFAULT ''" in DDL
+
+
+def test_aggregates_count_all_visitors_and_page_rollup() -> None:
+    for _table, sql in AGG_STATEMENTS:
+        assert "consented" not in sql  # agregat dari semua visitor (kontrak V-01)
+    page_sql = dict(AGG_STATEMENTS)["agg_visitor_page_daily"]
+    assert "event_type = 'page_view' AND page != ''" in page_sql
+    assert "UNION ALL" in page_sql and "'*'" in page_sql  # baris semua-visitor per hari x kanal
 
 
 @pytest.mark.parametrize(
@@ -155,8 +205,20 @@ def test_transform_valid_row() -> None:
         {"channel": "pos"},
         {"channel_code": "bad code"},
         {"outlet_code": "a' OR 1=1"},
-        {"type": "page_view"},
+        {"type": "unknown_event"},
         {"event_id": "not-a-uuid"},
+        # V-01: page_view tanpa/di luar enum halaman (URL tidak pernah boleh masuk)
+        {"type": "page_view", "page": None},
+        {"type": "page_view", "page": "https://shop.example/produk/123?ref=x"},
+        {"type": "page_view", "page": "HOME"},
+        # V-01: anonim tidak pernah member / fitur member / turunan server
+        {"consented": False},  # _row() = subject_kind member
+        {"consented": False, "subject_kind": "device", "type": "wishlist_add"},
+        {"consented": False, "subject_kind": "device", "type": "price_alert_set"},
+        {"consented": False, "subject_kind": "device", "type": "purchase"},
+        {"consented": False, "subject_kind": "device", "type": "cart_abandon"},
+        {"consented": "false"},  # bukan boolean
+        {"consented": 2},
     ],
 )
 def test_transform_rejects_contract_violations(override: dict[str, Any]) -> None:
@@ -270,7 +332,12 @@ def test_run_behavior_agg_params_and_k_anonymity() -> None:
 
     store = Store()
     result = run_behavior_agg(store, datetime(2026, 11, 20, 3, 0, tzinfo=UTC), 2, 10)
-    assert result.tables == ("agg_visitor_product_daily", "agg_visitor_funnel_daily", "agg_visitor_search_daily")
+    assert result.tables == (
+        "agg_visitor_product_daily",
+        "agg_visitor_funnel_daily",
+        "agg_visitor_search_daily",
+        "agg_visitor_page_daily",
+    )
     assert all(p["start"] == date(2026, 11, 19) and p["end"] == date(2026, 11, 21) for _, p in store.calls)
     search_sql, search_params = store.calls[2]
     assert "HAVING uniqExact(subject_key) >= {k:UInt32}" in search_sql

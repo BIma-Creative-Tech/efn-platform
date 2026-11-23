@@ -5,6 +5,7 @@ import { personasOf } from '@/lib/claims';
 import { odooHomeUrl } from '@/lib/config';
 import { getConfig } from '@/lib/runtime';
 import { navGroups, PERSONA_LABEL } from '@/lib/sm-personas';
+import { withVisitorNav } from '@/lib/visitor';
 
 export const dynamic = 'force-dynamic';
 
@@ -18,7 +19,7 @@ export default async function SmLayout({ children }: { children: React.ReactNode
   return (
     <Shell
       session={session}
-      groups={navGroups(session, cfg.smEnabled, cfg.fnbEnabled)}
+      groups={withVisitorNav(navGroups(session, cfg.smEnabled, cfg.fnbEnabled), session, cfg.smEnabled)}
       odooUrl={odooHomeUrl(cfg)}
       roleLabel={roleLabel}
       footNote="Data: mart supermarket (ETL tiap 15 menit)"

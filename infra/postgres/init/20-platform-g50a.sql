@@ -20,6 +20,7 @@
 --    - `erased_subject`  subject_key subjek terhapus (BFF: tolak di ingest segmen), retensi 100 hari
 --    - `subject_erasure` antrean erasure ClickHouse untuk ETL (per request_id DSAR, append-only), retensi 100 hari
 --    - kolom `event_raw.company_code` + `ingested_at` (cursor ETL) — revisi G50-A, idempoten di DB versi awal
+--    - kolom `event_raw.consented` + `page`, tipe `page_view` — V-01 log kunjungan anonim (23 Nov 2026), idempoten
 --    - fungsi SECURITY DEFINER `ensure_event_partitions` / `drop_old_event_partitions` (efn_bff tidak punya hak DDL)
 -- 2. `platform.member_wishlist`, `restock_alert`, `price_alert` (§28.8, L-161) + state pengamat stok/harga.
 -- 3. `platform.campaign`, `member_voucher`, `campaign_delivery`, `member_inbox` (§28.7, L-155, L-164).
@@ -92,7 +93,7 @@ CREATE TABLE IF NOT EXISTS behavior.event_raw (
   event_id       uuid        NOT NULL,
   type           text        NOT NULL CHECK (type IN ('product_view', 'wishlist_add', 'wishlist_remove', 'cart_add', 'cart_remove',
                                                       'checkout_start', 'search', 'notify_me_request', 'price_alert_set',
-                                                      'cart_abandon', 'purchase')),
+                                                      'page_view', 'cart_abandon', 'purchase')),
   client_ts      timestamptz NOT NULL,
   channel_code   text        CHECK (channel_code IS NULL OR channel_code ~ '^[A-Z0-9-]{1,8}$'),
   outlet_code    text        CHECK (outlet_code IS NULL OR outlet_code ~ '^[A-Za-z0-9_-]{1,16}$'),
@@ -106,7 +107,12 @@ CREATE TABLE IF NOT EXISTS behavior.event_raw (
   -- Revisi G50-A (selaras ETL `services/etl/efn_etl/behavior.py`): PT kanal (dari pemetaan kanal → PT BFF) dan waktu
   -- baris masuk staging (cursor ETL `(ingested_at, subject_key||':'||event_id)`)
   company_code   text        NOT NULL CHECK (company_code ~ '^[A-Z][A-Z0-9]{1,9}$'),
-  ingested_at    timestamptz NOT NULL DEFAULT clock_timestamp()
+  ingested_at    timestamptz NOT NULL DEFAULT clock_timestamp(),
+  -- V-01 (keputusan pemilik proyek 23 Nov 2026): false = log kunjungan anonim tanpa consent (tidak pernah segmen/DSAR);
+  -- `page` hanya untuk page_view. CHECK lintas kolom dipasang idempoten di bawah (berlaku juga untuk DB lama).
+  consented      boolean     NOT NULL DEFAULT true,
+  page           text        CHECK (page IS NULL OR page IN ('home', 'category', 'product', 'search', 'cart', 'checkout',
+                                                             'promo', 'store', 'account', 'order', 'other'))
 ) PARTITION BY RANGE (received_at);
 CREATE INDEX IF NOT EXISTS ix_event_raw_subject ON behavior.event_raw (subject_key, received_at);
 CREATE INDEX IF NOT EXISTS ix_event_raw_type ON behavior.event_raw (type, received_at);
@@ -142,7 +148,24 @@ END $$;
 ALTER TABLE behavior.event_raw DROP CONSTRAINT IF EXISTS event_raw_type_check;
 ALTER TABLE behavior.event_raw ADD CONSTRAINT event_raw_type_check
   CHECK (type IN ('product_view', 'wishlist_add', 'wishlist_remove', 'cart_add', 'cart_remove', 'checkout_start', 'search',
-                  'notify_me_request', 'price_alert_set', 'cart_abandon', 'purchase'));
+                  'notify_me_request', 'price_alert_set', 'page_view', 'cart_abandon', 'purchase'));
+-- V-01 (keputusan pemilik proyek 23 Nov 2026, log kunjungan anonim): kolom `consented` (DEFAULT true = semua baris lama
+-- ber-consent; default konstan → tanpa rewrite tabel) + `page`. CHECK ditulis ulang idempoten (DROP IF EXISTS + ADD):
+--   * `page` enum tertutup (bukan URL), wajib tepat untuk page_view dan dilarang untuk tipe lain;
+--   * baris anonim selalu subject device dan tidak pernah tipe fitur member / turunan kampanye (cart_abandon, purchase).
+ALTER TABLE behavior.event_raw ADD COLUMN IF NOT EXISTS consented boolean NOT NULL DEFAULT true;
+ALTER TABLE behavior.event_raw ADD COLUMN IF NOT EXISTS page text;
+ALTER TABLE behavior.event_raw DROP CONSTRAINT IF EXISTS event_raw_page_check;
+ALTER TABLE behavior.event_raw ADD CONSTRAINT event_raw_page_check
+  CHECK (page IS NULL OR page IN ('home', 'category', 'product', 'search', 'cart', 'checkout', 'promo', 'store', 'account',
+                                  'order', 'other'));
+ALTER TABLE behavior.event_raw DROP CONSTRAINT IF EXISTS event_raw_page_type_check;
+ALTER TABLE behavior.event_raw ADD CONSTRAINT event_raw_page_type_check CHECK ((type = 'page_view') = (page IS NOT NULL));
+ALTER TABLE behavior.event_raw DROP CONSTRAINT IF EXISTS event_raw_anon_check;
+ALTER TABLE behavior.event_raw ADD CONSTRAINT event_raw_anon_check
+  CHECK (consented OR (subject_kind = 'device'
+                       AND type NOT IN ('wishlist_add', 'wishlist_remove', 'notify_me_request', 'price_alert_set',
+                                        'cart_abandon', 'purchase')));
 -- Cursor ETL job `behavior_events` (index di induk → terbentuk di setiap partisi, termasuk partisi baru)
 CREATE INDEX IF NOT EXISTS ix_event_raw_ingested ON behavior.event_raw (ingested_at);
 
@@ -428,7 +451,7 @@ GRANT EXECUTE ON FUNCTION behavior.ensure_event_partitions(integer), behavior.dr
 -- tidak butuh file terpisah). Grant tabel penuh dari versi awal file ini dicabut dulu (idempoten).
 REVOKE ALL ON behavior.event_raw, behavior.erased_subject, behavior.subject_erasure FROM efn_etl;
 GRANT SELECT (event_id, subject_key, subject_kind, company_code, channel, channel_code, outlet_code, type, product_id,
-              duration_s, qty, query, result_count, stock_status, price_idr, received_at, ingested_at)
+              duration_s, qty, query, result_count, stock_status, price_idr, received_at, ingested_at, consented, page)
     ON behavior.event_raw TO efn_etl;
 GRANT SELECT (id, subject_key, request_id, created_at) ON behavior.subject_erasure TO efn_etl;
 -- Pertahanan berlapis: tabel penaut identitas tidak pernah terbaca ETL/Text-to-SQL

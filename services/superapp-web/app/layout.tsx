@@ -13,6 +13,7 @@ import { safeScheme, themeToCssVars } from '@/lib/brands';
 import { SiteHeader } from '@/components/SiteHeader';
 import { EngageProvider } from '@/components/engage/EngageProvider';
 import { FeatureGate } from '@/components/engage/FeatureGate';
+import { PageViewTracker } from '@/components/engage/BehaviorTrackers';
 import { TrackingBanner } from '@/components/engage/TrackingBanner';
 import { getSessionToken } from '@/lib/session';
 import './globals.css';
@@ -44,6 +45,7 @@ export default async function RootLayout({ children }: { children: ReactNode }) 
         </a>
         {/* G50: flag fitur dari BFF; banner consent tracking, wishlist, dan alert tersembunyi sampai flag menyala. */}
         <EngageProvider loggedIn={loggedIn}>
+          <PageViewTracker brandCode={brand.brandCode} />
           <TrackingBanner />
           <SiteHeader brand={brand} />
           <main id="konten" tabIndex={-1}>

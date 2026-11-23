@@ -1427,3 +1427,58 @@ default tidak), dan Q-INS-F4 (daftar metode bayar kanal online). ADR-041 tetap P
 - Yang sudah dibaca dari repo: `controllers/main.py:89-119`, `lib/insight_token.py:47-59`, `lib/claims.ts`,
   `lib/scope.ts`, `lib/sm-personas.ts`, `lib/queries.ts:123-198`, `clickhouse-init.sh:410-460`,
   `insight-access.sql:79-126`, `12-g41-esb.sql`, `19-insight-review.sql`, laporan fungsional 22 Nov.
+
+# V-01 23 Nov 2026 — log kunjungan anonim (amandemen ADR-047 + kontrak §28.6–§28.10)
+
+## Ringkasan (untuk manajemen)
+Keputusan pemilik proyek 23 Nov 2026 ("kunjungan visitor tidak masuk PDP; ada log visitor dan masuk ke Insight; demo di
+SMD dan PB") sudah dicatat sebagai amandemen ADR-047 §6b. Kontrak `docs/04` juga diperbarui. Kunjungan dicatat tanpa
+banner dengan kode perangkat yang disamarkan, tidak disambungkan ke akun, dan tidak dipakai untuk promo. Fitur ini OFF di
+production sampai DPO meninjaunya (Q-SM48). Tambahan biaya ±1,5–2 minggu-engineer. Status: dokumen saja, belum dibangun.
+
+## File diubah (worktree `efn-platform-visitor`, branch `feat/visitor-log`, tanpa kode)
+- `docs/decisions/ADR-047-tracking-perilaku-visitor-dan-kampanye-tertarget.md`:
+  - ringkasan manajemen + paragraf amandemen;
+  - §6b baru: opsi B parsial khusus log kunjungan, tabel perubahan per bagian beserta biaya, batas V-01 (6 butir),
+    risiko residual R-L13 dan R-L13a, serta Q-SM48;
+  - §7 diberi pemicu tinjau ulang baru.
+- `docs/04_SERVICE_CONTRACTS.md`:
+  - judul v21.4;
+  - §28.6.1 baru: gerbang, device ID, tabel penentuan mode, `page_view` + `page`, tipe yang ditolak dalam mode anonim,
+    `mode` di respons, perilaku klien;
+  - §28.6a: kolom `consented` dan `page` di PG dan ClickHouse, `agg_visitor_page_daily`, view segmen dengan
+    `consented = 1`, erasure tidak menyentuh event anonim;
+  - §28.7: payload `behavior.event` ditambah `subject_kind: "anon"` dan `consented`;
+  - §28.8a: `features.visit_log`;
+  - §28.10: baris flag `BEHAVIOR_ANON_VISIT_ENABLED` + catatan gate;
+  - §28.12: L-250..L-255 dan Q-SM48.
+- `docs/decisions/README.md`: catatan amandemen di baris indeks 047.
+- `docs/compliance/PDP_DATA_INVENTORY.md`:
+  - entri versi v20;
+  - baris baru §2.8.12a dengan kategori "pengenal perangkat pseudonim anonim", retensi 7 h / 90 h / 2 th, dan keterangan
+    tidak ikut DSAR;
+  - baris retensi §3 (v20).
+- `CLAUDE.md` tidak diubah. Baris K18-01 ("tracking OFF prod") masih benar.
+
+## Penomoran
+Penomoran mengikuti `main` di worktree ini: L-250..L-255 (L tertinggi sebelumnya L-249) dan Q-SM48 (Q-SM46/47 sudah
+dipakai G51). Kalau branch lain yang paralel memakai nomor yang sama, lead perlu menomori ulang saat merge.
+
+## Keputusan yang butuh tanda tangan klien
+- **Q-SM48** (DPO + Legal): log anonim diterima di luar consent, atau cukup disebut di kebijakan privasi, atau perlu
+  pemberitahuan penyimpanan perangkat. Juga nomor dokumen persetujuan untuk gate production. Default: jalan di
+  dev/stg/gladi, OFF prod.
+- Q-SM33 (teks banner) perlu disesuaikan: kunjungan dicatat anonim, sedangkan setuju berarti rekomendasi/promo personal.
+
+## Keputusan desain architect di dalam batas V-01 (perlu dikonfirmasi lead)
+- Rate limit per device memakai satu kunci untuk mode anonim dan consent, supaya satu device tidak mendapat kuota ganda.
+- `schema_version` `behavior.event` tetap 1. `consented` bersifat opsional dengan default `true`. Kombinasi
+  `subject_kind`/`consented` yang tidak konsisten masuk DLQ.
+- Gate production `BEHAVIOR_ANON_VISIT_ENABLED` mengikuti pola L-180. Ref DPO boleh sama dengan ref tracking bila DPO
+  mencakupnya.
+
+## Belum terverifikasi
+- Nama view/query Insight "Pengunjung" belum ditetapkan (menunggu spesifikasi Insight V-01).
+- `deploy-validate.sh` belum memuat flag baru.
+- Klaim bahwa log anonim "di luar PDP" adalah keputusan pemilik proyek dan belum diverifikasi DPO/Legal (R-L13).
+- Kode BFF/ETL tidak dibaca ulang untuk tugas ini. Kontrak dibuat berdasarkan teks §28.6–§28.10 yang ada dan V01_CONTRACT.

@@ -1352,3 +1352,95 @@ Cron akrual harian Odoo `efn_loyalty_accounting` memanggil `GET /v1/pos/loyalty/
 - Judul test `catalog.spec.ts` (blok G44) dan komentar `online-config.spec.ts:24` diperbarui; assertion tidak diubah.
 - Catatan untuk lead: selama BFF belum mendukung `va`/`ewallet`, checkout SMD hanya bisa QRIS. Di production ini butuh
   `ONLINE_PAYMENT_METHODS` memuat `qris` + `PAYMENT_PROVIDER` xendit|midtrans (L-103). Bila tidak, kanal SMD tampil tanpa mode bayar.
+
+## V-01 23 Nov 2026 — log kunjungan visitor anonim tanpa consent (keputusan pemilik proyek 23 Nov 2026)
+> Worktree `efn-platform-visitor`, branch `feat/visitor-log`. **Build/test BELUM dijalankan lokal** (tanpa shell): tsc,
+> eslint, Jest api-gateway, dan pytest ETL (`test_behavior_pg_ddl_parity.py`) harus dijalankan lead di container.
+
+### File berubah
+- `services/api-gateway/src/config/app-config.ts` — `behaviorAnonVisitEnabled` (`BEHAVIOR_ANON_VISIT_ENABLED`, default
+  false) + `behaviorVisitLogEnabled` (= tracking && anon). Spec: `src/config/g50-config.spec.ts`.
+- `src/behavior/subject-key.ts` — `anonSubjectKey = HMAC(behavior_device_pepper, "efn:anon:v1:" + device_id)`.
+- `src/behavior/dto/behavior.dto.ts` — tipe `page_view`, `PAGE_VALUES`, field `page`, `MEMBER_ONLY_EVENT_TYPES`.
+- `src/behavior/behavior.service.ts` — gate anonim, `mode` di respons, penolakan tipe member untuk anonim, erasure → 403.
+- `src/behavior/behavior.controller.ts` — `features.visit_log` di `GET /v1/config`.
+- `src/behavior/behavior-message.ts` — `consented` (absen = true untuk pesan pra-V-01) + `page`; validasi DLQ.
+- `src/behavior/behavior-writer.consumer.ts` — insert `page` (per event) + `consented` (per batch).
+- `src/behavior/behavior-jobs.service.ts` — `cart_abandon` hanya dari `cart_add` `consented`; baris turunan `consented=true`.
+- `src/behavior/purchase-events.service.ts` — `consented: true`, `page: null`.
+- `src/campaign/segment-ingest.service.ts` — kunci dengan jejak anonim di staging tidak masuk `segment_member`.
+- Spec: `behavior.service.spec.ts`, `behavior.controller.spec.ts`, `behavior-writer.consumer.spec.ts`,
+  `behavior-jobs.service.spec.ts`, `campaign/segment-ingest.service.spec.ts`.
+- `infra/postgres/init/20-platform-g50a.sql` — kolom `consented boolean NOT NULL DEFAULT true`, `page text` + CHECK enum,
+  `page_view` di CHECK `type` (CREATE TABLE dan blok ALTER idempoten), CHECK `event_raw_page_type_check`
+  (`(type='page_view') = (page IS NOT NULL)`), `event_raw_anon_check` (anonim ⇒ `subject_kind=device` dan bukan
+  wishlist/notify/price_alert/cart_abandon/purchase), grant ETL kolom + `consented, page`.
+- `services/etl/sql/platform-behavior-grants.sql` — grant kolom yang sama (duplikat referensi).
+- `infra/compose/docker-compose.yml` (api-gateway env) dan `scripts/deploy.sh` (DOTENV) — `BEHAVIOR_ANON_VISIT_ENABLED` default false.
+- `src/behavior/README.md` — bagian V-01.
+
+### Keputusan kecil yang saya ambil
+1. Migrasi ditaruh di **file 20 yang sudah ada** (pola revisi G50: `company_code`, `purchase`), bukan file 23 baru. Alasannya:
+   deploy.sh sudah menjalankan file itu, dan test paritas ETL membaca DDL file 20.
+2. Subject anonim tetap `subject_kind='device'` (bukan nilai baru), dibedakan oleh `consented=false`. Alasannya: ETL
+   `SUBJECT_KINDS` dan CHECK PG tidak perlu berubah.
+3. `page_view` + `product_id` (hanya boleh untuk `page=product`) disimpan dengan `product_id=null`. Ini menghindari
+   hitung ganda dengan `product_view` dan penolakan `unknown_product`.
+4. Bearer tanpa consent akun + `visit_log` aktif → **anonim**, walau consent device `granted` (tidak memakai `device_key`).
+   Ini konsisten dengan ADR-047 §3.3: consent device tidak menjadi subject saat login.
+5. Erasure diperiksa dari baris `device_consent` **terbaru** dengan `version='erasure'`. Bila sesudah itu ada consent baru
+   lalu ditarik biasa, device boleh anonim lagi. Setelah retensi `device_consent` (400 hari) baris erasure ikut hilang.
+6. Pesan antrean tanpa `consented` dibaca sebagai `true`. Pesan pra-V-01 di antrean/outbox memang semuanya ber-consent.
+   `schema_version` tetap 1 (perubahan aditif).
+7. Segmen: jaminan utama ada di sisi ClickHouse/ETL. BFF menambah filter berlapis (`NOT EXISTS event_raw … NOT consented`).
+   Filter ini hanya efektif selama jejak anonim masih di staging (7 hari). Dispatcher memang tidak bisa memetakan kunci
+   anonim karena kunci itu tidak pernah ada di `subject_member`.
+8. DSAR export/erasure **tidak diubah kodenya**. Kunci DSAR berasal dari `subject_member`/`device_link` + HMAC member, dan
+   kunci anonim beda domain HMAC, jadi tidak pernah ikut. Ada test pembuktiannya. Saya sengaja tidak menambah referensi
+   kolom `consented` di `behavior-privacy.ts` agar erasure akun tetap aman di DB yang belum menjalankan migrasi.
+9. `features.visit_log` tidak mensyaratkan teks consent dikonfigurasi (beda dengan `tracking`).
+
+### Wajib dikerjakan agent lain (bila tidak, ada yang rusak)
+- **efn-data-ai-engineer:** `services/etl/efn_etl/behavior.py` `CLIENT_EVENT_TYPES` + `page_view`. Bila tidak:
+  `test_pg_staging_values_are_accepted_by_etl_transform` merah dan job ETL gagal-tutup saat menemui `page_view`.
+  Selain itu: SELECT `e.consented`, `e.page` (sudah di-grant), kolom ClickHouse, view segmen `consented = 1`, dan agregat halaman.
+- **efn-devsecops-engineer:** `BEHAVIOR_ANON_VISIT_ENABLED` di `scripts/lib/deploy-validate.sh` (gating production + ref
+  persetujuan), daftar flag di `scripts/check-encryption.sh:803`, dan `.github/workflows/deploy.yml`. Saya tidak menyentuhnya.
+  Tidak ada `.env.example` di repo. Flag didokumentasikan di compose + deploy.sh.
+- **efn-frontend-engineer:** baca `features.visit_log`, kirim `page_view` dengan enum `page`, dan jangan kirim wishlist/notify/
+  price_alert sebagai event perilaku saat anonim.
+
+### Usulan kontrak docs/04 (untuk architect; docs/04 TIDAK saya ubah)
+- **§28.6 `POST /v1/events`:** respons 202 tambah `mode: "consented"|"anonymous"`. Gate:
+  - consent device `granted` atau consent `tracking` akun → `consented`.
+  - Tidak ada consent dan `features.visit_log` → `anonymous`: `subject_key = HMAC(behavior_device_pepper, "efn:anon:v1:" + device_id)`,
+    `subject_kind=device`, Bearer diabaikan untuk identitas.
+  - Baris `device_consent` terbaru `version='erasure'` → 403.
+  - Flag mati → 403 `tracking_consent_required`.
+  - Anonim + `wishlist_add|wishlist_remove|notify_me_request|price_alert_set` → `rejected invalid`.
+  - Tipe `page_view`: `page` wajib ∈ `home|category|product|search|cart|checkout|promo|store|account|order|other`.
+    `product_id` hanya bila `page=product` dan disimpan null. `page` di tipe lain → invalid.
+- **§28.6 `GET /v1/config`:** `features.visit_log: boolean` (= `BEHAVIOR_TRACKING_ENABLED` && `BEHAVIOR_ANON_VISIT_ENABLED`).
+- **§28.7 pesan `behavior.event`:** tambah `consented: boolean` (absen = true) dan `events[].page: string|null`.
+  Consumer: anonim wajib `subject_kind=device`, tanpa tipe fitur member.
+- **§28.6 staging:** `event_raw.consented`, `event_raw.page`, beserta CHECK di atas. `cart_abandon`/`purchase` hanya untuk
+  subject ber-consent. DSAR tidak mencakup event anonim.
+- **§28.10 flag:** `BEHAVIOR_ANON_VISIT_ENABLED` default false di semua env. Gating production menunggu keputusan devsecops/DPO.
+
+### Risiko / belum terverifikasi
+- Belum ada eksekusi tsc/Jest/pytest dan belum ada migrasi nyata di PG (`ALTER TABLE … ADD COLUMN … NOT NULL DEFAULT true`
+  pada tabel induk berpartisi + CHECK lintas kolom). Saya hanya membacanya, tidak menjalankannya.
+- R-L01: keputusan pemilik bahwa "kunjungan tidak masuk PDP" belum dikonfirmasi DPO/Legal. ADR-047 §1.2 menyebut pseudonim
+  device sebagai data pribadi. Kode menjaga anonim tetap tidak tertaut, tetapi status hukumnya keputusan pemilik + DPO.
+- Rate limit anonim memakai kuota device/IP yang sama dengan jalur consent (120/600 per menit). Tidak ada kuota terpisah.
+
+### Tindak lanjut SECURITY_REVIEW_2026-11-23_v01-visitor-log (23 Nov 2026)
+> Belum dijalankan lokal (tanpa shell).
+- **SEC-V01-05:** filter `NOT EXISTS event_raw … NOT consented` di `src/campaign/segment-ingest.service.ts` dihapus
+  beserta assertion spec-nya. Keputusan kecil no. 7 di atas tidak berlaku lagi. Jaminan segmen = view ClickHouse
+  `v_seg_*` `consented = 1` + ETL gagal-tutup, ditambah kunci anonim tidak pernah ada di `subject_member` (README diperbarui).
+- **SEC-V01-01:** `behavior.service.ts` menganggap consent device `consented` hanya bila baris terbaru `granted=true`
+  DAN `version` = `consentActiveText('tracking').version`. Versi lama atau teks aktif tidak dikonfigurasi → anonim (bila
+  `visit_log`) tanpa penautan member, selain itu 403. Ini juga mengubah perilaku pra-V-01: consent device versi lama kini
+  403/anonim, tidak lagi menjadi subject device. Spec baru di `behavior.service.spec.ts` mencakup versi lama dan teks yang
+  tidak dikonfigurasi, masing-masing dengan `visit_log` aktif dan mati.

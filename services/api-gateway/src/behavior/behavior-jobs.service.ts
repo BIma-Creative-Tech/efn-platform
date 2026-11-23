@@ -21,7 +21,8 @@ export interface BehaviorJobResult {
  * 2. retensi: `event_dedup` (= retensi staging), tautan device menganggur (180 h), bukti consent device (placeholder
  *    400 h), anggota segmen (30 h), daftar `erased_subject` (100 h > TTL ClickHouse 90 h);
  * 3. `cart_abandon` turunan server (ADR-047 §3.2): subjek yang `cart_add` terakhirnya 24–48 jam lalu tanpa
- *    `checkout_start` sesudahnya → satu event `cart_abandon` (event_id deterministik → aman diulang).
+ *    `checkout_start` sesudahnya → satu event `cart_abandon` (event_id deterministik → aman diulang). V-01: HANYA subject
+ *    ber-consent (`consented`); `cart_abandon` adalah sinyal kampanye, log kunjungan anonim tidak pernah menghasilkannya.
  * Tidak pernah melempar. Aktif bila tracking ATAU kampanye aktif (segmen ikut dipurge).
  */
 @Injectable()
@@ -109,7 +110,7 @@ export class BehaviorJobsService implements OnModuleInit, OnModuleDestroy {
       `WITH last_add AS (
          SELECT DISTINCT ON (subject_key) subject_key, subject_kind, event_id, received_at, channel, channel_code, outlet_code, company_code
            FROM behavior.event_raw
-          WHERE type = 'cart_add' AND received_at > now() - interval '48 hours'
+          WHERE type = 'cart_add' AND consented AND received_at > now() - interval '48 hours'
           ORDER BY subject_key, received_at DESC, event_id
        )
        SELECT l.subject_key, l.subject_kind, l.event_id::text AS event_id, l.channel, l.channel_code, l.outlet_code, l.company_code
@@ -132,8 +133,8 @@ export class BehaviorJobsService implements OnModuleInit, OnModuleDestroy {
       if ((ins.rowCount ?? 0) === 0) continue;
       await q.query(
         `INSERT INTO behavior.event_raw
-           (received_at, batch_id, subject_key, subject_kind, channel, event_id, type, client_ts, channel_code, outlet_code, company_code)
-         VALUES (now(), $1::uuid, $2, $3, $7, $4::uuid, 'cart_abandon', now(), $5, $6, $8)`,
+           (received_at, batch_id, subject_key, subject_kind, channel, event_id, type, client_ts, channel_code, outlet_code, company_code, consented)
+         VALUES (now(), $1::uuid, $2, $3, $7, $4::uuid, 'cart_abandon', now(), $5, $6, $8, true)`,
         [deterministicUuid(`efn:cart_abandon:batch:${eventId}`), subject, c.subject_kind, eventId, c.channel_code, c.outlet_code, c.channel, c.company_code],
       );
       n += 1;

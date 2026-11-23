@@ -20,6 +20,13 @@
 > pasar/kebiasaan) dan **mengusulkan** segmen + voucher; **marketing yang memutuskan** kampanye. Data mentah dihapus
 > setelah 90 hari, ringkasan anonim disimpan 2 tahun, dan semuanya ikut terhapus bila member menghapus akun. Mati di
 > production sampai DPO menyetujui. Biaya ±5–7 minggu-engineer (BFF, web/app, data, Odoo), Rp0 lisensi.
+>
+> **Amandemen 23 Nov 2026 (keputusan pemilik proyek, V-01).** Kunjungan web/app kini **dicatat untuk semua pengunjung
+> tanpa banner**, sebagai log kunjungan anonim yang tampil di Insight (demo SMD dan PB). Log ini memakai kode acak
+> perangkat yang disamarkan, **tanpa** IP/browser/URL lengkap, **tidak pernah** disambungkan ke akun, **tidak** dipakai
+> untuk segmen/promo, dan dihapus setelah 90 hari. Promo personal dan penautan akun tetap butuh persetujuan
+> "pelacakan". Risiko sisa: regulator bisa menganggap kode perangkat itu tetap data pribadi — **DPO wajib meninjau
+> sebelum production** (§6b). Tambahan biaya ±1,5–2 minggu-engineer (BFF, web/app, ETL, Insight).
 
 ## 1. Konteks
 
@@ -194,7 +201,50 @@ Q-SM33 (teks banner consent), Q-SM37 (`outlet_code` → `warehouse_id` untuk Ins
 kanal, SEC-G50-14), Q-SM39 (re-grant `tracking` menautkan ulang data lama, SEC-G50-15). Bentuk payload klaim yang
 berlaku = parser BFF + fixture `efn_campaign/tests/fixtures/campaign_payload_v1.json` (keputusan lead SEC-G50-02).
 
+## 6b. Amandemen 23 Nov 2026 — log kunjungan anonim (V-01)
+Status ADR tetap **Proposed**. Keputusan pemilik proyek 23 Nov 2026: *"kunjungan visitor tidak masuk PDP; ada log
+visitor dan masuk ke Insight; demo di SMD dan PB"*. Amandemen ini mencatat keputusan tersebut dan batas teknisnya; tidak
+membuka ulang keputusan. Kontrak rinci: `docs/04` §28.6, §28.6a, §28.7, §28.8a, §28.10, L-250..L-255.
+
+**Opsi yang berlaku:** untuk **log kunjungan saja** dipakai **opsi B parsial** (§2.1: device ID untuk semua pengunjung
+tanpa consent). Opsi A tetap berlaku untuk **penautan ke akun, profil per member, segmen, dan kampanye** (consent
+`tracking` tetap syarat). Jalur data a (§2.2) tidak berubah; tidak ada pengecualian ADR-003.
+
+| Bagian | Teks semula | Setelah amandemen | Dampak biaya / waktu |
+|---|---|---|---|
+| §3.1 no. 3 | Device ID dibuat **hanya setelah consent** | Bila `features.visit_log` aktif, device ID (UUIDv4 first-party, cookie `efn_did` + localStorage / SecureStore) dibuat saat kunjungan pertama **tanpa menunggu consent** | Web/app ±3–4 hari |
+| §3.1 no. 5 | Tanpa consent: klien tidak mengirim event; hanya penghitung agregat tanpa pengenal (belum dibangun) | Tanpa consent: event diterima sebagai **anonim** (`consented=false`), `subject_key = HMAC(behavior_device_pepper, "anon:" + device_id)` — domain berbeda dari `device_key` consent; penghitung tanpa pengenal tidak dibangun (digantikan log anonim) | BFF ±3–4 hari |
+| §3.2 event | 9 tipe klien | + `page_view` dengan `page` (enum 11 nilai); event anonim menolak `wishlist_*`, `notify_me_request`, `price_alert_set` | termasuk di atas |
+| §3.3 penyimpanan | Semua event = subjek consent | Kolom `consented` + `page` di staging PG dan `fact_visitor_event`; agregat baru `agg_visitor_page_daily`; funnel/produk/pencarian dari semua pengunjung; view segmen wajib `consented = 1` | ETL + DDL ±2–3 hari |
+| §3.4 segmen | Segmen dari subjek consent | Tidak berubah; ditegakkan di view (`consented = 1`) | — |
+| Insight | Persona Marketing membaca agregat kampanye/funnel | Halaman "Pengunjung" SMD dan PB (kunjungan per hari, halaman teratas, produk dilihat vs dibeli, pencarian teratas & tanpa hasil, funnel), k-anonim tetap | Insight ±3–4 hari |
+
+**Batas V-01 (wajib, agar klaim "anonim" tetap dapat dipertahankan):**
+1. **Tanpa IP, user agent, URL lengkap, referrer** di payload, staging, maupun ClickHouse (IP hanya kunci rate-limit
+   ter-hash di Redis, seperti sekarang). Query pencarian tetap disanitasi (`redactQuery`).
+2. **Tanpa penautan:** event anonim tidak pernah membuat `device_link`, tidak memakai member id walau ada Bearer, dan
+   tidak digabung dengan subjek consent (prefix `anon:` membuat kunci berbeda untuk device yang sama). Penarikan consent
+   `tracking` = berhenti penautan/profiling, device tetap boleh dicatat anonim; device ber-erasure (`version='erasure'`)
+   tetap ditolak `403`.
+3. **Tidak dipakai segmen/kampanye:** view `efn_segment.*` dan user `efn_segment_reader` hanya melihat `consented = 1`.
+4. **Retensi** sama: staging 7 hari, mentah ClickHouse 90 hari (TTL), agregat tanpa `subject_key` 2 tahun (k ≥ 10).
+5. **Flag** `BEHAVIOR_ANON_VISIT_ENABLED` (default `false`, efektif hanya bila `BEHAVIOR_TRACKING_ENABLED=true`; ikut
+   gate production L-180).
+6. Erasure DSAR tidak menyentuh event anonim (tidak tertaut ke orang, sehingga tidak dapat dicari per subjek).
+
+**Risiko residual (dicatat, bukan alasan membuka ulang keputusan):**
+| ID | Risiko | Mitigasi | Pemilik |
+|---|---|---|---|
+| **R-L13** (diperbarui) | `device_id` pseudonim yang persisten (cookie 180 hari) **dapat dianggap data pribadi** oleh regulator/DPO karena memungkinkan *singling out* perangkat, meskipun tidak tertaut ke orang; tanpa banner berarti tidak ada pemberitahuan di titik pengumpulan | Tidak tertaut ke akun, HMAC dengan pepper hanya di BFF, tanpa IP/UA/URL, tidak dipakai segmen, retensi mentah 90 hari, flag default OFF; **catatan untuk DPO sebelum production**: tinjau klaim "di luar PDP", pertimbangkan pemberitahuan ringan di kebijakan privasi (bukan banner) dan apakah perlu penyimpanan perangkat (cookie/localStorage) diberi pemberitahuan | DPO / Legal |
+| R-L13a (catatan) | Erasure tidak dapat menghapus event anonim per orang | Diterima: konsekuensi langsung dari tidak menautkan; TTL 90 hari menjadi batas atas | DPO |
+
+Pertanyaan terbuka baru: **Q-SM48** (DPO) Apakah log kunjungan anonim V-01 diterima di luar consent, atau cukup
+disebut di kebijakan privasi; apakah retensi 90 hari mentah dapat dipertahankan. Default sampai dijawab: berjalan di
+dev/stg/gladi, **OFF di production** (gate L-180).
+
 ## 7. Kapan ditinjau ulang
+- DPO/regulator menyatakan `device_id` anonim tetap data pribadi yang butuh consent (amandemen V-01 dibatalkan atau
+  dibatasi ke agregat tanpa pengenal).
 - Volume event > ±5 juta/hari (evaluasi opsi 2.2 b dengan ADR pengecualian).
 - Setelah perbaikan §28.7b dan uji end-to-end pertama (verifikasi alur segmen → approval → inbox).
 - DPO menolak consent sebagai dasar atau meminta retensi lebih pendek.

@@ -89,7 +89,7 @@ export default async function MarketingPage({ searchParams }: { searchParams: Sm
       ) : (
         <>
           <p className="note-block" role="note">
-            Angka funnel hanya mencakup pengunjung yang menyetujui pelacakan. Satuan = jumlah perangkat-hari (satu perangkat yang datang dua hari terhitung dua).
+            Angka funnel mencakup semua pengunjung, termasuk kunjungan anonim tanpa persetujuan pelacakan (V-01, 23 Nov 2026). Satuan = jumlah perangkat-hari (satu perangkat yang datang dua hari terhitung dua).
           </p>
           <nav aria-label="Kanal" className="tabs-links">
             {CHANNELS.map((c) => (
@@ -103,14 +103,14 @@ export default async function MarketingPage({ searchParams }: { searchParams: Sm
               label="Pengunjung (perangkat-hari)"
               value={!data.funnel.ok ? ERR : viewers === 0 ? 'Belum ada data' : fmtSuppressed(viewers)}
               muted={!data.funnel.ok || viewers === 0}
-              info="Σ perangkat ber-consent per hari. Unik per periode belum tersedia (Q-SM41)."
+              info="Σ perangkat per hari (anonim + ber-consent). Unik per periode belum tersedia (Q-SM41)."
             />
             <SmKpiTile
               label="Konversi"
               value={!data.funnel.ok ? ERR : suppressedViewers || convCur === null ? 'Belum cukup data' : fmtPct(convCur)}
               muted={!data.funnel.ok || suppressedViewers || convCur === null}
               delta={!suppressedViewers && convCur !== null ? { value: ppChange(convCur, convPrev), kind: 'pp', goodWhen: 'up' } : undefined}
-              info="Pembeli dibagi pengunjung (perangkat-hari ber-consent)."
+              info="Pembeli dibagi pengunjung (perangkat-hari)."
             />
             <SmKpiTile
               label="Voucher dipakai"

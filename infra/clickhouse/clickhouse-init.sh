@@ -450,6 +450,9 @@ unset ESB_POLICY_EXPECTED
 # G47 (docs/04 §28.13.7, L-188): row policy efn_insight_scope untuk v_sm_* (butuh $INSIGHT_KEY tervalidasi di atas).
 # shellcheck source=/dev/null  # file di-mount saat runtime (/init/access)
 . /init/access/insight-sm-policy.sh
+# V-01 (23 Nov 2026): row policy efn_insight_scope untuk v_vis_* (halaman Pengunjung lintas PT; SQL_efn_vcodes/vsig).
+# shellcheck source=/dev/null  # file di-mount saat runtime (/init/access)
+. /init/access/insight-visitor-policy.sh
 unset INSIGHT_KEY
 # Fail closed: view efn_insight tanpa row policy = semua PT terbaca (grant efn_insight.* wildcard). Bila ada, cabut
 # grant role lalu gagalkan init.

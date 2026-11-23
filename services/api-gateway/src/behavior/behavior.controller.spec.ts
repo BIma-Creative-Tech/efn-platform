@@ -39,6 +39,7 @@ describe('GET /v1/config features (§28.6, §28.10)', () => {
     expect(new PublicConfigController(testConfig()).get()).toEqual({
       features: {
         tracking: false,
+        visit_log: false,
         wishlist: false,
         restock_alert: false,
         price_alert: false,
@@ -59,6 +60,14 @@ describe('GET /v1/config features (§28.6, §28.10)', () => {
     ).get();
     expect(on.features).toMatchObject({ tracking: true, wishlist: true });
     expect(on.tracking_consent).toEqual({ version: 'tracking@1' });
+  });
+
+  it('V-01 visit_log: true hanya bila BEHAVIOR_TRACKING_ENABLED + BEHAVIOR_ANON_VISIT_ENABLED (tanpa syarat teks consent); tracking arti lama', () => {
+    expect(new PublicConfigController(testConfig({ BEHAVIOR_ANON_VISIT_ENABLED: 'true' })).get().features.visit_log).toBe(false);
+    expect(new PublicConfigController(testConfig({ BEHAVIOR_TRACKING_ENABLED: 'true' })).get().features.visit_log).toBe(false);
+    const anon = new PublicConfigController(testConfig({ BEHAVIOR_TRACKING_ENABLED: 'true', BEHAVIOR_ANON_VISIT_ENABLED: 'true' })).get();
+    expect(anon.features).toMatchObject({ visit_log: true, tracking: false });
+    expect(anon.tracking_consent).toBeNull();
   });
 });
 

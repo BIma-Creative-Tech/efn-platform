@@ -69,17 +69,19 @@ export class BehaviorWriterConsumer implements OnApplicationBootstrap {
         // PT diturunkan ulang dari pemetaan kanal → PT saat tulis (sumber sama dengan ingest); kanal yang sementara tidak
         // terpetakan memakai PT yang sudah divalidasi saat ingest (pesan ber-`company_code` ∈ COMPANY_CODES).
         const companies = await resolveChannelCompanies(q, rows.map((e) => e.channel_code));
-        // ingested_at = DEFAULT clock_timestamp() (cursor ETL), tidak dikirim BFF
+        // ingested_at = DEFAULT clock_timestamp() (cursor ETL), tidak dikirim BFF. V-01: `consented` per batch (subject),
+        // `page` per event (hanya page_view).
         await q.query(
           `INSERT INTO behavior.event_raw
              (received_at, batch_id, subject_key, subject_kind, channel, event_id, type, client_ts, channel_code, outlet_code,
-              product_id, duration_s, qty, query, result_count, stock_status, price_idr, company_code)
+              product_id, duration_s, qty, query, result_count, stock_status, price_idr, company_code, page, consented)
            SELECT $1::timestamptz, $2::uuid, $3, $4, $5, t.event_id, t.type, t.client_ts, t.channel_code, t.outlet_code,
-                  t.product_id, t.duration_s, t.qty, t.query, t.result_count, t.stock_status, t.price_idr, t.company_code
+                  t.product_id, t.duration_s, t.qty, t.query, t.result_count, t.stock_status, t.price_idr, t.company_code,
+                  t.page, $20::boolean
              FROM unnest($6::uuid[], $7::text[], $8::timestamptz[], $9::text[], $10::text[], $11::int[], $12::smallint[],
-                         $13::int[], $14::text[], $15::int[], $16::text[], $17::bigint[], $18::text[])
+                         $13::int[], $14::text[], $15::int[], $16::text[], $17::bigint[], $18::text[], $19::text[])
                   AS t(event_id, type, client_ts, channel_code, outlet_code, product_id, duration_s, qty, query, result_count,
-                       stock_status, price_idr, company_code)`,
+                       stock_status, price_idr, company_code, page)`,
           [
             msg.received_at,
             msg.batch_id,
@@ -99,6 +101,8 @@ export class BehaviorWriterConsumer implements OnApplicationBootstrap {
             rows.map((e) => e.stock_status),
             rows.map((e) => e.price_idr),
             rows.map((e) => companies.get(e.channel_code) ?? e.company_code),
+            rows.map((e) => e.page),
+            msg.consented,
           ],
         );
       }

@@ -10,6 +10,9 @@
 -- Tanpa row policy per PT: satu user dipakai worker untuk PT yang dikonfigurasi (SEGMENT_COMPANIES); semua query worker
 -- difilter company_code; pembatasan tulis = API key Odoo per PT (403 company_mismatch) + allowlist BFF.
 -- SEC-215 (G44): grant PER VIEW (bukan efn_segment.*) agar objek baru di database ini tidak otomatis terbaca.
+-- V-01 (23 Nov 2026): kunjungan anonim (fact_visitor_event.consented = 0) TIDAK pernah terbaca segment-worker: setiap
+-- view sumber efn_dwh.v_seg_* yang membaca fact_visitor_event memfilter `consented = 1` (16-g50-behavior.sql, diuji
+-- services/etl/tests/test_behavior.py). Definer tetap punya SELECT tabel dasar (dibutuhkan view DEFINER).
 
 CREATE SETTINGS PROFILE IF NOT EXISTS segment_readonly SETTINGS
     readonly = 2 CONST,
