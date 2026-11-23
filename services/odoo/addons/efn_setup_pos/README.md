@@ -55,6 +55,15 @@ Kode jurnal kas (§3.1, `account.journal.code` maks 5, unik per company): brand 
 `IMDC1..IMDC9`, `IMDCA..IMDCZ`; brand ≥ 4 huruf/kosong = `blocked` (buat manual). Akun kas per outlet dibuat CE (prefix
 kas `l10n_id`) — default Q-G54-2 "per outlet"; satu akun bersama = keputusan Finance.
 
+**C-11 Denah meja (19.0.1.16.0, opsional, default mati).** POS hasil importer ESB dibuat tanpa `module_pos_restaurant`
+dan tanpa lantai, sehingga layar meja tidak muncul. Opsi *Denah meja* (apply) memberi POS yang belum punya meja satu
+lantai `Dine-in <POS>` berisi `table_count` meja placeholder (default 10, 2/4 kursi, grid 5 kolom), lalu menyalakan
+`module_pos_restaurant` + `default_screen = tables`. Lantai dibuat **sebelum** mode restoran dinyalakan agar CE
+`_setup_default_floor` tidak membuat lantai bernama company dengan 1 meja. POS yang sudah punya meja = `ok` (tidak
+diubah). Pilih hanya POS outlet makan di tempat (dapur/booth takeaway jangan disertakan). Denah nyata per outlet
+tetap Q-20: admin menyesuaikan lewat editor denah di POS. Peringatan cek **W-05**: company F&B dengan POS tanpa mode
+restoran/meja. Kasir perlu reload POS setelah apply.
+
 **Data baru (noupdate, dibuat saat `-u` karena xmlid baru, tanpa migrasi):** EDC `pos_payment_method_edc_imd/_cup`;
 Poin EFN IMD/CUP (`account_points_liability_*`, `journal_points_*`, `pos_payment_method_points_*`, akun 21990091
 PLACEHOLDER Q-F18-3); preset `preset_imd_/preset_cup_` `dine_in` + `takeaway`; **QRIS manual**

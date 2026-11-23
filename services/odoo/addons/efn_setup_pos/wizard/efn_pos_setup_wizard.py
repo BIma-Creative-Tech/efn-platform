@@ -8,6 +8,9 @@ akuntansi/POS baru:
   (cek CE dipanggil langsung, tanpa savepoint karena tidak ada yang ditulis);
 - mode ``apply``: langkah C-01..C-09 (cari dulu, baru buat -> idempoten), lalu cek ulang (C-10). Setiap config diproses
   dalam savepoint sendiri; gagal = baris ``blocked``, config lain lanjut.
+- C-11 (opsional, ``opt_tables``, default mati): POS tanpa meja diberi satu lantai "Dine-in <POS>" berisi
+  ``table_count`` meja placeholder lalu ``module_pos_restaurant`` dinyalakan (importer ESB tidak mengisi mode restoran,
+  sehingga layar meja tidak muncul). Denah nyata per outlet tetap Q-20; admin menyesuaikan dari editor denah POS.
 
 Hak: cek = ``point_of_sale.group_pos_manager``; apply = + ``account.group_account_manager`` (membuat jurnal/akun), dicek
 di server lalu operasi memakai ``sudo().with_company(company)``. ``pos.config`` CE 19 tidak punya chatter (bukan
@@ -30,6 +33,9 @@ CODE_SUFFIX_CHARS = "123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
 # Kode brand -> sufiks xmlid data efn_setup_company/efn_setup_pos (xmlid lama GL/PB dipertahankan, L-48).
 BRAND_XMLID_SUFFIX = {"GL": "rtl", "PB": "fnb"}
 SEQUENCE_FIELDS = ("order_seq_id", "order_backend_seq_id", "order_line_seq_id", "device_seq_id")
+DEFAULT_TABLE_COUNT = 10  # placeholder sampai denah outlet (Q-20)
+MAX_TABLE_COUNT = 60
+TABLES_PER_ROW = 5
 EDC_PREFIX = "pos_payment_method_edc_"
 QRIS_PREFIX = "pos_payment_method_qris_manual_"
 STATUS_SELECTION = [
@@ -94,6 +100,11 @@ class EfnPosSetupWizard(models.TransientModel):
     opt_qris_manual = fields.Boolean(string="QRIS manual (cek mutasi)", default=True)
     opt_company_accounts = fields.Boolean(string="Akun POS company (piutang PoS, selisih kas)", default=True)
     opt_menu_taxes = fields.Boolean(string="Pajak penjualan default di produk menu tanpa pajak", default=True)
+    opt_tables = fields.Boolean(
+        string="Denah meja (mode restoran) untuk POS tanpa meja",
+        help="Pilih hanya POS outlet makan di tempat; dapur/booth takeaway jangan disertakan.",
+    )
+    table_count = fields.Integer(string="Jumlah meja placeholder", default=DEFAULT_TABLE_COUNT)
     line_ids = fields.One2many("efn.pos.setup.wizard.line", "wizard_id", string="Hasil", readonly=True)
     summary = fields.Char(string="Ringkasan", readonly=True)
 
@@ -115,6 +126,8 @@ class EfnPosSetupWizard(models.TransientModel):
         company = self.company_id
         apply = self.mode == "apply"
         self._efn_check_access(company, apply)
+        if apply and self.opt_tables and not 1 <= self.table_count <= MAX_TABLE_COUNT:
+            raise UserError(_("Jumlah meja placeholder harus 1 sampai %s.", MAX_TABLE_COUNT))
         configs = self._efn_target_configs()
         lines = []
         if apply:
@@ -314,6 +327,8 @@ class EfnPosSetupWizard(models.TransientModel):
                 if commands:
                     config.write({"payment_method_ids": commands})
                 lines += self._efn_fix_points(config)
+                if self.opt_tables:
+                    lines += self._efn_fix_tables(config)
         except Exception as exc:  # noqa: BLE001 - savepoint di-rollback; config lain tetap diproses
             self.env.invalidate_all(flush=False)
             _logger.warning("EFN G54: apply config %s gagal (%s)", config.id, type(exc).__name__)
@@ -423,6 +438,36 @@ class EfnPosSetupWizard(models.TransientModel):
         if config._efn_setup_link_points_method():
             return [self._line(config, "C-08", "fixed", _("Poin EFN ditautkan (tukar poin aktif)."))]
         return [self._line(config, "C-08", "warning", _("Tukar poin aktif tetapi company tidak punya metode Poin EFN."))]
+
+    def _efn_fix_tables(self, config):
+        if config.module_pos_restaurant and config.floor_ids.table_ids:
+            return [self._line(config, "C-11", "ok", _("Mode restoran aktif dan denah meja sudah ada."))]
+        # Lantai + meja dibuat dulu: write module_pos_restaurant=True di CE 19 (_setup_default_floor) membuat lantai
+        # bernama company dengan 1 meja bila config belum punya lantai.
+        floor = config.floor_ids[:1] or config.env["restaurant.floor"].create(
+            {"name": _("Dine-in %s", config.name), "pos_config_ids": [Command.link(config.id)]}
+        )
+        if not floor.table_ids:
+            config.env["restaurant.table"].create(
+                [
+                    {
+                        "floor_id": floor.id,
+                        "table_number": number,
+                        "seats": 2 if number % 2 else 4,
+                        "shape": "square",
+                        "position_h": 50 + (number - 1) % TABLES_PER_ROW * 150,
+                        "position_v": 50 + (number - 1) // TABLES_PER_ROW * 150,
+                        "width": 100,
+                        "height": 100,
+                    }
+                    for number in range(1, self.table_count + 1)
+                ]
+            )
+        config.write({"module_pos_restaurant": True, "default_screen": "tables"})
+        message = _(
+            "Mode restoran aktif, lantai %(floor)s dengan %(count)s meja.", floor=floor.name, count=len(floor.table_ids)
+        )
+        return [self._line(config, "C-11", "fixed", message)]
 
     # ------------------------------------------------------------------------------------------------ cek
     def _efn_check_company(self, company):
@@ -557,6 +602,12 @@ class EfnPosSetupWizard(models.TransientModel):
             if problems:
                 advice = _(" Usulan default preset: %s (Q-18).", preset.name) if preset else ""
                 lines.append(self._line(config, "W-01", "warning", "; ".join(problems) + "." + advice))
+        if company.efn_business_type == "fnb" and not (config.module_pos_restaurant and config.floor_ids.table_ids):
+            message = _(
+                "Mode restoran/denah meja belum ada: layar meja tidak muncul di POS (apply opsi Denah meja, C-11). "
+                "Abaikan untuk dapur/booth tanpa makan di tempat."
+            )
+            lines.append(self._line(config, "W-05", "warning", message))
         if not config.receipt_header:
             lines.append(self._line(config, "W-02", "warning", _("Header struk kosong (nama PT, NPWP, alamat; Q-1).")))
         employees = config.env["hr.employee"].search_count([("company_id", "=", company.id)], limit=1)

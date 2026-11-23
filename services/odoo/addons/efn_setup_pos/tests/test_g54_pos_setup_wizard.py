@@ -81,9 +81,11 @@ class TestG54PosSetupWizard(TransactionCase):
             )
         )
 
-    def _wizard(self, company, configs, mode="check", user=None):
+    def _wizard(self, company, configs, mode="check", user=None, **vals):
         Wizard = self.env["efn.pos.setup.wizard"].with_user(user or self.manager).with_company(company)
-        wizard = Wizard.create({"company_id": company.id, "config_ids": [Command.set(configs.ids)], "mode": mode})
+        wizard = Wizard.create(
+            {"company_id": company.id, "config_ids": [Command.set(configs.ids)], "mode": mode, **vals}
+        )
         wizard.action_run()
         return wizard
 
@@ -211,3 +213,33 @@ class TestG54PosSetupWizard(TransactionCase):
         wizard = self._wizard(self.imd, config, "apply")
         self.assertFalse(config.payment_method_ids, "metode bayar tidak boleh diubah selama sesi terbuka")
         self.assertTrue(self._lines(wizard, config, "P15", "warning"))
+
+    def test_tables_option_enables_floor_plan(self):
+        config = self._config(self.imd, "G54 Outlet Meja")
+        untouched = self._config(self.imd, "G54 Outlet Takeaway")
+        Floor = self.env["restaurant.floor"]
+        floors_before = Floor.search_count([])
+        wizard = self._wizard(self.imd, config | untouched, "check")
+        self.assertTrue(self._lines(wizard, config, "W-05", "warning"), "POS F&B tanpa meja = W-05")
+        self.assertEqual(Floor.search_count([]), floors_before, "mode check tidak membuat lantai")
+
+        self._wizard(self.imd, untouched, "apply")
+        self.assertFalse(untouched.module_pos_restaurant, "opsi meja default mati")
+        self.assertFalse(untouched.floor_ids)
+
+        wizard = self._wizard(self.imd, config, "apply", opt_tables=True, table_count=6)
+        self.assertTrue(self._lines(wizard, config, "C-11", "fixed"))
+        self.assertFalse(self._lines(wizard, config, "W-05"))
+        self.assertTrue(config.module_pos_restaurant)
+        self.assertEqual(config.default_screen, "tables")
+        self.assertEqual(len(config.floor_ids), 1, "hanya lantai EFN, tanpa lantai default CE")
+        tables = config.floor_ids.table_ids
+        self.assertEqual(sorted(tables.mapped("table_number")), list(range(1, 7)))
+        self.assertEqual(len({(t.position_h, t.position_v) for t in tables}), 6, "meja tidak bertumpuk")
+
+        wizard = self._wizard(self.imd, config, "apply", opt_tables=True, table_count=6)
+        self.assertTrue(self._lines(wizard, config, "C-11", "ok"))
+        self.assertEqual(len(config.floor_ids.table_ids), 6, "apply ulang tidak menambah meja")
+
+        with self.assertRaises(UserError):
+            self._wizard(self.imd, config, "apply", opt_tables=True, table_count=0)

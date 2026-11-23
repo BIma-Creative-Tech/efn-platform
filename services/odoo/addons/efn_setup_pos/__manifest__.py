@@ -11,7 +11,7 @@
     # 19.0.1.15.0 (G54, docs/fit-gap/G54_G55_G61_ODOO_SETUP.md): wizard "Lengkapi konfigurasi POS"
     # (efn.pos.setup.wizard, cek P01..P19 + apply C-01..C-09); data EDC/Poin EFN/preset IMD & CUP, QRIS manual per PT
     # (bukan SMD). Record noupdate ber-xmlid baru dibuat saat -u -> tanpa migrasi.
-    "version": "19.0.1.15.0",
+    "version": "19.0.1.16.0",
     "category": "EFN/Setup",
     "author": "Era Food and Nourishment",
     "license": "LGPL-3",

@@ -21,6 +21,8 @@
                             <field name="opt_edc"/>
                             <field name="opt_qris_manual"/>
                             <field name="opt_menu_taxes"/>
+                            <field name="opt_tables"/>
+                            <field name="table_count" invisible="not opt_tables"/>
                         </group>
                     </group>
                     <div class="alert alert-info" role="status" invisible="not summary">
