@@ -42,7 +42,11 @@ class TestEfnWithholding(AccountTestInvoicingCommon):
         )
         cls.data_b = cls.setup_other_company(name="PT PPh B")
         cls.pph23_b = cls._efn_tax(
-            "PPh 23 Uji B 2%", -2.0, "pph_23", "24-104-01", cls._efn_account("EFNPPH23B", cls.data_b["company"]),
+            "PPh 23 Uji B 2%",
+            -2.0,
+            "pph_23",
+            "24-104-01",
+            cls._efn_account("EFNPPH23B", cls.data_b["company"]),
             cls.data_b,
         )
         cls.accountant = new_test_user(
@@ -210,8 +214,9 @@ class TestEfnWithholding(AccountTestInvoicingCommon):
         from odoo.addons.efn_pii.tests.common import PiiKeyMixin  # noqa: PLC0415 (hanya bila efn_pii terpasang)
 
         PiiKeyMixin._pii_env(self)
+        # Vendor individu: ADR-036 §0.2 hanya melindungi partner individu; NPWP perusahaan tersimpan plaintext.
         vendor = self.env["res.partner"].create(
-            {"name": "CV Vendor NPWP Uji", "is_company": True, "vat": NPWP, "country_id": self.env.ref("base.id").id}
+            {"name": "Vendor NPWP Uji", "is_company": False, "vat": NPWP, "country_id": self.env.ref("base.id").id}
         )
         raw = PiiKeyMixin._raw_table(self, "res_partner", vendor.id, "vat")["vat"]
         self.assertTrue(raw)
