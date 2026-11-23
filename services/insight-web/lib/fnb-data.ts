@@ -7,7 +7,8 @@ import 'server-only';
 import { redirect } from 'next/navigation';
 import { requireSession } from './auth';
 import { esbCodesOf } from './claims';
-import { addDays, addYears, startOfMonthShift, wibYesterday } from './dates';
+import { addDays, startOfMonthShift, wibYesterday } from './dates';
+import { lyRange } from './yoy';
 import { fnbRouteDenial, FNB_DENIAL_PATH, FNB_ROUTES, type FnbPersona } from './fnb-personas';
 import { pickStoreDay, parseStoreBranches, type DailyRow } from './fnb-store';
 import { parseFilters, type RawParams } from './filters';
@@ -41,7 +42,8 @@ export async function fnbRangePage(persona: 'exec' | 'marketing', searchParams: 
   const raw = await searchParams;
   const { filters, prev, adjusted } = parseFilters(raw as RawParams, esbCodesOf(session.codes), new Date());
   const ctx: Ctx = { session, filters, prev };
-  const yoy = { from: addYears(filters.from, -1), to: addYears(filters.to, -1) };
+  // Pembanding = 364 hari sebelumnya (hari dalam minggu sama), sama dengan /yoy (lib/yoy.ts lyRange).
+  const yoy = lyRange(filters.from, filters.to);
   const extra: ParamBag = { yoy_from: yoy.from, yoy_to: yoy.to, m_from: startOfMonthShift(filters.to, -12) };
   return { ctx, adjusted, extra, yoy, q: <T>(name: QueryName, more: ParamBag = {}) => settle(run<T>(name, ctx, { ...extra, ...more })) };
 }

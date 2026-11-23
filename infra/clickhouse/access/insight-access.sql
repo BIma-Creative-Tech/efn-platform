@@ -61,6 +61,9 @@ GRANT SELECT ON efn_dwh.v_esb_movement_daily TO efn_insight_definer;
 GRANT SELECT ON efn_dwh.v_esb_coverage TO efn_insight_definer;
 -- G52 (init/21-g52-insight-fnb.sql, §28.15.8): tabel/view dasarnya (v_esb_movement_daily, dim_esb_branch) sudah di sini.
 GRANT SELECT ON efn_dwh.v_esb_store_receipt_daily TO efn_insight_definer;
+-- Insight YoY 24 Nov 2026 (init/23-insight-yoy.sql): tabel dasarnya sudah ada di daftar ini.
+GRANT SELECT ON efn_dwh.v_esb_sales_done_day TO efn_insight_definer;
+GRANT SELECT ON efn_dwh.v_esb_menu_econ_daily TO efn_insight_definer;
 GRANT SELECT ON efn_dwh.dim_esb_branch TO efn_insight_definer;
 GRANT SELECT ON efn_dwh.dim_esb_product TO efn_insight_definer;
 GRANT SELECT ON efn_dwh.dim_esb_menu TO efn_insight_definer;
@@ -157,6 +160,16 @@ CREATE OR REPLACE VIEW efn_insight.v_esb_store_receipt_daily DEFINER = efn_insig
 SELECT day, brand, company_code, branch_id, branch_name, origin_branch_id, origin_branch_name, origin_kind, item_group,
        category, product_code, product_name, uom, qty, lines
 FROM efn_dwh.v_esb_store_receipt_daily;
+-- Insight YoY 24 Nov 2026 (init/23-insight-yoy.sql): pasangan cabang-hari yang slice penjualannya selesai (pembanding
+-- sebanding) dan ekonomi menu per nama (berbayar / gratis / komponen paket / header paket).
+CREATE OR REPLACE VIEW efn_insight.v_esb_sales_done_day DEFINER = efn_insight_definer SQL SECURITY DEFINER AS
+SELECT brand, company_code, branch_id, day
+FROM efn_dwh.v_esb_sales_done_day;
+
+CREATE OR REPLACE VIEW efn_insight.v_esb_menu_econ_daily DEFINER = efn_insight_definer SQL SECURITY DEFINER AS
+SELECT sales_date, brand, company_code, branch_id, menu_name, menu_category, qty_paid, gross_paid, disc_paid, cogs_paid,
+       qty_free, cogs_free, qty_pkg, cogs_pkg, pkg_qty, pkg_gross, pkg_disc
+FROM efn_dwh.v_esb_menu_econ_daily;
 
 -- Grant wildcard: view baru di efn_insight otomatis terbaca -> clickhouse-init.sh MEMVERIFIKASI setiap view efn_insight
 -- punya row policy efn_insight_scope dan mencabut grant ini (fail closed) bila ada yang tidak.
