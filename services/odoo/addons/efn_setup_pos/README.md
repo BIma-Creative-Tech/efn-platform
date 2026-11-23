@@ -55,14 +55,16 @@ Kode jurnal kas (§3.1, `account.journal.code` maks 5, unik per company): brand 
 `IMDC1..IMDC9`, `IMDCA..IMDCZ`; brand ≥ 4 huruf/kosong = `blocked` (buat manual). Akun kas per outlet dibuat CE (prefix
 kas `l10n_id`) — default Q-G54-2 "per outlet"; satu akun bersama = keputusan Finance.
 
-**C-11 Denah meja (19.0.1.16.0, opsional, default mati).** POS hasil importer ESB dibuat tanpa `module_pos_restaurant`
-dan tanpa lantai, sehingga layar meja tidak muncul. Opsi *Denah meja* (apply) memberi POS yang belum punya meja satu
-lantai `Dine-in <POS>` berisi `table_count` meja placeholder (default 10, 2/4 kursi, grid 5 kolom), lalu menyalakan
-`module_pos_restaurant` + `default_screen = tables`. Lantai dibuat **sebelum** mode restoran dinyalakan agar CE
-`_setup_default_floor` tidak membuat lantai bernama company dengan 1 meja. POS yang sudah punya meja = `ok` (tidak
-diubah). Pilih hanya POS outlet makan di tempat (dapur/booth takeaway jangan disertakan). Denah nyata per outlet
-tetap Q-20: admin menyesuaikan lewat editor denah di POS. Peringatan cek **W-05**: company F&B dengan POS tanpa mode
-restoran/meja. Kasir perlu reload POS setelah apply.
+**C-11 Mode restoran (19.0.1.16.0, opsional, default mati).** POS hasil importer ESB dibuat tanpa
+`module_pos_restaurant`, sehingga layar meja tidak muncul. Opsi *Mode restoran* (apply) adalah sakelar massal standar
+yang setara dengan mencentang *Is a Bar/Restaurant* di Settings tiap POS terpilih: `module_pos_restaurant = True` +
+`iface_printbill = True` (CE mengisinya hanya saat create). Lantai default (nama company, 1 meja) dibuat oleh CE
+`_setup_default_floor`, dan `default_screen` sudah default `tables`. Wizard tidak membuat lantai atau meja sendiri.
+Denah nyata (Q-20) digambar admin lewat *Edit Plan* (lihat "Denah meja — langkah UI standar" di bawah). POS yang mode
+restorannya sudah aktif dilaporkan `ok`. Pilih hanya POS outlet makan di tempat. Peringatan cek **W-05**: company F&B
+dengan POS yang mode restorannya mati. Kasir perlu reload POS setelah apply. Fit-gap: `docs/agent-reports/efn-odoo-functional.md`
+(23 Nov 2026, table management). Lantai `Dine-in <POS>` dengan 10 meja placeholder yang di-backfill di efn-prod
+dibiarkan (record standar, bisa diedit lewat *Edit Plan*).
 
 **Data baru (noupdate, dibuat saat `-u` karena xmlid baru, tanpa migrasi):** EDC `pos_payment_method_edc_imd/_cup`;
 Poin EFN IMD/CUP (`account_points_liability_*`, `journal_points_*`, `pos_payment_method_points_*`, akun 21990091
@@ -226,9 +228,9 @@ Tidak dipakai: IoT box (`iface_print_via_proxy`, `proxy_ip`, `is_posbox`) — pe
 | # | Langkah / field | Nilai usulan | Keputusan |
 |---|---|---|---|
 | 1 | Company aktif PT F&B; buat `pos.config` lewat UI | 1 config per kasir/area | P-11 |
-| 2 | `module_pos_restaurant` | True | — |
-| 3 | `floor_ids`, `default_screen` | denah outlet; `tables` (dine-in dominan) / `register` (takeaway dominan) | Q-20 |
-| 4 | `iface_printbill`, `iface_splitbill` | True / True | Q-20 |
+| 2 | `module_pos_restaurant` (*Settings → Is a Bar/Restaurant*) | True. Saat dinyalakan, CE membuat lantai bernama company + 1 meja bila POS belum punya lantai. Tidak bisa diubah selama sesi terbuka. **Mematikannya melepas semua lantai dari POS** | — |
+| 3 | `floor_ids`, `default_screen` | denah outlet dibuat lewat *Edit Plan* di POS (langkah di bawah). `tables` (default CE; dine-in dominan) / `register` (takeaway dominan). Satu lantai **tidak** dipakai bersama oleh POS outlet lain | Q-20 |
+| 4 | `iface_printbill`, `iface_splitbill` | True / True. POS impor yang dinyalakan lewat write tidak otomatis mendapat `iface_printbill` (CE hanya mengisinya saat create) → centang manual | Q-20 |
 | 5 | `use_presets` = True, `default_preset_id`, `available_preset_ids` | **G19 W-14:** *Makan di tempat (F&B)* (default bila dine-in dominan) + *Bawa pulang (F&B)* untuk kota default; kota lain = sepasang preset kota (dine-in & bawa pulang). **Jangan** tawarkan preset bawaan *Dine In*/*Takeout* (tanpa fiscal position → mengikuti default config). Delivery hanya bila kasir menerima pesan-antar telepon (pakai fiscal position non-dine-in) | #15/#37, R-L09 |
 | 6 | `default_fiscal_position_id` | = fiscal position **dine-in** kota outlet (*F&B Dine-in* untuk kota default) agar order tanpa preset tetap kena SC | #15 |
 | 7 | `fiscal_position_ids` / `tax_regime_selection` | kosong / False (kasir tidak memilih pajak) | — |
@@ -249,6 +251,35 @@ Tidak dipakai: IoT box (`iface_print_via_proxy`, `proxy_ip`, `is_posbox`) — pe
 | 22 | Poin EFN | `efn_loyalty_redeem_enabled` False untuk kiosk (constraint) | Q-13 |
 | 23 | Perangkat | kasir + KDS + kiosk = peer WireGuard (B-a ≤ 3 perangkat, B-b > 3) | Q-W1 |
 | 24 | Uji pilot | dine-in 2 course + split + pindah meja; takeaway kota; printer mati → pesan ulang; offline 15 menit → sinkron; PB1/SC di struk & jurnal | PoC |
+
+### Denah meja — langkah UI standar (terverifikasi source CE 19.0, 2026-11-23)
+Fitur meja, gabung meja, split bill, dan open bill sepenuhnya standar `pos_restaurant`. Tidak ada modul `efn_*` untuk meja.
+
+1. **Nyalakan mode restoran** (user *Point of Sale: Administrator*, sesi POS tertutup): *Point of Sale → Configuration →
+   Settings* → pilih POS → *Is a Bar/Restaurant*. CE menambah lantai bernama company dengan 1 meja bila POS belum punya
+   lantai. Untuk banyak POS hasil impor, opsi C-11 wizard menyalakan sakelar yang sama sekaligus.
+2. Di Settings yang sama: *Floors & Tables Map* (lantai yang dilayani, tombol *Floors* → *Configuration → Floor Plans*),
+   *Early Receipt Printing* (`iface_printbill`), *Allow Bill Splitting* (`iface_splitbill`), *Default Screen*
+   (`tables`/`register`). Di POS kiosk opsi ini disembunyikan.
+3. **Gambar denah di POS** (cara utama): buka POS → layar meja → menu dropdown navbar POS → **Edit Plan** (hanya muncul di layar meja dan bila POS sudah
+   punya lantai). Di mode ini admin bisa
+   menambah lantai, menambah/duplikat/hapus meja, menyeret posisi, mengubah ukuran, mengganti nama/nomor meja, kursi,
+   bentuk, warna, warna latar lantai, dan gambar latar denah. Perubahan langsung tersimpan ke server.
+   - Dengan `pos_hr` aktif, menu *Edit Plan* hanya tampil bila karyawan yang login di POS adalah admin/manager
+     (`pos_hr_restaurant` navbar).
+   - Penyimpanan memakai hak user Odoo sesi POS: tulis `restaurant.floor`/`restaurant.table` hanya untuk
+     `point_of_sale.group_pos_manager` (POS User = baca saja). Jadi gambar denah dengan login user manajer outlet,
+     bukan user terminal kasir. Perilaku saat login karyawan manager di terminal ber-user POS User belum
+     terverifikasi (uji PoC).
+4. **Alternatif backend** (daftar/nomor/kursi, tanpa posisi visual kecuali mode developer): *Point of Sale →
+   Configuration → Floor Plans* (`pos_restaurant.action_restaurant_floor_form`).
+5. Meja tidak bisa dihapus bila dipakai sesi yang belum ditutup atau masih punya order draft. Lantai yang ditautkan ke POS
+   tidak bisa diubah tautannya selama sesi terbuka.
+6. Operasional kasir (standar): pilih meja → order menempel ke meja (open bill) → *Bill* (cetak sebelum bayar) → *Split* →
+   bayar. Pindah meja = *Transfer*. Gabung meja = seret satu meja ke meja lain di layar meja (`parent_id`; order anak
+   digabung ke induk), seret keluar untuk memisah. Jumlah tamu disimpan di `pos.order.customer_count`.
+   **Belum terverifikasi:** apakah gabung meja (menulis `restaurant.table.parent_id`) berhasil untuk user terminal yang
+   hanya POS User. Wajib diuji di PoC sebelum pilot.
 
 ### QR order meja & kiosk (F-49) — **jangan aktifkan `mobile` tanpa keputusan**
 `pos_self_order` mode `consultation`/`mobile` melayani pelanggan lewat route **publik Odoo** (`/pos-self/...`, `/pos-self-order/process-order/...`, `auth='public'`, token `pos.config.access_token` 16 heksa + `restaurant.table.identifier` 8 heksa, tanpa rate limit). Ponsel pelanggan harus menjangkau Odoo → **bertentangan dengan ADR-023/CLAUDE.md** (Odoo tidak diakses dari internet). Mode **kiosk** di jaringan POS (peer WireGuard) aman dipakai. QR dari ponsel pelanggan = keputusan klien + ADR baru (opsi di `docs/08 §7.4`).
