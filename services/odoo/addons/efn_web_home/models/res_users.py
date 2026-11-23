@@ -103,9 +103,7 @@ class ResUsers(models.Model):
 
         # sudo hanya untuk membaca id/nama/tipe action yang dipasang admin di record user INI (ACL ir.actions.actions
         # bisa terbatas); membuka action tetap lewat /web/action/load dengan hak user.
-        pinned = [
-            {"id": act.id, "name": act.name, "type": act.type} for act in user.sudo().efn_home_pinned_action_ids
-        ]
+        pinned = [{"id": act.id, "name": act.name, "type": act.type} for act in user.sudo().efn_home_pinned_action_ids]
 
         activities = []
         # mail.activity._search memfilter aktivitas yang dokumennya tidak terbaca di PT aktif (record rule).
@@ -159,11 +157,7 @@ class ResUsers(models.Model):
                 continue
             entries.append(menu)
 
-        modules = {
-            (m.get("xmlid") or "").split(".")[0]
-            for m in entries
-            if m["id"] not in root_map and m.get("xmlid")
-        }
+        modules = {(m.get("xmlid") or "").split(".")[0] for m in entries if m["id"] not in root_map and m.get("xmlid")}
         categories = self._efn_home_module_categories(modules - set(MODULE_GROUPS))
 
         apps = []

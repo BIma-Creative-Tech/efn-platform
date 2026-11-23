@@ -111,9 +111,7 @@ class AccountPayment(models.Model):
             watched = self.filtered(lambda p: p.efn_approval_state in ("to_approve", "approved"))
             before = {payment.id: {fname: payment[fname] for fname in content} for payment in watched}
         res = super().write(vals)
-        changed = watched.filtered(
-            lambda p: any(p[fname] != value for fname, value in before[p.id].items())
-        )
+        changed = watched.filtered(lambda p: any(p[fname] != value for fname, value in before[p.id].items()))
         if changed:
             changed._efn_system_write(APPROVAL_RESET)
             for payment in changed:
@@ -127,9 +125,7 @@ class AccountPayment(models.Model):
         self.ensure_one()
         company = self.company_id
         transfer = company.transfer_account_id
-        return bool(
-            transfer and self.partner_id == company.partner_id and self.destination_account_id == transfer
-        )
+        return bool(transfer and self.partner_id == company.partner_id and self.destination_account_id == transfer)
 
     def _efn_needs_approval(self):
         self.ensure_one()

@@ -37,7 +37,9 @@ class EfnAccountAssetDepreciationLine(models.Model):
         self.asset_id._efn_check_manager()
         for line in self:
             if not line.posted:
-                raise UserError(_("Baris penyusutan #%(seq)s belum diposting; tidak ada yang dibalik.", seq=line.sequence))
+                raise UserError(
+                    _("Baris penyusutan #%(seq)s belum diposting; tidak ada yang dibalik.", seq=line.sequence)
+                )
             move = line.move_id
             if move and move.state == "posted":
                 siblings = self.search_count(

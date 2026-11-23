@@ -146,7 +146,7 @@ class EfnAccountAssetPartialDisposalWizard(models.TransientModel):
         if surplus > 0 and (not self.surplus_account_id or not self.retained_earnings_account_id):
             raise UserError(
                 _(
-                    "Unit yang dilepas membawa surplus revaluasi %(amount)s: akun surplus dan laba ditahan wajib diisi.",
+                    "Unit yang dilepas membawa surplus revaluasi %(amount)s: akun surplus dan laba ditahan wajib diisi.",  # noqa: E501 - string terjemahan utuh
                     amount=surplus,
                 )
             )
@@ -168,7 +168,9 @@ class EfnAccountAssetPartialDisposalWizard(models.TransientModel):
             add(self.receivable_account_id, self.proceeds, 0.0, _("Hasil pelepasan sebagian"))
         if gain_loss < 0:
             add(self.loss_account_id, abs(gain_loss), 0.0, _("Rugi pelepasan sebagian"))
-        add(asset.asset_account_id, 0.0, split["cost"], _("Pelepasan nilai perolehan (%(qty)s unit)", qty=self.quantity))
+        add(
+            asset.asset_account_id, 0.0, split["cost"], _("Pelepasan nilai perolehan (%(qty)s unit)", qty=self.quantity)
+        )
         if gain_loss > 0:
             add(self.gain_account_id, 0.0, gain_loss, _("Laba pelepasan sebagian"))
         if surplus > 0:

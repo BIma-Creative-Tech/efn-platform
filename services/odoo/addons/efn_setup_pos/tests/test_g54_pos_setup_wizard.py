@@ -81,9 +81,11 @@ class TestG54PosSetupWizard(TransactionCase):
             )
         )
 
-    def _wizard(self, company, configs, mode="check", user=None):
+    def _wizard(self, company, configs, mode="check", user=None, **vals):
         Wizard = self.env["efn.pos.setup.wizard"].with_user(user or self.manager).with_company(company)
-        wizard = Wizard.create({"company_id": company.id, "config_ids": [Command.set(configs.ids)], "mode": mode})
+        wizard = Wizard.create(
+            {"company_id": company.id, "config_ids": [Command.set(configs.ids)], "mode": mode, **vals}
+        )
         wizard.action_run()
         return wizard
 
@@ -101,9 +103,11 @@ class TestG54PosSetupWizard(TransactionCase):
 
     def _lines(self, wizard, config, code=None, status=None):
         return wizard.line_ids.filtered(
-            lambda line: line.config_id == config
-            and (code is None or line.code == code)
-            and (status is None or line.status == status)
+            lambda line: (
+                line.config_id == config
+                and (code is None or line.code == code)
+                and (status is None or line.status == status)
+            )
         )
 
     # ------------------------------------------------------------------------------------------------ test
@@ -211,3 +215,31 @@ class TestG54PosSetupWizard(TransactionCase):
         wizard = self._wizard(self.imd, config, "apply")
         self.assertFalse(config.payment_method_ids, "metode bayar tidak boleh diubah selama sesi terbuka")
         self.assertTrue(self._lines(wizard, config, "P15", "warning"))
+
+    def test_restaurant_option_uses_standard_floor(self):
+        config = self._config(self.imd, "G54 Outlet Meja")
+        untouched = self._config(self.imd, "G54 Outlet Takeaway")
+        Floor = self.env["restaurant.floor"]
+        floors_before = Floor.search_count([])
+        wizard = self._wizard(self.imd, config | untouched, "check")
+        self.assertTrue(self._lines(wizard, config, "W-05", "warning"), "POS F&B tanpa mode restoran = W-05")
+        self.assertEqual(Floor.search_count([]), floors_before, "mode check tidak membuat lantai")
+
+        self._wizard(self.imd, untouched, "apply")
+        self.assertFalse(untouched.module_pos_restaurant, "opsi mode restoran default mati")
+        self.assertFalse(untouched.floor_ids)
+
+        wizard = self._wizard(self.imd, config, "apply", opt_tables=True)
+        self.assertTrue(self._lines(wizard, config, "C-11", "fixed"))
+        self.assertFalse(self._lines(wizard, config, "W-05"))
+        self.assertTrue(config.module_pos_restaurant)
+        self.assertTrue(config.iface_printbill)
+        self.assertTrue(config.iface_splitbill, "split bill dipakai (keputusan 23 Nov 2026)")
+        self.assertEqual(config.default_screen, "tables")
+        self.assertEqual(len(config.floor_ids), 1, "lantai default CE (_setup_default_floor)")
+        self.assertEqual(config.floor_ids.name, self.imd.name)
+        self.assertEqual(len(config.floor_ids.table_ids), 1)
+
+        wizard = self._wizard(self.imd, config, "apply", opt_tables=True)
+        self.assertTrue(self._lines(wizard, config, "C-11", "ok"))
+        self.assertEqual(len(config.floor_ids), 1, "apply ulang tidak menambah lantai")

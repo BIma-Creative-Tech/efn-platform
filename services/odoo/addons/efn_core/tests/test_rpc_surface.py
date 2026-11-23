@@ -568,7 +568,10 @@ RPC_ALLOWLIST = {
     ("efn.account.asset", "action_view_partial_disposals"): "G57: check_access('read'), act_window saja",
     ("efn.account.asset", "action_view_merged_assets"): "G57: check_access('read'), act_window saja",
     ("efn.account.asset", "action_view_revaluations"): "G57: check_access('read'), act_window saja",
-    ("efn.account.asset.group", "action_efn_reseed"): "efn_check_asset_manager (seed hanya PT env.companies ber-CoA id)",
+    (
+        "efn.account.asset.group",
+        "action_efn_reseed",
+    ): "efn_check_asset_manager (seed hanya PT env.companies ber-CoA id)",
     ("efn.account.asset.depreciation.line", "action_post_now"): "asset_id._efn_check_manager",
     ("efn.account.asset.depreciation.line", "action_reverse"): "asset_id._efn_check_manager",
     ("efn.account.asset.disposal.wizard", "action_dispose"): "asset_id._efn_check_manager",
@@ -632,6 +635,9 @@ RPC_ALLOWLIST = {
     ("account.payment", "action_efn_reject"): "_efn_check_approver (Accounting Manager + 4-eyes + company)",
     ("efn.outlet.analytic.wizard", "action_check"): "_efn_check_access (Accounting Manager + company)",
     ("efn.outlet.analytic.wizard", "action_apply"): "_efn_check_access (Accounting Manager + company)",
+    # efn_setup_pos: override CE gabung meja; sudo hanya parent_id bila POS User + config_id milik company user
+    # bersesi opened + meja di lantai config itu (SECURITY_REVIEW_2026-11-23_pos-table-merge SEC-01/02).
+    ("restaurant.table", "set_parent_id"): "_efn_cashier_may_link (override CE, sudo hanya parent_id)",
 }
 
 MODEL_BASES = {"Model", "AbstractModel", "TransientModel"}

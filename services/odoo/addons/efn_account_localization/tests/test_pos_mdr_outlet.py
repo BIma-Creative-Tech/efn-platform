@@ -240,7 +240,9 @@ class TestEfnPosMdrOutlet(TestPoSCommon):
         check = self._wizard()
         check.action_check()
         self.assertFalse(self.warehouse.efn_analytic_account_id, "cek tidak menulis")
-        self.assertIn("create", check.line_ids.filtered(lambda line: line.warehouse_id == self.warehouse).mapped("status"))
+        self.assertIn(
+            "create", check.line_ids.filtered(lambda line: line.warehouse_id == self.warehouse).mapped("status")
+        )
         Account = self.env["account.analytic.account"]
         before = Account.search_count([("plan_id", "=", self.plan.id)])
         self._wizard().action_apply()

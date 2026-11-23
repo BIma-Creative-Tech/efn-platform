@@ -27,7 +27,9 @@ class EfnAccountAssetPartialDisposal(models.Model):
     quantity_after = fields.Float(string="Unit Sesudah", readonly=True, digits="Product Unit of Measure")
     cost_removed = fields.Monetary(string="Nilai Dikeluarkan", currency_field="currency_id", readonly=True)
     accumulated_removed = fields.Monetary(string="Akumulasi Dikeluarkan", currency_field="currency_id", readonly=True)
-    net_book_value_removed = fields.Monetary(string="Nilai Buku Dikeluarkan", currency_field="currency_id", readonly=True)
+    net_book_value_removed = fields.Monetary(
+        string="Nilai Buku Dikeluarkan", currency_field="currency_id", readonly=True
+    )
     proceeds = fields.Monetary(string="Hasil", currency_field="currency_id", readonly=True)
     gain_loss = fields.Monetary(string="Laba / (Rugi)", currency_field="currency_id", readonly=True)
     move_id = fields.Many2one("account.move", string="Jurnal", readonly=True, copy=False)

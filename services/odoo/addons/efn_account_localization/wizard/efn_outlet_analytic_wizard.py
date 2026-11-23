@@ -97,7 +97,11 @@ class EfnOutletAnalyticWizard(models.TransientModel):
         Account = self.env["account.analytic.account"].sudo()
         if not warehouse.code:
             return Account
-        domain = [("plan_id", "=", plan.id), ("company_id", "=", warehouse.company_id.id), ("code", "=", warehouse.code)]
+        domain = [
+            ("plan_id", "=", plan.id),
+            ("company_id", "=", warehouse.company_id.id),
+            ("code", "=", warehouse.code),
+        ]
         return Account.search(domain, limit=1)
 
     def _efn_preview(self, warehouse):

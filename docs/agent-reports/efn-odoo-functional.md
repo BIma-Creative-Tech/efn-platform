@@ -1325,3 +1325,91 @@ di README modul.
 - Apakah POS 19 menampilkan kategori tanpa produk di POS brand lain.
 - Kategori dari skrip brand-catalog di DB nyata (nama sama hanya menjadi duplikat label).
 - Runbook `docs/runbooks/demo-supermarket-seed.md` belum menyebut tahap 15.
+
+## 23 Nov 2026 — Fit-gap table management POS F&B (`pos_restaurant`), PR #155 C-11
+
+Worktree `efn-platform-postable`, branch `fix/pos-table-management`. Pemicu: layar meja tidak muncul di POS PB karena
+`pos_config_plan` (`efn_legacy_history/esb_import/mapping.py:245`) hanya mengisi name/company/picking_type/
+payment_method_ids/active. Pertanyaan pemilik proyek: kenapa tidak memakai fitur meja bawaan Odoo?
+
+### Jawaban singkat
+Yang dipakai **sudah** fitur meja bawaan CE 19. C-11 tidak menambah model, field, atau layar. Ia membuat record
+standar `restaurant.floor`/`restaurant.table` lalu menyalakan `module_pos_restaurant`. Satu-satunya bagian custom
+adalah pembuat 10 meja placeholder (grid). Bagian itu bukan gap CE: CE sudah membuat lantai default, dan denah nyata
+memang harus digambar admin di editor POS (Q-20).
+
+### Fit-gap (V = terverifikasi source odoo/odoo 19.0 hari ini; B = belum terverifikasi)
+| Kebutuhan | Standar CE 19 | Status |
+|---|---|---|
+| Sakelar mode restoran | `pos.config.module_pos_restaurant` "Is a Bar/Restaurant" (`point_of_sale/models/pos_config.py` ±163), di Settings sebagai `pos_module_pos_restaurant` related (`point_of_sale/models/res_config_settings.py` ±53) | V |
+| Efek saat dinyalakan | `pos_restaurant/models/pos_config.py` `write` ±41–51 → `_setup_default_floor` ±53–67: bila POS belum punya lantai, buat lantai bernama `company_id.name` + 1 meja (no 1, 1 kursi, 130×130). `create` ±22–39: untuk config restoran juga set `iface_printbill=True` dan mematikan gambar produk/kategori, lalu `_setup_default_floor`. `write` **tidak** mengisi `iface_printbill` | V |
+| Efek saat dimatikan | `write` mengirim `floor_ids = [(5,)]` (lantai lepas dari POS, record tetap) dan mematikan `set_tip_after_payment` | V |
+| Kunci sesi | `module_pos_restaurant` ada di `_get_forbidden_change_fields` (`point_of_sale` ±754), `floor_ids` ditambah `pos_restaurant` (±17) → tidak bisa diubah saat sesi terbuka. `restaurant.floor.write` menolak ubah `pos_config_ids`/`active` bila sesi terbuka | V |
+| `default_screen` | Selection `tables`/`register`, **default `tables`** (`pos_restaurant/models/pos_config.py` ±15) | V |
+| Settings | `pos_restaurant/views/res_config_settings_views.xml`: *Floors & Tables Map* (`pos_floor_ids`, readonly saat sesi aktif, tombol *Floors*), *Early Receipt Printing*, *Allow Bill Splitting*, *Add tip after payment*, *Default Screen*; semua tersembunyi untuk kiosk / bila mode restoran mati | V |
+| Backend denah | Menu `menu_restaurant_floor_all` di *Configuration* (`point_of_sale.menu_point_config_product`, seq 10, grup `group_pos_user`), action `action_restaurant_floor_form` "Floor Plans"; form lantai berisi daftar meja (nomor, kursi, bentuk, ukuran, warna); posisi/bentuk di form meja hanya mode developer (`base.group_no_one`) | V |
+| Editor denah di POS | Navbar *Edit Plan* (`pos_restaurant/static/src/app/components/navbar/navbar.xml`) tampil di FloorScreen bila POS punya lantai; `showEditPlanButton` = true. Dengan `pos_hr`: `module_pos_restaurant && (!module_pos_hr \|\| employeeIsAdmin)` (`pos_hr_restaurant/.../navbar.js`, auto_install) | V |
+| Fungsi editor | `floor_screen.js`: `addFloor`, `createTable`, `duplicateTable/Floor`, `renameTable/Floor`, `changeSeatsNum`, `changeShape`, `setTableColor`, `setFloorColor`, `deleteTable/Floor`, `uploadImage` (gambar latar), drag & resize (grid 10 px). Simpan lewat `pos.data.create/write` langsung ke `restaurant.floor/table` | V |
+| Hak simpan denah | `pos_restaurant/security/ir.model.access.csv`: floor & table = baca untuk `group_pos_user`, CRUD untuk `group_pos_manager`; method model tanpa `sudo` | V |
+| Gabung/pisah meja | Seret meja ke meja lain → `mergeTableOrders` + `set_parent_id`; seret keluar → `unMergeTable` (`floor_screen.js`); siklus dicegah di `restaurant.table.set_parent_id` | V |
+| Pindah meja, split bill, open bill, jumlah tamu, course | Sudah diverifikasi 2026-10-07 (README `efn_setup_pos` "SOP restoran"); tidak diulang hari ini | V (07 Okt) |
+| Status meja | Hitungan perubahan belum terkirim per meja/lantai (`getChangeCount`, `getFloorChangeCount`); warna meja = atribut desain (`color`), bukan status | V |
+| Self-order per meja | `pos_self_order`: QR per meja hanya bila `self_ordering_mode='mobile'` + mode restoran + `service_mode='table'` (`_get_qr_code_data`); `identifier` per meja. Mode `mobile` **dikunci** SEC-75/ADR-032 → tidak relevan untuk pilot | V |
+| Gabung meja oleh user terminal POS User | `set_parent_id`/`write parent_id` memakai hak user; ACL POS User baca saja | **B** — bisa jadi AccessError; uji PoC |
+| Bulk enable untuk 27 POS impor | Tidak ada aksi massal standar; Settings per POS. Multi-edit list `pos.config` | **B** (tidak dicek) |
+
+### Penilaian C-11
+- Custom yang **perlu**: hanya mekanisme massal untuk POS impor (27+ POS, diulang di tiap DB baru efn-dev/stg/prod).
+  Itu sejenis C-01..C-10 (wizard yang mengisi field standar), bukan logika fitur.
+- Custom yang **tidak perlu**: membuat lantai `Dine-in <POS>` dan 10 meja placeholder sebelum menyalakan sakelar,
+  `table_count`, dan menulis `default_screen` (sudah default `tables`). Jumlah dan tata letak meja adalah keputusan
+  outlet (Q-20). Angka 10 adalah tebakan, dan kasir bisa memakai nomor meja yang tidak ada di outlet.
+- Migrasi ulang aman: `pos_config_plan` tidak menyentuh `module_pos_restaurant` maupun lantai. Hanya `name` yang
+  dimiliki importer, field lain `create_only`. Jadi impor ulang ke DB yang sama tidak menimpa mode restoran atau denah. Di DB baru, wizard
+  memang dijalankan ulang (metode bayar dsb.), jadi sakelar massal di wizard yang sama cukup.
+
+### Rekomendasi: (b) dengan sakelar massal tipis
+Untuk efn-lead / efn-odoo-engineer (PR #155):
+1. `_efn_fix_tables`: hapus pembuatan lantai/meja. Cukup `config.write({"module_pos_restaurant": True})` untuk POS
+   terpilih yang mode restorannya mati. Opsional: ikut set `iface_printbill = True` agar sama dengan perilaku `create` CE.
+   Jangan menulis `default_screen`. Pesan `fixed`: "Mode restoran aktif (lantai default CE). Atur denah lewat Edit Plan."
+2. Hapus field `table_count`, konstanta `DEFAULT_TABLE_COUNT`/`MAX_TABLE_COUNT`/`TABLES_PER_ROW`, validasi ±129, dan
+   field di view. Ganti label `opt_tables` jadi "Nyalakan mode restoran (Is a Bar/Restaurant)".
+3. Status `ok` = `module_pos_restaurant` aktif (CE menjamin lantai). W-05 = company F&B dan mode restoran mati.
+   Opsional: tambahkan info (bukan warning) bila POS hanya punya 1 meja, artinya denah default CE belum diatur.
+4. Sesuaikan `tests/test_g54_pos_setup_wizard.py::test_tables_option_enables_floor_plan`: setelah apply ada tepat 1
+   lantai bernama company dengan 1 meja (perilaku CE). Apply ulang tidak menambah lantai.
+5. Tidak perlu modul data-only baru: `pos.config` hasil impor tidak punya xmlid, dan lantai per outlet adalah data
+   operasional, bukan konfigurasi.
+6. Alternatif tanpa kode (bila lead ingin nol Python): hapus C-11, pertahankan W-05 yang menunjuk ke langkah Settings.
+   Biayanya 27 klik Settings per DB. Saya tidak merekomendasikan ini karena DB diulang di beberapa env.
+
+### Data backfill efn-prod (27 lantai × 10 meja PB)
+**Biarkan.** Itu record standar `restaurant.floor/table`, bisa diedit penuh lewat *Edit Plan*, dan tidak berbeda
+fungsinya dari lantai default CE. Mengganti ke 1 meja hanya menambah kerja. Syarat: sebelum go-live outlet, admin
+menyesuaikan denah ke kondisi nyata (Q-20). Hapus meja yang tidak ada di outlet saat sesi tertutup dan tanpa order
+draft. Jangan mematikan `module_pos_restaurant` untuk "reset", karena tautan lantai akan dilepas.
+
+### Langkah UI standar admin outlet
+Ada di README `efn_setup_pos` bagian "Denah meja — langkah UI standar". Ringkasnya: Settings → *Is a Bar/Restaurant*
+→ *Early Receipt Printing* / *Bill Splitting* / *Default Screen*. Lalu login POS sebagai user **POS Administrator**
+(dengan `pos_hr`, juga karyawan manager) → layar meja → *Edit Plan* → gambar lantai/meja. Alternatif backend:
+*Configuration → Floor Plans*.
+
+### Pertanyaan untuk pemilik proyek
+1. **Q-20 denah nyata per outlet PB:** jumlah lantai/area (indoor/outdoor/smoking), nomor dan kursi per meja. Default:
+   admin outlet menggambar sendiri di *Edit Plan* saat persiapan go-live. Placeholder 10 meja hanya sementara.
+2. Dari 27 POS café PB, mana yang benar-benar dine-in, dan mana yang takeaway (`default_screen = register`)? Default:
+   semua `tables`, kecuali outlet yang dikonfirmasi takeaway.
+3. Bila satu outlet punya lebih dari satu kasir/POS, apakah semua kasir melayani lantai yang sama? Default: ya, lantai
+   outlet ditautkan ke semua POS outlet itu (`floor_ids` many2many), tidak dibagi lintas outlet.
+4. Siapa yang menggambar denah: manajer outlet (perlu user POS Administrator) atau tim pusat? Default: tim pusat
+   (POS Administrator) bersama manajer outlet, karena user terminal kasir hanya POS User.
+5. Apakah gabung meja dan split bill dipakai di PB? (Menentukan uji PoC hak POS User pada gabung meja.)
+
+### Belum terverifikasi
+- Gabung meja dan simpan denah dari terminal ber-user POS User, termasuk saat karyawan manager login via PIN `pos_hr`
+  (ACL menunjukkan tulis hanya untuk POS Manager; perlu uji runtime).
+- Posisi persis menu *Edit Plan* di UI (hanya diverifikasi dari template navbar).
+- Multi-edit `pos.config` di list view sebagai alternatif massal.
+- Tidak ada test/instalasi yang dijalankan dalam tugas ini (dokumen saja).
