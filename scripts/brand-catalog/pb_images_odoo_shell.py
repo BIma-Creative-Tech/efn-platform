@@ -1,28 +1,28 @@
 # ruff: noqa: F821
 # Odoo shell: pasang foto situs resmi Paris Baguette (hasil scrape_parisbaguette.py, data/brand-catalog/parisbaguette)
 # ke product.template.image_1920 produk PB yang terpublikasi di kanal online PB (menu hasil migrasi ESB).
-# HANYA environment lokal efn-prod gladi. Izin pemakaian brand: konfirmasi tim Erajaya 20 Okt 2026 (README brand-catalog).
+# HANYA environment lokal efn-prod gladi. Izin pemakaian brand: konfirmasi tim Erajaya 20 Okt 2026 (README).
+# Sumber foto: situs resmi parisbaguette.co.id.
 #
 # Pencocokan nama setelah normalisasi (huruf kapital, "&" -> "AND", tanda baca dibuang, spasi dirapikan):
 #   1) sama persis; 2) nama ESB = nama situs + penanda kanal/isi saja (SUFFIX_RE), mis. "TRUFFLE MUSHROOM SOUP (OC)"
 #   -> "Truffle Mushroom Soup" (prefiks terpanjang menang). Tidak ada pencocokan fuzzy: lebih baik tanpa foto daripada
 #   foto produk lain.
-# Idempoten: foto yang sudah sama (checksum) dilewati; foto lain yang sudah ada di Odoo (dipasang manual) dipertahankan
-# kecuali EFN_PB_IMG_FORCE=1. Master produk lain (nama, harga, deskripsi) tidak diubah.
+# Idempoten: foto yang sudah sama (byte identik) dilewati; foto lain yang sudah ada di Odoo (dipasang manual)
+# dipertahankan kecuali EFN_PB_IMG_FORCE=1. Master produk lain (nama, harga, deskripsi) tidak diubah.
 # Pakai:
 #   docker cp data/brand-catalog/parisbaguette efn-prod-odoo-1:/tmp/pbimg
 #   MSYS_NO_PATHCONV=1 docker exec -i -e EFN_PB_IMG_DRY_RUN=1 efn-prod-odoo-1 \
 #     odoo shell -c /etc/odoo/odoo.conf -d efn_odoo --no-http < scripts/brand-catalog/pb_images_odoo_shell.py
 #   (ulangi tanpa EFN_PB_IMG_DRY_RUN untuk menyimpan)
 import base64
-import hashlib
 import json
 import os
 import re
 import unicodedata
 from pathlib import Path
 
-root = Path(os.environ.get("EFN_PB_IMG_DIR", "/tmp/pbimg"))
+root = Path(os.environ.get("EFN_PB_IMG_DIR", "/tmp/pbimg"))  # noqa: S108 - path di dalam container Odoo
 force = os.environ.get("EFN_PB_IMG_FORCE") == "1"
 dry = os.environ.get("EFN_PB_IMG_DRY_RUN") == "1"
 
@@ -63,7 +63,7 @@ for t in T.search([("efn_online_channel_ids", "in", channel.ids)], order="name")
         continue
     used.add(base)
     data = (root / site[base]["image_file"]).read_bytes()
-    if t.image_1920 and hashlib.sha1(base64.b64decode(t.image_1920)).hexdigest() == hashlib.sha1(data).hexdigest():
+    if t.image_1920 and base64.b64decode(t.image_1920) == data:
         same += 1
         continue
     if t.image_1920 and not force:
