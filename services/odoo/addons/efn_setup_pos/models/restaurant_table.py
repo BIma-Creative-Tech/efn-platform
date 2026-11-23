@@ -1,0 +1,43 @@
+"""Gabung/pisah meja oleh kasir POS User (keputusan pemilik proyek 23 Nov 2026; fit-gap efn-odoo-functional).
+
+Gap CE 19: ``pos_restaurant/security/ir.model.access.csv`` memberi ``restaurant.table`` baca saja ke
+``point_of_sale.group_pos_user``, tetapi layar meja menulis ``parent_id`` dengan hak user sesi:
+``set_parent_id`` (seret meja ke meja = gabung, ``floor_screen.js``), ``write({'parent_id': False})`` (pisah meja,
+``floor_screen.js``; setelah bayar, ``order_payment_validation.js``). Akibatnya kasir mendapat AccessError.
+
+Elevasi sempit: hanya field ``parent_id``, hanya oleh POS User, hanya untuk meja (dan meja induk) di lantai milik POS
+company user yang sesinya sedang terbuka. Perubahan lain (posisi, kursi, denah) tetap butuh POS Manager.
+"""
+
+from odoo import models
+
+
+class RestaurantTable(models.Model):
+    _inherit = "restaurant.table"
+
+    def _efn_cashier_may_link(self, parent=None):
+        env = self.env
+        if env.su or env.user.has_group("point_of_sale.group_pos_manager"):
+            return False  # hak standar sudah cukup / tidak perlu elevasi
+        if not env.user.has_group("point_of_sale.group_pos_user"):
+            return False
+        tables = (self | parent).sudo() if parent else self.sudo()
+        configs = tables.floor_id.pos_config_ids.filtered(
+            lambda c: c.company_id in env.user.company_ids and c.module_pos_restaurant
+        )
+        open_configs = (
+            env["pos.session"].sudo().search([("config_id", "in", configs.ids), ("state", "!=", "closed")]).config_id
+        )
+        # setiap meja (termasuk induk) harus berada di lantai POS bersesi terbuka
+        return bool(tables) and all(t.floor_id.pos_config_ids & open_configs for t in tables)
+
+    def set_parent_id(self, parent_id, config_id):
+        parent = self.browse(parent_id).exists()
+        if self._efn_cashier_may_link(parent):
+            return super(RestaurantTable, self.sudo()).set_parent_id(parent_id, config_id)
+        return super().set_parent_id(parent_id, config_id)
+
+    def write(self, vals):
+        if set(vals) == {"parent_id"} and not vals["parent_id"] and self._efn_cashier_may_link():
+            return super(RestaurantTable, self.sudo()).write(vals)
+        return super().write(vals)

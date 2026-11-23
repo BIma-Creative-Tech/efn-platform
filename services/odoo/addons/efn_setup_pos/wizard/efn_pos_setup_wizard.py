@@ -4,7 +4,8 @@ Masalah: ``pos.config`` hasil importer ESB (``efn_legacy_history``, ``payment_me
 ("Open Register" ditolak ``_check_payment_method_ids``). Wizard ini mengotomasi langkah UI standar CE 19, tanpa model
 akuntansi/POS baru:
 
-- mode ``check``: laporan kesiapan P01..P19 per config + peringatan W-xx; TIDAK menulis apa pun selain baris hasil wizard
+- mode ``check``: laporan kesiapan P01..P19 per config + peringatan W-xx; TIDAK menulis apa pun selain baris hasil
+  wizard
   (cek CE dipanggil langsung, tanpa savepoint karena tidak ada yang ditulis);
 - mode ``apply``: langkah C-01..C-09 (cari dulu, baru buat -> idempoten), lalu cek ulang (C-10). Setiap config diproses
   dalam savepoint sendiri; gagal = baris ``blocked``, config lain lanjut.
@@ -198,7 +199,11 @@ class EfnPosSetupWizard(models.TransientModel):
         return chart.ref(xmlid, raise_if_not_found=False)
 
     def _efn_xmlid_methods(self, company, prefix):
-        domain = [("module", "=", "efn_setup_pos"), ("model", "=", "pos.payment.method"), ("name", "=like", prefix + "%")]
+        domain = [
+            ("module", "=", "efn_setup_pos"),
+            ("model", "=", "pos.payment.method"),
+            ("name", "=like", prefix + "%"),
+        ]
         data = self.env["ir.model.data"].sudo().search(domain)
         methods = self._efn_env(company)["pos.payment.method"].browse(data.mapped("res_id")).exists()
         return methods.filtered(lambda m: m.active and m.company_id == company)
@@ -273,14 +278,18 @@ class EfnPosSetupWizard(models.TransientModel):
             | configs.with_env(company.env).payment_method_ids
         )
         methods = methods.filtered(
-            lambda m: m.company_id == company
-            and m.journal_id.type == "bank"
-            and not m.efn_is_loyalty_points
-            and not m.outstanding_account_id
+            lambda m: (
+                m.company_id == company
+                and m.journal_id.type == "bank"
+                and not m.efn_is_loyalty_points
+                and not m.outstanding_account_id
+            )
         )
         if not methods:
             return "ok", _("Metode bank (EDC/QRIS) sudah punya akun outstanding.")
-        account = self._efn_chart_ref(company, "account_journal_payment_debit_account_id") or company.transfer_account_id
+        account = (
+            self._efn_chart_ref(company, "account_journal_payment_debit_account_id") or company.transfer_account_id
+        )
         if not account:
             return "blocked", _("Tidak ada akun outstanding/transfer di CoA company; isi manual di metode bayar.")
         busy = methods.filtered("open_session_ids")
@@ -299,7 +308,9 @@ class EfnPosSetupWizard(models.TransientModel):
             return "ok", _("Semua produk menu POS company sudah berpajak penjualan.")
         tax = company.account_sale_tax_id
         if not tax:
-            message = _("%s produk menu tanpa pajak, tetapi company tidak punya pajak penjualan default.", len(products))
+            message = _(
+                "%s produk menu tanpa pajak, tetapi company tidak punya pajak penjualan default.", len(products)
+            )
             return "warning", message
         products.write({"taxes_id": [Command.link(tax.id)]})
         return "fixed", _("%(count)s produk menu diberi pajak default %(tax)s.", count=len(products), tax=tax.name)
@@ -344,7 +355,9 @@ class EfnPosSetupWizard(models.TransientModel):
             if invoice:
                 vals["invoice_journal_id"] = invoice.id
             else:
-                lines.append(self._line(config, "C-02", "blocked", _("Company tidak punya jurnal penjualan (invoice).")))
+                lines.append(
+                    self._line(config, "C-02", "blocked", _("Company tidak punya jurnal penjualan (invoice)."))
+                )
         if vals:
             config.write(vals)
             lines.append(self._line(config, "C-02", "fixed", _("Jurnal diisi: %s", ", ".join(vals))))
@@ -380,7 +393,9 @@ class EfnPosSetupWizard(models.TransientModel):
         domain = [("type", "=", "cash"), ("company_id", "=", company.id), ("name", "=", name)]
         journal = Journal.search(domain + [("pos_payment_method_ids", "=", False)], limit=1)
         if not journal:
-            taken = set(Journal.with_context(active_test=False).search([("company_id", "=", company.id)]).mapped("code"))
+            taken = set(
+                Journal.with_context(active_test=False).search([("company_id", "=", company.id)]).mapped("code")
+            )
             code = cash_journal_code(company.efn_brand_code, taken)
             if not code:
                 return [
@@ -388,7 +403,9 @@ class EfnPosSetupWizard(models.TransientModel):
                         config,
                         "C-04",
                         "blocked",
-                        _("Kode jurnal kas tidak bisa dibuat otomatis (kode brand kosong/>= 4 huruf/habis): buat manual."),
+                        _(
+                            "Kode jurnal kas tidak bisa dibuat otomatis (kode brand kosong/>= 4 huruf/habis): buat manual."  # noqa: E501 - string terjemahan utuh
+                        ),
                     )
                 ]
             # default_account_id TIDAK diisi: CE membuat akun kas per jurnal (prefix cash l10n_id) dan mengisi
@@ -431,15 +448,18 @@ class EfnPosSetupWizard(models.TransientModel):
             return [self._line(config, "C-08", "ok", _("Poin EFN sudah ditautkan."))]
         if config._efn_setup_link_points_method():
             return [self._line(config, "C-08", "fixed", _("Poin EFN ditautkan (tukar poin aktif)."))]
-        return [self._line(config, "C-08", "warning", _("Tukar poin aktif tetapi company tidak punya metode Poin EFN."))]
+        return [
+            self._line(config, "C-08", "warning", _("Tukar poin aktif tetapi company tidak punya metode Poin EFN."))
+        ]
 
     def _efn_fix_tables(self, config):
         if config.module_pos_restaurant:
             return [self._line(config, "C-11", "ok", _("Mode restoran aktif."))]
         # Sama dengan centang "Is a Bar/Restaurant": CE 19 _setup_default_floor membuat lantai default (1 meja) bila
-        # POS belum punya lantai. iface_printbill hanya diisi CE saat create, jadi diisi di sini.
-        config.write({"module_pos_restaurant": True, "iface_printbill": True})
-        message = _("Mode restoran aktif; atur denah lewat Edit Plan di POS (POS Administrator).")
+        # POS belum punya lantai. iface_printbill hanya diisi CE saat create; split bill = keputusan pemilik
+        # 23 Nov 2026.
+        config.write({"module_pos_restaurant": True, "iface_printbill": True, "iface_splitbill": True})
+        message = _("Mode restoran + split bill aktif; Store Manager mengatur denah lewat Edit Plan di POS.")
         return [self._line(config, "C-11", "fixed", message)]
 
     # ------------------------------------------------------------------------------------------------ cek

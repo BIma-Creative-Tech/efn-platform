@@ -58,9 +58,10 @@ kas `l10n_id`) — default Q-G54-2 "per outlet"; satu akun bersama = keputusan F
 **C-11 Mode restoran (19.0.1.16.0, opsional, default mati).** POS hasil importer ESB dibuat tanpa
 `module_pos_restaurant`, sehingga layar meja tidak muncul. Opsi *Mode restoran* (apply) adalah sakelar massal standar
 yang setara dengan mencentang *Is a Bar/Restaurant* di Settings tiap POS terpilih: `module_pos_restaurant = True` +
-`iface_printbill = True` (CE mengisinya hanya saat create). Lantai default (nama company, 1 meja) dibuat oleh CE
+`iface_printbill = True` (CE mengisinya hanya saat create) + `iface_splitbill = True` (keputusan pemilik 23 Nov 2026).
+Lantai default (nama company, 1 meja) dibuat oleh CE
 `_setup_default_floor`, dan `default_screen` sudah default `tables`. Wizard tidak membuat lantai atau meja sendiri.
-Denah nyata (Q-20) digambar admin lewat *Edit Plan* (lihat "Denah meja — langkah UI standar" di bawah). POS yang mode
+Denah nyata (Q-20) digambar Store Manager lewat *Edit Plan* (lihat "Denah meja — langkah UI standar" di bawah). POS yang mode
 restorannya sudah aktif dilaporkan `ok`. Pilih hanya POS outlet makan di tempat. Peringatan cek **W-05**: company F&B
 dengan POS yang mode restorannya mati. Kasir perlu reload POS setelah apply. Fit-gap: `docs/agent-reports/efn-odoo-functional.md`
 (23 Nov 2026, table management). Lantai `Dine-in <POS>` dengan 10 meja placeholder yang di-backfill di efn-prod
@@ -253,7 +254,12 @@ Tidak dipakai: IoT box (`iface_print_via_proxy`, `proxy_ip`, `is_posbox`) — pe
 | 24 | Uji pilot | dine-in 2 course + split + pindah meja; takeaway kota; printer mati → pesan ulang; offline 15 menit → sinkron; PB1/SC di struk & jurnal | PoC |
 
 ### Denah meja — langkah UI standar (terverifikasi source CE 19.0, 2026-11-23)
-Fitur meja, gabung meja, split bill, dan open bill sepenuhnya standar `pos_restaurant`. Tidak ada modul `efn_*` untuk meja.
+Fitur meja, gabung meja, split bill, dan open bill adalah standar `pos_restaurant`. Satu-satunya tambalan `efn_*` adalah hak
+gabung/pisah meja untuk kasir (lihat "Gabung meja oleh kasir" di bawah).
+
+**Keputusan pemilik proyek 23 Nov 2026:** (1) denah digambar **Store Manager** (Manager Outlet, grup Manajer POS) lewat
+*Edit Plan*; (2) gabung meja **dan** split bill dipakai; (3) efn-prod (demo): satu lantai per outlet dengan posisi meja acak,
+khusus demo (denah nyata tetap Q-20).
 
 1. **Nyalakan mode restoran** (user *Point of Sale: Administrator*, sesi POS tertutup): *Point of Sale → Configuration →
    Settings* → pilih POS → *Is a Bar/Restaurant*. CE menambah lantai bernama company dengan 1 meja bila POS belum punya
@@ -278,8 +284,14 @@ Fitur meja, gabung meja, split bill, dan open bill sepenuhnya standar `pos_resta
 6. Operasional kasir (standar): pilih meja → order menempel ke meja (open bill) → *Bill* (cetak sebelum bayar) → *Split* →
    bayar. Pindah meja = *Transfer*. Gabung meja = seret satu meja ke meja lain di layar meja (`parent_id`; order anak
    digabung ke induk), seret keluar untuk memisah. Jumlah tamu disimpan di `pos.order.customer_count`.
-   **Belum terverifikasi:** apakah gabung meja (menulis `restaurant.table.parent_id`) berhasil untuk user terminal yang
-   hanya POS User. Wajib diuji di PoC sebelum pilot.
+
+### Gabung meja oleh kasir (`models/restaurant_table.py`, 19.0.1.16.0)
+Gap CE 19 (terbukti test `tests/test_table_merge_access.py`: tanpa tambalan, kasir mendapat AccessError): ACL
+`pos_restaurant` memberi `restaurant.table` baca saja ke POS User, padahal layar meja menulis `parent_id` dengan hak user
+sesi (`set_parent_id` saat gabung; `write({'parent_id': False})` saat pisah dan setelah bayar). Tambalan: elevasi `sudo`
+**hanya** untuk field `parent_id`, **hanya** oleh POS User, **hanya** untuk meja (dan meja induk) di lantai POS milik
+company user yang sesinya sedang terbuka. Field lain (posisi, kursi, denah) dan meja POS lain tetap butuh Manajer POS.
+Yang belum terverifikasi: alur di UI POS (browser) dengan login karyawan `pos_hr`.
 
 ### QR order meja & kiosk (F-49) — **jangan aktifkan `mobile` tanpa keputusan**
 `pos_self_order` mode `consultation`/`mobile` melayani pelanggan lewat route **publik Odoo** (`/pos-self/...`, `/pos-self-order/process-order/...`, `auth='public'`, token `pos.config.access_token` 16 heksa + `restaurant.table.identifier` 8 heksa, tanpa rate limit). Ponsel pelanggan harus menjangkau Odoo → **bertentangan dengan ADR-023/CLAUDE.md** (Odoo tidak diakses dari internet). Mode **kiosk** di jaringan POS (peer WireGuard) aman dipakai. QR dari ponsel pelanggan = keputusan klien + ADR baru (opsi di `docs/08 §7.4`).

@@ -103,9 +103,11 @@ class TestG54PosSetupWizard(TransactionCase):
 
     def _lines(self, wizard, config, code=None, status=None):
         return wizard.line_ids.filtered(
-            lambda line: line.config_id == config
-            and (code is None or line.code == code)
-            and (status is None or line.status == status)
+            lambda line: (
+                line.config_id == config
+                and (code is None or line.code == code)
+                and (status is None or line.status == status)
+            )
         )
 
     # ------------------------------------------------------------------------------------------------ test
@@ -232,6 +234,7 @@ class TestG54PosSetupWizard(TransactionCase):
         self.assertFalse(self._lines(wizard, config, "W-05"))
         self.assertTrue(config.module_pos_restaurant)
         self.assertTrue(config.iface_printbill)
+        self.assertTrue(config.iface_splitbill, "split bill dipakai (keputusan 23 Nov 2026)")
         self.assertEqual(config.default_screen, "tables")
         self.assertEqual(len(config.floor_ids), 1, "lantai default CE (_setup_default_floor)")
         self.assertEqual(config.floor_ids.name, self.imd.name)

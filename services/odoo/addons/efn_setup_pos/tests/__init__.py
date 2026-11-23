@@ -5,4 +5,5 @@ from . import (
     test_g18_config,
     test_g54_pos_setup_wizard,
     test_self_order_lock,
+    test_table_merge_access,
 )
