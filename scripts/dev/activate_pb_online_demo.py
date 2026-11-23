@@ -20,7 +20,7 @@ Yang dibuat untuk company PB (efn_brand_code = PB):
   partner generik + tim Super-App, pricelist IDR, pembulatan Rp1, jurnal bank TTPO (titipan) + TRFO (transfer, dengan
   rekening bank PLACEHOLDER milik partner PT, diverifikasi/"trusted" oleh admin), kalender ambil 09:00-21:00 WIB,
   user teknis efn_online_pb (Internal User + grup kanal, TANPA API key), kanal PB aktif, 5 outlet pickup (FP
-  non-dine-in), publikasi ±150 menu PB terlaris (histori ESB) dengan harga median ESB di pricelist DEMO kanal.
+  non-dine-in), publikasi semua menu POS PB yang terjual sejak 1 Agu 2026 (histori ESB) dengan harga median ESB di pricelist DEMO kanal.
 """
 
 import os
@@ -379,26 +379,25 @@ summary.append("outlet: " + "; ".join(outlet_rows))
 # ---------------------------------------------------------------- publikasi produk
 Template = env["product.template"].sudo()
 # Revisi lead 23 Nov 2026: list_price PB di efn-prod hasil migrasi = placeholder (Rp0/Rp1), kategori POS "T Package"
-# hampir semua Rp0. Kandidat = menu PB paling laku di histori ESB (efn_legacy_sales_line, sejak PB_DEMO_SINCE, >= 20
-# baris), tanpa tas/add-on/paket kiosk; harga = median harga jual ESB, ditulis sebagai item pricelist DEMO kanal
-# (master produk tidak diubah).
+# hampir semua Rp0. Kandidat = SEMUA menu POS PB yang terjual di histori ESB (efn_legacy_sales_line, sejak
+# PB_DEMO_SINCE; revisi 23 Nov sore: batas 150 & minimal 20 baris dicabut), tanpa tas/add-on/paket/SKU kiosk;
+# harga = median harga jual ESB, ditulis sebagai item pricelist DEMO kanal (master produk tidak diubah). Menu tanpa
+# penjualan sejak PB_DEMO_SINCE tidak dipublikasikan (tidak ada harga nyata). Kata kunci dicocokkan per kata utuh
+# (\m..\M) agar menu "BAGUETTE" tidak ikut terbuang oleh "BAG".
 PB_DEMO_SINCE = "2026-08-01"
-PB_DEMO_LIMIT = 150
 env.cr.execute(
-    """
+    r"""
     SELECT pp.product_tmpl_id, percentile_disc(0.5) WITHIN GROUP (ORDER BY l.price) AS med, count(*) AS n
       FROM efn_legacy_sales_line l
       JOIN product_product pp ON pp.id = l.product_id
       JOIN product_template t ON t.id = pp.product_tmpl_id
      WHERE l.company_id = %s AND l.price >= 5000 AND l.date >= %s
-       AND t.active AND t.sale_ok AND t.company_id = %s
-       AND (t.name->>'en_US') !~* '(BAG|ADD ON|ADD-ON|KIOSK|OJOL|TIKTOK|VOUCHER|PACKAGE|PAKET|TOTE|DELIVERY|CHARGE)'
+       AND t.active AND t.sale_ok AND t.available_in_pos AND t.type <> 'combo' AND t.company_id = %s
+       AND (t.name->>'en_US') !~* '\m(BAG|TOTEBAG|ADD ON|ADD-ON|KIOSK|OJOL|TIKTOK|VOUCHER|PACKAGE|PAKET|TOTE|DELIVERY|CHARGE)\M'
      GROUP BY pp.product_tmpl_id
-    HAVING count(*) >= 20
      ORDER BY n DESC
-     LIMIT %s
     """,
-    (company.id, PB_DEMO_SINCE, company.id, PB_DEMO_LIMIT),
+    (company.id, PB_DEMO_SINCE, company.id),
 )
 demo_prices = {tmpl_id: float(med) for tmpl_id, med, _n in env.cr.fetchall()}
 candidates = Template.browse(list(demo_prices))
