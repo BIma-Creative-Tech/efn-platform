@@ -1315,3 +1315,42 @@ Metode: baca kode saja (tanpa runtime; tidak ada test yang saya jalankan). Kontr
 
 ## G67.4 Sisa risiko
 Semua view/query belum dieksekusi oleh saya (hanya hasil hijau dari lead). Bergantung pada `join_use_nulls=0` (default) di view efn_dwh (`s.hit = 0`, `m.hit = 0`, `branch_name = ''`); bila profil user Insight mengubahnya, uom_mismatch, label cabang, dan quality berubah diam-diam (tambahkan test/asersi setting bila perlu). Semua konstanta [B] (status terhitung, arah GTR, tanda beban, nama pos summary) menunggu hasil backfill PB. UAT G67 belum ditulis di `docs/testing/UAT_SCENARIOS.md` (di luar permintaan ini).
+
+# QA G66b — Login per pengguna ESB (ADR-051 A1, kontrak §30.17) (25 Nov 2026)
+
+Cakupan: `services/prodplan` (api, session, actor, provision, config, service, workflow), `services/insight-web` (lib/prodplan-*, route `api/prodplan/*`, proxy), `efn_esb_identity`, `haproxy.cfg`, `docker-compose.prodplan*.yml`. **Semua dari membaca kode; tidak ada runtime** (ruff/pytest/vitest dijalankan lead; file yang saya tulis belum pernah dijalankan).
+
+## 1. Konsistensi kontrak (diverifikasi cocok)
+- **Path/method aksi** `prodplan-actions.ts:225-250` vs `ROUTES` `api.py:64-92`: 18 aksi + GET (`prodplan-data.ts`) cocok; `resume-posting` body `{row_version}` -> 202 `{outbox_ids}` (`api.py:94`, `service.py:1303`).
+- **`ppa2`**: urutan 8 kunci, `ensure_ascii=False` vs `JSON.stringify`, HMAC kunci = byte ASCII hex (`prodplan-token.ts:94-101` vs `actor.py:84-93`, `config.py:339`), regex, TTL 60, skew 30, vektor `tests/prodplan-token.test.ts:71-125` vs `test_actor.py:85-102` identik. Aturan `sid` kosong cocok (`prodplan-token.ts:67` vs `api.py:95,209-212`).
+- **Sesi**: `POST /v1/session` 3 kunci (`api.py:96,268`, `prodplan-login.ts:80`), nonce 22 karakter = `newJti`; `SessionView` vs `session.py:166-179` vs `parseSessionView` (`prodplan-session.ts:73-94`); cookie `Max-Age` dari `expires_at` ISO (`parseExpiresAt`); `DELETE` sid tak dikenal 204 (`api.py:219`).
+- **Kode galat login** -> `?e=` (`prodplan-session.ts:124-139`) cocok dengan `_ERRORS` (`session.py:66-74`) dan §30.17.5.
+- **prodplan -> Odoo**: tujuh kunci persis (`provision.py:34` vs `efn_esb_identity.py:40-42`), username lowercase = regex Odoo (`session.py:88` vs `efn_esb_identity.py:47`), `company_code` = kode PT internal (`config.py:32`) -> Odoo hanya peringatan (`efn_esb_identity.py:245-248`), body `{"payload":{...}}` untuk `@api.model efn_esb_provision(self, payload)`, `RPC_ALLOWLIST` terdaftar (`efn_core/tests/test_rpc_surface.py:642`).
+- **Header vs haproxy** (`haproxy.cfg:155-163`): `http.client` mengirim `Host: odoo-rpc-gateway:8443`, `Content-Type: application/json`, `Accept`, `Authorization: bearer <key>`, `User-Agent`, `Accept-Encoding: identity`, `Content-Length` -> semuanya di allowlist; CN `prodplan-odoo` -> hanya `p_esb_identity`, body <= 16384 = `BODY_MAX_BYTES`. `X-Odoo-Database` ditambah gateway (`haproxy.cfg:214`), jadi klien tidak perlu.
+- **Env compose vs `config.py`**: `PRODPLAN_ESB_COMPANY_CODES`, `_ROLE_PLANNER/_WAREHOUSE`, `_DOC_ACCESS`, `_CK_BRANCHES`, `PRODPLAN_ODOO_*` (provision dipaku `false` di base, overlay yang menimpa), `PRODPLAN_ODOO_RPC_URL` cocok; tidak ada sisa `PRODPLAN_ESB_USER_*`/`PASSWORD`/`SOURCE_LOCATIONS` di compose.
+
+## 2. Ketidakcocokan nyata
+1. **Dua kode galat prodplan tanpa pesan di insight-web.** `invalid_quantity` 422 (`service.py:1087`) dan `reconcile_incomplete` 409 (`service.py:1265`) tidak ada di `PP_ERROR_MESSAGES` (`prodplan-errors.ts`) -> jatuh ke pesan status ("Permintaan tidak valid" / "Tindakan tidak dapat dilakukan pada status saat ini") yang menyesatkan. **Diperbaiki** (2 pesan).
+2. **`pr_nums` > 50.** `buildDemand` mengirim sampai 100 nomor PR per baris (`prodplan-actions.ts:134`) sedangkan `put_demand` menolak > 50 (`service.py:652`) -> menyimpan baris hasil impor PR besar gagal "Permintaan tidak valid". **Diperbaiki** (potong 50).
+3. **`full_name` berisi karakter kontrol.** Odoo menolak seluruh payload (`efn_esb_identity.py:73-77,114`), prodplan hanya memotong 128 (`provision.py`) -> identitas tak pernah dibuat, hanya `odoo_provision_failed` di log. **Diperbaiki** (`_clean_name`).
+4. **Kontrak §30.17 tidak mencatat** `actor_id` di `SessionView`, format `expires_at`, route `GET /api/prodplan/expired`, aturan `cancel` vs `needs_login`, `meta` sid tak dikenal, `GET /v1/plans` tanpa brand, `pr_nums` 50, pembersihan `full_name`, lokasi flag `source_branches_truncated`. **Diperbaiki** -> §30.17.17.
+5. Selisih kecil, tidak diubah: `PP_JOB_ERROR_MESSAGES` tidak punya `not_found`/`forbidden` (kode job di `workflow.py:93-94`; jatuh ke pesan generik, aman); `esb_access_missing.details.doc_kinds` tidak ditampilkan UI (disaring `sanitizeDetails`, pesan sudah cukup); `branches[].name` bisa `null` dan UI memakai `''`.
+
+## 3. Perbaikan yang dilakukan
+- `services/insight-web/lib/prodplan-errors.ts`: pesan `invalid_quantity`, `reconcile_incomplete`.
+- `services/insight-web/lib/prodplan-actions.ts`: `pr_nums` maks 50.
+- `services/prodplan/efn_prodplan/provision.py`: `_clean_name` (karakter kontrol -> spasi, padatkan spasi, maks 128).
+- `docs/04_SERVICE_CONTRACTS.md`: §30.17.17 baru (tabel koreksi + butir belum terverifikasi).
+- `docs/qa/G66_UAT.md`: bagian 0/1/6/7/10 disesuaikan, bagian 12 baru (13 skenario login), hasil diperbarui.
+
+## 4. Test ditambah (belum dijalankan; lead jalankan ruff + pytest + vitest)
+- `services/insight-web/tests/prodplan-error-codes.test.ts`: 36 kode galat prodplan -> pesan tabel, kode dipertahankan, status publik, teks prodplan (mis. "SQL bocor") tidak diteruskan; kode tak dikenal jatuh ke status; `loginErrorFor` untuk semua kode sesi.
+- `services/prodplan/tests/test_provision.py::test_payload_satisfies_odoo_validate_payload_rules`: cermin aturan `validate_payload` Odoo (7 kunci, akun, regex username, nama tanpa karakter kontrol, `role_id`, peran unik, cabang <= 200, body <= 16 KiB) termasuk masukan jahat.
+
+## 5. Butir §30.17.15 yang TIDAK tercakup test
+- prodplan: (a) log/respons **dan PG** bebas password/username utuh: hanya log+metrik+respons+repr yang di-grep (`test_logs_and_metrics_never_contain_secrets`, `test_token_never_leaves_process`); PG hanya lewat 3 tes integrasi yang di-skip. (b) Cabang di level service: `approve` / `decide_transfer` (asal DAN tujuan) / `post` (cabang + `doc_insert`) / `cancel` (`doc_delete`) -> `branch_forbidden`/`esb_access_missing` hanya diuji sebagai fungsi murni (`require_branches`, `plan_resume`), bukan handler SQL `service.py`. (c) `source_branches_truncated` (cap 20 diuji, flag `warnings` tidak di-assert). (d) `https_sender`: konteks mTLS verify-full, header vs allowlist haproxy, timeout 5 dtk tidak diuji (hanya logika antrean). (e) "Odoo timeout/503 -> login tetap 201 dalam batas waktu" hanya diuji tidak-memblokir (enqueue), bukan end-to-end HTTP.
+- insight-web: tercakup di file `prodplan-login/route/token/needs-login/access` dan `proxy-gate` (tidak saya telusuri baris-per-baris; angka 1.115 lulus dari lead). Tidak ada test render komponen (`SessionClock`, tombol Lanjutkan posting, `PpAction` expired).
+- Odoo / devsecops: tercakup oleh suite lead (285 test, `check-encryption.sh`); tidak saya periksa ulang.
+
+## 6. Sisa risiko / belum terverifikasi
+Approve + posting dua akun ESB (Q-PP17); `needs_login` -> `resume-posting` dan resume oleh aktor lain terhadap ESB nyata; provisioning ke Odoo nyata (bentuk body `/json/2`, TLS mTLS, header di balik haproxy nyata); lockout 5x/15 menit vs kebijakan ESB (Q-PP18); migrasi `24-*` di atas data lama; browser (cookie `__Host-` pada HTTP lokal tanpa TLS tidak akan terset; fokus; redirect `expired`); `PRODPLAN_ESB_COMPANY_CODES` kosong saat `PRODPLAN_ENABLED=true` = exit 2 (disengaja, tapi pastikan runbook menyebut); `prodplan_session` hilang saat restart (L-260) membuat semua pengguna login ulang dan outbox berhenti di `needs_login` — perlu pengumuman sebelum deploy. UAT bagian 12 belum pernah dijalankan.

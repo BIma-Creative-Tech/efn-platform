@@ -1,7 +1,6 @@
 import { parseBomQuery } from '@/lib/prodplan-actions';
 import { loadBoms } from '@/lib/prodplan-data';
-import { publicStatus } from '@/lib/prodplan-errors';
-import { errorResponse, guardApi, jsonResponse } from '@/lib/prodplan-guard';
+import { errorResponse, failResponse, guardApi, jsonResponse } from '@/lib/prodplan-guard';
 
 export const dynamic = 'force-dynamic';
 
@@ -10,6 +9,9 @@ const STATUS_BY_CODE: Record<string, number> = {
   invalid_request: 422,
   forbidden: 403,
   actor_invalid: 401,
+  session_expired: 401,
+  branch_forbidden: 403,
+  esb_access_missing: 403,
   rate_limited: 429,
   disabled: 503,
   not_found: 404,
@@ -25,7 +27,7 @@ export async function GET(req: Request): Promise<Response> {
   const sp = new URL(req.url).searchParams;
   const parsed = parseBomQuery(sp.get('brand'), sp.get('q'));
   if (!parsed) return errorResponse(422, 'bad_input', {}, { fields: ['q'] });
-  const res = await loadBoms(g.session, parsed.brand, parsed.q);
-  if (!res.ok) return jsonResponse(publicStatus(STATUS_BY_CODE[res.error.code] ?? 502), { error: res.error });
+  const res = await loadBoms(g.sid, parsed.brand, parsed.q);
+  if (!res.ok) return failResponse({ status: STATUS_BY_CODE[res.error.code] ?? 502, error: res.error });
   return jsonResponse(200, { ok: true, data: { items: res.data } });
 }

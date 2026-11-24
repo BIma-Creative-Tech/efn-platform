@@ -34,6 +34,12 @@ ALLOWED_FIELDS = frozenset(
         "error_class",
         "mfg_mode",
         "write_enabled",
+        # §30.17.5: `user_mask` = username tersamar (2 karakter + *** + 1); username utuh/nama/token DILARANG.
+        "result",
+        "user_mask",
+        "actor_id",
+        "esb_brand",
+        "reason_class",
     }
 )
 _LOGGER = logging.getLogger("efn_prodplan")

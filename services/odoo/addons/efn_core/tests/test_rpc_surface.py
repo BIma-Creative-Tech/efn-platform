@@ -638,6 +638,11 @@ RPC_ALLOWLIST = {
     # efn_setup_pos: override CE gabung meja; sudo hanya parent_id bila POS User + config_id milik company user
     # bersesi opened + meja di lantai config itu (SECURITY_REVIEW_2026-11-23_pos-table-merge SEC-01/02).
     ("restaurant.table", "set_parent_id"): "_efn_cashier_may_link (override CE, sudo hanya parent_id)",
+    # efn_esb_identity (G66b, ADR-051 A1): duplikasi login ESB -> shadow user arsip.
+    ("efn.esb.identity", "efn_esb_provision"): (
+        "check_caller (group_esb_provisioner + Internal User saja, aktif, non-share) + payload tertutup"
+    ),
+    ("efn.esb.identity", "action_efn_activate"): "base.group_system + check_access(write)",
 }
 
 MODEL_BASES = {"Model", "AbstractModel", "TransientModel"}

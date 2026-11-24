@@ -1445,3 +1445,120 @@ Keputusan user Q-ESB25/Q-G65-7: 5 gudang damage PB (cabang ESB 3, 13, 23, 25, 37
   karantina (domain `view_location_id`) [V]; orderpoint & reservasi tidak.
 - Ops: transfer internal (→ Stock) atau `stock.scrap` standar. Record rule: tidak perlu tambahan.
 - Kontrak docs/04 §27.13.4 perlu diubah oleh pemilik kontrak: `quarantine` menjadi didukung.
+
+## 25 Nov 2026 — G66b: duplikasi login ESB ke Odoo (JIT shadow user), fit-gap + rancangan saja
+
+Konteks: `/produksi` (G66, ADR-051 Proposed, docs/04 §30) pindah ke login per pengguna ESB Core. Pemilik proyek
+meminta setiap login ESB yang berhasil diduplikasi ke Odoo agar pengguna + perannya sudah ada saat cutover ESB→Odoo.
+Tanpa kode di gelombang ini. Tanda: **[V]** = diverifikasi dari source `odoo/odoo@19.0` (WebFetch 25 Nov 2026) atau
+kode repo; **[B]** = belum terverifikasi.
+
+### 1. Fit-gap modul standar CE 19
+
+| Modul / fitur | Menutup? | Alasan |
+|---|---|---|
+| `base` `res.users` tanpa password | **Ya (sebagian)** | `_check_credentials`: password kosong langsung `AccessDenied`; hash NULL di-`COALESCE` ke `''` sehingga verifikasi gagal [V]. Tapi user aktif tanpa password masih bisa diberi password oleh admin / reset → bukan penghalang tunggal. |
+| `base` `active=False` (arsip) | **Ya — mekanisme utama** | `_login` memakai `search(_get_login_domain)` tanpa `active_test=False` (default ORM menyaring arsip) [V kode; perilaku ORM default]; `_check_uid_passwd` menolak `not user.active` [V]; validasi API key SQL `u.active` [V]; `auth_signup._action_reset_password` menolak user arsip [V]; `auth_oauth._check_credentials` mensyaratkan `self.env.user.active` [V]. Satu bit menutup password, API key, reset, OAuth. |
+| `base` tipe user / `share` | Ya | `share` = compute stored dari `all_group_ids ∋ base.group_user` [V]. Default `group_ids` = `base.group_user` + `implied_ids` dari `base.default_user_group` [V] → provisioning WAJIB menulis `group_ids` eksplisit (Command.set) agar grup default yang dikonfigurasi admin tidak ikut (least privilege). |
+| `base` unik login | Ya | `_login_key UNIQUE(login)` [V] → butuh format login ber-namespace. |
+| `auth_ldap` | **Tidak** (referensi desain) | Satu-satunya JIT provisioning standar: `_get_or_create_user` membuat user saat bind LDAP sukses bila `create_user`, menyalin "template user", tidak menyimpan password [V]. Tidak cocok: butuh server LDAP, login terjadi DI Odoo (Odoo harus bisa diakses pengguna), ESB bukan LDAP. Ide yang diambil: template grup tetap, cari dulu lalu buat, password tidak pernah disimpan. |
+| `auth_oauth` | **Tidak** (sekarang); kandidat pasca-migrasi | Login terjadi di Odoo lewat provider OAuth; `_auth_oauth_signin` membuat user via signup dengan `active: True` [V] — bertentangan dengan "tidak bisa login". ESB bukan provider OIDC [B]. Field `oauth_uid` jangan dipakai ulang sebagai id eksternal (semantik lain). |
+| `auth_signup` | **Tidak** untuk provisioning; **Ya** untuk aktivasi | Signup publik/undangan membuat user aktif (template `base.template_portal_user_id`) [V]. `create()` mengirim undangan bila user punya email kecuali context `no_reset_password` [V] → shadow user tanpa email + context itu. Saat migrasi: "Send Password Reset Instructions" standar = cara set password baru (butuh email + SMTP). |
+| `auth_totp` | Tidak relevan saat shadow; **wajib** saat aktivasi | Kebijakan 2FA internal (CLAUDE.md) berlaku setelah unarchive; catatan memori: efn-prod 2FA OFF sampai SMTP. |
+| `portal` | **Tidak direkomendasikan** | Grup `efn_insight` tanpa `implied base.group_user` secara teknis bisa dipegang portal, tetapi: target migrasi = karyawan internal, `efn_role._check_group_ids` menolak grup `share` di peran, `_internal_active` (penerima notifikasi) menyaring `share`, dan konversi portal→internal saat cutover = langkah ekstra. |
+
+**Gap:** tidak ada mekanisme CE untuk "buat/perbarui user dari sistem lain lewat panggilan service-to-service, idempoten,
+dengan kunci eksternal, tanpa memberi hak admin ke pemanggil". → butuh kode `efn_*` kecil (lihat §4).
+
+### 2. Rancangan yang direkomendasikan
+
+- **Tipe:** user internal (`group_ids = [base.group_user]` saja), **`active=False` sejak create**, tanpa password,
+  tanpa email/telepon, context `no_reset_password=True`. Tidak bisa login dengan cara apa pun (tabel §1).
+- **Login:** `esb:<akun>:<username_lower>` (akun = `pb|wtz|bacha|cup|imd`, sama dengan `ESB_BRAND_SELECTION`). Titik dua
+  bukan format email → tidak bentrok dengan login Odoo asli (email) dan tidak memicu alur email. Username ESB hanya unik
+  per akun ESB (pola `efn.insight.esb.branch`) → akun wajib di kunci. Saat aktivasi login diganti ke format final.
+- **Penanda asal:** model baru `efn.esb.identity` (bukan field di `res.users`): `user_id` (m2o, unik, ondelete restrict),
+  `company_id`, `esb_account`, `esb_username`, `esb_role_id` (int), `esb_pp_roles` (char/selection-many ⊆
+  `PP_ROLES`), `esb_branch_ids` (m2m `efn.insight.esb.branch`), `first_login_at`, `last_login_at`,
+  `state` (`shadow|revoked|activated`). Unik `(esb_account, esb_username)`. Record rule multi-company. Alasan model
+  terpisah: res.users tidak disentuh, ACL bisa sempit, mudah dihapus/diarsip setelah migrasi.
+- **Company:** diturunkan dari cabang login → `efn.insight.esb.branch (esb_brand, esb_branch_id).company_id`
+  (sudah ada, divalidasi `BRAND_COMPANY_CODES`). Bacha bisa → BCF + BCR. `company_id` = PT pertama, `company_ids` =
+  semua PT cabang. Tanpa cabang yang cocok → tolak (`esb_provision_no_company`); `companyCode` teks hanya
+  pengecekan silang, bukan kunci (format nama PT tidak stabil [B]).
+- **Peran (rekomendasi default):** izin ESB disalin ke `esb_pp_roles` (cermin data), **TIDAK** menjadi `res.groups`
+  selama fase shadow. Alasan: `efn_role` SEC-228 menetapkan `group_prodplan_*` sensitif = **penetapan manual, bukan
+  otomatis** (`SENSITIVE_GROUP_XMLIDS`, hanya diblok untuk `sync_from_job`, tetapi prinsipnya sama); user arsip tidak
+  memakai grup itu (insight-web memakai sesi ESB, bukan `/efn/insight/open`); dan bila prodplan disusupi, dampaknya
+  hanya user arsip tanpa hak. Saat cutover, admin Access Rights menetapkan peran lewat Penetapan Peran efn_role
+  berdasarkan cermin (laporan siap pakai). Jangan isi `efn_insight_esb_branch_ids` (persona store → T9 membuang PP).
+- **Perubahan izin ESB:** tiap login mengirim izin terkini → cermin ditimpa (tambah & kurang). Bila kelak grup sudah
+  diberikan (pasca-aktivasi atau opsi B di §5): **turun otomatis, naik manual** (pencabutan boleh otomatis, penambahan
+  tidak).
+- **User ESB dinonaktifkan:** Odoo tidak bisa tahu dari login gagal (401 tidak membedakan password salah vs nonaktif,
+  dan memberi sinyal pada kegagalan = enumerasi). Maka: cron harian menandai `last_login_at` > 90 hari
+  (`STALE_LOGIN_DAYS`) sebagai kandidat `revoked`; rekonsiliasi penuh lewat daftar user ESB (esb-extract, GET-only)
+  bila API-nya ada [B]. `revoked` = cermin dikosongkan, user tetap arsip, **tidak dihapus** (jejak audit + peta migrasi).
+- **Aktivasi saat migrasi (Superadmin saja):** ganti login, isi email kerja, unarchive (standar), tetapkan peran via
+  efn_role (manual), kirim reset password (standar `auth_signup`, butuh SMTP), TOTP wajib. Tambahan kode cukup
+  tombol/server action yang memindah `state → activated` dan memeriksa prasyarat; selebihnya UI CE standar.
+- **Jangan pernah menautkan otomatis** ke user Odoo yang sudah ada (nama/email sama) → risiko pengambilalihan akun;
+  penautan hanya manual oleh Superadmin.
+
+### 3. Titik masuk provisioning
+
+`efn_insight` saat ini hanya punya route `GET /efn/insight/open` (`auth="user"`, Odoo → insight-web, token eit3) —
+arah terbalik, tidak dipakai. Pola yang sudah ada untuk service → Odoo: user teknis + API key + `POST /json/2/<model>/<metode>`
+(kanal online, `docs/runbooks/odoo-online-api-key.md`: key scope global, rotasi 30 hari). Usulan paling sederhana:
+
+- `POST /json/2/efn.esb.identity/efn_esb_provision` dari `services/prodplan` (bukan browser) setelah login ESB sukses,
+  lewat TLS verify-full CA internal; **tidak memblokir login** (timeout pendek, gagal = log + diulang otomatis di login
+  berikutnya karena idempoten). Antrian RabbitMQ tidak perlu untuk tahap ini.
+- Payload tertutup (kunci tak dikenal → tolak, termasuk `password`/`token`): `esb_account`, `username`
+  (`[A-Za-z0-9._@-]{1,64}`), `full_name` (≤128), `company_code`, `role_id`, `pp_roles` (⊆ `PP_ROLES`), `branch_ids`
+  (≤200 int). Upsert by `(esb_account, username)`; respons tanpa PII (`{"identity_id", "created": bool}`).
+- User teknis `efn_esb_provisioner` (satu per instalasi; per PT tidak perlu karena cabang menentukan PT): pola
+  persis user teknis kanal online [V `efn_setup_online/demo/efn_online_demo.xml`]: `Command.set([base.group_user,
+  group_esb_provisioner])`, satu company, tanpa API key di data (key lewat runbook, secret
+  `odoo_api_key_esb_provisioner`), lewat `odoo-rpc-gateway` yang sudah ada. ACL hanya `efn.esb.identity` read;
+  metode memakai `sudo()` terbatas untuk membuat/menulis `res.users` dengan nilai yang dikunci kode. **Bukan**
+  `base.group_erp_manager`. Grup ditambahkan ke `efn_role.TECHNICAL_GROUP_XMLIDS` (tidak bisa jadi peran).
+- Log: `esb_provision uid=<odoo id> created=<bool> roles=<n>` tanpa username/nama (PDP). `efn_audit` CONTROL_SPECS
+  `res.users` tetap mencatat create.
+
+### 4. Data-only atau kode?
+
+Butuh kode (`efn_setup_*` tidak cukup: perlu model, metode RPC, validasi). Lingkup minimal untuk efn-odoo-engineer:
+1. Modul baru **`efn_esb_identity` 19.0.1.0.0** (LGPL-3, depends `efn_insight`), README menyebut ADR-051 + referensi
+   desain `auth_ldap._get_or_create_user` (CE) — tanpa OCA/Cybrosys.
+   - Model `efn.esb.identity` (field §2), constraint unik, record rule multi-company, ACL: provisioner read,
+     `base.group_erp_manager` read, `base.group_system` write.
+   - `@api.model efn_esb_provision(payload)`: cek grup provisioner, validasi ketat, upsert user
+     (`active=False`, `group_ids=[Command.set([group_user])]`, tanpa password/email, `no_reset_password`), tolak bila
+     login sudah dipakai user tanpa identity.
+   - Cron stale 90 hari; tombol aktivasi (Superadmin) yang hanya memindah state + cek prasyarat.
+   - Data: grup `group_esb_provisioner`, user teknis (tanpa API key; key dibuat runbook), cron (`noupdate=1`).
+2. **`efn_role` 19.0.1.2.4 → 19.0.1.2.5**: tambah `efn_esb_identity.group_esb_provisioner` ke `TECHNICAL_GROUP_XMLIDS`.
+3. Test (`TransactionCase`, tag `efn`): create → user arsip, `share=False`, grup persis `base.group_user`, tanpa grup
+   PP; panggilan kedua idempoten + cermin peran diperbarui/dikurangi; payload berisi `password` ditolak; caller tanpa
+   grup → AccessError; login bentrok dengan user non-ESB → ditolak, user asli tak berubah; tanpa cabang cocok →
+   ditolak; `authenticate` dengan password apa pun → AccessDenied; provisioner tidak bisa ditambahkan ke `efn.role`;
+   record rule multi-company.
+Di luar Odoo (bukan wewenang agent ini): pemanggil di `services/prodplan`, revisi docs/04 §30 + amandemen ADR-051
+(atau ADR baru) **sebelum** implementasi, entri `docs/compliance/PDP_DATA_INVENTORY.md`, runbook API key.
+
+### 5. Risiko & keputusan pemilik proyek
+
+| ID | Hal | Rekomendasi default |
+|---|---|---|
+| Q-ESBU1 | Peran ESB jadi grup Odoo otomatis (opsi B) atau cermin data saja sampai cutover (opsi A)? | **A** — sesuai SEC-228, blast radius minimal |
+| Q-ESBU2 | Kunci identitas: ESB tidak memberi userID stabil di respons login [B]; username diganti di ESB → duplikat | Kunci `(akun, username)`; minta userID bila ada |
+| Q-ESBU3 | Cakupan: JIT hanya menangkap pengguna `/produksi`, bukan semua user ESB | JIT sekarang + impor batch daftar user ESB saat cutover G43 |
+| Q-ESBU4 | Retensi shadow user yang tidak pernah diaktifkan (PDP) | Arsip permanen; hapus identity + anonimkan nama 6 bulan pasca-cutover (keputusan DPO) |
+| Q-ESBU5 | Simpan daftar cabang ESB per user? | Ya (m2m ke cabang yang sudah ada, bukan PII) |
+| Q-ESBU6 | Password saat aktivasi: reset email (butuh SMTP + email kerja) | Reset email + TOTP; SMTP prasyarat |
+
+Risiko: (1) prodplan disusupi → bisa membuat user arsip tanpa hak (diterima bila opsi A; batasi laju di prodplan);
+(2) user arsip dengan grup sensitif menjadi "bom waktu" saat unarchive massal (dicegah opsi A + aktivasi manual);
+(3) review akses efn_role mungkin melewati user arsip [B — cek filter review]; (4) arsip user ikut mengarsip partner
+[B]; (5) nama lengkap = data pribadi, nomor HP/email tidak boleh ikut payload.

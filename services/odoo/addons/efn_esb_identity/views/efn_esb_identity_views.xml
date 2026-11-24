@@ -1,0 +1,90 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- G66b (docs/04 §30.17.11): daftar identitas ESB untuk Access Rights (baca) dan Superadmin (aktivasi migrasi).
+     Identitas hanya dibuat oleh efn_esb_provision (ACL tanpa create/unlink). Menu di Settings > Users & Companies
+     (base.menu_users, pola efn_insight). -->
+<odoo>
+    <record id="efn_esb_identity_view_list" model="ir.ui.view">
+        <field name="name">efn.esb.identity.list</field>
+        <field name="model">efn.esb.identity</field>
+        <field name="arch" type="xml">
+            <list create="0" delete="0" decoration-muted="state == 'revoked'" decoration-success="state == 'activated'">
+                <field name="company_id" groups="base.group_multi_company"/>
+                <field name="esb_account"/>
+                <field name="esb_username"/>
+                <field name="user_id"/>
+                <field name="esb_pp_roles"/>
+                <field name="last_login_at"/>
+                <field name="state"/>
+            </list>
+        </field>
+    </record>
+
+    <record id="efn_esb_identity_view_form" model="ir.ui.view">
+        <field name="name">efn.esb.identity.form</field>
+        <field name="model">efn.esb.identity</field>
+        <field name="arch" type="xml">
+            <form create="0" delete="0">
+                <header>
+                    <button name="action_efn_activate" type="object" string="Tandai diaktifkan (migrasi)"
+                            class="btn-primary" groups="base.group_system" invisible="state == 'activated'"
+                            confirm="Pastikan login sudah diganti dan email kerja terisi. Setelah ini login ESB tidak lagi mengubah user Odoo ini. Lanjutkan?"/>
+                    <field name="state" widget="statusbar"/>
+                </header>
+                <sheet>
+                    <group>
+                        <group>
+                            <field name="esb_account"/>
+                            <field name="esb_username"/>
+                            <field name="esb_role_id"/>
+                            <field name="esb_pp_roles"/>
+                        </group>
+                        <group>
+                            <field name="user_id"/>
+                            <field name="company_id"/>
+                            <field name="first_login_at"/>
+                            <field name="last_login_at"/>
+                            <field name="activated_at" invisible="not activated_at"/>
+                        </group>
+                    </group>
+                    <field name="esb_branch_ids" widget="many2many_tags"/>
+                    <p class="text-muted">
+                        Shadow user = user internal yang diarsipkan, tanpa password, hanya Internal User. Peran PP di sini
+                        hanya cermin izin ESB, bukan grup Odoo. Migrasi: ganti login + isi email kerja di user, tandai
+                        diaktifkan, unarchive user, tetapkan peran lewat Penetapan Peran EFN, kirim reset password, TOTP.
+                    </p>
+                </sheet>
+            </form>
+        </field>
+    </record>
+
+    <record id="efn_esb_identity_view_search" model="ir.ui.view">
+        <field name="name">efn.esb.identity.search</field>
+        <field name="model">efn.esb.identity</field>
+        <field name="arch" type="xml">
+            <search>
+                <field name="esb_username"/>
+                <field name="company_id" groups="base.group_multi_company"/>
+                <filter name="shadow" string="Shadow" domain="[('state', '=', 'shadow')]"/>
+                <filter name="revoked" string="Dicabut" domain="[('state', '=', 'revoked')]"/>
+                <filter name="activated" string="Diaktifkan" domain="[('state', '=', 'activated')]"/>
+                <separator/>
+                <filter name="group_account" string="Akun ESB" context="{'group_by': 'esb_account'}"/>
+                <filter name="group_company" string="PT" context="{'group_by': 'company_id'}"/>
+            </search>
+        </field>
+    </record>
+
+    <record id="action_efn_esb_identity" model="ir.actions.act_window">
+        <field name="name">Identitas ESB</field>
+        <field name="res_model">efn.esb.identity</field>
+        <field name="view_mode">list,form</field>
+        <field name="search_view_id" ref="efn_esb_identity_view_search"/>
+        <field name="help" type="html">
+            <p>Pengguna ESB yang pernah masuk ke modul Produksi, dicatat sebagai user Odoo yang diarsipkan.</p>
+            <p>Dibuat otomatis oleh prodplan (bila PRODPLAN_ODOO_PROVISION_ENABLED=true); tidak bisa dibuat manual.</p>
+        </field>
+    </record>
+
+    <menuitem id="menu_efn_esb_identity" name="Identitas ESB" parent="base.menu_users"
+              action="action_efn_esb_identity" sequence="45" groups="base.group_erp_manager"/>
+</odoo>

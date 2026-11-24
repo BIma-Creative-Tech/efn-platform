@@ -5,7 +5,21 @@
  */
 export const PP_ERROR_MESSAGES: Readonly<Record<string, string>> = {
   invalid_request: 'Permintaan tidak valid. Periksa isian lalu coba lagi.',
-  actor_invalid: 'Sesi Anda tidak dapat diverifikasi oleh layanan produksi. Buka ulang Insight dari Odoo.',
+  actor_invalid: 'Sesi Anda tidak dapat diverifikasi oleh layanan produksi. Keluar lalu masuk lagi ke modul Produksi.',
+  // Sesi ESB per pengguna (§30.17.5, §30.17.13).
+  invalid_credentials: 'Username atau password ESB salah.',
+  login_locked: 'Terlalu banyak percobaan masuk. Coba lagi dalam 15 menit.',
+  no_pp_access: 'Akun ESB ini tidak memiliki izin modul Produksi.',
+  esb_company_not_allowed: 'Akun ESB ini tidak memiliki izin modul Produksi.',
+  session_capacity: 'ESB sedang tidak dapat dihubungi. Coba beberapa saat lagi.',
+  session_expired: 'Sesi ESB berakhir (maksimal 1 jam). Silakan masuk lagi.',
+  branch_forbidden: 'Akun ESB Anda tidak memegang cabang yang diperlukan untuk tindakan ini.',
+  esb_access_missing: 'Akun ESB Anda tidak punya hak akses dokumen yang diperlukan untuk tindakan ini. Hubungi administrator ESB.',
+  resume_requires_original_user:
+    'Dokumen ini mungkin sudah dibuat di ESB oleh pengguna sebelumnya. Hanya pengguna yang sama yang boleh melanjutkan atau mengirim ulang agar hasilnya bisa dicocokkan.',
+  nothing_to_resume: 'Tidak ada posting yang perlu dilanjutkan. Muat ulang halaman.',
+  admin_account_write_forbidden: 'Akun admin ESB tidak boleh memposting ke ESB production. Masuk dengan akun perorangan.',
+  needs_login: 'Posting berhenti karena sesi ESB berakhir. Masuk lagi lalu pilih "Lanjutkan posting".',
   forbidden: 'Anda tidak berwenang untuk brand atau tindakan ini.',
   not_found: 'Data tidak ditemukan.',
   conflict_version: 'Rencana sudah diubah oleh orang lain. Muat ulang halaman, periksa perubahannya, lalu ulangi.',
@@ -28,6 +42,9 @@ export const PP_ERROR_MESSAGES: Readonly<Record<string, string>> = {
   too_many_docs: 'Jumlah dokumen ESB melebihi batas per rencana.',
   date_out_of_window: 'Tanggal produksi di luar jendela yang diizinkan untuk posting.',
   rate_limited: 'Terlalu banyak permintaan. Tunggu sebentar lalu coba lagi.',
+  // Dikeluarkan prodplan (service.py) tetapi dulu jatuh ke pesan generik status HTTP yang menyesatkan (QA G66b).
+  invalid_quantity: 'Jumlah pada salah satu dokumen ESB tidak valid (harus lebih dari nol). Hitung ulang rencana lalu periksa pratinjau.',
+  reconcile_incomplete: 'Pemeriksaan dokumen di ESB belum tuntas. Coba kirim ulang beberapa saat lagi.',
   esb_unavailable: 'ESB tidak dapat dihubungi. Coba lagi beberapa saat lagi.',
   disabled: 'Modul perencanaan produksi belum aktif.',
   // Kode lokal insight-web (bukan dari prodplan).
@@ -35,7 +52,7 @@ export const PP_ERROR_MESSAGES: Readonly<Record<string, string>> = {
   unreachable: 'Layanan perencanaan produksi tidak dapat dihubungi.',
   bad_response: 'Respons layanan perencanaan produksi tidak dikenali.',
   bad_input: 'Isian tidak valid.',
-  unauthorized: 'Sesi berakhir. Buka ulang Insight dari Odoo.',
+  unauthorized: 'Sesi ESB berakhir (maksimal 1 jam). Silakan masuk lagi.',
   forbidden_origin: 'Permintaan ditolak karena asalnya tidak sama dengan halaman ini.',
   unknown_action: 'Tindakan tidak dikenal.',
 };
@@ -43,7 +60,10 @@ export const PP_ERROR_MESSAGES: Readonly<Record<string, string>> = {
 /** Pesan job gagal (`job.error_code`, §30.8). */
 export const PP_JOB_ERROR_MESSAGES: Readonly<Record<string, string>> = {
   esb_unavailable: 'ESB tidak dapat dihubungi. Coba lagi beberapa saat lagi.',
-  esb_auth_failed: 'Login ke ESB gagal. Hubungi administrator.',
+  not_found: 'Rencana tidak ditemukan atau di luar cabang Anda.',
+  forbidden: 'Akun ESB Anda tidak berwenang untuk proses ini.',
+  esb_auth_failed: 'Login ke ESB gagal. Masuk lagi ke modul Produksi; bila berulang, hubungi administrator.',
+  needs_login: 'Sesi ESB berakhir sebelum proses selesai. Masuk lagi lalu ulangi (aman diulang).',
   call_budget_exceeded: 'Proses melebihi batas panggilan ke ESB. Persempit rentang tanggal atau hubungi administrator.',
   bom_cycle: 'Resep (BOM) memuat siklus.',
   bom_too_deep: 'Resep (BOM) terlalu bertingkat.',

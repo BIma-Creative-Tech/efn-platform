@@ -6242,6 +6242,9 @@ rencana (`PRODPLAN_WRITE_ENABLED=false`); tahap 2 = tulis ke **staging ESB**. Tu
 (§30.4). Pemilik: `services/prodplan` (engineer Python), `services/insight-web` halaman `/produksi` (frontend), overlay
 compose + PKI + pg role (devsecops), grup Odoo di `efn_insight` (Odoo engineer, kecil). Tidak mengulang ADR-040/041.
 
+> **Amandemen 25 Nov 2026:** identitas pindah ke **login per pengguna ESB** (akun service ESB dihapus, asersi `ppa2`,
+> cookie `__Host-epp`, peran dari izin ESB, provisioning JIT Odoo) — **§30.17 menang** atas §30.2–§30.12 dan §30.16.
+
 ### 30.1 Komponen & jaringan
 
 | Komponen | Isi | Network |
@@ -6763,6 +6766,429 @@ Hasil QA, security review (SEC-225..233) dan uji E2E nyata ke ESB staging. Butir
 
 **Pertanyaan tambahan:** **Q-PP13** siapa yang meng-authorize simple-transfer buatan aplikasi di ESB dan berapa lama
 (fase produksi menunggu status 3); **Q-PP14** apakah pemakaian ulang nomor dokumen juga berlaku di ESB production.
+
+### 30.17 Identitas per pengguna ESB (amandemen A1 ADR-051, 25 Nov 2026) — menang atas §30.2–§30.12 dan §30.16 bila berbeda
+
+> **Ringkasan manajemen.** Modul Produksi kini punya halaman masuk sendiri: pengguna mengetik username + password **ESB**
+> miliknya. Aplikasi meneruskannya sekali ke ESB, lalu bekerja dengan token ESB orang itu (maks. 1 jam) yang hanya
+> disimpan di memori server. Tidak ada lagi akun ESB bersama. Halaman Insight lain tetap login Odoo. Login yang berhasil
+> dicatat sebagai user Odoo diarsipkan (tanpa password) untuk migrasi. Tulis ke ESB production tetap terkunci.
+
+Status: **kontrak, belum dibangun.** Keputusan pemilik proyek: ADR-051 §8.1 (Q-PP2 diterima, Q-PP1 diganti, Q-PP6
+dijawab). Pemilik: engineer Python (`services/prodplan`), frontend (`services/insight-web`), Odoo engineer (modul
+`efn_esb_identity`, rancangan fit-gap `docs/agent-reports/efn-odoo-functional.md` "G66b"), devsecops (overlay, PKI, haproxy,
+secret). Semua flag lama tetap (`PRODPLAN_ENABLED`, `PRODPLAN_WRITE_ENABLED`, `INSIGHT_PRODPLAN_ENABLED` default `false`).
+
+#### 30.17.1 Alur
+
+```mermaid
+sequenceDiagram
+  autonumber
+  participant B as Browser (WireGuard)
+  participant W as insight-web
+  participant P as prodplan (memori sesi)
+  participant E as ESB Core
+  participant O as odoo-rpc-gateway → Odoo
+  B->>W: POST /api/prodplan/login (form: username, password)
+  W->>P: POST /v1/session {username,password,n} + X-EFN-Actor ppa2 (sid="")
+  P->>E: POST /auth/login
+  E-->>P: accessToken (TTL 3600 dtk), refreshToken (dibuang)
+  P->>E: GET /user/access ; GET /branch/list/user (Bearer token pengguna)
+  P->>P: peran + cabang + simpan sesi {sha256(sid) → token}
+  P-->>W: 201 {sid, expires_at, session}
+  W-->>B: 303 /produksi + Set-Cookie __Host-epp=<sid>
+  P--)O: (thread latar, bila flag) POST /json/2/efn.esb.identity/efn_esb_provision
+  B->>W: aksi /produksi (cookie __Host-epp)
+  W->>P: /v1/... + ppa2 (sid)
+  P->>E: GET/POST/DELETE dengan token pengguna itu
+```
+
+Password ESB hanya ada di memori request langkah 1–3 (insight-web dan prodplan). **Dilarang**: menulisnya ke log, PG, Odoo,
+cookie, URL, pesan galat, metrik, atau menyimpannya untuk login ulang. `refreshToken` dibuang saat diterima (tidak ada
+endpoint refresh yang terbukti, Q-PP15).
+
+#### 30.17.2 insight-web: halaman & route
+
+| Path | Jenis | Perilaku |
+|---|---|---|
+| `/produksi/masuk` | halaman (server component + form HTML biasa, tanpa JS wajib) | Field `username` (`autocomplete="username"`, maks 64) dan `password` (`type=password`, `autocomplete="current-password"`, maks 128), banner environment ESB (dari konfigurasi statis `esb_env` hasil `GET /v1/meta` tanpa sesi, lihat §30.17.3). Query `?e=` ∈ {`invalid`,`locked`,`no_access`,`unavailable`,`rate`,`expired`} → pesan tetap §30.17.5; nilai lain diabaikan. Username **tidak** diisi ulang dari query |
+| `POST /api/prodplan/login` | route handler | Urutan: flag → `isSameOriginMutation` (ketat) → `Content-Type: application/x-www-form-urlencoded` → body ≤ 4096 byte → batas laju **10 percobaan / 15 menit per `clientIp`** (`lib/rate-limit.ts`) → validasi bentuk (username regex `^[A-Za-z0-9._@-]{1,64}$` setelah trim, password 1..128 karakter; gagal → `e=invalid` tanpa memanggil prodplan) → `POST /v1/session`. Sukses → **303** `/produksi` + `Set-Cookie`. Gagal → 303 `/produksi/masuk?e=<kode>`. Selalu `Cache-Control: no-store` |
+| `POST /api/prodplan/logout` | route handler | origin guard → `DELETE /v1/session` (galat diabaikan) → hapus cookie → 303 `/produksi/masuk` |
+| `/produksi`, `/produksi/baru`, `/produksi/[id]`, `/produksi/kemasan` | halaman (ada) | Lapis kedua: `GET /v1/session`; 401 → redirect `/produksi/masuk?e=expired` + hapus cookie. Header sendiri: nama lengkap ESB, brand, banner ESB STAGING/PRODUCTION, sisa waktu sesi, tombol **Keluar**; **tanpa** navigasi ke halaman Insight lain |
+| `/api/prodplan/*` (ada: `[action]`, `boms`, `jobs/[id]`) | route handler | `guardApi` diganti: flag → cookie `__Host-epp` berbentuk sah → [mutasi: origin + JSON] → batas laju per `sha256(sid)` (nilai lama) → panggil prodplan dengan `ppa2`. prodplan 401 `session_expired` → balas 401 `session_expired` + hapus cookie (UI mengalihkan ke `/produksi/masuk?e=expired`) |
+
+**Cookie sesi Produksi** (terpisah dari `__Host-eis`): `__Host-epp=<sid>`; `sid` = 32 byte acak dari prodplan
+(`secrets.token_urlsafe(32)`, 43 karakter, regex `^[A-Za-z0-9_-]{43}$`); atribut `Path=/; HttpOnly; Secure;
+SameSite=Strict; Max-Age=<expires_at − now>`. insight-web tidak menyimpan apa pun tentang sesi selain meneruskan cookie;
+cookie tidak ditandatangani insight-web (prodplan = otoritas; cookie hanya berguna lewat insight-web karena prodplan tidak
+terjangkau browser).
+
+**Gerbang `proxy.ts`** (urutan baru): bila `isProduksiPath(path)` → **jangan** jalankan autentikasi sesi Odoo; flag mati →
+`/pp-belum-aktif`; `path === '/produksi/masuk'` → lanjut; cookie `__Host-epp` hilang/tidak berbentuk sah → rewrite
+`/produksi/masuk`. Selain `/produksi*` gerbang tidak berubah dan **tidak pernah membaca `__Host-epp`**: sesi ESB tidak bisa
+membuka `/`, `/fnb/*`, `/sm/*`, ekspor, atau route data ClickHouse. Peran PP di `eis3` tidak lagi memberi akses ke
+`/produksi` (`ppAccessDenial` lama dihapus dari jalur akses; `ppNavItems` boleh tetap memakai peran PP `eis3` hanya untuk
+menampilkan tautan menu "Produksi" ke pengguna Odoo). Konstanta `PP_ROLES`, aturan T9, dan grup Odoo PP **tidak dihapus**
+(tujuan pemetaan migrasi, §30.17.11).
+
+#### 30.17.3 API prodplan baru / berubah
+
+| Method & path | Asersi | Body | Sukses | Galat |
+|---|---|---|---|---|
+| `POST /v1/session` | `ppa2` dengan `sid:""` | JSON tepat 3 kunci: `{"username", "password", "n"}`; `n` = 16 byte acak base64url (22 karakter) dibuat insight-web per percobaan agar `bh` bukan hash password | 201 `{"sid", "expires_at", "session": SessionView}` | 400 `invalid_request`, 401 `invalid_credentials`, 403 `no_pp_access` / `esb_company_not_allowed`, 429 `login_locked`, 502 `esb_unavailable`, 503 `session_capacity` / `disabled` |
+| `GET /v1/session` | `ppa2` (sid) | – | 200 `SessionView` (tanpa panggilan ESB) | 401 `session_expired` |
+| `DELETE /v1/session` | `ppa2` (sid) | – | 204 (idempoten; sesi tak dikenal juga 204). prodplan memanggil `POST /auth/logout` ESB dengan token itu, timeout 5 dtk, galat diabaikan | – |
+| `GET /v1/meta` | `ppa2` (sid boleh `""`) | – | tanpa sesi: `{esb_env}` saja; dengan sesi: seperti §30.8 tetapi `brands` = brand sesi, `ck` disaring cabang sesi, `source_locations` **dihapus** | – |
+| `POST /v1/plans/{id}/resume-posting` | `ppa2` (sid) | `{row_version}` | 202 `{outbox_ids}` (§30.17.9) | 403 `esb_access_missing` / `branch_forbidden` / `resume_requires_original_user`, 409 `nothing_to_resume` |
+
+`SessionView` = `{"name": fullName ≤ 64, "esb_env", "esb_brand", "company_code", "roles": ["pp_planner"?, "pp_warehouse"?],
+"doc_access": {"insert": [doc_kind…], "delete": [doc_kind…]}, "branches": [{"branch_id", "name"}], "expires_at"}`. Tanpa
+username, token, `userRoleID`, maupun sid.
+
+**Langkah `POST /v1/session` di prodplan** (berurutan; gagal di langkah mana pun setelah 3 → `POST /auth/logout` ESB
+best-effort lalu galat):
+1. Validasi bentuk (sama dengan §30.17.2) → gagal 401 `invalid_credentials` (tanpa ESB). `username_norm` = trim + lowercase.
+2. Lockout (§30.17.5) → 429 `login_locked` (tanpa ESB). Kapasitas sesi total penuh setelah membuang yang kedaluwarsa → 503
+   `session_capacity`.
+3. `POST /auth/login` **satu kali** (tanpa retry; antrean global 1 login/dtk, maks 5 bersamaan). HTTP 400/401/403 atau
+   envelope gagal → 401 `invalid_credentials` (+ hitung gagal). 5xx/jaringan/timeout → 502 `esb_unavailable` (tidak dihitung
+   gagal). `result.flagActive` bukan `1`/`true` (ESB mengirim int `1`, uji staging 25 Nov 2026) atau `accessToken` kosong → 401 `invalid_credentials`.
+4. Brand: `result.companyCode` dicocokkan dengan `PRODPLAN_ESB_COMPANY_CODES`; tidak cocok atau brand ∉ `PRODPLAN_BRANDS`
+   → 403 `esb_company_not_allowed`.
+5. `exp` = klaim `exp` dari payload JWT `accessToken` (decode base64url **tanpa** verifikasi tanda tangan — token diterima
+   langsung dari ESB lewat TLS; hanya untuk penjadwalan). Tidak terbaca atau > `now + 3600` → `now + 3540`.
+6. `GET /user/access` dan `GET /branch/list/user` (token pengguna, retry GET biasa). Gagal → 502 `esb_unavailable`.
+7. Peran (§30.17.6). Tanpa peran PP → 403 `no_pp_access`. Cabang kosong → 403 `no_pp_access`.
+8. Upsert `prodplan.actor` (§30.17.8) → `actor_id`; buat sesi; lewati batas 3 sesi per aktor (sesi tertua dibuang + logout
+   ESB best-effort). Enqueue provisioning Odoo bila flag (§30.17.11). Balas 201.
+
+**Allowlist ESB (§30.4) tambahan:** `POST /auth/logout`, `GET /user/access` (keduanya diizinkan tanpa `allow_write`).
+`GET /branch/list/user` sudah ada. Parser `/user/access` dan `/branch/list/user` toleran; nama field cabang (`branchID`,
+`branchName`) dan kolom mana yang memuat kode akses seperti `B.4` (`accessID` menurut uji lead; mungkin `indexAccess`)
+**belum terverifikasi** → fixture test dari respons staging yang disamarkan (tanpa username/nama).
+
+#### 30.17.4 Penyimpanan sesi & token (keputusan: **memori proses prodplan**)
+
+| Opsi | Restart prodplan | Worker outbox | Biaya | Keputusan |
+|---|---|---|---|---|
+| **Memori** (dict `sha256(sid) → Session`) | semua sesi hilang → login ulang; outbox berhenti di `needs_login` | memakai sesi hidup aktor | Rp0, tanpa dependency | **Dipilih**: token ≤ 1 jam tanpa refresh, jadi persistensi menyelamatkan < 1 jam; replika tunggal (§30.1); tidak ada token at rest |
+| Tabel PG terenkripsi | sesi bertahan ≤ 1 jam | sama | dependency kripto baru (stdlib tanpa AES) atau `pgcrypto` (kunci lewat SQL) + secret kunci baru, ±3 hari | Ditolak (tinjau bila Q-PP15 menemukan refresh) |
+
+`Session` = `{sid_hash, actor_id, esb_env, esb_brand, company_code, username_norm, name, user_role_id, roles, doc_insert,
+doc_delete, branch_ids, branch_names, access_token, exp, created_at}`. Aturan:
+- prodplan **tidak pernah** menyimpan `sid` mentah (hanya SHA-256), tidak pernah mengirim token ke insight-web, browser, PG,
+  log, atau metrik. `__repr__` objek sesi tidak memuat token/username.
+- TTL sesi = `exp` token (absolut, tanpa perpanjangan). Penyapu tiap 60 dtk membuang sesi kedaluwarsa.
+- Batas: **3 sesi per aktor**, **200 sesi total** (konstanta kode). ESB membalas 401 untuk token sesi → sesi dibuang
+  (alasan `esb_401`).
+- Kontainer: `ulimits: core: 0` (tanpa core dump) ditambahkan ke service `prodplan` (devsecops).
+- Peran, akses dokumen, dan cabang dihitung **sekali saat login** (berlaku ≤ 1 jam; perubahan izin di ESB efektif pada
+  login berikutnya).
+
+#### 30.17.5 Batas laju, lockout, galat, logging
+
+- **insight-web**: 10 percobaan login / 15 menit per IP (`clientIp`), 429 → `e=rate`.
+- **prodplan** (konstanta): per `username_norm` — 5 kali `invalid_credentials` dalam 15 menit → terkunci 15 menit
+  (`login_locked`, ESB tidak dipanggil). Penghitung di memori, direset oleh login sukses. Lockout per username bisa
+  dipakai mengunci pengguna lain (DoS) — diterima karena halaman hanya lewat WireGuard; tujuannya melindungi akun ESB dari
+  kebijakan lockout ESB sendiri (Q-PP18). Antrean login global 1/dtk.
+- **Pesan (Indonesia, tetap; tidak membedakan "user tidak ada" vs "password salah")**:
+
+| Kode | HTTP | `e=` | Pesan |
+|---|---|---|---|
+| `invalid_credentials` | 401 | `invalid` | "Username atau password ESB salah." |
+| `login_locked` | 429 | `locked` | "Terlalu banyak percobaan masuk. Coba lagi dalam 15 menit." |
+| (batas IP insight-web) | 429 | `rate` | sama dengan `login_locked` |
+| `no_pp_access`, `esb_company_not_allowed` | 403 | `no_access` | "Akun ESB ini tidak memiliki izin modul Produksi." |
+| `esb_unavailable`, `session_capacity` | 502/503 | `unavailable` | "ESB sedang tidak dapat dihubungi. Coba beberapa saat lagi." |
+| `session_expired` | 401 | `expired` | "Sesi ESB berakhir (maksimal 1 jam). Silakan masuk lagi." |
+
+- **Log** (tambahan §30.11): event `pp_login {result, user_mask, esb_brand?, actor_id?, duration_ms}`, `pp_logout
+  {actor_id, reason}`, `pp_session_evicted {actor_id, reason}`. `user_mask` = username dinormalisasi: ≤ 3 karakter →
+  `***`; selain itu 2 karakter pertama + `***` + 1 karakter terakhir. **Dilarang** (test grep): password, `n`, `sid`,
+  cookie, token akses/refresh, JWT atau klaimnya, header `X-EFN-Actor`, username utuh, `fullName` di log (nama hanya di PG
+  sebagai aktor). Kolom log `sub` = `actor_id`.
+
+#### 30.17.6 Pemetaan izin ESB → peran & akses dokumen
+
+Aturan dari env non-rahasia (tata bahasa: `KODE:hak[+hak];KODE:hak…`, `hak` ∈ {`view`,`insert`,`update`,`delete`};
+`authorize` **tidak diterima** di aturan; semua klausa wajib terpenuhi = AND). Item `accessDetails[]` cocok dengan `KODE`
+bila nilai string ter-trim kolom kode akses sama persis (§30.17.3 catatan verifikasi); hak terpenuhi bila field
+`<hak>Access === true`. Aturan tak sah → exit 2 (`prodplan_config_error reason=esb_role_rule`).
+
+| Env | Default | Arti |
+|---|---|---|
+| `PRODPLAN_ESB_ROLE_PLANNER` | `B.4:view+insert;K.5:view;D.16:view;C.1:view` | `pp_planner`: Simple Manufacturing tambah, BOM, Stock List, Purchase Request baca |
+| `PRODPLAN_ESB_ROLE_WAREHOUSE` | `D.9:view+insert;D.4:view+insert;D.16:view` | `pp_warehouse`: Simple Transfer + Goods Transfer Request tambah, Stock List |
+| `PRODPLAN_ESB_DOC_ACCESS` | `simple_transfer=D.9;goods_transfer_request=D.4;simple_manufacturing=B.4` | kode akses per `doc_kind` → `doc_insert` (`insertAccess`) dan `doc_delete` (`deleteAccess`) sesi. Mode `standard` (`…/assembly`) mungkin butuh B.1 — ubah nilai ini bila Q-PP3 = standard |
+
+Akun admin staging memenuhi kedua peran (satu orang = dua peran; SoD tetap per dokumen → **alur approve butuh akun ESB
+kedua**, Q-PP17). `authorizeAccess` tidak pernah dipakai dan aplikasi tidak pernah memanggil `…/authorize`.
+
+**Pembatasan cabang (Q-PP6, menggantikan `PRODPLAN_SOURCE_LOCATIONS` yang dihapus)** — `branch_ids` = hasil
+`/branch/list/user`:
+
+| Titik | Aturan | Galat |
+|---|---|---|
+| `GET /v1/plans`, `GET /v1/plans/{id}`, job, post-preview | hanya rencana dengan `branch_id ∈ branch_ids` dan `esb_brand` = brand sesi | di luar → 404 `not_found` (tidak membocorkan keberadaan) |
+| `POST /v1/plans` | `branch_id ∈ branch_ids ∩ PRODPLAN_CK_BRANCHES` | 422 `invalid_branch` |
+| `calculate` (sumber transfer §30.5 butir 7) | sumber = semua lokasi (`GET /location/branch/{id}`) dari cabang ∈ `branch_ids` **milik pemicu hitung**, kecuali lokasi produksi; urutan tetap §30.5; maks 20 cabang (sisanya diabaikan + flag `source_branches_truncated`) | – |
+| `transfers/{tid}/approve\|reject` | pemutus (W) wajib memegang cabang asal **dan** tujuan | 403 `branch_forbidden` |
+| `approve` rencana | W memegang `plan.branch_id` | 403 `branch_forbidden` |
+| `post` / `resume-posting` | pemicu memegang semua cabang asal/tujuan dokumen fase itu **dan** `doc_insert` untuk semua `doc_kind` fase itu | 403 `branch_forbidden` / `esb_access_missing` (`details.doc_kinds`) |
+| `cancel` dengan outbox `confirmed` | pembatal memegang `doc_delete` untuk `doc_kind` terkait | 403 `esb_access_missing` |
+
+Lokasi reject/waste di cabang yang diizinkan bisa muncul sebagai sumber; gerbang = keputusan kepala gudang per transfer
+(L-258). **Cache** (`BomCatalog`, nama cabang/lokasi) dikunci per `actor_id` — tidak ada data ESB yang dibagi antar-pengguna
+lewat cache (R-T24). Snapshot stok & BOM di rencana tetap data rencana yang dilihat semua peserta yang memegang cabangnya.
+
+#### 30.17.7 Asersi `ppa2` (menggantikan `ppa1`; `ppa1` ditolak setelah rilis)
+
+`X-EFN-Actor: ppa2.<payload_b64url>.<sig_b64url>`; kunci, HMAC, base64url, batas 2048 byte sama dengan §30.7. Regex
+`^ppa2\.[A-Za-z0-9_-]{16,1800}\.[A-Za-z0-9_-]{43}$`. Payload JSON tanpa spasi, **tepat 8 kunci berurutan**: `aud`
+(`"prodplan"`), `bh`, `exp` (= `iat + 60`), `iat`, `jti`, `m`, `p`, `sid` (cookie `__Host-epp`, 43 karakter; `""` **hanya**
+untuk `POST /v1/session` dan `GET /v1/meta`). Verifikasi berurutan = §30.7 (regex → HMAC → kunci tepat → aud → waktu → m/p →
+bh → jti) lalu: `sid` kosong di path selain dua itu → 401 `actor_invalid`; `sha256(sid)` tidak ada/kedaluwarsa → 401
+`session_expired`. Identitas, peran, brand, cabang **hanya** dari sesi prodplan (tidak ada klaim identitas dari
+insight-web). Tidak ada lagi pemeriksaan `codes`.
+
+#### 30.17.8 Identitas aktor & SoD (skema)
+
+Migrasi `infra/postgres/init/24-prodplan-esb-login.sql` (idempoten, pola §30.2; **membatalkan diri** dengan `RAISE
+EXCEPTION` bila ada rencana `draft|submitted|approved` atau outbox non-terminal — operator membatalkan rencana staging lama
+dulu, runbook):
+
+```sql
+CREATE TABLE IF NOT EXISTS prodplan.actor (
+  id integer GENERATED ALWAYS AS IDENTITY (START WITH 1000000) PRIMARY KEY,  -- > uid Odoo lama, tidak bentrok
+  esb_env text NOT NULL CHECK (esb_env IN ('staging','production')),
+  esb_brand text NOT NULL CHECK (esb_brand IN ('pb','wtz','bacha','imd','cup')),
+  username_norm varchar(64) NOT NULL CHECK (username_norm ~ '^[a-z0-9._@-]{1,64}$'),
+  display_name varchar(64) NOT NULL,
+  first_login_at timestamptz NOT NULL DEFAULT now(), last_login_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (esb_env, esb_brand, username_norm));
+ALTER TABLE prodplan.outbox ADD COLUMN IF NOT EXISTS run_as_sub integer;          -- NULL = created_by_sub
+-- CHECK status outbox ditambah 'needs_login'; ix_outbox_work TIDAK memuat 'needs_login'.
+```
+- Semua kolom `*_sub` (plan, transfer, suggestion, job, outbox, audit, pack_rule) kini = `prodplan.actor.id` (tanpa FK,
+  agar baris lama ber-uid Odoo tetap terbaca); `*_name` = `display_name` (`fullName` ESB dipotong 64).
+- Upsert aktor saat login: `display_name` dan `last_login_at` diperbarui.
+- **SoD** (§30.7 + §30.16) tidak berubah bentuknya; artinya kini **dua akun ESB berbeda** (`actor.id` berbeda). Dua aktor dari
+  `esb_env`/`esb_brand` yang sama dengan username sama tidak mungkin (UNIQUE).
+- `role_id`, cabang, dan akses dokumen **tidak** disimpan di PG (hanya di sesi memori).
+
+#### 30.17.9 Outbox, worker, job
+
+**Prinsip:** setiap panggilan ESB memakai token sesi hidup milik aktor yang memicu: job → `job.requested_by_sub`; outbox →
+`coalesce(run_as_sub, created_by_sub)`; GET sinkron API → pemanggil. Fungsi `token_for(actor_id, esb_env, esb_brand,
+min_remaining)` mengambil sesi hidup aktor itu dengan `exp` terbesar; `min_remaining` = **120 dtk untuk POST/DELETE**,
+30 dtk untuk GET. Tidak ada login ulang otomatis (prodplan tidak memegang password): 401 ESB → sesi dibuang.
+
+| Situasi | Perilaku |
+|---|---|
+| `pending` dipilih, tanpa token layak | → **`needs_login`** (`last_error_code='needs_login'`), **tanpa** panggilan ESB |
+| `delete_pending` dipilih, tanpa token | → `needs_login` (nomor ESB tetap ada → saat dilanjutkan kembali ke `delete_pending`) |
+| POST/DELETE dibalas 401 | sesi dibuang; baris → `needs_login`; karena `attempts > 0`, saat dilanjutkan baris tanpa nomor menjadi **`unknown`** (rekonsiliasi marker dulu), **tidak** langsung POST |
+| `sent` / `unknown` / `deleting` tanpa token | status tetap, `last_error_code='needs_login'`, `next_attempt_at = now + 60 dtk`; otomatis lanjut (GET saja) saat aktor itu login lagi atau rencana dilanjutkan |
+| Job tanpa token / token hilang di tengah | job `failed`, `error_code='needs_login'` (GET saja; aman diulang setelah login) |
+| Restart prodplan | `sending` → `unknown` (aturan lama); semua sesi hilang → baris menunggu seperti di atas |
+
+`plan.posting_state = needs_attention` bila ada baris `needs_login` atau `last_error_code='needs_login'`. UI menampilkan
+"Posting berhenti karena sesi ESB berakhir" + tombol **Lanjutkan posting**.
+
+**`POST /v1/plans/{id}/resume-posting`** (R; transaksi dengan `FOR UPDATE` plan + outbox):
+1. Tidak ada baris `needs_login` maupun `last_error_code='needs_login'` → 409 `nothing_to_resume`.
+2. Bila ada baris yang **mungkin sudah tercipta di ESB oleh aktor sebelumnya** (status `unknown`/`sent`, atau `needs_login`
+   dengan `attempts > 0` tanpa nomor) dan pemanggil ≠ aktor `run_as` saat ini → 403 `resume_requires_original_user`
+   (rekonsiliasi harus dengan mata yang sama; Q-PP16).
+3. Cek cabang + `doc_insert`/`doc_delete` pemanggil untuk baris yang tersisa (§30.17.6).
+4. `run_as_sub` = pemanggil untuk semua baris non-terminal; `needs_login` → `pending` (nomor NULL, `attempts = 0`) / `unknown`
+   (nomor NULL, `attempts > 0`) / `delete_pending` (nomor ada). Audit `posting_resumed`.
+
+`POST /v1/plans/{id}/post` dan `cancel` menetapkan `created_by_sub`/`run_as_sub` = pemanggil. `POST /v1/outbox/{oid}/resend`
+hanya oleh aktor `run_as` baris itu (selain itu 403 `resume_requires_original_user`). Aturan §30.9/§30.16 lain (marker,
+tanpa POST ulang otomatis, rekonsiliasi semua halaman, GET sebelum DELETE) tetap.
+
+#### 30.17.10 Akun service lama: dihapus
+
+Tidak ada pemakaian akun service untuk apa pun (baca latar belakang pun tidak ada: semua GET dipicu pengguna). Dihapus:
+env `PRODPLAN_ESB_USER_<BRAND>`, `PRODPLAN_ESB_PASSWORD_<BRAND>_FILE`; secret `esb_prodplan_password_<brand>` dari
+`scripts/secrets.list`, overlay, `check-encryption.sh` (gerbang baru: secret itu **tidak boleh** ada di render). Operator
+menghancurkan file secret di host per environment (runbook `prodplan.md`). Isi file itu sama dengan password admin
+`esb_core_password_pb` milik esb-extract (R-S17) → rotasi password admin ESB = keputusan IT klien (dicatat, bukan syarat).
+
+#### 30.17.11 Provisioning JIT ke Odoo (rancangan Odoo: fit-gap G66b; modul final oleh `efn-odoo-engineer`)
+
+| Aspek | Kontrak |
+|---|---|
+| Flag | `PRODPLAN_ODOO_PROVISION_ENABLED=false` (hanya `true` persis). `false` → tidak ada antrean, tidak ada koneksi, secret/sertifikat tidak wajib ada |
+| Pemicu | Langkah 8 `POST /v1/session` (login sukses + peran PP). Tidak pernah dari browser |
+| Eksekusi | antrean memori `queue.Queue(maxsize=100)` + satu thread `odoo-provision`; penuh → dibuang (`dropped`). Dedup memori: payload identik yang sukses < 24 jam → `skipped`. Satu percobaan per login, timeout 5 dtk; gagal → log + metrik, diulang alami pada login berikutnya. **Tidak pernah** memengaruhi respons login |
+| Jalur | `POST https://odoo-rpc-gateway:8443/json/2/efn.esb.identity/efn_esb_provision` lewat network overlay baru **`prodplan-rpc`** (internal; anggota tepat {`prodplan`, `odoo-rpc-gateway`}; oktet 26 — konfirmasi peta oktet saat implementasi) di overlay `infra/compose/docker-compose.prodplan-odoo.yml` |
+| TLS / autentikasi | mTLS verify-full: CA `/run/secrets/efn_ca_crt`, hostname `odoo-rpc-gateway`, sertifikat klien leaf baru `prodplan-odoo|client` (CN `prodplan-odoo`; `gen-pki.sh` → intermediate staging/prod diterbitkan ulang); `Authorization: bearer <API key>` user teknis **`efn_esb_provisioner`** (bukan superuser / ERP manager; grup `group_esb_provisioner` di `efn_role.TECHNICAL_GROUP_XMLIDS`), secret **`odoo_api_key_esb_provisioner`** (mount `prodplan` saja; rotasi 30 hari, runbook API key). haproxy: CN `prodplan-odoo` → hanya path itu (ACL `p_esb_identity`), body ≤ 16 KiB, backend `odoo_forecast` (volume kecil); CN lain tidak bisa memanggil path itu |
+| Payload (tertutup; kunci lain termasuk `password`/`token` → ditolak Odoo) | `{"payload": {"esb_account": "pb", "username": "<username_norm>", "full_name": "<fullName ≤128>", "company_code": "PB", "role_id": <userRoleID>, "pp_roles": ["pp_planner"…], "branch_ids": [<int> ≤200]}}` (bentuk body `/json/2` mengikuti pola §28.2; **belum terverifikasi** untuk method ini) |
+| Respons | 200 `{"identity_id": int, "created": bool}` (tanpa PII). Galat Odoo (mis. `esb_provision_no_company`, login bentrok dengan user non-ESB) → log `odoo_provision_failed {actor_id, http_status, reason_class}` |
+| Perilaku Odoo (fit-gap) | upsert `efn.esb.identity` unik (`esb_account`, `esb_username`); shadow `res.users` internal **diarsipkan sejak create**, hanya `base.group_user` (`Command.set`), tanpa password/email, context `no_reset_password`, login `esb:<akun>:<username>`; `esb_pp_roles` = cermin data, ditimpa tiap login; **tanpa** `res.groups` PP (SEC-228), **tanpa** mengisi `efn_insight_esb_branch_ids`, **tanpa** penautan otomatis ke user yang ada, **tidak pernah** menghapus user; company dari cabang (`efn.insight.esb.branch`) |
+| Odoo mati / gateway 503 | login ESB tetap sukses; identitas tertunda sampai login berikutnya |
+| Environment | Kunci identitas tidak memuat `esb_env`; provisioning dari ESB staging hanya ke stack lokal (dev/stg/gladi). Render production dengan `esb_env=staging` + flag `true` → `check-encryption.sh` gagal |
+| K25-02 | `prodplan` (profil `data`) dan `odoo-rpc-gateway` (`core`) di mesin berbeda → `prodplan-rpc` lintas host lewat WireGuard; tinjau saat pemisahan |
+| Pertanyaan | Q-ESBU1..Q-ESBU6 (fit-gap G66b §5) |
+
+#### 30.17.12 Gerbang tulis ESB production
+
+`PROD_WRITE_UNLOCKED = False` **tetap** (keputusan pemilik proyek #5: semua POST/DELETE dari akun admin ke production
+ditahan). Membuka = **PR terpisah** + review security, setelah: ADR-051 `Accepted`; akun ESB production **perorangan
+non-admin** untuk setiap planner & kepala gudang PB (Q-PP17); PR itu menambah env `PRODPLAN_ESB_ADMIN_ROLE_IDS` (wajib tidak
+kosong bila `esb_env=production` + `PRODPLAN_WRITE_ENABLED=true`, selain itu exit 2) dan penolakan runtime: `post`,
+`resume-posting`, `cancel` ber-DELETE dari sesi dengan `user_role_id` di daftar itu → 403 `admin_account_write_forbidden`,
+dan worker tidak mengirim baris yang `run_as`-nya sesi admin. GET production dengan akun admin diizinkan (keputusan #4)
+setelah staging lulus.
+
+#### 30.17.13 Env, galat, metrik, retensi
+
+**Env prodplan** — baru: `PRODPLAN_ESB_COMPANY_CODES` (wajib per brand aktif, mis. `pb=<companyCode ESB>`; dari `.env`
+lokal karena staging ≠ production; bukan rahasia), `PRODPLAN_ESB_ROLE_PLANNER`, `PRODPLAN_ESB_ROLE_WAREHOUSE`,
+`PRODPLAN_ESB_DOC_ACCESS` (§30.17.6), `PRODPLAN_ODOO_PROVISION_ENABLED=false`, `PRODPLAN_ODOO_RPC_URL`
+(`https://odoo-rpc-gateway:8443`, nilai lain → exit 2), `PRODPLAN_ODOO_API_KEY_FILE`
+(`/run/secrets/odoo_api_key_esb_provisioner`), `PRODPLAN_ODOO_CLIENT_CERT_FILE` / `_KEY_FILE`
+(`/run/secrets/tls_prodplan_odoo_crt|key`), `PRODPLAN_ODOO_CA_FILE` (`/run/secrets/efn_ca_crt`). Dihapus:
+`PRODPLAN_ESB_USER_<BRAND>`, `PRODPLAN_ESB_PASSWORD_<BRAND>_FILE`, `PRODPLAN_SOURCE_LOCATIONS`. **insight-web:** tanpa env
+baru. Konstanta kode (bukan env): batas login, lockout, 3/200 sesi, `min_remaining` 120/30 dtk, antrean provisioning 100,
+timeout 5 dtk.
+
+**Kode galat baru** (prodplan): `invalid_credentials` 401, `login_locked` 429, `no_pp_access` 403,
+`esb_company_not_allowed` 403, `session_capacity` 503, `session_expired` 401, `branch_forbidden` 403,
+`esb_access_missing` 403, `resume_requires_original_user` 403, `nothing_to_resume` 409; `job.error_code` dan
+`outbox.last_error_code` `needs_login`; (PR pembuka) `admin_account_write_forbidden` 403. Batas mutasi 60/menit per
+`actor_id`.
+
+**Metrik baru:** `prodplan_login_total{result}` (ok, invalid_credentials, login_locked, no_pp_access,
+esb_company_not_allowed, esb_unavailable, session_capacity), `prodplan_sessions_active` (gauge),
+`prodplan_session_evictions_total{reason}` (expired, limit, logout, esb_401), `prodplan_odoo_provision_total{result}`
+(ok, failed, dropped, skipped); `prodplan_outbox_rows{status="needs_login"}` lewat gauge lama.
+**Alert baru:** `EfnProdplanLoginFailures` (kenaikan `invalid_credentials`+`login_locked` > 20 dalam 15 menit, warning —
+indikasi tebak password), `EfnProdplanNeedsLogin` (`needs_login` > 0 selama 30 menit, warning),
+`EfnProdplanOdooProvisionFailing` (`failed` naik dan `ok` = 0 selama 6 jam saat flag aktif, info).
+
+**Retensi & PDP (tambahan §30.10):**
+
+| Data | Lokasi | Retensi |
+|---|---|---|
+| Password ESB | memori request insight-web + prodplan | selama request; tidak pernah disimpan |
+| Token akses ESB, sid hash, peran, cabang, `userRoleID` | memori prodplan | ≤ `exp` token (≤ 1 jam), hilang saat restart |
+| `refreshToken` | – | dibuang saat diterima |
+| `prodplan.actor` (username dinormalisasi, nama tampilan) | PG | selama dirujuk rencana/outbox/audit (≤ 1825 hari); purge harian aktor yang tidak dirujuk dan `last_login_at` > 400 hari |
+| Antrean provisioning | memori prodplan | detik; dedup 24 jam di memori |
+| `efn.esb.identity` + shadow `res.users`/`res.partner` | Odoo | Q-ESBU4 (usulan: arsip permanen; identitas dihapus + nama dianonimkan 6 bulan pasca-cutover) — keputusan DPO |
+
+#### 30.17.14 Pertanyaan terbuka baru
+
+| ID | Pertanyaan | Default sementara |
+|---|---|---|
+| **Q-PP15** | Apakah ESB punya endpoint refresh token (diuji: `GET /auth/refresh` 401, `POST /auth/refresh` 405, `POST /auth/refresh-token` 401)? | Tidak ada; sesi maks 1 jam lalu login ulang; `refreshToken` dibuang |
+| **Q-PP16** | Apakah ESB menyaring data transaksi/stok/BOM per pengguna atau per cabang pengguna? (hanya akun admin yang diuji) | Dianggap **tidak terbukti**; aplikasi menegakkan cabang sendiri; tidak diklaim di UI |
+| **Q-PP17** | Akun ESB perorangan: staging minimal **dua akun non-admin** (planner + kepala gudang) untuk uji SoD; production per planner/kepala gudang PB; hak minimum per peran sesuai §30.17.6 (tanpa authorize) | Staging memakai admin → uji approve tertahan |
+| **Q-PP18** | Kebijakan lockout/percobaan gagal login di ESB (berapa kali, berapa lama, apakah akun terkunci permanen) | Lockout aplikasi 5×/15 menit di bawah perkiraan ESB |
+| **Q-PP19** | Arti klaim JWT `authorized` dan daftar `userRoleID` yang = admin | `authorized` diabaikan; daftar admin wajib diisi sebelum PR pembuka §30.17.12 |
+| Q-ESBU1..6 | Provisioning Odoo (fit-gap G66b §5) | Default rekomendasi fit-gap |
+
+**L-258** lokasi reject/waste di cabang yang diizinkan bisa menjadi sumber usulan transfer; gerbang = keputusan kepala
+gudang. **L-259** perubahan izin ESB berlaku pada login berikutnya (≤ 1 jam). **L-260** restart prodplan mengakhiri semua
+sesi.
+
+#### 30.17.15 Test kontrak wajib
+
+**prodplan**
+- Login: sukses (ESB palsu) → sesi + `actor` upsert; password salah → `invalid_credentials` dan ESB dipanggil **sekali**
+  (tanpa retry); 5 gagal → `login_locked` tanpa panggilan ESB; `flagActive` selain `1`/`true` → `invalid_credentials`; `companyCode`
+  asing → `esb_company_not_allowed` + `POST /auth/logout`; `/user/access` tanpa peran → `no_pp_access` + logout; 5xx →
+  `esb_unavailable` tidak menambah hitungan lockout; `exp` JWT rusak → `now+3540`.
+- Pemetaan peran: vektor `/user/access` (fixture staging disamarkan) → peran + `doc_insert/doc_delete`; aturan dengan
+  `authorize` atau tata bahasa salah → exit 2.
+- Log/metrik/respons/PG **tidak pernah** memuat password, `n`, sid, token, refreshToken, username utuh (grep seluruh output
+  test, termasuk saat exception); `repr(session)` bersih.
+- `ppa2`: vektor positif + negatif (kunci salah, kedaluwarsa, replay `jti`, `m`/`p`/`bh` beda, kunci tambahan, `sid` kosong
+  di path lain, sid tak dikenal → `session_expired`); `ppa1` → `actor_invalid`.
+- Cabang: rencana cabang lain → 404; approve transfer lintas cabang tanpa izin → `branch_forbidden`; sumber transfer hanya
+  dari cabang pemicu; cache tidak bocor antar-aktor (dua aktor, BOM berbeda).
+- SoD dengan dua aktor ESB; aktor sama ditolak.
+- Outbox: tanpa token → `needs_login` tanpa panggilan ESB; token sisa < 120 dtk → tidak POST; 401 saat POST → `needs_login`
+  lalu resume → `unknown` → rekonsiliasi (tidak ada POST kedua bila marker ditemukan); resume oleh aktor lain saat ada
+  `unknown` → `resume_requires_original_user`; `delete_pending` → `needs_login` → resume → `delete_pending`; restart
+  (sesi kosong) aman.
+- Job tanpa token → `failed/needs_login`.
+- Allowlist: `POST /auth/logout`, `GET /user/access` lolos; `…/authorize` tetap ditolak; kunci L-250 tetap `False`.
+- Provisioning: flag `false` → tidak ada koneksi; Odoo timeout/503 → login tetap 201 dalam batas waktu normal; payload
+  tepat 7 kunci tanpa password/token; antrean penuh → `dropped`.
+
+**insight-web**
+- Vektor `ppa2` byte-exact sama dengan prodplan; body login memuat `n` acak berbeda tiap percobaan.
+- Proxy: `/produksi/masuk` terbuka tanpa sesi Odoo; `/produksi` tanpa `__Host-epp` → masuk; cookie `__Host-epp` saja
+  **tidak** membuka `/`, `/fnb/*`, `/sm/*`, ekspor, route data; sesi `eis3` ber-peran PP tanpa `__Host-epp` **tidak** membuka
+  `/produksi`.
+- Login route: origin asing → 403; batas 10/15 menit per IP; redirect galat tanpa username; `Set-Cookie` atribut persis
+  (`__Host-`, HttpOnly, Secure, SameSite=Strict, Path=/); 401 `session_expired` dari prodplan → cookie dihapus.
+- Logout memanggil `DELETE /v1/session` dan menghapus cookie walau prodplan gagal.
+
+**Odoo `efn_esb_identity`** — daftar test fit-gap G66b §4 butir 3 (user arsip, grup persis `base.group_user`, tanpa grup PP,
+idempoten, payload ber-`password` ditolak, bentrok login ditolak, `authenticate` → AccessDenied, multi-company).
+
+**devsecops / `check-encryption.sh`** — secret `esb_prodplan_password_*` tidak ada; network `prodplan-rpc` anggota tepat
+{prodplan, odoo-rpc-gateway}; `PRODPLAN_ODOO_PROVISION_ENABLED=false` di render production; haproxy CN `prodplan-odoo` hanya
+`p_esb_identity`; `prodplan` `ulimits.core=0`.
+
+#### 30.17.16 Urutan rilis & estimasi
+
+1. prodplan + insight-web **bersamaan** (`ppa1` → `ppa2` tidak kompatibel; flag tetap `false` sampai keduanya hidup).
+2. Migrasi skema `24-…` setelah rencana staging lama dibatalkan.
+3. Modul Odoo `efn_esb_identity` + overlay `prodplan-odoo` kapan saja (flag provisioning `false`).
+4. Uji E2E staging dengan akun admin (login, hitung, posting transfer); approve/SoD menunggu akun kedua (Q-PP17).
+
+Estimasi (architect): prodplan 1–1,5 minggu-engineer; insight-web 0,5–1; Odoo 0,5–1; devsecops 0,5; QA + security 0,5 —
+total **±3 minggu-engineer**, Rp0 lisensi, tanpa dependency baru.
+
+#### 30.17.17 Koreksi setelah implementasi & uji staging (25 Nov 2026)
+
+Teks di atas dikoreksi agar cocok dengan implementasi yang sudah benar (QA G66b; `docs/agent-reports/efn-qa-engineer.md`). Bagian lain tidak berubah.
+
+| Butir | Kontrak awal | Implementasi (berlaku) |
+|---|---|---|
+| `SessionView` | 9 kunci (§30.17.3) | ditambah `actor_id` (integer = `prodplan.actor.id` = nilai `*_sub` rencana; bukan rahasia; dipakai UI hanya untuk petunjuk SoD). `branches[].name` boleh `null` (nama belum terbaca) |
+| `expires_at` | format tak ditetapkan | ISO 8601 UTC detik penuh `YYYY-MM-DDTHH:MM:SSZ` (di `SessionView` dan respons 201); insight-web juga menerima epoch detik/milidetik |
+| Kedaluwarsa di halaman | redirect `/produksi/masuk?e=expired` + hapus cookie (§30.17.2) | halaman server tidak bisa menulis cookie → redirect ke route baru **`GET /api/prodplan/expired`** (303, hapus `__Host-epp`, lalu `/produksi/masuk?e=expired`); hanya menghapus cookie sendiri |
+| `GET /v1/meta` | sid boleh `""` → `{esb_env}` | tetap; sid **tidak kosong tetapi tak dikenal/kedaluwarsa** = 401 `session_expired` (aturan sama dengan path lain) |
+| `GET /v1/plans` | filter `brand` | `brand` boleh dikosongkan → brand sesi; brand lain = 403 `forbidden` |
+| `cancel` | hanya `doc_delete` untuk `confirmed` (§30.17.6) | juga **409 `invalid_state`** bila ada baris `needs_login` yang mungkin sudah tercipta di ESB (`attempts > 0` atau punya nomor) — status tak pasti harus direkonsiliasi dulu lewat `resume-posting` oleh aktor asal; baris `needs_login` yang belum pernah dikirim dibatalkan (`failed/cancelled`) |
+| `result.flagActive` | bukan `1`/`true` → `invalid_credentials` | tidak berubah (uji staging: ESB mengirim integer `1`); dicatat agar tidak dikembalikan ke `=== true` |
+| Kode galat prodplan lain | tidak terdaftar di §30.17.13 | `invalid_quantity` 422 (qty ≤ 0 saat posting, SEC-231), `reconcile_incomplete` 409 (resend: daftar ESB tak terbaca tuntas), `bad_input` 422 (cari BOM) — sudah ada sejak §30.16; insight-web kini punya pesan sendiri untuk ketiganya (`lib/prodplan-errors.ts`) |
+| `pr_nums` per baris permintaan | – | maks **50** nomor PR per baris (`put_demand`); insight-web memotong ke 50 sebelum mengirim |
+| Payload provisioning `full_name` | `fullName ≤ 128` | karakter kontrol (< 0x20, 0x7F) diganti spasi dan spasi berurutan dipadatkan sebelum kirim, karena Odoo menolak **seluruh** payload bila nama memuat karakter kontrol; `company_code` = kode PT internal prodplan (`PB`, `WTZ`, `BCF`, `IMD`, `CUP`), bukan `companyCode` ESB; Odoo hanya mencocokkannya dengan `efn_brand_code` PT cabang untuk peringatan log (bukan penolakan) |
+| Cabang sumber transfer terpotong | flag `source_branches_truncated` | ditulis di `job.result.warnings.source_branches_truncated` (jumlah cabang yang diabaikan), bukan di rencana |
+
+**Belum terverifikasi runtime (tetap terbuka):** approve/posting dengan dua akun ESB nyata (Q-PP17), `needs_login` + `resume-posting` terhadap ESB, provisioning ke Odoo nyata lewat gateway (bentuk body `/json/2`, header `Host: odoo-rpc-gateway:8443` vs filter haproxy), lockout 5×/15 menit terhadap kebijakan ESB (Q-PP18), migrasi `24-*` di atas data lama, browser sungguhan.
+
+#### 30.17.18 Perubahan setelah security review (SEC-234..241, 25 Nov 2026) — menang atas §30.17.2 bila berbeda
+
+- **Body login** `POST /v1/session` kini persis `{username,password,n,c}`. `c` = kunci klien buram dari insight-web:
+  22 karakter pertama base64url(HMAC-SHA256(kunci asersi sebagai byte ASCII-hex, `"ppc1|" + ip_klien`)), regex
+  `^[A-Za-z0-9_-]{22}$`; tidak ada/tidak valid → 400 `invalid_request`. prodplan tidak memverifikasi isinya dan tidak
+  mencatatnya di log; IP klien memakai helper yang sama dengan batas laju login per IP.
+- **Asersi login mengikat nonce saja:** untuk `POST /v1/session`, `bh` = hash `n` (bukan hash badan), supaya password
+  tidak pernah masuk fungsi hash di sisi mana pun (CodeQL `js/insufficient-password-hash`). prodplan mencocokkan `bh`
+  dengan `n` di badan; asersi login yang meng-hash seluruh badan ditolak 401 `actor_invalid`. Panggilan lain tetap
+  mengikat seluruh badan. Integritas badan login dijaga mTLS antar-sidecar.
+- **Lockout (SEC-234):** 5 gagal/15 menit per pasangan (username, `c`) → pasangan itu terkunci 15 menit; rem global
+  30 gagal/60 menit per username → semua sumber terkunci 15 menit. Login sukses hanya menghapus hitungan pasangannya.
+  Limiter dibatasi 10.000 kunci dan disapu tiap 60 detik.
+- **Import PR (SEC-235):** `branch_ids` wajib subset cabang sesi (403 `branch_forbidden`); kosong → cabang sesi (maks 20).
+- **Sesi yatim (SEC-236):** `GET /api/prodplan/expired` memanggil `DELETE /v1/session` best-effort sebelum menghapus
+  cookie; timeout insight-web khusus login 65 detik; di prodplan antrean login 5 detik dan `POST /auth/login` 8 detik.
+- **SEC-239/241:** `user_mask` username ≤ 6 karakter = karakter pertama + `***`; `repr` respons klien ESB tanpa body;
+  `cancel` menegakkan cabang seperti aksi lain.
+- **SEC-237 (fakta staging):** login dengan username huruf kecil diterima sebagai akun yang sama → username ESB tidak
+  peka huruf besar/kecil di staging; perlu dikonfirmasi untuk production (Q-PP14 diperluas).
+- **Uji staging ulang setelah perbaikan:** login, peran, cabang, SoD, logout, alur web, lockout per sumber (sumber lain
+  tidak ikut terkunci); log prodplan tanpa password, token, username, maupun `c`.
 
 ## 31. Insight "Margin bahan" — indeks harga bahan & atribusi margin (G67)
 

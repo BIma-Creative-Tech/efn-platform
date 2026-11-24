@@ -33,6 +33,12 @@ for f in efn_ca_crt tls_api_gateway_crt tls_api_gateway_key tls_traefik_crt tls_
   [[ -s "${sec}/${f}.txt" ]] || { echo "secret ${f} tidak ada (jalankan scripts/gen-secrets.sh)" >&2; exit 2; }
   cp "${sec}/${f}.txt" "${work}/${f}"
 done
+# G66 A1 (docs/04 §30.17.11): sertifikat klien prodplan-odoo opsional (stack yang belum menerbitkannya melewati kasusnya)
+for f in tls_prodplan_odoo_crt tls_prodplan_odoo_key; do
+  if [[ -s "${sec}/${f}.txt" ]]; then cp "${sec}/${f}.txt" "${work}/${f}"; fi
+done
+# Body 20 KB (> 16 KiB batas CN prodplan-odoo) untuk uji 413
+head -c 20000 /dev/zero | tr '\0' 'a' | sed 's/^/{"x":"/; s/$/"}/' > "${work}/pp_big.json"
 # Klien dengan CN api-gateway tetapi diterbitkan CA ASING (bukan CA internal) -> harus gagal handshake
 printf '[req]\ndistinguished_name = dn\nprompt = no\nx509_extensions = v3\n[dn]\nCN = api-gateway\n[v3]\nextendedKeyUsage = clientAuth\n' \
   > "${work}/foreign.cnf"
@@ -264,6 +270,35 @@ run bff_body_600k_denied deny $BFF -X POST -H "$H_CT" -H "$H_AUTH" --data-binary
 # forecast-worker langsung ke sidecar Odoo (melewati filter) harus ditolak ghostunnel odoo-tls
 # shellcheck disable=SC2086
 run forecast_direct_to_odoo_tls_rejected tls $FC -X POST -H "$H_CT" -H "$H_AUTH" --data '{}' "https://odoo:8443$FC_OK"
+
+# ── G66 A1 §30.17.11: klien prodplan-odoo HANYA efn.esb.identity/efn_esb_provision; CN lain tidak boleh ke sana ──────
+PP_OK=/json/2/efn.esb.identity/efn_esb_provision
+post bff_to_esb_identity_denied deny "$PP_OK"
+postfc forecast_to_esb_identity_denied deny "$PP_OK"
+if [ -f /t/tls_prodplan_odoo_crt ]; then
+  PP="--cert /t/tls_prodplan_odoo_crt --key /t/tls_prodplan_odoo_key"
+  postpp() { # $1 nama, $2 harapan, $3 path, sisa = argumen tambahan
+    n="$1"; w="$2"; p="$3"; shift 3
+    # shellcheck disable=SC2086
+    run "$n" "$w" $PP -X POST -H "$H_CT" -H "$H_AUTH" --data '{"payload":{}}' "$@" "$GW$p"
+  }
+  postpp esb_identity_allowed pass "$PP_OK"
+  postpp prodplan_to_bff_path_denied deny "$OK_PATH"
+  postpp prodplan_to_forecast_path_denied deny "$FC_OK"
+  postpp prodplan_users_write_denied deny /json/2/res.users/write
+  postpp prodplan_identity_search_denied deny /json/2/efn.esb.identity/search_read
+  postpp prodplan_identity_suffix deny "${PP_OK}_v2"
+  postpp prodplan_identity_encoded deny /json/2/efn.esb.identity/efn_esb_pr%6fvision
+  postpp prodplan_identity_query deny "$PP_OK?db=postgres"
+  postpp prodplan_hdr_cookie_ok pass "$PP_OK" -H "Cookie: session_id=x"
+  postpp prodplan_hdr_unknown deny "$PP_OK" -H "X-Anything: 1"
+  # shellcheck disable=SC2086
+  run prodplan_body_too_large deny $PP -X POST -H "$H_CT" -H "$H_AUTH" --data-binary @/t/pp_big.json "$GW$PP_OK"
+  # shellcheck disable=SC2086
+  run prodplan_direct_to_odoo_tls_rejected tls $PP -X POST -H "$H_CT" -H "$H_AUTH" --data '{}' "https://odoo:8443$PP_OK"
+else
+  echo "SKIP prodplan-odoo: sertifikat tls_prodplan_odoo_* belum diterbitkan (bash scripts/gen-pki.sh prodplan-odoo)"
+fi
 
 echo "TOTAL_FAIL=$fails"
 [ "$fails" -eq 0 ]

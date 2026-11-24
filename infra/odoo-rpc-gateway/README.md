@@ -109,6 +109,13 @@
   `docker-compose.segment.yml` menambahkan gateway ke `segment-rpc` (hanya gateway + segment-worker). Odoo wajib memuat
   ketiga metode di `RPC_ALLOWLIST` (`efn_core/tests/test_rpc_surface.py`). Kasus uji `test-gateway.sh` untuk #30-#32
   **belum ditambahkan** (backlog; pola kasus G44).
+- **G66 A1 (25 Nov 2026, docs/04 §30.17.11, ADR-051 §8.5 Proposed): provisioning identitas ESB.** Klien keempat CN
+  `prodplan-odoo` (leaf client baru, `gen-pki.sh`) HANYA path `/json/2/efn.esb.identity/efn_esb_provision` (ACL
+  `p_esb_identity`), body ≤ 16 KiB, backend `odoo_forecast` (antrean 4, `maxconn 1`). User teknis `efn_esb_provisioner`
+  (grup `group_esb_provisioner`, bukan superuser/ERP manager), secret `odoo_api_key_esb_provisioner` (mount prodplan saja).
+  Network: overlay `docker-compose.prodplan-odoo.yml` menambahkan gateway ke `prodplan-rpc` (hanya gateway + prodplan).
+  Odoo wajib memuat metode itu di `RPC_ALLOWLIST` (efn-odoo-engineer, modul `efn_esb_identity`). `test-gateway.sh`
+  menjalankan kasus CN `prodplan-odoo` hanya bila `secrets/tls_prodplan_odoo_*` ada; **belum dijalankan** terhadap stack.
 - **Belum / batas:**
   - Tidak ada metrik HAProxy ke Prometheus (log akses → Loki; alert `EfnOdooRpcGatewayDenied`). Kandidat: PROMEX di
     loopback + sidecar mTLS.

@@ -3,6 +3,7 @@
  *  1. membuat nonce + CSP ketat (lib/csp.ts) dan meneruskannya ke Server Components lewat header permintaan;
  *  2. gerbang sesi: kill switch / kunci hilang -> /belum-aktif; cookie hilang/invalid/kedaluwarsa -> /sesi-berakhir
  *     (cookie dihapus bila ada). Halaman dan route data tetap memverifikasi ulang sendiri (lapis kedua).
+ *     Pengecualian `/produksi*` (docs/04 §30.17.2): gerbang = cookie sesi ESB `__Host-epp`, bukan sesi Odoo.
  * Route handler (/api/*, /sso, /logout) dikecualikan: mereka memasang header & autentikasi sendiri.
  * Gerbang memakai rewrite internal (bukan redirect): host di belakang sidecar/Traefik tidak dipercaya untuk URL absolut.
  */
@@ -13,7 +14,8 @@ import { getConfig, getKey } from './lib/runtime';
 import { SESSION_COOKIE, clearCookieHeader } from './lib/session';
 import { FNB_DENIAL_PATH, fnbRouteDenial } from './lib/fnb-personas';
 import { G68_DISABLED_PATH, g68RouteDenial } from './lib/g68-access';
-import { PP_DENIAL_PATH, ppRouteDenial } from './lib/prodplan-access';
+import { PP_LOGIN_PATH, isProduksiPath } from './lib/prodplan-access';
+import { PP_COOKIE, isPpSid } from './lib/prodplan-session';
 import { DENIAL_PATH, smRouteDenial } from './lib/sm-personas';
 
 const PUBLIC_PATHS = new Set([
@@ -62,7 +64,15 @@ export function proxy(request: NextRequest): NextResponse {
   const csp = buildCsp(nonce, isDev);
   const path = request.nextUrl.pathname;
 
-  if (!PUBLIC_PATHS.has(path)) {
+  if (isProduksiPath(path)) {
+    // G66 (§30.17.2): /produksi* memakai SESI ESB (`__Host-epp`), BUKAN sesi Odoo: autentikasi Odoo tidak dijalankan dan
+    // cookie `__Host-eis` tidak dibaca. Lapis kedua (GET /v1/session) di lib/pp-page.ts.
+    if (!getConfig().ppEnabled) return rewriteTo(request, '/pp-belum-aktif', csp, nonce, false);
+    if (path !== PP_LOGIN_PATH && !isPpSid(request.cookies.get(PP_COOKIE)?.value)) {
+      return rewriteTo(request, PP_LOGIN_PATH, csp, nonce, false);
+    }
+  } else if (!PUBLIC_PATHS.has(path)) {
+    // Sebaliknya: selain /produksi* gerbang TIDAK PERNAH membaca `__Host-epp` (sesi ESB tidak membuka halaman Insight lain).
     const cfg = getConfig();
     const auth = authenticate(
       request.cookies.get(SESSION_COOKIE)?.value,
@@ -86,9 +96,6 @@ export function proxy(request: NextRequest): NextResponse {
     // G68 (§32.8): /pnl, /waste, /fill-rate butuh INSIGHT_G68_ENABLED=true (mati -> halaman "Segera"); /pnl juga persona exec.
     const g68Denial = g68RouteDenial(path, auth.session, { g68Enabled: cfg.g68Enabled, fnbEnabled: cfg.fnbEnabled });
     if (g68Denial) return rewriteTo(request, g68Denial === 'g68-belum-aktif' ? G68_DISABLED_PATH : FNB_DENIAL_PATH[g68Denial], csp, nonce, false);
-    // G66 (§30.12): /produksi* butuh INSIGHT_PRODPLAN_ENABLED=true + peran PP (lapis kedua: halaman + route handler API).
-    const ppDenial = ppRouteDenial(path, auth.session, cfg.ppEnabled);
-    if (ppDenial) return rewriteTo(request, PP_DENIAL_PATH[ppDenial], csp, nonce, false);
   }
 
   const requestHeaders = new Headers(request.headers);

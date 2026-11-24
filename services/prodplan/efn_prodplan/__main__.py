@@ -60,6 +60,18 @@ def _purge_loop(db: Any, retention_days: int, stop: threading.Event) -> None:
         stop.wait(PURGE_CHECK_SECONDS)
 
 
+def _sweep_loop(sessions: Any, login: Any, stop: threading.Event) -> None:
+    """§30.17.4: penyapu sesi kedaluwarsa + entri lockout kedaluwarsa (SEC-241) tiap 60 dtk."""
+    from efn_prodplan.session import SWEEP_SECONDS
+
+    while not stop.wait(SWEEP_SECONDS):
+        try:
+            sessions.sweep()
+            login.sweep()
+        except Exception as exc:  # noqa: BLE001
+            log_event("session_sweep_failed", logging.ERROR, error_class=type(exc).__name__)
+
+
 def _serve_http(app: App, stop: threading.Event) -> int:
     server = make_server(app, "127.0.0.1", 8080)
     thread = threading.Thread(target=server.serve_forever, name="api", daemon=True)
@@ -89,43 +101,58 @@ def cmd_serve() -> int:
         return 2
 
     from efn_prodplan import jobs, outbox
-    from efn_prodplan.esb import EsbClient, HttpsTransport, TokenBucket
+    from efn_prodplan.esb import HttpsTransport
+    from efn_prodplan.provision import build_provisioner
     from efn_prodplan.service import Service
-    from efn_prodplan.store import Database, PgJobStore, PgOutboxStore
+    from efn_prodplan.session import (
+        READ_MIN_REMAINING,
+        EsbClients,
+        LoginService,
+        SessionStore,
+    )
+    from efn_prodplan.store import Database, PgActorStore, PgJobStore, PgOutboxStore
 
     metrics.WRITE_ENABLED.set(1 if settings.write_enabled else 0)
     metrics.INFO.set(1, settings.esb_env, settings.mfg_mode)
     db = Database(settings.pg)
-    transport = HttpsTransport(settings.max_response_bytes)
+    # §30.17: tidak ada akun service ESB; semua klien bertoken sesi pengguna (memori proses ini saja).
+    sessions = SessionStore()
+    clients = EsbClients(
+        base_url=settings.base_url,
+        mfg_mode=settings.mfg_mode,
+        transport=HttpsTransport(settings.max_response_bytes),
+        sessions=sessions,
+        timeout=float(settings.timeout_seconds),
+        rate_per_sec=settings.rate_per_sec,
+    )
+    provisioner = build_provisioner(settings.odoo)  # flag mati -> no-op, tanpa koneksi/secret
+    login = LoginService(
+        esb_env=settings.esb_env,
+        brands=settings.brands,
+        planner_rules=settings.planner_rules,
+        warehouse_rules=settings.warehouse_rules,
+        doc_access_map=settings.doc_access,
+        sessions=sessions,
+        clients=clients,
+        actors=PgActorStore(db),
+        provisioner=provisioner,
+    )
 
-    def client(cfg: Any, bucket: TokenBucket, *, allow_write: bool, max_calls: int | None) -> EsbClient:
-        return EsbClient(
-            settings.base_url,
-            cfg.user,
-            cfg.password,
-            transport,
-            bucket,
-            mfg_mode=settings.mfg_mode,
-            allow_write=allow_write,
-            timeout=float(settings.timeout_seconds),
-            max_calls=max_calls,
+    def job_client(actor_id: int, brand: str) -> Any:
+        return clients.for_owner(
+            actor_id, settings.esb_env, brand, READ_MIN_REMAINING, max_calls=settings.job_max_calls
         )
 
-    read_clients: dict[str, EsbClient] = {}
-    job_clients: dict[str, EsbClient] = {}
-    outbox_clients: dict[str, EsbClient] = {}
-    for cfg in settings.brands:
-        bucket = TokenBucket(settings.rate_per_sec)  # satu bucket per brand, dipakai bersama ketiga klien
-        read_clients[cfg.key] = client(cfg, bucket, allow_write=False, max_calls=None)
-        job_clients[cfg.key] = client(cfg, bucket, allow_write=False, max_calls=settings.job_max_calls)
-        outbox_clients[cfg.key] = client(cfg, bucket, allow_write=settings.write_enabled, max_calls=None)
+    def outbox_client(actor_id: int, brand: str, min_remaining: int) -> Any:
+        owned = clients.for_owner(actor_id, settings.esb_env, brand, min_remaining, allow_write=settings.write_enabled)
+        return None if owned is None else owned[1]
 
-    catalog = jobs.BomCatalog()  # cache header BOM bersama API + job
-    service = Service(settings, db, read_clients, _now, catalog)
-    runner = jobs.JobRunner(db, PgJobStore(db), settings, job_clients, _now, catalog)
+    catalog = jobs.BomCatalog()  # cache header BOM bersama API + job (kunci per aktor)
+    service = Service(settings, db, clients.for_actor, _now, catalog)
+    runner = jobs.JobRunner(db, PgJobStore(db), settings, job_client, _now, catalog)
     worker = outbox.OutboxWorker(
         PgOutboxStore(db),
-        outbox_clients,
+        outbox_client,
         esb_env=settings.esb_env,
         write_enabled=settings.write_enabled,
         reconcile_grace_seconds=settings.reconcile_grace_seconds,
@@ -137,7 +164,10 @@ def cmd_serve() -> int:
             target=outbox.run_loop, args=(worker, stop, settings.outbox_poll_seconds), name="outbox", daemon=True
         ),
         threading.Thread(target=_purge_loop, args=(db, settings.retention_days, stop), name="purge", daemon=True),
+        threading.Thread(target=_sweep_loop, args=(sessions, login, stop), name="session-sweep", daemon=True),
     ]
+    if provisioner.enabled:
+        threads.append(threading.Thread(target=provisioner.run_loop, args=(stop,), name="odoo-provision", daemon=True))
     for thread in threads:
         thread.start()
     log_event(
@@ -147,7 +177,14 @@ def cmd_serve() -> int:
         write_enabled=settings.write_enabled,
         count=len(settings.brands),
     )
-    app = App(enabled=True, assert_key=settings.assert_key, service=service, ready_check=db.ready)
+    app = App(
+        enabled=True,
+        assert_key=settings.assert_key,
+        service=service,
+        ready_check=db.ready,
+        sessions=sessions,
+        login=login,
+    )
     return _serve_http(app, stop)
 
 

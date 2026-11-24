@@ -18,15 +18,22 @@ export function Shell({
   headerSlot,
   belowHeader,
   footNote,
+  logoutAction = '/logout',
+  standalone = false,
   children,
 }: {
-  session: Session;
+  /** Hanya `name` yang dipakai (modul Produksi memakai nama pengguna ESB, bukan sesi Odoo). */
+  session: Pick<Session, 'name'>;
   groups: readonly NavGroup[];
   odooUrl: string | null;
   roleLabel: ReactNode;
   headerSlot?: ReactNode;
   belowHeader?: ReactNode;
   footNote: string;
+  /** Tujuan form "Keluar" (modul Produksi: `/api/prodplan/logout`). */
+  logoutAction?: string;
+  /** true = tanpa tautan ke halaman Insight lain (Glosarium) dan ke Odoo: modul Produksi punya sesi sendiri (§30.17.2). */
+  standalone?: boolean;
   children: ReactNode;
 }): ReactNode {
   return (
@@ -43,11 +50,13 @@ export function Shell({
           </div>
           <NavLinks groups={groups} />
           <div className="sidebar-foot">
-            <Link href="/glosarium" className="nav-link" title="Glosarium istilah">
-              <Icon name="book" />
-              <span>Glosarium</span>
-            </Link>
-            {odooUrl ? (
+            {standalone ? null : (
+              <Link href="/glosarium" className="nav-link" title="Glosarium istilah">
+                <Icon name="book" />
+                <span>Glosarium</span>
+              </Link>
+            )}
+            {odooUrl && !standalone ? (
               <a href={odooUrl} className="nav-link" title="Kembali ke Odoo">
                 <Icon name="home" />
                 <span>Kembali ke Odoo</span>
@@ -67,7 +76,7 @@ export function Shell({
                 <span className="user-name">{session.name}</span>
                 <span className="user-role">{roleLabel}</span>
               </div>
-              <form method="post" action="/logout">
+              <form method="post" action={logoutAction}>
                 <button type="submit" className="btn">
                   Keluar
                 </button>

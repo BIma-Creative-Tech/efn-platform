@@ -27,7 +27,12 @@ export const PP_WINDOW_MS = 60_000;
 export const createPpMutationLimiter = (): RateLimiter => new RateLimiter(PP_MUTATION_LIMIT, PP_WINDOW_MS);
 export const createPpReadLimiter = (): RateLimiter => new RateLimiter(PP_READ_LIMIT, PP_WINDOW_MS);
 
-export const createPageQueryLimiter = (): RateLimiter => new RateLimiter(PAGE_QUERY_LIMIT, PAGE_QUERY_WINDOW_MS);
+/** Login Produksi (§30.17.5): 10 percobaan / 15 menit per IP sumber (clientIp). */
+export const PP_LOGIN_LIMIT = 10;
+export const PP_LOGIN_WINDOW_MS = 15 * 60_000;
+export const createPpLoginLimiter = (): RateLimiter => new RateLimiter(PP_LOGIN_LIMIT, PP_LOGIN_WINDOW_MS);
+
+export const createPageQueryLimiter =(): RateLimiter => new RateLimiter(PAGE_QUERY_LIMIT, PAGE_QUERY_WINDOW_MS);
 export const createExportLimiter = (): RateLimiter => new RateLimiter(EXPORT_LIMIT, EXPORT_WINDOW_MS);
 
 /** `INSIGHT_CH_EXPORT_CONCURRENCY`: bilangan bulat 1..8, selain itu default 3. */

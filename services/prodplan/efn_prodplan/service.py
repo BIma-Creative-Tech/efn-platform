@@ -1,7 +1,10 @@
 """Handler API prodplan (docs/04 §30.8). Aturan murni ada di `workflow`; modul ini = validasi body + SQL transaksi.
 
 Setiap mutasi rencana: `SELECT ... FOR UPDATE` baris `plan` + cek `row_version` -> 409 `conflict_version` (§30.6).
-Rencana hanya terlihat bila `esb_env` = environment proses dan brand-nya lolos `workflow.require_brand`.
+
+§30.17 (amandemen A1 ADR-051): pemanggil = sesi ESB (`Actor` dari `session.Session`). Rencana hanya terlihat bila
+`esb_env` = environment proses, `esb_brand` = brand sesi, dan `branch_id` ∈ cabang sesi (di luar -> 404). Semua GET ESB
+sinkron memakai token pemanggil; cache BOM/nama lokasi dikunci per aktor (`cache_scope`).
 """
 
 import re
@@ -12,9 +15,9 @@ from typing import Any
 
 from efn_prodplan.actor import Actor
 from efn_prodplan.calc import q4
-from efn_prodplan.config import BRAND_CODES, Settings
-from efn_prodplan.esb import EsbError
-from efn_prodplan.jobs import BomCatalog, BomHeader, validate_search
+from efn_prodplan.config import Settings
+from efn_prodplan.esb import EsbError, EsbTokenRejected
+from efn_prodplan.jobs import BomCatalog, BomHeader, cache_scope, source_branches, validate_search
 from efn_prodplan.names import NameCache
 from efn_prodplan.outbox import RESENDABLE_ERRORS, find_by_marker
 from efn_prodplan.payloads import (
@@ -38,11 +41,15 @@ from efn_prodplan.workflow import (
     check_stock_age,
     check_version,
     plan_no,
+    plan_resume,
     posting_state,
     preview_digest,
+    require_branches,
     require_brand,
+    require_doc_access,
     require_role,
     require_status,
+    run_as,
     transition,
 )
 
@@ -127,6 +134,31 @@ def parse_uuid(value: str) -> str:
     if not _UUID_RE.fullmatch(value):
         raise ApiError(404, "not_found")
     return value
+
+
+def pr_branches(actor: Actor, given: list[int]) -> list[int]:
+    """SEC-235: `branch_ids` import PR wajib subset cabang sesi (403 `branch_forbidden`); kosong -> cabang sesi dengan
+    batas sama seperti sumber transfer (maks 20), bukan "semua yang terlihat token ESB"."""
+    if given:
+        require_branches(actor, given)
+        return given
+    return source_branches(actor.branch_ids, 0)[0]
+
+
+def delete_branches(rows: list[dict[str, Any]], plan_branch: int) -> set[int]:
+    """Cabang dokumen outbox: transfer = asal + tujuan (`plan_transfer`), produksi = cabang rencana."""
+    out: set[int] = set()
+    for r in rows:
+        pair = [b for b in (r.get("origin_branch_id"), r.get("dest_branch_id")) if b is not None]
+        out.update(int(b) for b in (pair or [plan_branch]))
+    return out
+
+
+def esb_api_error(exc: EsbError) -> ApiError:
+    """GET ESB sinkron gagal: token pemanggil ditolak (sesi sudah dibuang) -> 401 `session_expired`; lainnya -> 502."""
+    if isinstance(exc, EsbTokenRejected):
+        return ApiError(401, "session_expired")
+    return ApiError(502, "esb_unavailable")
 
 
 def to_json(value: Any) -> Any:
@@ -230,36 +262,48 @@ class Service:
         self,
         settings: Settings,
         db: Database,
-        read_clients: Mapping[str, Any],
+        read_clients: Callable[[Actor], Any] | None,
         clock: Callable[[], datetime],
         catalog: BomCatalog | None = None,
         names: NameCache | None = None,
     ) -> None:
         self.settings = settings
         self.db = db
-        self._clients = read_clients
+        self._clients = read_clients or (lambda _actor: None)
         self._clock = clock
         self._catalog = catalog or BomCatalog()
         self._names = names or NameCache()
 
+    def _client(self, actor: Actor) -> Any:
+        """Klien ESB bertoken sesi pemanggil; sesi hilang -> 401 `session_expired`."""
+        client = self._clients(actor)
+        if client is None:
+            raise ApiError(401, "session_expired")
+        return client
+
     # ------------------------------------------------------------------ nama (tampilan; gagal -> None)
-    def _branch_name(self, brand: str, branch_id: Any) -> str | None:
-        return self._names.branch_name(brand, self._clients.get(brand), branch_id)
+    @staticmethod
+    def _branch_name(actor: Actor, branch_id: Any) -> str | None:
+        """Nama cabang dari `/branch/list/user` saat login (tanpa GET baru); cabang di luar sesi -> None."""
+        try:
+            return actor.branch_names.get(int(branch_id)) or None
+        except (TypeError, ValueError):
+            return None
 
-    def _location_name(self, brand: str, branch_id: Any, location_id: Any) -> str | None:
-        return self._names.location_name(brand, self._clients.get(brand), branch_id, location_id)
+    def _location_name(self, actor: Actor, branch_id: Any, location_id: Any) -> str | None:
+        scope = cache_scope(actor.sub, actor.brand)
+        return self._names.location_name(scope, self._clients(actor), branch_id, location_id)
 
-    def _name_plan(self, item: dict[str, Any]) -> None:
-        brand = item.get("esb_brand") or ""
-        item["branch_name"] = self._branch_name(brand, item.get("branch_id"))
+    def _name_plan(self, actor: Actor, item: dict[str, Any]) -> None:
+        item["branch_name"] = self._branch_name(actor, item.get("branch_id"))
         item["production_location_name"] = self._location_name(
-            brand, item.get("branch_id"), item.get("production_location_id")
+            actor, item.get("branch_id"), item.get("production_location_id")
         )
 
-    def _name_place(self, brand: str, place: dict[str, Any]) -> dict[str, Any]:
+    def _name_place(self, actor: Actor, place: dict[str, Any]) -> dict[str, Any]:
         out = dict(place)
-        out["branch_name"] = self._branch_name(brand, place.get("branch_id"))
-        out["location_name"] = self._location_name(brand, place.get("branch_id"), place.get("location_id"))
+        out["branch_name"] = self._branch_name(actor, place.get("branch_id"))
+        out["location_name"] = self._location_name(actor, place.get("branch_id"), place.get("location_id"))
         return out
 
     @staticmethod
@@ -274,7 +318,7 @@ class Service:
 
     # ------------------------------------------------------------------ util
     def _brand_ok(self, actor: Actor, brand: str) -> None:
-        require_brand(actor, brand, [b.key for b in self.settings.brands], BRAND_CODES)
+        require_brand(actor, brand, [b.key for b in self.settings.brands])
 
     def _plan_for_update(self, tx: Tx, actor: Actor, plan_id: str) -> dict[str, Any]:
         sql = f"SELECT {PLAN_COLUMNS} FROM prodplan.plan WHERE id = %s FOR UPDATE"  # noqa: S608
@@ -285,9 +329,14 @@ class Service:
         return self._visible(actor, tx.one(sql, (parse_uuid(plan_id),)))
 
     def _visible(self, actor: Actor, plan: dict[str, Any] | None) -> dict[str, Any]:
-        if plan is None or plan["esb_env"] != self.settings.esb_env:
+        """§30.17.6: env proses + brand sesi + cabang sesi; selain itu 404 (tidak membocorkan keberadaan)."""
+        if (
+            plan is None
+            or plan["esb_env"] != self.settings.esb_env
+            or plan["esb_brand"] != actor.brand
+            or int(plan["branch_id"]) not in actor.branch_ids
+        ):
             raise ApiError(404, "not_found")
-        self._brand_ok(actor, plan["esb_brand"])
         return plan
 
     @staticmethod
@@ -302,11 +351,11 @@ class Service:
     def _audit(self, tx: Tx, plan: Mapping[str, Any], actor: Actor, action: str, rid: str, **detail: Any) -> None:
         audit(tx, plan["company_code"], plan.get("id"), actor.sub, actor.name, action, to_json(detail), rid)
 
-    def _bom_header(self, brand: str, bom_id: int) -> BomHeader | None:
+    def _bom_header(self, actor: Actor, bom_id: int) -> BomHeader | None:
         try:
-            return self._catalog.header(brand, self._clients[brand], bom_id)
-        except EsbError:
-            raise ApiError(502, "esb_unavailable") from None
+            return self._catalog.header(cache_scope(actor.sub, actor.brand), self._client(actor), bom_id)
+        except EsbError as exc:
+            raise esb_api_error(exc) from None
 
     def search_boms(self, actor: Actor, query: Mapping[str, str]) -> dict[str, Any]:
         """`GET /v1/boms?brand=&q=&limit=` (keputusan lead G66; kontrak §30.8 diperbarui lead). `q` tidak dilog."""
@@ -324,9 +373,9 @@ class Service:
         if not 1 <= limit <= 50:
             raise ApiError(422, "bad_input", {"field": "limit"})
         try:
-            items = self._catalog.search(brand, self._clients[brand], q, limit)
-        except EsbError:
-            raise ApiError(502, "esb_unavailable") from None
+            items = self._catalog.search(cache_scope(actor.sub, brand), self._client(actor), q, limit)
+        except EsbError as exc:
+            raise esb_api_error(exc) from None
         return {"items": items}
 
     def _plan_view(self, tx: Tx, plan_id: Any) -> dict[str, Any]:
@@ -335,27 +384,27 @@ class Service:
         return to_json(plan)
 
     # ------------------------------------------------------------------ meta & pack rules
-    def meta(self, actor: Actor) -> dict[str, Any]:
+    def meta(self, actor: Actor | None) -> dict[str, Any]:
+        """§30.17.3: tanpa sesi -> `{esb_env}` saja (banner halaman masuk); dengan sesi -> brand sesi, `ck` disaring
+        cabang sesi, tanpa `source_locations`."""
+        if actor is None:
+            return {"esb_env": self.settings.esb_env}
         require_role(actor, ANY_ROLE)
         brands = []
         for b in self.settings.brands:
-            if BRAND_CODES[b.key] & actor.codes:
+            if b.key == actor.brand:
                 ck = [
                     {
                         "branch_id": br,
                         "production_location_id": loc,
-                        "branch_name": self._branch_name(b.key, br),
-                        "production_location_name": self._location_name(b.key, br, loc),
+                        "branch_name": self._branch_name(actor, br),
+                        "production_location_name": self._location_name(actor, br, loc),
                     }
                     for br in sorted(b.ck)
+                    if br in actor.branch_ids
                     for loc in b.ck[br]
                 ]
-                sources = [
-                    self._name_place(b.key, {"branch_id": br, "location_id": loc}) for br, loc in b.source_locations()
-                ]
-                brands.append(
-                    {"esb_brand": b.key, "company_code": b.company_code, "ck": ck, "source_locations": sources}
-                )
+                brands.append({"esb_brand": b.key, "company_code": b.company_code, "ck": ck})
         return {
             "esb_env": self.settings.esb_env,
             "write_enabled": self.settings.write_enabled,
@@ -434,16 +483,10 @@ class Service:
     # ------------------------------------------------------------------ rencana
     def list_plans(self, actor: Actor, query: Mapping[str, str]) -> dict[str, Any]:
         require_role(actor, ANY_ROLE)
-        brand = query.get("brand", "")
-        if brand:
-            self._brand_ok(actor, brand)
-            brands = [brand]
-        else:  # tanpa filter brand (insight-web): semua brand aktif yang kode PT-nya ada di klaim
-            brands = [b.key for b in self.settings.brands if BRAND_CODES[b.key] & actor.codes]
-            if not brands:
-                raise ApiError(403, "forbidden")
-        where = ["esb_env = %s", "esb_brand = ANY(%s)"]
-        params: list[Any] = [self.settings.esb_env, brands]
+        brand = query.get("brand", "") or actor.brand  # tanpa filter brand (insight-web) = brand sesi
+        self._brand_ok(actor, brand)
+        where = ["esb_env = %s", "esb_brand = %s", "branch_id = ANY(%s)"]  # §30.17.6: hanya cabang sesi
+        params: list[Any] = [self.settings.esb_env, brand, sorted(actor.branch_ids)]
         if query.get("from"):
             where.append("production_date >= %s")
             params.append(req_date(query["from"], "from"))
@@ -472,7 +515,7 @@ class Service:
             )
         out_items = to_json(items)
         for item in out_items:
-            self._name_plan(item)
+            self._name_plan(actor, item)
         return {"items": out_items, "count": int((count or {}).get("n") or 0)}
 
     def create_plan(self, actor: Actor, body: Mapping[str, Any], rid: str) -> Any:
@@ -484,8 +527,8 @@ class Service:
         prod_date = req_date(body.get("production_date"), "production_date")
         notes = req_str(body, "notes", 1000, optional=True, min_len=0)
         cfg = self.settings.brand(brand)
-        if cfg is None or not cfg.is_ck(branch_id, loc_id):
-            raise ApiError(422, "invalid_branch")
+        if cfg is None or not cfg.is_ck(branch_id, loc_id) or branch_id not in actor.branch_ids:
+            raise ApiError(422, "invalid_branch")  # §30.17.6: branch_ids sesi ∩ PRODPLAN_CK_BRANCHES
         today = self._clock().date()
         if not today - timedelta(days=30) <= prod_date <= today + timedelta(days=60):
             raise _bad("production_date")
@@ -518,7 +561,7 @@ class Service:
             assert row is not None
             self._audit(tx, row, actor, "plan_created", rid, plan_no=number)
         out = to_json(row)
-        self._name_plan(out)
+        self._name_plan(actor, out)
         return out
 
     def get_plan(self, actor: Actor, plan_id: str) -> dict[str, Any]:
@@ -600,13 +643,12 @@ class Service:
         out["limitations"] = list(LIMITATIONS)
         out["posting_state"] = posting_state(out["outbox"])
         # Nama dari ESB (cache) di luar transaksi DB; gagal -> null.
-        self._name_plan(out)
-        brand = out["esb_brand"]
+        self._name_plan(actor, out)
         for t in out["transfers"]:
-            t["origin_branch_name"] = self._branch_name(brand, t["origin_branch_id"])
-            t["origin_location_name"] = self._location_name(brand, t["origin_branch_id"], t["origin_location_id"])
-            t["dest_branch_name"] = self._branch_name(brand, t["dest_branch_id"])
-            t["dest_location_name"] = self._location_name(brand, t["dest_branch_id"], t["dest_location_id"])
+            t["origin_branch_name"] = self._branch_name(actor, t["origin_branch_id"])
+            t["origin_location_name"] = self._location_name(actor, t["origin_branch_id"], t["origin_location_id"])
+            t["dest_branch_name"] = self._branch_name(actor, t["dest_branch_id"])
+            t["dest_location_name"] = self._location_name(actor, t["dest_branch_id"], t["dest_location_id"])
         return out
 
     def put_demand(self, actor: Actor, plan_id: str, body: Mapping[str, Any], rid: str) -> Any:
@@ -646,7 +688,7 @@ class Service:
             require_status(plan["status"], {"draft"})
             check_version(int(plan["row_version"]), body.get("row_version"))
         for idx, item in enumerate(parsed):  # GET ESB (header BOM, di-cache) di luar transaksi
-            header = self._bom_header(plan["esb_brand"], item["bom_id"])
+            header = self._bom_header(actor, item["bom_id"])
             if header is None or header.product_detail_id != item["product_detail_id"]:
                 raise ApiError(422, "bom_not_assembly", {"field": f"lines[{idx}].bom_id"})
             item["header"] = header
@@ -716,7 +758,7 @@ class Service:
         params = {
             "required_date_from": start.isoformat(),
             "required_date_to": end.isoformat(),
-            "branch_ids": req_int_list(body, "branch_ids", 50),
+            "branch_ids": pr_branches(actor, req_int_list(body, "branch_ids", 50)),
             "status_ids": req_int_list(body, "status_ids", 10) if "status_ids" in body else [3, 30],
         }
         return self._enqueue(actor, plan_id, "pr_import", params, rid)
@@ -883,11 +925,13 @@ class Service:
             check_version(int(plan["row_version"]), body.get("row_version"))
             check_sod(actor.sub, plan["created_by_sub"], plan["submitted_by_sub"], self._contributors(tx, plan["id"]))
             row = tx.one(
-                "SELECT id FROM prodplan.plan_transfer WHERE id = %s AND plan_id = %s FOR UPDATE",
+                "SELECT id, origin_branch_id, dest_branch_id FROM prodplan.plan_transfer"
+                " WHERE id = %s AND plan_id = %s FOR UPDATE",
                 (int(tid), plan["id"]),
             )
             if row is None:
                 raise ApiError(404, "not_found")
+            require_branches(actor, (row["origin_branch_id"], row["dest_branch_id"]))  # §30.17.6: asal DAN tujuan
             tx.exec(
                 "UPDATE prodplan.plan_transfer SET status = %s, decided_by_sub = %s, decided_by_name = %s,"
                 " decided_at = now(), reject_reason = %s WHERE id = %s",
@@ -909,6 +953,7 @@ class Service:
             plan = self._plan_for_update(tx, actor, plan_id)
             target = transition("approve", plan["status"])
             check_version(int(plan["row_version"]), body.get("row_version"))
+            require_branches(actor, (plan["branch_id"],))
             check_sod(actor.sub, plan["created_by_sub"], plan["submitted_by_sub"], self._contributors(tx, plan["id"]))
             pending = tx.one(
                 "SELECT count(*) AS n FROM prodplan.plan_transfer WHERE plan_id = %s AND status = 'proposed'",
@@ -970,9 +1015,8 @@ class Service:
             require_status(plan["status"], {"approved", "posted"})
             preview = self._preview(tx, plan, phase)
         # Nama ditambahkan SETELAH digest dihitung (digest tidak bergantung pada nama/ketersediaan ESB).
-        brand = plan["esb_brand"]
         preview["docs"] = [
-            {**d, "origin": self._name_place(brand, d["origin"]), "dest": self._name_place(brand, d["dest"])}
+            {**d, "origin": self._name_place(actor, d["origin"]), "dest": self._name_place(actor, d["dest"])}
             for d in preview["docs"]
         ]
         return preview
@@ -999,15 +1043,15 @@ class Service:
                 "transfers_not_authorized",
                 {"doc_numbers": [r["esb_doc_number"] for r in rows if r["esb_doc_number"]]},
             )
-        client = self._clients[plan["esb_brand"]]
+        client = self._client(actor)
         not_ok: list[str] = []
         for r in rows:
             if r["doc_kind"] != "simple_transfer":
                 continue
             try:
                 doc = client.get_doc("simple_transfer", r["esb_doc_number"])
-            except EsbError:
-                raise ApiError(502, "esb_unavailable") from None
+            except EsbError as exc:
+                raise esb_api_error(exc) from None
             if doc_status_id(doc) != 3:
                 not_ok.append(r["esb_doc_number"])
         if not_ok:
@@ -1033,6 +1077,9 @@ class Service:
             preview = self._preview(tx, plan, phase)
             if preview["digest"] != digest:
                 raise ApiError(409, "digest_mismatch")
+            # §30.17.6: pemicu memegang semua cabang asal/tujuan dokumen fase ini + `doc_insert` semua doc_kind-nya.
+            require_branches(actor, {d[k]["branch_id"] for d in preview["docs"] for k in ("origin", "dest")})
+            require_doc_access(actor, insert_kinds={d["doc_kind"] for d in preview["docs"]})
             existing = tx.all("SELECT seq, phase FROM prodplan.outbox WHERE plan_id = %s", (plan["id"],))
             if any(r["phase"] == phase for r in existing):
                 raise ApiError(409, "invalid_state")
@@ -1058,8 +1105,8 @@ class Service:
                     raise ApiError(422, "invalid_quantity") from None  # SEC-231: tidak pernah qty <= 0 ke ESB
                 row = tx.one(
                     "INSERT INTO prodplan.outbox (company_code, esb_brand, esb_env, plan_id, seq, phase, doc_kind,"
-                    " source_transfer_id, source_line_id, marker, request_body, created_by_sub)"
-                    " VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id",
+                    " source_transfer_id, source_line_id, marker, request_body, created_by_sub, run_as_sub)"
+                    " VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id",
                     (
                         plan["company_code"],
                         plan["esb_brand"],
@@ -1073,6 +1120,7 @@ class Service:
                         marker,
                         jsonb(body_esb),
                         actor.sub,
+                        actor.sub,  # run_as_sub = pemicu (§30.17.9): worker memakai token sesi aktor ini
                     ),
                 )
                 assert row is not None
@@ -1128,19 +1176,30 @@ class Service:
             # SEC-230: kunci SEMUA baris outbox rencana sebelum menilai status. Claim worker memakai FOR UPDATE SKIP
             # LOCKED + syarat rencana belum `cancelled`, jadi tidak ada baris yang lolos ke `sending` di sela-sela.
             rows = tx.all(
-                "SELECT id, status FROM prodplan.outbox WHERE plan_id = %s ORDER BY seq FOR UPDATE", (plan["id"],)
+                "SELECT o.id, o.status, o.doc_kind, o.attempts, o.esb_doc_number, t.origin_branch_id, t.dest_branch_id"
+                " FROM prodplan.outbox o LEFT JOIN prodplan.plan_transfer t ON t.id = o.source_transfer_id"
+                " WHERE o.plan_id = %s ORDER BY o.seq FOR UPDATE OF o",
+                (plan["id"],),
             )
             if any(r["status"] in ("sending", "sent", "unknown", "delete_pending", "deleting") for r in rows):
                 raise ApiError(409, "invalid_state")
+            # §30.17.9: `needs_login` yang mungkin sudah tercipta di ESB (pernah dikirim / punya nomor) = tidak pasti.
+            uncertain = [r for r in rows if r["status"] == "needs_login" and (r["attempts"] or r["esb_doc_number"])]
+            if uncertain:
+                raise ApiError(409, "invalid_state")
+            # §30.17.6 + SEC-241: pembatal memegang cabang asal/tujuan + `doc_delete` dokumen ESB yang akan dihapus.
+            confirmed = [r for r in rows if r["status"] == "confirmed"]
+            require_branches(actor, delete_branches(confirmed, plan["branch_id"]))
+            require_doc_access(actor, delete_kinds={r["doc_kind"] for r in confirmed})
             cancelled_pending = tx.exec(
                 "UPDATE prodplan.outbox SET status = 'failed', last_error_code = 'cancelled', updated_at = now()"
-                " WHERE plan_id = %s AND status = 'pending'",
+                " WHERE plan_id = %s AND status IN ('pending','needs_login')",
                 (plan["id"],),
             )
             delete_pending = tx.exec(
-                "UPDATE prodplan.outbox SET status = 'delete_pending', next_attempt_at = now(), updated_at = now()"
-                " WHERE plan_id = %s AND status = 'confirmed'",
-                (plan["id"],),
+                "UPDATE prodplan.outbox SET status = 'delete_pending', run_as_sub = %s, next_attempt_at = now(),"
+                " updated_at = now() WHERE plan_id = %s AND status = 'confirmed'",
+                (actor.sub, plan["id"]),
             )
             self._bump(
                 tx,
@@ -1174,6 +1233,7 @@ class Service:
     def _load_outbox(self, tx: Tx, actor: Actor, outbox_id: str) -> tuple[dict[str, Any], dict[str, Any]]:
         row = tx.one(
             "SELECT o.id, o.plan_id, o.doc_kind, o.marker, o.status, o.last_error_code, o.esb_doc_number, o.esb_env,"
+            " o.created_by_sub, o.run_as_sub,"
             " p.production_date, p.branch_id FROM prodplan.outbox o JOIN prodplan.plan p ON p.id = o.plan_id"
             " WHERE o.id = %s FOR UPDATE OF o",
             (parse_uuid(outbox_id),),
@@ -1191,6 +1251,8 @@ class Service:
             raise ApiError(409, "write_disabled")
         with self.db.tx() as tx:
             row, plan = self._load_outbox(tx, actor, outbox_id)
+            if run_as(row) != actor.sub:
+                raise ApiError(403, "resume_requires_original_user")  # §30.17.9: hanya aktor `run_as` baris itu
             if not self.resendable(row, plan["status"]):
                 raise ApiError(409, "invalid_state")
             known = {
@@ -1201,10 +1263,10 @@ class Service:
                     (row["esb_env"], row["doc_kind"]),
                 )
             }
-        client = self._clients.get(plan["esb_brand"])
-        if client is None:
-            raise ApiError(409, "invalid_state")
-        found = find_by_marker(client, row, known)  # GET ESB di luar transaksi
+        try:
+            found = find_by_marker(self._client(actor), row, known)  # GET ESB di luar transaksi, token pemanggil
+        except EsbError as exc:
+            raise esb_api_error(exc) from None
         with self.db.tx() as tx:
             row, plan = self._load_outbox(tx, actor, outbox_id)
             if not self.resendable(row, plan["status"]):
@@ -1229,3 +1291,34 @@ class Service:
             )
             self._audit(tx, plan, actor, "outbox_resend", rid, outbox_id=str(row["id"]))
         return {"outbox_id": str(row["id"]), "status": "pending"}
+
+    def resume_posting(self, actor: Actor, plan_id: str, body: Mapping[str, Any], rid: str) -> Any:
+        """§30.17.9 `POST /v1/plans/{id}/resume-posting` (R): baris `needs_login` dilanjutkan dengan token pemanggil.
+        Baris yang mungkin sudah tercipta di ESB oleh aktor lain -> 403 `resume_requires_original_user`; baris tanpa
+        nomor yang pernah dikirim -> `unknown` (rekonsiliasi marker dulu, TIDAK POST ulang)."""
+        require_role(actor, ANY_ROLE)
+        with self.db.tx() as tx:
+            plan = self._plan_for_update(tx, actor, plan_id)
+            check_version(int(plan["row_version"]), body.get("row_version"))
+            rows = tx.all(
+                "SELECT o.id, o.doc_kind, o.status, o.attempts, o.esb_doc_number, o.last_error_code, o.created_by_sub,"
+                " o.run_as_sub, t.origin_branch_id, t.dest_branch_id FROM prodplan.outbox o"
+                " LEFT JOIN prodplan.plan_transfer t ON t.id = o.source_transfer_id"
+                " WHERE o.plan_id = %s ORDER BY o.seq FOR UPDATE OF o",
+                (plan["id"],),
+            )
+            row_branches: dict[Any, list[int]] = {}
+            for r in rows:  # transfer: cabang asal + tujuan; produksi: cabang rencana
+                pair = [b for b in (r["origin_branch_id"], r["dest_branch_id"]) if b is not None]
+                row_branches[r["id"]] = pair or [plan["branch_id"]]
+            targets = plan_resume(rows, actor, row_branches)
+            for outbox_id, status in targets:
+                tx.exec(
+                    "UPDATE prodplan.outbox SET run_as_sub = %s, status = %s, next_attempt_at = now(),"
+                    " last_error_code = CASE WHEN last_error_code = 'needs_login' THEN NULL ELSE last_error_code END,"
+                    " updated_at = now() WHERE id = %s",
+                    (actor.sub, status, outbox_id),
+                )
+            self._bump(tx, plan["id"])
+            self._audit(tx, plan, actor, "posting_resumed", rid, rows=len(targets))
+        return {"outbox_ids": [str(oid) for oid, _ in targets]}
