@@ -65,6 +65,16 @@ def parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
     exp.add_argument("--allow-default-ratio", action="store_true", help="BoM FIN tanpa bom_ratio -> product_qty 1")
     exp.add_argument("--drop-zero-qty-components", action="store_true", help="buang komponen BoM qty <= 0")
     exp.add_argument(
+        "--allow-zero-cost",
+        action="store_true",
+        help="G65b: produk ber-stok tanpa sumber HPP dan nilai saldo awal ESB tepat 0 -> cost 0 (peringatan)",
+    )
+    exp.add_argument(
+        "--skip-unconvertible-stock",
+        action="store_true",
+        help="G65b: baris stok satuan tanpa faktor tetap tidak dimuat; validator error -> peringatan",
+    )
+    exp.add_argument(
         "--recent-menu-days",
         type=int,
         default=30,
@@ -130,6 +140,8 @@ def build_params(args: argparse.Namespace, settings: MigSettings) -> RunParams:
             skip_unlinked_menu_boms=args.skip_unlinked_menu_boms,
             allow_default_ratio=args.allow_default_ratio,
             drop_zero_qty_components=args.drop_zero_qty_components,
+            allow_zero_cost=args.allow_zero_cost,
+            skip_unconvertible_stock=args.skip_unconvertible_stock,
         ),
         purchase_statuses=tuple(s.strip() for s in args.purchase_statuses.split(",") if s.strip()),
         purchase_discount_mode=args.purchase_discount_mode,

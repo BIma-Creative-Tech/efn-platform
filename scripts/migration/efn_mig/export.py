@@ -247,6 +247,7 @@ class G65Result:
     # (company, produk, sumber, satuan): sumber HPP dengan satuan tanpa faktor ke UoM produk -> sumber berikutnya
     cost_unconvertible: set[tuple[str, str, str, str]] = field(default_factory=set)
     stock_without_cost: list[str] = field(default_factory=list)  # "<company>|<product_code>"
+    zero_cost_products: set[str] = field(default_factory=set)  # G65b --allow-zero-cost: "<company>|<product_code>"
 
 
 def master_records(
@@ -274,6 +275,7 @@ def master_records(
     latest = m.latest_purchases(
         inputs.purchases, run.purchase_statuses, m.year_before(inputs.ref), inputs.ref, result.purchase
     )
+    zero = result.zero_cost_products if opts.allow_zero_cost else None  # G65b --allow-zero-cost
     if "quant" in out:
         if run.cutover is None:
             raise StepError("langkah stock wajib --cutover-date (§27.13.4)")
@@ -281,7 +283,7 @@ def master_records(
             brand, inputs.opening, index, maps.branch, data.products, uom_by_code, maps.uom, maps.location,
             run.cutover, result.stock,
         )  # fmt: skip
-        result.stock_without_cost = _stock_without_cost(brand, data, inputs, latest, out["quant"], maps)
+        result.stock_without_cost = _stock_without_cost(brand, data, inputs, latest, out["quant"], maps, zero)
     if "branch" in out:
         out["branch"] = branch_records
     for company in data.companies:
@@ -314,7 +316,7 @@ def master_records(
             )  # fmt: skip
         if "cost" in out:
             out["cost"] += company_costs(
-                brand, company, data, inputs, latest, maps, result.cost_mixed_uom, result.cost_unconvertible
+                brand, company, data, inputs, latest, maps, result.cost_mixed_uom, result.cost_unconvertible, zero
             )
     return out, index
 
@@ -328,9 +330,12 @@ def company_costs(
     maps: Maps,
     mixed_uom: set[str] | None = None,
     unconvertible: set[tuple[str, str, str, str]] | None = None,
+    zero_cost: set[str] | None = None,
 ) -> list[dict[str, Any]]:
     """`cost.jsonl` satu company: stock_opening -> bom_last_hpp -> purchase_last (L-252), semua dalam satuan produk.
-    HPP `stock_opening` hanya dari baris yang juga dimuat langkah `stock` (cabang non-skip, lokasi `stock`; QA P3)."""
+    HPP `stock_opening` hanya dari baris yang juga dimuat langkah `stock` (cabang non-skip, lokasi `stock`; QA P3).
+    `zero_cost` (bukan None = `--allow-zero-cost`, G65b): produk tanpa sumber dengan nilai saldo awal tepat 0 -> cost 0;
+    dicatat `<company>|<kode>`."""
     _, index = m.build_branches(brand, data.branches, maps.branch)
     opening = [
         r for r in inputs.opening
@@ -338,10 +343,14 @@ def company_costs(
     ]  # fmt: skip
     # G65b: satuan kosong -> satuan dasar snapshot SELURUH brand (sama dengan langkah stock / build_quants).
     product_uoms, _ = m.opening_uoms(m.product_uoms(data.products, data.bom_headers, data.bom_lines), inputs.opening)
-    return m.build_costs(
+    zero: set[str] | None = set() if zero_cost is not None else None
+    rows = m.build_costs(
         brand, company, data.bom_lines, data.product_codes, opening, m.purchase_last_prices(latest, company),
-        inputs.as_of, mixed_uom, product_uoms, maps.uom, unconvertible,
+        inputs.as_of, mixed_uom, product_uoms, maps.uom, unconvertible, zero,
     )  # fmt: skip
+    if zero_cost is not None and zero:
+        zero_cost |= {f"{company}|{code}" for code in zero}
+    return rows
 
 
 def _stock_without_cost(
@@ -351,11 +360,13 @@ def _stock_without_cost(
     latest: dict[m.PurchaseKey, tuple[m.PurchaseRank, Any]],
     quants: list[dict[str, Any]],
     maps: Maps,
+    zero_cost: set[str] | None = None,
 ) -> list[str]:
-    """Produk ber-quant tanpa sumber HPP mana pun (validator: error; §27.13.4 butir 4)."""
+    """Produk ber-quant tanpa sumber HPP mana pun (validator: error; §27.13.4 butir 4). Dengan `zero_cost`
+    (`--allow-zero-cost`) produk bernilai saldo awal 0 dianggap ber-cost (0) dan dicatat di `zero_cost`."""
     missing: set[str] = set()
     for company in sorted({str(q["company_code"]) for q in quants}):
-        costs = company_costs(brand, company, data, inputs, latest, maps)
+        costs = company_costs(brand, company, data, inputs, latest, maps, zero_cost=zero_cost)
         priced = {str(c["data"]["product_code"]) for c in costs}
         missing |= {
             f"{company}|{q['data']['product_code']}"
@@ -456,6 +467,8 @@ def export_master(
         manifest["stock_without_cost"] = result.stock_without_cost
         manifest["stock_by_branch"] = result.stock.branch_stats()
         manifest["quarantine_rows"] = result.stock.quarantine_rows  # G65b: pengganti skipped.quarantine
+    if {"cost", "stock"} & set(master_steps):
+        manifest["zero_cost_products"] = sorted(result.zero_cost_products)  # G65b --allow-zero-cost
     manifest.update(files=files, maps=map_entries, unmapped_branches=index.unmapped, skipped=skipped)
     path = out_dir / f"{run_id}.efnmig"
     write_bundle(path, manifest, members, keys, "bundle")

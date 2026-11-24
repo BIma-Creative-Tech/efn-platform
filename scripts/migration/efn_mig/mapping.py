@@ -441,6 +441,11 @@ class ExportOptions:
     skip_unlinked_menu_boms: bool = False  # --skip-unlinked-menu-boms: BoM tipe Menu tanpa tautan tidak diekspor
     allow_default_ratio: bool = False  # --allow-default-ratio: BoM normal FIN tanpa bom_ratio -> product_qty 1
     drop_zero_qty_components: bool = False  # --drop-zero-qty-components: komponen qty <= 0 dibuang
+    # G65b (keputusan user 24 Nov 2026): produk ber-stok tanpa sumber HPP dan SEMUA amount_balance saldo awal yang
+    # dimuat = 0 -> cost 0 source stock_opening (peringatan QUANT_ZERO_COST, bukan error QUANT_NO_COST).
+    allow_zero_cost: bool = False  # --allow-zero-cost
+    # G65b: baris stok tanpa faktor satuan tetap tidak dimuat; validator STOCK_UOM_UNCONVERTIBLE -> STOCK_UOM_SKIPPED.
+    skip_unconvertible_stock: bool = False  # --skip-unconvertible-stock
 
     def __post_init__(self) -> None:
         if self.default_uom is not None and not _XMLID_RE.fullmatch(self.default_uom):
@@ -452,6 +457,8 @@ class ExportOptions:
             "skip_unlinked_menu_boms": self.skip_unlinked_menu_boms,
             "allow_default_ratio": self.allow_default_ratio,
             "drop_zero_qty_components": self.drop_zero_qty_components,
+            "allow_zero_cost": self.allow_zero_cost,
+            "skip_unconvertible_stock": self.skip_unconvertible_stock,
         }
 
     @property
@@ -843,12 +850,15 @@ def build_costs(
     product_uoms: Mapping[str, str] | None = None,
     umap: Mapping[str, UomMap] | None = None,
     unconvertible: set[tuple[str, str, str, str]] | None = None,
+    zero_cost: set[str] | None = None,
 ) -> list[dict[str, Any]]:
     """`standard_price` per produk, sumber pertama yang > 0 (§27.13.4, L-252): `stock_opening` (baris
     `fact_esb_stock_opening` company ini pada cutover; kosong bila tanpa --cutover-date) -> `bom_last_hpp` ->
     `purchase_last` (harga baris PO sah terbaru). Dengan `product_uoms` + `umap` (export) semua nilai per satuan
     produk (`source_uom` = UoM produk); sumber yang satuannya tidak terkonversi dilewati dan dicatat di
-    `unconvertible` (company, produk, sumber, satuan) -> sumber berikutnya. Tanpa sumber -> tidak ada baris."""
+    `unconvertible` (company, produk, sumber, satuan) -> sumber berikutnya. Tanpa sumber -> tidak ada baris, KECUALI
+    `zero_cost` diberikan (`--allow-zero-cost`, G65b): produk `zero_value_codes` -> standard_price 0 source
+    `stock_opening` dan kodenya dicatat di `zero_cost`."""
     found: dict[str, tuple[Decimal, str, str]] = {}
     mixed: set[str] = set()
     opening = list(opening)
@@ -879,6 +889,11 @@ def build_costs(
     for code, (price, uom) in (purchase_last or {}).items():
         if code in product_codes and price > 0:
             offer(code, price, uom, "purchase_last")
+    if zero_cost is not None:  # ExportOptions.allow_zero_cost (G65b)
+        for code in zero_value_codes(opening, product_codes, set(found)):
+            uom = (product_uoms or {}).get(code, "")
+            found[code] = (Decimal(0), uom, "stock_opening")
+            zero_cost.add(code)
     return [
         record(
             "cost",
@@ -896,6 +911,22 @@ def build_costs(
         )
         for code, (price, uom, source) in sorted(found.items())
     ]
+
+
+def zero_value_codes(opening: Iterable[Mapping[str, Any]], product_codes: set[str], priced: set[str]) -> list[str]:
+    """G65b `--allow-zero-cost`: produk master tanpa sumber HPP (`priced`) yang punya baris saldo awal qty > 0 dan
+    SEMUA `amount_balance` barisnya tepat 0. Nilai ≠ 0 di baris mana pun -> bukan kandidat (tetap QUANT_NO_COST)."""
+    stocked: set[str] = set()
+    valued: set[str] = set()
+    for row in opening:
+        code = str(row["product_code"])
+        if code not in product_codes or code in priced:
+            continue
+        if dec(row.get("qty_balance")) > 0:
+            stocked.add(code)
+        if dec(row.get("amount_balance")) != 0:
+            valued.add(code)
+    return sorted(stocked - valued)
 
 
 # ================================================================== G65 harga beli supplier (§27.13.4)

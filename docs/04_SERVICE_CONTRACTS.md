@@ -3697,7 +3697,13 @@ menghasilkan nilai > 0:
    produk itu di semua cabang company, `opening_date = cutover`, dalam satuan produk (aturan satuan di bawah);
 2. `bom_last_hpp`: perilaku lama `build_costs` (`lastHpp` komponen BOM terbesar);
 3. `purchase_last`: `price` baris supplierinfo terbaru produk itu (satuan produk);
-4. tidak ada → tidak ada baris `cost` (validator: error bila produk punya baris `quant`).
+4. tidak ada → tidak ada baris `cost` (validator: error bila produk punya baris `quant`). **Pengecualian eksplisit
+   `--allow-zero-cost`** (G65b, keputusan user 24 Nov 2026; `ExportOptions.allow_zero_cost`, default mati): produk
+   yang punya baris saldo awal dimuat dengan qty > 0 dan **semua** `amount_balance` barisnya tepat 0 → baris `cost`
+   `standard_price = 0`, `source = stock_opening`, `as_of = cutover` (`mapping.zero_value_codes`). Manifest:
+   `export_options.allow_zero_cost` + `zero_cost_products` (`<PT>|<kode>`, langkah `cost` dan `stock`). Produk dengan
+   nilai ≠ 0 di baris mana pun tetap tanpa cost (`QUANT_NO_COST` error). **[B]** importer Odoo menerima
+   `standard_price = 0` (paket W-C).
 `as_of` = cutover atau tanggal export. Langkah `cost` wajib dijalankan ulang **dengan** `--cutover-date` sebelum
 `stock`; importer `cost` (run nyata) menulis `efn_mig_esb.cost_as_of.<CODE>` = `as_of`, dan langkah `stock` menolak
 (exit 4) bila nilainya ≠ cutover.
@@ -3705,7 +3711,10 @@ menghasilkan nilai > 0:
 **Aturan satuan (stok & harga):** `uom` ESB baris dinormalisasi `norm_uom`. Sama dengan `uom_esb` produk → apa adanya.
 Beda → export mengirim `uom_esb` + `uom_xmlid` (dari `uom_map.csv`) dan **importer** mengonversi ke UoM produk
 (`_compute_quantity`/`_compute_price` antar-UoM berreferensi sama, **[B]** API Odoo 19). Tidak ada di `uom_map` →
-error validator; tidak dapat dikonversi di Odoo → `failed` (`uom_incompatible`). Tidak ditebak. Untuk `cost` sumber
+error validator; tidak dapat dikonversi di Odoo → `failed` (`uom_incompatible`). Tidak ditebak. Opsi eksplisit
+`--skip-unconvertible-stock` (G65b, `ExportOptions.skip_unconvertible_stock`, default mati): baris stok tanpa faktor
+tetap **tidak dimuat** dan tetap di `skipped.uom_unconvertible`; validator menurunkan `STOCK_UOM_UNCONVERTIBLE` menjadi
+peringatan `STOCK_UOM_SKIPPED` (opsi dibaca dari manifest `export_options`, ikut laporan bertanda tangan). Untuk `cost` sumber
 `stock_opening`/`purchase_last` dengan satuan beda, export mengirim nilai per satuan ESB + `source_uom`; importer
 mengonversi (field `source_uom` sudah ada).
 
@@ -3792,6 +3801,8 @@ Tambahan §27.7:
 | `supplierinfo`: `discount` di luar 0..100 | Error |
 | `quant`: `fact_esb_stock_opening.opening_date ≠ manifest.cutover_date`; cabang non-`skip` tanpa checkpoint | Error (exit 4 di importer) |
 | `skipped.negative_stock` > 0; `location_unmapped` > 0; `supplierinfo_unmapped` > 0 | Peringatan |
+| G65b `--allow-zero-cost`: produk di `zero_cost_products` (`QUANT_ZERO_COST`); `--skip-unconvertible-stock`: `skipped.uom_unconvertible` > 0 (`STOCK_UOM_SKIPPED`, tanpa opsi = Error `STOCK_UOM_UNCONVERTIBLE`) | Peringatan (hanya bila opsi tercatat di `export_options`) |
+| `cost.standard_price ≤ 0` tanpa `allow_zero_cost` atau produk tidak di `zero_cost_products`; `zero_cost_products` tanpa opsi (`COST_ZERO_WITHOUT_OPTION`) | Error |
 | `legacy_purchase_line`: duplikat `(purchase_num, line_no)` per segmen; tanggal di luar segmen/rentang | Error |
 | `legacy_purchase_line`: `map_source='name'` | Peringatan |
 

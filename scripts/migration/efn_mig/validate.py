@@ -192,11 +192,11 @@ def validate_bundle(
     if history_files:
         _validate_history(bundle, history_files, out, brand)
     master = _validate_master(bundle, brand, companies, out)
-    _check_g65(bundle, master, brand, out, production)
+    options = read_export_options(man)
+    _check_g65(bundle, master, brand, out, production, options)
     for branch in man.get("unmapped_branches") or []:
         if branch.get("active"):
             out.error("BRANCH_UNMAPPED", "branch", branch.get("branch_id"), "cabang aktif tanpa baris branch_map.csv")
-    options = read_export_options(man)
     _check_branches(master.get("branch", []), out)
     _check_products_menus(master, out, options)
     _check_boms(master, out, options)
@@ -411,8 +411,9 @@ def _count(skipped: Mapping[str, Any], key: str) -> int:
 
 
 def _check_g65(
-    bundle: Bundle, records: Mapping[str, list[dict[str, Any]]], brand: str, out: _Collector, production: bool
-) -> None:
+    bundle: Bundle, records: Mapping[str, list[dict[str, Any]]], brand: str, out: _Collector, production: bool,
+    options: m.ExportOptions,
+) -> None:  # fmt: skip
     """§27.13.5: supplierinfo, cost (sumber/as_of), quant (stok awal) + temuan export di manifest."""
     man = bundle.manifest
     if isinstance(man.get("segment"), dict):
@@ -420,12 +421,23 @@ def _check_g65(
     cutover = str(man.get("cutover_date") or "")
     skipped = man.get("skipped") if isinstance(man.get("skipped"), dict) else {}
     _check_supplierinfo(records.get("supplierinfo", []), brand, out)
+    zero_listed = {str(z) for z in man.get("zero_cost_products") or []}
     for row in records.get("cost", []):
         data, key = row["data"], row["esb_key"]
         if data.get("source") not in m.COST_SOURCES:
             out.error("COST_SOURCE", "cost", key, f"source wajib salah satu {', '.join(m.COST_SOURCES)}")
         elif data.get("source") == "stock_opening" and data.get("as_of") != cutover:
             out.error("COST_AS_OF", "cost", key, "source=stock_opening wajib as_of = cutover_date")
+        price = _dec(data.get("standard_price"))
+        zero_ok = options.allow_zero_cost and f"{row['company_code']}|{data.get('product_code')}" in zero_listed
+        if (price is None or price <= 0) and not zero_ok:  # G65b: cost 0 hanya lewat --allow-zero-cost tercatat
+            out.error("COST_ZERO_WITHOUT_OPTION", "cost", key, "standard_price <= 0 tanpa --allow-zero-cost")
+    for item in sorted(zero_listed):
+        if options.allow_zero_cost:
+            out.warn("QUANT_ZERO_COST", "cost", item,
+                     "ber-stok tanpa sumber HPP, nilai saldo awal 0 -> cost 0 (--allow-zero-cost)")  # fmt: skip
+        else:
+            out.error("COST_ZERO_WITHOUT_OPTION", "cost", item, "zero_cost_products tanpa export_options")
     has_quant = bundle.entity_file("quant") is not None
     if has_quant:
         _check_quants(records.get("quant", []), brand, cutover, out)
@@ -441,8 +453,12 @@ def _check_g65(
                       "cabang non-skip tanpa checkpoint stock_opening pada cutover")  # fmt: skip
         for item in man.get("stock_without_cost") or []:
             out.error("QUANT_NO_COST", "quant", item, "produk ber-stok tanpa sumber HPP (cost)")
-        if _count(skipped, "uom_unconvertible"):
-            out.error("STOCK_UOM_UNCONVERTIBLE", "quant", _count(skipped, "uom_unconvertible"),
+        unconvertible = _count(skipped, "uom_unconvertible")
+        if unconvertible and options.skip_unconvertible_stock:  # G65b --skip-unconvertible-stock
+            out.warn("STOCK_UOM_SKIPPED", "quant", unconvertible,
+                     "satuan tanpa faktor ke UoM produk: baris TIDAK dimuat (--skip-unconvertible-stock)")  # fmt: skip
+        elif unconvertible:
+            out.error("STOCK_UOM_UNCONVERTIBLE", "quant", unconvertible,
                       "satuan ESB tanpa faktor ke UoM produk (uom_map/ea_factor) -> baris tidak dimuat")  # fmt: skip
         for item in (skipped.get("uom_conflict") or {}).get("items") or []:
             msg = f"produk tanpa satuan ESB, >1 satuan di saldo awal {item.get('uoms')} -> tidak dimuat (G65b)"

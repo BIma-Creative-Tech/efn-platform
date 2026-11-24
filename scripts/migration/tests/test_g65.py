@@ -722,3 +722,104 @@ def test_reconcile_stock_item2(tmp_path: Path, keys: b.Keys, source: FakeSource)
     assert warn.blocking == 0 and any(ln.item == "2_stok_nilai_pt" and ln.status == "peringatan" for ln in warn.lines)
     totals[0]["quantity"] -= 1
     assert reconcile([(bundle, _result(keys, bundle, report_json, {"quant": totals}))]).blocking == 1
+
+
+# ================================================================== G65b --allow-zero-cost, --skip-unconvertible-stock
+def zero_cost_fixture(source: FakeSource) -> None:
+    source.dims["dim_esb_product"] += [product("ZC1", "Nol", "Local - Dry", "KG", 0, None),
+                                       product("NV1", "Bernilai", "Local - Dry", "KG", 0, None)]  # fmt: skip
+    source.opening = [
+        opening(11, "ZC1", "4", "0"),
+        opening(12, "ZC1", "1", "0"),  # semua amount_balance 0 -> kandidat cost 0
+        opening(11, "NV1", "2", "0"),
+        opening(12, "NV1", "-1", "-500"),  # ada nilai ≠ 0 -> tetap QUANT_NO_COST walau opsi aktif
+        opening(11, "RM001", "1", "100"),
+    ]
+
+
+def test_zero_value_codes_rules() -> None:
+    rows = [opening(11, "A", "2", "0"), opening(11, "B", "2", "0"), opening(12, "B", "1", "10"),
+            opening(11, "C", "-1", "0"), opening(11, "D", "3", "0")]  # fmt: skip
+    assert m.zero_value_codes(rows, {"A", "B", "C", "D"}, {"D"}) == ["A"]  # B bernilai, C tanpa qty > 0, D ber-HPP
+    assert m.zero_value_codes(rows, {"B"}, set()) == []
+
+
+def test_allow_zero_cost_off_is_error(tmp_path: Path, keys: b.Keys, source: FakeSource) -> None:
+    zero_cost_fixture(source)
+    bundle = _stock_bundle(tmp_path, keys, source)
+    assert bundle.manifest["stock_without_cost"] == ["PB|NV1", "PB|ZC1"]
+    assert bundle.manifest["zero_cost_products"] == []
+    assert bundle.manifest["export_options"]["allow_zero_cost"] is False
+    report = validate_bundle(bundle)
+    assert "QUANT_NO_COST" in codes(report) and "QUANT_ZERO_COST" not in codes(report, "warning")
+    assert "ketat (tanpa pengecualian)" in report.to_markdown()
+
+
+def test_allow_zero_cost_on_cost_zero_and_warning(tmp_path: Path, keys: b.Keys, source: FakeSource) -> None:
+    zero_cost_fixture(source)
+    opts = m.ExportOptions(allow_zero_cost=True)
+    inputs = G65Inputs.load(source, "pb", ["cost"], CUTOVER)
+    result = G65Result()
+    rows, _ = master_records(master_data(source), "pb", maps_with(), ["cost"], opts, None, inputs,
+                             params(options=opts), result)  # fmt: skip
+    by = {r["esb_key"]: r["data"] for r in rows["cost"]}
+    assert by["ZC1"] == {**by["ZC1"], "standard_price": 0, "source": "stock_opening", "as_of": "2026-12-01",
+                         "source_uom": "KG"}  # fmt: skip
+    assert "NV1" not in by and result.zero_cost_products == {"PB|ZC1"}
+    # Tanpa opsi: tidak ada baris cost 0.
+    plain, _ = master_records(master_data(source), "pb", maps_with(), ["cost"], None, None, inputs, params(),
+                              G65Result())  # fmt: skip
+    assert "ZC1" not in {r["esb_key"] for r in plain["cost"]}
+    bundle = _stock_bundle(tmp_path, keys, source, options=opts)
+    man = bundle.manifest
+    assert man["stock_without_cost"] == ["PB|NV1"] and man["zero_cost_products"] == ["PB|ZC1"]
+    assert man["export_options"]["allow_zero_cost"] is True
+    report = validate_bundle(bundle)
+    assert "QUANT_ZERO_COST" in codes(report, "warning")
+    assert "QUANT_NO_COST" in codes(report)  # NV1 (nilai ≠ 0) tetap error
+    assert "allow_zero_cost=True" in report.to_markdown()
+    assert report.to_json()["export_options"]["allow_zero_cost"] is True
+
+
+def test_validator_zero_cost_requires_option(keys: b.Keys) -> None:
+    zero = [cost("A", standard_price=0)]
+    assert "COST_ZERO_WITHOUT_OPTION" in codes(validate_bundle(_bundle(keys, {"cost": zero})))
+    listed_only = _bundle(keys, {"cost": zero}, zero_cost_products=["PB|A"])  # tercatat tapi opsi mati
+    assert "COST_ZERO_WITHOUT_OPTION" in codes(validate_bundle(listed_only))
+    ok = validate_bundle(_bundle(keys, {"cost": zero}, zero_cost_products=["PB|A"],
+                                 export_options={"allow_zero_cost": True}))  # fmt: skip
+    assert ok.errors == 0, ok.findings
+    assert "QUANT_ZERO_COST" in codes(ok, "warning")
+    unlisted = _bundle(
+        keys, {"cost": zero}, export_options={"allow_zero_cost": True}
+    )  # opsi aktif, produk tak tercatat
+    assert "COST_ZERO_WITHOUT_OPTION" in codes(validate_bundle(unlisted))
+
+
+def unconvertible_fixture(source: FakeSource) -> None:
+    # Satuan G tidak ada di uom_map uji -> baris tak terkonversi.
+    source.opening = [opening(11, "RM001", "1", "100"),
+                      opening(11, "RM001", "500", "50", location="Dapur", uom="G")]  # fmt: skip
+
+
+def test_skip_unconvertible_stock_off_is_error(tmp_path: Path, keys: b.Keys, source: FakeSource) -> None:
+    unconvertible_fixture(source)
+    bundle = _stock_bundle(tmp_path, keys, source)
+    assert bundle.manifest["export_options"]["skip_unconvertible_stock"] is False
+    report = validate_bundle(bundle)
+    assert "STOCK_UOM_UNCONVERTIBLE" in codes(report) and "STOCK_UOM_SKIPPED" not in codes(report, "warning")
+
+
+def test_skip_unconvertible_stock_on_is_warning(tmp_path: Path, keys: b.Keys, source: FakeSource) -> None:
+    unconvertible_fixture(source)
+    opts = m.ExportOptions(skip_unconvertible_stock=True)
+    bundle = _stock_bundle(tmp_path, keys, source, options=opts)
+    man = bundle.manifest
+    assert man["export_options"]["skip_unconvertible_stock"] is True
+    assert man["skipped"]["uom_unconvertible"]["items"] == [{"branch_id": 11, "product_code": "RM001", "uom": "G"}]
+    (rm001,) = list(bundle.rows("quant.jsonl"))
+    assert rm001["data"]["quantity"] == 1  # baris G tetap TIDAK dimuat
+    report = validate_bundle(bundle)
+    assert report.errors == 0, report.findings
+    assert "STOCK_UOM_SKIPPED" in codes(report, "warning")
+    assert "skip_unconvertible_stock=True" in report.to_markdown()

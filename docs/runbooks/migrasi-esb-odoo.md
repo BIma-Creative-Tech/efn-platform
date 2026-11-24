@@ -336,9 +336,16 @@ $DC run --rm esb-extract python -m efn_esb snapshot --brand pb --entity stock_op
 # b) Export: histori SEMUA langkah bulan 2026-11 (flow, sales.daily, sales.line, purchase) dengan cutover baru,
 #    lalu cost (master), stock, cutover-param
 $MIG python esb_to_odoo.py export --brand pb --step history --cutover-date 2026-12-01 --maps /maps --out /out --months 2026-11
-$MIG python esb_to_odoo.py export --brand pb --step cost --cutover-date 2026-12-01 --maps /maps --out /out
-$MIG python esb_to_odoo.py export --brand pb --step stock --cutover-date 2026-12-01 --maps /maps --out /out
+#    Keputusan user 24 Nov 2026 (latihan 17 Nov: 17 QUANT_NO_COST nilai ESB 0, 35 baris WIP satuan beda): cost DAN
+#    stock dengan --allow-zero-cost + --skip-unconvertible-stock (tercatat export_options + laporan validator);
+#    PB 39/40 Makassar tanpa kartu stok ESB -> --stock-empty-branch.
+G65B="--allow-zero-cost --skip-unconvertible-stock"
+$MIG python esb_to_odoo.py export --brand pb --step cost --cutover-date 2026-12-01 --maps /maps --out /out $G65B
+$MIG python esb_to_odoo.py export --brand pb --step stock --cutover-date 2026-12-01 --maps /maps --out /out $G65B \
+  --stock-empty-branch 39 --stock-empty-branch 40
 $MIG python esb_to_odoo.py export --brand pb --step cutover-param --cutover-date 2026-12-01 --maps /maps --out /out
+#    Periksa: manifest.zero_cost_products (peringatan QUANT_ZERO_COST) dan skipped.uom_unconvertible (STOCK_UOM_SKIPPED)
+#    -> daftar dikirim ke Ops/Finance; QUANT_NO_COST yang tersisa (nilai ESB ≠ 0) tetap memblokir.
 # c) Impor berurutan: segmen Nov -> cost -> stock -> cutover-param. Tiap bundel: validate_import.py -> dry-run -> nyata
 SHIFT="--allow-cutover-shift PB:2026-11-17:2026-12-01"
 $RI <bundel>.efnmig --validation validation_<run_id>.json $SHIFT                         # dry-run
@@ -351,8 +358,10 @@ Catatan:
 - Langkah `cost` **wajib** dijalankan ulang (dengan `--cutover-date`) sebelum `stock`; importer menolak `stock` bila
   `efn_mig_esb.cost_as_of.PB` ≠ cutover. HPP produk yang sudah berstok tidak diubah importer (`conflict_has_stock`) →
   pada gladi ulang reset stok/DB dulu.
-- Validator `stock` (exit 1 bila error): `QUANT_NO_COST` (produk ber-stok tanpa sumber HPP), `STOCK_UOM_UNCONVERTIBLE`,
-  `QUANT_UOM` (satuan tanpa `uom_map.csv`), `STOCK_CHECKPOINT_MISSING`, `LOCATION_QUARANTINE`. Peringatan
+- Validator `stock` (exit 1 bila error): `QUANT_NO_COST` (produk ber-stok tanpa sumber HPP), `STOCK_UOM_UNCONVERTIBLE`
+  (peringatan `STOCK_UOM_SKIPPED` bila `--skip-unconvertible-stock`), `STOCK_UOM_CONFLICT`, `QUANT_UOM` (satuan tanpa
+  `uom_map.csv`), `STOCK_CHECKPOINT_MISSING`, `COST_ZERO_WITHOUT_OPTION`. Peringatan `QUANT_ZERO_COST`
+  (`--allow-zero-cost`), `STOCK_EMPTY_DECLARED`,
   `STOCK_NEGATIVE` (saldo negatif ESB tidak dimigrasi — daftar `manifest.skipped.negative_stock` dikirim ke Ops,
   Q-ESB27), `LOCATION_UNMAPPED`, `LOCATION_SUSPECT`, `SUPPLIERINFO_UNMAPPED`.
 - Setelah `stock` nyata: valuasi PB periodik → apply tidak membuat jurnal. Closing draft

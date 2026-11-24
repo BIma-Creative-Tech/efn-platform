@@ -35,6 +35,8 @@ def test_strict_default_recorded_and_clean(tmp_path: Path, keys: b.Keys, maps: M
         "skip_unlinked_menu_boms": False,
         "allow_default_ratio": False,
         "drop_zero_qty_components": False,
+        "allow_zero_cost": False,
+        "skip_unconvertible_stock": False,
     }
     assert bundle.manifest["skipped"]["unlinked_menu_boms"] == {"count": 0, "bom_ids": []}
     report = validate_bundle(bundle)
