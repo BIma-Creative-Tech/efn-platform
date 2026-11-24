@@ -1,5 +1,35 @@
 # Laporan Agent: efn-devsecops-engineer
 
+## G66 infra prodplan (24 Nov 2026, worktree `efn-platform-prodplan`, branch `feat/production-planning`, belum di-commit) — ADR-051, docs/04 §30
+
+- **Compose:** overlay baru `infra/compose/docker-compose.prodplan.yml` (profil `data`): `prodplan` (uid 65534, read_only,
+  tmpfs /tmp, cap_drop ALL, 1 CPU/384M, healthcheck §30.1, env §30.3 default aman, `PRODPLAN_ESB_USER_PB` `${…:-}`),
+  `prodplan-tls` (ghostunnel server :8443→127.0.0.1:8080, CN insight-web-pp + prometheus, status 6078),
+  `insight-web-pp-tls` (ghostunnel client 127.0.0.1:7443→prodplan:8443, verify-cn prodplan, status 6079). Network
+  `prodplan-db` (.23 internal), `insight-plan` (.24 internal), `egress-prodplan` (.25, enable_icc=false). insight-web,
+  postgres, prometheus ikut network baru lewat overlay. Base hanya berubah di komentar peta oktet.
+- **Secret password staging:** sumber file `esb_prodplan_password_pb` bisa dialihkan dengan
+  `PRODPLAN_ESB_PASSWORD_PB_SECRET_FILE` di `.env` lokal (nama secret kontrak tidak berubah).
+- **PostgreSQL:** `00-roles.sh` mendukung role opsional (`?efn_prodplan`, dilewati bila secret tidak di-mount, jadi deploy
+  tanpa overlay tetap jalan). Migrasi `23-prodplan-g66.sql`: DDL §30.6 + CHECK kolom umum, owner NOLOGIN (SEC-39),
+  `efn_prodplan` dibuat NOLOGIN bila belum ada (grant tidak bergantung urutan), DML kecuali audit_event (SELECT/INSERT).
+  `pg_hba.conf` + baris `efn_prodplan`.
+- **Tafsir kontrak:** (1) §30.10 menuntut purge audit_event 1825 hari, §30.6 melarang DELETE → fungsi
+  `prodplan.purge_expired_audit_events()` SECURITY DEFINER (batas 1825 hari tetap di SQL), EXECUTE ke efn_prodplan.
+  (2) Job `prodplan` dikecualikan dari `EfnServiceDown` agar hanya `EfnProdplanDown` (warning 15m) yang berlaku.
+  (3) Scrape memakai dns_sd agar tanpa overlay tidak ada alert palsu.
+- **Gerbang:** `check-encryption.sh` §6b7 (secret persis per service, env *_FILE, network persis, hardening, dua URL ESB,
+  CN/listen/target sidecar), §11 kill switch render `prod-prodplan`/`prod-stack`, (d) postgres `[data]` atau
+  `[data, prodplan-db]`, pg_hba baris G66, SEC-180 untuk `PRODPLAN_ESB_USER_*`, render baru dev-prodplan/prod-prodplan.
+- **CI/build:** ci.yml (filter, ruff/pip-audit/pytest prodplan, compose config overlay, secret diff, EKU insight_web_pp),
+  build-push.yml (scan-pr + build, belum di rantai rilis), Makefile validate/test-py.
+- **Observability:** job `prodplan`, grup alert `efn-prodplan` (Down, OutboxStuck, DeleteFailed) → `docs/runbooks/prodplan.md`.
+- **Belum terverifikasi:** tidak menjalankan docker/compose/check-encryption/shellcheck/promtool (aturan sesi). Asumsi:
+  merge `networks`/`secrets` antar-overlay = union (pola wa-unofficial); interpolasi `${X:--1,7}` dan path secret dari
+  variabel. Dockerfile `services/prodplan` (USER non-root, python di PATH) milik efn-data-ai-engineer — build-push gagal
+  bila belum ada. Staging/prod: intermediate wajib terbit ulang; GitHub Env `PG_PASSWORD_PRODPLAN`, `PRODPLAN_ASSERT_KEY`
+  sebelum deploy VPS berikutnya.
+
 ## G62 infra login-gateway (23 Nov 2026, worktree `efn-platform-odoo`, branch `feat/odoo-completion`, belum di-commit) — ADR-050
 
 - **Compose:** `login-gateway` (profil `core`, image `${IMAGE_LOGIN_GATEWAY:-ghcr.io/${EFN_STACK}/login-gateway:dev}`, target

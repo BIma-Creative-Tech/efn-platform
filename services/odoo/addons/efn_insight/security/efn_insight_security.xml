@@ -103,6 +103,39 @@
         <field name="implied_ids" eval="[Command.link(ref('group_insight_user'))]"/>
     </record>
 
+    <!-- ================================================================== production planning (G66)
+         docs/04 §30.7, ADR-051 Proposed. Peran pp_planner / pp_warehouse di token eit3 (BUKAN persona: tidak masuk
+         PERSONA_GROUPS / SQL_efn_personas). Satu privilege per grup (pola persona, widget hak akses Odoo 19).
+         Tidak ikut sinkron jabatan (efn_role). Satu user boleh memegang keduanya; SoD ditegakkan per dokumen di
+         services/prodplan, bukan di sini. -->
+    <record id="res_groups_privilege_prodplan_planner" model="res.groups.privilege">
+        <field name="name">Insight: Production planner CK</field>
+        <field name="category_id" ref="module_category_efn_insight"/>
+        <field name="sequence">80</field>
+        <field name="placeholder">–</field>
+        <field name="description">F&amp;B (data ESB): halaman Produksi di Insight — membuat dan menyetujui rencana produksi Central Kitchen, mengajukan transfer dan memposting dokumen produksi ke ESB. Persetujuan tidak boleh atas dokumen buatan sendiri (ditegakkan aplikasi). Tidak berlaku untuk kepala toko yang dibatasi cabang.</field>
+    </record>
+    <record id="res_groups_privilege_prodplan_warehouse" model="res.groups.privilege">
+        <field name="name">Insight: Kepala gudang (persetujuan transfer)</field>
+        <field name="category_id" ref="module_category_efn_insight"/>
+        <field name="sequence">90</field>
+        <field name="placeholder">–</field>
+        <field name="description">F&amp;B (data ESB): halaman Produksi di Insight — menyetujui transfer bahan antar-gudang yang diajukan planner. Tidak bisa menyetujui transfer yang diajukannya sendiri (ditegakkan aplikasi). Tidak berlaku untuk kepala toko yang dibatasi cabang.</field>
+    </record>
+
+    <record id="group_prodplan_planner" model="res.groups">
+        <field name="name">Insight: Production planner CK</field>
+        <field name="comment">Peran pp_planner (token eit3). Wajib PT ESB di cakupan dan tanpa cabang kepala toko (T9); selain itu peran dibuang saat membuka Insight.</field>
+        <field name="privilege_id" ref="res_groups_privilege_prodplan_planner"/>
+        <field name="implied_ids" eval="[Command.link(ref('group_insight_user'))]"/>
+    </record>
+    <record id="group_prodplan_warehouse" model="res.groups">
+        <field name="name">Insight: Kepala gudang (persetujuan transfer)</field>
+        <field name="comment">Peran pp_warehouse (token eit3). Wajib PT ESB di cakupan dan tanpa cabang kepala toko (T9); selain itu peran dibuang saat membuka Insight.</field>
+        <field name="privilege_id" ref="res_groups_privilege_prodplan_warehouse"/>
+        <field name="implied_ids" eval="[Command.link(ref('group_insight_user'))]"/>
+    </record>
+
     <!-- ================================================================== record rule (G52) -->
     <data noupdate="1">
         <record id="efn_insight_esb_branch_rule_company" model="ir.rule">

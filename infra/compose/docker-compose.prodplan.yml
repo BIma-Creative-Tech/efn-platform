@@ -1,0 +1,261 @@
+# G66 (docs/04 §30, ADR-051 Proposed): production planning CK di atas ESB Core (service `prodplan`, Python 3.12).
+# Runbook: docs/runbooks/prodplan.md.
+#
+# Mengapa overlay, bukan service di base (pola docker-compose.esb.yml G41 / forecast G44):
+#   - Tanpa overlay TIDAK ada service yang memegang password ESB prodplan, jalur keluar ke ESB, atau DB efn_prodplan
+#     yang bisa dijangkau lewat network. Base tidak berubah (§30.1).
+#   - Image prodplan belum masuk rantai rilis bertanda tangan (IMAGE_* di deploy.yml/efn-deploy/deploy.sh, SEC-42):
+#     build-push.yml menandatanganinya, tetapi deploy.sh TIDAK menyertakan overlay ini (tindak lanjut, runbook §9).
+#   Dev/staging lokal:
+#     docker compose -f docker-compose.yml -f docker-compose.dev.yml -f docker-compose.prodplan.yml \
+#       --profile core --profile data up -d postgres prodplan prodplan-tls insight-web insight-web-tls insight-web-pp-tls
+#
+# Jaringan (§30.1, dicek scripts/check-encryption.sh; oktet 23-25 di peta oktet docker-compose.yml):
+#   prodplan-db     (internal, .23) : HANYA postgres <-> prodplan (TLS verify-full, role efn_prodplan)
+#   insight-plan    (internal, .24) : HANYA insight-web (sidecar klien) / prometheus -> prodplan-tls :8443 (mTLS)
+#   egress-prodplan (bridge,  .25)  : keluar internet HANYA prodplan, enable_icc=false. Allowlist host ESB (staging /
+#                                     production) + method/path ditegakkan DI APLIKASI (§30.4); allowlist tingkat
+#                                     jaringan (nftables subnet .25 -> IP ESB:443) = sisa risiko (pola SEC-183 esb-extract).
+#   prodplan TIDAK di data/internal/esb/insight-data/egress: tanpa RabbitMQ, ClickHouse, Odoo, MinIO, Loki. Tanpa Traefik.
+#   K25-02: bila stack data pindah mesin, prodplan-db menjadi lintas host (WireGuard) -> tinjau ulang (L-252).
+#
+# TLS: API prodplan plaintext HANYA di loopback namespace-nya (127.0.0.1:8080). Masuk lewat sidecar prodplan-tls
+# (ghostunnel server :8443, CN klien insight-web-pp + prometheus). insight-web memanggil http://127.0.0.1:7443 =
+# loopback ke sidecar klien insight-web-pp-tls (ghostunnel client, verifikasi CN prodplan) di namespace insight-web.
+#
+# Secret (§30.2; daftar di scripts/secrets.list; mount least privilege dicek check-encryption.sh):
+#   pg_password_prodplan      random        postgres (00-roles.sh, role opsional) + prodplan
+#   prodplan_assert_key       hex32         insight-web (penanda tangan ppa1) + prodplan (pemverifikasi)
+#   esb_prodplan_password_pb  host:disabled prodplan saja. TERPISAH dari esb_core_password_pb (R-S17, Q-PP1). File
+#                                           sumber bisa dialihkan lewat PRODPLAN_ESB_PASSWORD_PB_SECRET_FILE di .env lokal
+#                                           (mis. password staging), nama secret di container tetap.
+#   tls_prodplan_*            pki (server)  prodplan-tls saja
+#   tls_insight_web_pp_*      pki (client)  insight-web-pp-tls saja
+# Username API ESB (SEC-180): TIDAK di repo. PRODPLAN_ESB_USER_<BRAND> dari infra/compose/.env lokal / config rilis;
+# default kosong (brand aktif tanpa user -> exit 2, fail-closed di efn_prodplan/config.py).
+services:
+  prodplan:
+    image: ${IMAGE_PRODPLAN:-ghcr.io/${EFN_STACK:-efn}/prodplan:dev}
+    build:
+      context: ../../services/prodplan
+    profiles: ["data"]
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"
+        labels: "service"
+    security_opt:
+      - no-new-privileges:true
+    depends_on:
+      postgres:
+        condition: service_healthy
+    # Non-root eksplisit (nobody, §30.1). Kode di image milik root dan hanya dibaca; tidak ada tulisan di luar /tmp.
+    user: "65534:65534"
+    # Replika 1 (cache jti di memori + worker job/outbox dalam proses yang sama, ADR-051 §4.2).
+    command: ["python", "-m", "efn_prodplan", "serve"]
+    environment:
+      APP_ENV: ${APP_ENV:-production}
+      # Kill switch (§30.3): hanya "true" persis yang aktif. false = /healthz 200, /v1/* 503, tanpa panggilan ESB.
+      PRODPLAN_ENABLED: ${PRODPLAN_ENABLED:-false}
+      # false = POST /v1/plans/{id}/post 409 write_disabled, worker outbox tidak mengirim. Tulis ke ESB PRODUCTION tetap
+      # terkunci konstanta kode PROD_WRITE_UNLOCKED=False (L-250), bukan env.
+      PRODPLAN_WRITE_ENABLED: ${PRODPLAN_WRITE_ENABLED:-false}
+      # Hanya dua nilai sah (dicek check-encryption + exit 2 di kode): https://stg7.esb.co.id/core-stg (staging, default)
+      # atau https://services.esb.co.id/core (production).
+      PRODPLAN_ESB_BASE_URL: ${PRODPLAN_ESB_BASE_URL:-https://stg7.esb.co.id/core-stg}
+      PRODPLAN_ESB_MFG_MODE: ${PRODPLAN_ESB_MFG_MODE:-actual}
+      PRODPLAN_BRANDS: ${PRODPLAN_BRANDS:-pb}
+      # SEC-180: username API ESB per brand dari .env lokal / config rilis saja (default kosong). v1 hanya pb.
+      PRODPLAN_ESB_USER_PB: ${PRODPLAN_ESB_USER_PB:-}
+      PRODPLAN_ESB_PASSWORD_PB_FILE: /run/secrets/esb_prodplan_password_pb
+      PRODPLAN_CK_BRANCHES: "${PRODPLAN_CK_BRANCHES:-pb:4=7}"
+      PRODPLAN_SOURCE_LOCATIONS: "${PRODPLAN_SOURCE_LOCATIONS:-}"
+      PRODPLAN_APPLY_YIELD: ${PRODPLAN_APPLY_YIELD:-false}
+      PRODPLAN_STOCK_MAX_AGE_MINUTES: "${PRODPLAN_STOCK_MAX_AGE_MINUTES:-30}"
+      PRODPLAN_POST_MAX_DOCS: "${PRODPLAN_POST_MAX_DOCS:-60}"
+      PRODPLAN_POST_DATE_WINDOW_DAYS: "${PRODPLAN_POST_DATE_WINDOW_DAYS:--1,7}"
+      PRODPLAN_ESB_RATE_PER_SEC: "${PRODPLAN_ESB_RATE_PER_SEC:-2.0}"
+      PRODPLAN_JOB_MAX_CALLS: "${PRODPLAN_JOB_MAX_CALLS:-2000}"
+      PRODPLAN_ESB_TIMEOUT_SECONDS: "${PRODPLAN_ESB_TIMEOUT_SECONDS:-30}"
+      PRODPLAN_ESB_MAX_RESPONSE_BYTES: "${PRODPLAN_ESB_MAX_RESPONSE_BYTES:-16777216}"
+      PRODPLAN_OUTBOX_POLL_SECONDS: "${PRODPLAN_OUTBOX_POLL_SECONDS:-10}"
+      PRODPLAN_RECONCILE_GRACE_SECONDS: "${PRODPLAN_RECONCILE_GRACE_SECONDS:-300}"
+      PRODPLAN_RETENTION_DAYS: "${PRODPLAN_RETENTION_DAYS:-730}"
+      PRODPLAN_ASSERT_KEY_FILE: /run/secrets/prodplan_assert_key
+      # PostgreSQL lewat network prodplan-db saja, TLS verify-full dengan CA internal (selain verify-full -> exit 2).
+      PG_HOST: postgres
+      PG_PORT: "5432"
+      PG_DB: efn_prodplan
+      PG_USER: efn_prodplan
+      PG_PASSWORD_FILE: /run/secrets/pg_password_prodplan
+      PG_SSLMODE: verify-full
+      PG_SSLROOTCERT: /run/secrets/efn_ca_crt
+    secrets:
+      - pg_password_prodplan
+      - prodplan_assert_key
+      - esb_prodplan_password_pb
+      - efn_ca_crt
+    networks: [prodplan-db, insight-plan, egress-prodplan]
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    deploy:
+      resources:
+        limits: { cpus: "1", memory: 384M }
+    healthcheck:
+      # Loopback namespace sendiri (plaintext hanya 127.0.0.1:8080); /healthz tidak menyentuh PG/ESB (§30.8).
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8080/healthz',timeout=3).status==200 else 1)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    labels:
+      service: prodplan
+
+  # Sidecar TLS server (§30.1). Pola insight-web-tls; anchor x-ghostunnel base tidak berlaku lintas file -> nilai
+  # hardening + image digest disalin persis dari docker-compose.yml (perbarui bersama).
+  prodplan-tls:
+    image: ghostunnel/ghostunnel:v1.11.3-alpine@sha256:2599b8a04bae16d70a4209495618dea61b46a00a9a05fcf74da282688ad3517f
+    profiles: ["data"]
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"
+        labels: "service"
+    security_opt:
+      - no-new-privileges:true
+    user: "65534:65534"
+    read_only: true
+    cap_drop: [ALL]
+    deploy:
+      resources:
+        limits: { memory: 64M }
+    network_mode: "service:prodplan"
+    # restart: true = sidecar ikut di-restart saat prodplan di-recreate (namespace baru), pola login-gateway-tls.
+    depends_on:
+      prodplan:
+        condition: service_started
+        restart: true
+    command:
+      - server
+      - --listen=0.0.0.0:8443
+      - --target=127.0.0.1:8080
+      - --cert=/run/secrets/tls_prodplan_crt
+      - --key=/run/secrets/tls_prodplan_key
+      - --cacert=/run/secrets/efn_ca_crt
+      - --allow-cn=insight-web-pp
+      - --allow-cn=prometheus
+      - --status=http://127.0.0.1:6078
+      - --quiet=conns
+    secrets: [efn_ca_crt, tls_prodplan_crt, tls_prodplan_key]
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:6078/_status"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    labels:
+      service: prodplan-tls
+
+  # Sidecar TLS client di namespace insight-web (§30.1): insight-web -> http://127.0.0.1:7443 -> mTLS ke prodplan:8443
+  # (leaf CN insight-web-pp, EKU clientAuth; server diverifikasi CN prodplan). Pola ocr-worker-metrics-bridge.
+  insight-web-pp-tls:
+    image: ghostunnel/ghostunnel:v1.11.3-alpine@sha256:2599b8a04bae16d70a4209495618dea61b46a00a9a05fcf74da282688ad3517f
+    profiles: ["data"]
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"
+        labels: "service"
+    security_opt:
+      - no-new-privileges:true
+    user: "65534:65534"
+    read_only: true
+    cap_drop: [ALL]
+    deploy:
+      resources:
+        limits: { memory: 64M }
+    network_mode: "service:insight-web"
+    depends_on:
+      insight-web:
+        condition: service_started
+        restart: true
+    command:
+      - client
+      - --listen=127.0.0.1:7443
+      - --target=prodplan:8443
+      - --override-server-name=prodplan
+      - --cert=/run/secrets/tls_insight_web_pp_crt
+      - --key=/run/secrets/tls_insight_web_pp_key
+      - --cacert=/run/secrets/efn_ca_crt
+      - --verify-cn=prodplan
+      - --status=http://127.0.0.1:6079
+      - --quiet=conns
+    secrets: [efn_ca_crt, tls_insight_web_pp_crt, tls_insight_web_pp_key]
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:6079/_status"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    labels:
+      service: insight-web-pp-tls
+
+  # insight-web (§30.3 tambahan, §30.12): network insight-plan + kunci asersi ppa1. Daftar network/secret digabung
+  # dengan base. Tanpa overlay: tidak ada env/secret prodplan di insight-web (halaman /produksi nonaktif).
+  insight-web:
+    environment:
+      # Hanya "true" persis; default false di semua env (dicek check-encryption render prod-prodplan).
+      INSIGHT_PRODPLAN_ENABLED: ${INSIGHT_PRODPLAN_ENABLED:-false}
+      # Tetap: loopback ke sidecar insight-web-pp-tls (bukan dari .env; host/port lain -> fitur nonaktif di aplikasi).
+      PRODPLAN_URL: http://127.0.0.1:7443
+      PRODPLAN_ASSERT_KEY_FILE: /run/secrets/prodplan_assert_key
+    secrets:
+      - prodplan_assert_key
+    networks: [insight-ingress, insight-data, insight-plan]
+
+  # L-252 (ADR-051 §4.2): postgres ikut network kedua prodplan-db -> `samenet` pg_hba mencakup subnet .23 untuk semua
+  # baris role. Anggota prodplan-db dikunci {postgres, prodplan} oleh check-encryption.sh. Secret password role
+  # efn_prodplan dibaca 00-roles.sh (role opsional: dilewati bila secret tidak di-mount).
+  postgres:
+    networks: [data, prodplan-db]
+    secrets:
+      - pg_password_prodplan
+
+  # Scrape https://prodplan:8443/metrics (mTLS CN prometheus) lewat insight-plan (§30.1, infra/observability/prometheus.yml).
+  prometheus:
+    networks: [internal, data, insight-plan]
+
+networks:
+  prodplan-db:      # hanya postgres <-> prodplan (dicek scripts/check-encryption.sh)
+    name: ${EFN_STACK:-efn}_prodplan-db
+    internal: true
+    ipam:
+      config: [{ subnet: "${EFN_SUBNET_BASE:-172.30}.23.0/24" }]
+  insight-plan:     # hanya insight-web, prodplan, prometheus
+    name: ${EFN_STACK:-efn}_insight-plan
+    internal: true
+    ipam:
+      config: [{ subnet: "${EFN_SUBNET_BASE:-172.30}.24.0/24" }]
+  egress-prodplan:  # keluar internet HANYA prodplan; tanpa komunikasi antar-container (pola SEC-183)
+    name: ${EFN_STACK:-efn}_egress-prodplan
+    driver: bridge
+    driver_opts:
+      com.docker.network.bridge.enable_icc: "false"
+    ipam:
+      config: [{ subnet: "${EFN_SUBNET_BASE:-172.30}.25.0/24" }]
+
+secrets:
+  pg_password_prodplan: { file: ../../secrets/pg_password_prodplan.txt }
+  prodplan_assert_key: { file: ../../secrets/prodplan_assert_key.txt }
+  # Default = file per nama secret. Dev lokal dengan ESB staging: set PRODPLAN_ESB_PASSWORD_PB_SECRET_FILE di
+  # infra/compose/.env (path relatif terhadap infra/compose atau absolut), mis. ../../secrets/esb_core_password_stg.txt.
+  esb_prodplan_password_pb: { file: "${PRODPLAN_ESB_PASSWORD_PB_SECRET_FILE:-../../secrets/esb_prodplan_password_pb.txt}" }
+  tls_prodplan_crt: { file: ../../secrets/tls_prodplan_crt.txt }
+  tls_prodplan_key: { file: ../../secrets/tls_prodplan_key.txt }
+  tls_insight_web_pp_crt: { file: ../../secrets/tls_insight_web_pp_crt.txt }
+  tls_insight_web_pp_key: { file: ../../secrets/tls_insight_web_pp_key.txt }

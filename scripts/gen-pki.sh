@@ -45,7 +45,8 @@ APP_ENV="${APP_ENV:-dev}"
 # Klien mTLS = Traefik, Prometheus, Grafana, Promtail, ocr-worker (ke Ollama), blackbox-exporter (probe), cAdvisor,
 # Loki (ruler -> Alertmanager), etl (-> loki-tls) dan metabase-provision (-> metabase-tls) (G13), api-gateway
 # (-> odoo-rpc-gateway) dan odoo-rpc-gateway (-> odoo-tls) (G17), forecast-worker (-> odoo-rpc-gateway) (G44),
-# segment-worker (-> odoo-rpc-gateway, -> api-gateway:9466) dan wa-operator (operator -> Traefik wa-admin) (G50).
+# segment-worker (-> odoo-rpc-gateway, -> api-gateway:9466) dan wa-operator (operator -> Traefik wa-admin) (G50),
+# insight-web-pp (sidecar insight-web -> prodplan-tls) (G66).
 # Sumber kebenaran SAN + nameConstraints intermediate. Tambah service baru = baris di sini + 2 baris `pki` di
 # scripts/secrets.list + TERBITKAN ULANG INTERMEDIATE (nameConstraints memuat daftar ini; lihat runbook internal-pki).
 PKI_SERVICES=(
@@ -94,6 +95,12 @@ PKI_SERVICES=(
   # (NONPROD_ONLY_SERVICES): production WA OFF; bila kelak diaktifkan, sertifikat operator diterbitkan per orang lewat
   # runbook, bukan otomatis setiap deploy. Kunci dipegang operator (salin ke perangkat WireGuard staf), tidak di-mount.
   "wa-operator|client"
+  # G66 (docs/04 §30.1/§30.2, ADR-051): sidecar prodplan-tls :8443 (insight-web-pp + prometheus -> prodplan) dan sidecar
+  # klien insight-web-pp-tls di namespace insight-web (CN insight-web-pp, clientAuth saja; BEDA dari leaf server
+  # insight-web agar CN klien prodplan tidak bisa dipakai sebagai server Insight dan sebaliknya). Service baru ->
+  # staging/prod: intermediate WAJIB diterbitkan ulang (runbook internal-pki#service-baru); dev/CI: CA dev dibuat ulang.
+  "prodplan|server"
+  "insight-web-pp|client"
   # G50 (docs/04 §28.9, ADR-048): Mailpit DEV (SMTP implicit TLS + UI HTTPS dengan CA dev). DEV_ONLY_SERVICES: tidak
   # diterbitkan di staging/production; secret tls_mailpit_* hanya didefinisikan docker-compose.dev.yml (bukan
   # scripts/secrets.list).

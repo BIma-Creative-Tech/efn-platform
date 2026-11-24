@@ -73,8 +73,10 @@ x-ghostunnel: &ghostunnel
 # nama bawaan compose) agar label traefik.docker.network dan skrip uji tidak bergantung pada `-p`.
 # Peta oktet ketiga (TETAP, dipakai turunan): 0 edge, 1 internal (TRUSTED_PROXIES, relabel Prometheus), 2 data,
 # 3 egress, 4 socket-proxy, 5 cache, 6 objstore, 7-8 overlay ESB, 9-10 insight, 11-12 overlay forecast,
-# 13-16 + 21 overlay wa-unofficial, 17-19 overlay segment, 20 mail (dev), 22 login-ingress (G62).
+# 13-16 + 21 overlay wa-unofficial, 17-19 overlay segment, 20 mail (dev), 22 login-ingress (G62),
+# 23-25 overlay prodplan (G66: prodplan-db, insight-plan, egress-prodplan).
 # PostgreSQL hanya di network `data` -> pg_hba memakai `samenet` (dicek check-encryption.sh), bukan CIDR literal.
+# Pengecualian satu-satunya: overlay docker-compose.prodplan.yml menambah `prodplan-db` (L-252, anggota {postgres, prodplan}).
 networks:
   edge:          # Traefik dan publik (80/443)
     name: ${EFN_STACK:-efn}_edge

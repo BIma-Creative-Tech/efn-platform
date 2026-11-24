@@ -20,6 +20,7 @@ import {
   parseName,
   parseRoles,
   parseRolesV2,
+  parseRolesV3,
   parseWids,
   scopeConsistent,
   scopeConsistentV3,
@@ -182,7 +183,7 @@ export function verifySsoTokenV3(
   if (!isSub(sub) || !isInt(iat) || !isInt(exp)) return { ok: false, code: 'bad_claims' };
   if (typeof jti !== 'string' || !JTI_RE.test(jti)) return { ok: false, code: 'bad_claims' };
   const name = parseName(raw.name);
-  const roles = parseRolesV2(raw.roles);
+  const roles = parseRolesV3(raw.roles);
   const cids = parseCids(raw.cids);
   const codes = parseCodesV2(raw.codes);
   const wids = parseWids(raw.wids);

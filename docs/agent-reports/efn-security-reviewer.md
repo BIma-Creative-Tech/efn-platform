@@ -48,3 +48,16 @@ tanpa flag; `brs` ditandatangani (HMAC + sig3); kelas PT/BR benar; tidak ada jal
 
 ## 2026-11-23 — Review port accounting G57–G60
 0 Critical / 2 High / 5 Medium / 5 Low / 5 Info. High SEC-G60-01 (persetujuan payment bisa ditulis lewat RPC) dan SEC-G58-01 (status batch bisa dipalsukan), serta Medium SEC-G57-01/02/03, SEC-G58-02, SEC-G60-02 diperbaiki engineer + test regresi, diverifikasi efn-lead di container. Laporan: `docs/reviews/SECURITY_REVIEW_2026-11-23_accounting-port.md`.
+
+## 2026-11-24 — Review G66 production planning ESB (`feat/production-planning`, worktree efn-platform-prodplan)
+0 Critical / 1 High / 2 Medium / 4 Low / 2 Info. Laporan: `docs/reviews/SECURITY_REVIEW_2026-11-24_prodplan.md` (SEC-225..233; cek
+tabrakan nomor dengan review esb-aggregates yang belum di-commit di worktree lain). **Verdict: boleh merge selama tulis production
+terkunci** (L-250 terbukti tidak bisa dilewati lewat env/konfigurasi/redirect).
+- **SEC-225 (High, P1):** `outbox.py:109` rekonsiliasi hanya membaca halaman pertama daftar ESB (produksi tanpa filter marker) →
+  `not_found_after_timeout` palsu → resend menggandakan dokumen produksi. Wajib ditutup sebelum PR pembuka kunci.
+- **SEC-226 (Medium):** resend tidak menolak baris yang sudah punya `esb_doc_number`; `_confirm` toleran membuat baris turun ke
+  `failed` → dokumen lama yatim, tidak terhapus saat cancel.
+- **SEC-227 (Medium):** SoD hanya pembuat/pengaju; penyunting demand/hitung/usulan bisa menyetujui.
+- Low: SEC-228 grup PP belum sensitif di `efn_role`; SEC-229 peran PP tidak per PT; SEC-230 cancel destruktif oleh satu planner + race
+  cancel/claim; SEC-231 qty BOM ≤ 0 lolos ke payload. Info: SEC-232 kunci `details` tidak cocok; SEC-233 hardening.
+- Belum terverifikasi: perilaku nyata ESB (page size, filter `additionalInfo`, qty negatif), `gen-pki.sh`, komponen UI PP; test tidak dijalankan.

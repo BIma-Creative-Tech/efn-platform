@@ -4,6 +4,7 @@
 `eit3` (G52, docs/04 §28.15.5): format sama dengan `eit2`, prefix `eit3`, `v=3`, tepat 14 kunci (13 kunci `eit2` +
 `brs` = cabang ESB `"<esb_brand>:<branch_id>"` untuk kepala toko F&B) dan aturan konsistensi T1-T8
 (`validate_claims_v3`). `eit2` tetap ada untuk rollback (`EFN_INSIGHT_TOKEN_VERSION=2`).
+G66 (docs/04 §30.7, ADR-051 Proposed): `roles` eit3 boleh memuat `PP_ROLES` (maks 8 peran) + aturan T9; format tetap.
 
 `eit2` (G47, docs/04 §28.13.4): format sama dengan `eit1` di bawah, prefix `eit2`, tepat 13 kunci (tambahan `cats`,
 `wids`; `v=2`; `codes` boleh memuat `SM_CODES`; `roles` = satu dari user/all_brands + 0..5 persona) dan aturan
@@ -80,6 +81,10 @@ BRAND_COMPANY_CODES = {
     "wtz": frozenset({"WTZ"}),
 }
 MAX_BRS = 50
+# G66 (docs/04 §30.7, ADR-051, L-251): peran production planning di `roles` eit3 (bukan persona -> sig ClickHouse
+# tetap). Identik dengan insight-web `lib/claims.ts` `PP_ROLES`. Panjang `roles` maks 8 (basis 1 + persona 5 + PP 2).
+PP_ROLES = frozenset({"pp_planner", "pp_warehouse"})
+MAX_ROLES_V3 = 8
 PAYLOAD_KEYS_V3 = PAYLOAD_KEYS_V2 | {"brs"}
 _TOKEN_V3_RE = re.compile(r"eit3\.[A-Za-z0-9_-]{16,3000}\.[A-Za-z0-9_-]{43}")
 _BRS_RE = re.compile(r"(bacha|cup|imd|pb|wtz):[1-9][0-9]{0,9}")
@@ -238,8 +243,11 @@ def _sorted_unique(values):
     return isinstance(values, list) and all(values[i] < values[i + 1] for i in range(len(values) - 1))
 
 
-def _validate_common(payload):
-    """Bentuk kunci cakupan bersama eit2/eit3 (`codes`, `cids`, `roles`, `wids`, `cats`). Mengembalikan persona."""
+def _validate_common(payload, extra_roles=frozenset()):
+    """Bentuk kunci cakupan bersama eit2/eit3 (`codes`, `cids`, `roles`, `wids`, `cats`). Mengembalikan persona.
+
+    `extra_roles` = peran non-persona tambahan yang sah (eit3: `PP_ROLES`; eit2: tidak ada).
+    """
     codes, cids, roles = payload.get("codes"), payload.get("cids"), payload.get("roles")
     wids, cats = payload.get("wids"), payload.get("cats")
     if (
@@ -261,7 +269,7 @@ def _validate_common(payload):
         not isinstance(roles, list)
         or not all(isinstance(r, str) for r in roles)
         or not _sorted_unique(roles)
-        or not set(roles) <= (ROLES | PERSONAS)
+        or not set(roles) <= (ROLES | PERSONAS | extra_roles)
         or len(set(roles) & ROLES) != 1
     ):
         raise ValueError("bad_roles")
@@ -395,12 +403,14 @@ def _valid_brs(brs):
 
 
 def validate_claims_v3(payload):
-    """Validasi isi klaim eit3 (docs/04 §28.15.5, aturan T1-T7) — pembuat DAN rujukan verifikasi. ValueError(kode).
+    """Validasi isi klaim eit3 (docs/04 §28.15.5 T1-T7 + §30.7 T9) — pembuat DAN rujukan verifikasi. ValueError(kode).
 
     T8 (`payload_b64 ≤ 3000`) diperiksa `encode_token_v3` / `verify_token_v3`.
     """
-    personas = _validate_common(payload)
+    personas = _validate_common(payload, extra_roles=PP_ROLES)
     codes, roles, wids, cats = payload["codes"], payload["roles"], payload["wids"], payload["cats"]
+    if len(roles) > MAX_ROLES_V3:
+        raise ValueError("bad_roles")
     brs = payload.get("brs")
     if not _valid_brs(brs):
         raise ValueError("bad_brs")
@@ -426,6 +436,9 @@ def validate_claims_v3(payload):
         raise ValueError("bad_claims")
     # T7: cats ≠ [] ⇒ category ∈ P.
     if cats and "category" not in roles:
+        raise ValueError("bad_claims")
+    # T9 (docs/04 §30.7, G66): PP ∩ roles ≠ ∅ ⇒ ESB ≠ ∅ ∧ brs = [].
+    if set(roles) & PP_ROLES and (not esb or brs):
         raise ValueError("bad_claims")
 
 

@@ -1190,3 +1190,52 @@ Verifikasi hanya dengan membaca kode (tanpa runtime). Dikecualikan atas perminta
 3. `FilterBar` masih menampilkan chip cabang `sm:` yang tertinggal di URL (hanya tampil, server menolak); kosmetik.
 4. UAT G52 belum ditulis di `docs/testing/UAT_SCENARIOS.md` (di luar permintaan ini): sarankan skenario OTP tidak relevan; yang perlu: kepala toko tanpa cabang (`no_branch`), store+marketing (store dibuang), eit2 saat `INSIGHT_ACCEPT_EIT2=false`, pt=SMD di /fnb/exec.
 5. Aturan `cids` sesi dual-domain memuat id company SM di `SQL_efn_cids` view ESB: aman (policy ESB hanya cek format + sig), tetapi sig menutup string apa adanya; tidak ada mismatch.
+
+---
+
+# QA G66 — Production planning di atas ESB (24 Nov 2026)
+
+Cakupan: `services/prodplan` (api, service, workflow, calc, jobs, outbox, payloads, store), `services/insight-web` (lib/prodplan-*, components/pp, rute `(pp)/produksi`, `api/prodplan`), skema `23-prodplan-g66.sql`, kontrak §30. **Semua verifikasi dari membaca kode; tidak ada runtime** (pytest/vitest/ruff dijalankan lead). Tes baru belum pernah dijalankan; angka di dalamnya dihitung tangan (komentar di file).
+
+## 1. Ketidakcocokan kontrak / UI-service (urut dampak)
+Tidak ada yang merusak layar total: parser UI defensif, semua kunci utama (plan, requirements, transfers, outbox, preview, job, meta, boms, pack-rules) cocok dengan `service.py`. Selisih yang nyata:
+1. **Nama produk di Usulan batch dan baris transfer hilang** (UI menampilkan "Produk #1001"). UI membaca `suggestions[].material_code/material_name/product_code/product_name` dan `transfers[].lines[].product_name` (`PlanParts.tsx:223-225`, `:296`; `prodplan-types.ts:360-373`, `:385-391`), service tidak mengirimnya (`service.py` get_plan SELECT suggestion/transfer_line). **Diperbaiki** (lihat bawah).
+2. **`details.doc_numbers` dibuang UI**: service mengirim `{"doc_numbers": [...]}` untuk `transfers_not_authorized` (`service.py:881`, `:895`); `sanitizeDetails` hanya membaca `docs`/`doc_nums` (`prodplan-errors.ts:77`) -> pesan "Dokumen: ..." tidak pernah tampil. **Diperbaiki.**
+3. **Label galat outbox**: worker menulis `esb_rejected`, `not_sent`, `sent_unknown`, `doc_not_found`, `marker_mismatch`, `cancelled`, `client_error` (`outbox.py:200,206,213,221,245,250`; `service.py:1014`), `OUTBOX_ERROR_LABEL` (`prodplan-format.ts:94-99`) hanya mengenal `esb_validation`/`esb_unavailable` yang tidak pernah ditulis -> baris yang dibatalkan/ditolak tampil "Galat dari ESB (lihat administrator)". **Diperbaiki** (label ditambah).
+4. Dokumen pratinjau fase **produksi** tidak menampilkan produk hasil dan jumlahnya: service mengirim `product_code`, `qty`, `level`, `bom_id` per dokumen (`service.py:189-199`), `PreviewDoc` (`prodplan-types.ts:183-188`) dan tabel (`PlanFlow.tsx:328-348`) hanya menampilkan jenis dokumen + bahan. Pengguna tidak melihat "FIN-C 10 pcs" pada konfirmasi posting. **Belum diperbaiki** (perubahan tampilan; disarankan).
+5. `details` galat validasi service = `{"field": ...}` (singular, `service.py:57`), kontrak §30.8 menyebut "nama field"; UI sudah menormalkan ke `fields[]` (`prodplan-errors.ts:70`) — cocok.
+6. Kontrak §30.8 baris `GET /v1/boms` menyebut galat `422 bad_input`; service mengembalikan **400 `invalid_request`** (`service.py:282,287`). UI memetakan 400/422 sama; selaraskan teks kontrak.
+7. `q` pencarian BOM: UI menerima 2..64 karakter bebas (`prodplan-actions.ts:77-86`), service 2..60 dengan whitelist karakter (`jobs.py:129`) -> 61-64 karakter atau tanda lain = galat umum "Permintaan tidak valid" (kosmetik).
+8. Kode galat job yang ditulis worker tetapi tidak ada di kontrak (§30.8 daftar `job.error_code`): `conflict_version`, `invalid_state`, `bom_not_assembly`, `bom_missing`, `not_found`, `forbidden`, `interrupted`, `internal` (`jobs.py:36,386`; `store.py:255`); UI menampilkan pesan umum "Proses gagal". `job.result.path` (jalur siklus BOM) diabaikan (`prodplan-call.ts:74`): planner tidak melihat jalur siklus.
+9. `stock_fetched_at` dikirim (`service.py` get_plan) tetapi tidak ditampilkan UI; pengguna tidak melihat batas 30 menit sebelum `stock_too_old`.
+10. `PackRuleEditor` komentar menyebut "satuan harus sama dengan satuan dasar produk (diperiksa prodplan)" (`PackRuleEditor.tsx:4`); `put_pack_rule` tidak memeriksa (hanya flag `uom_mismatch` saat hitung).
+Cocok (diverifikasi baris-per-baris): semua path/method ke `ROUTES` (`api.py:61-85`) vs `prodplan-actions.ts:225-247`; peran P/W/R; kunci body (tes baru `prodplan-contract.test.ts`); status job `queued|running|done|failed` (SQL `:162`); status outbox/plan/transfer/usulan; kode galat `workflow.MESSAGES` vs `PP_ERROR_MESSAGES` (24 kode; tes baru di kedua sisi); `meta`, `boms`, `pack-rules`, `plans` list `{items,count}`.
+
+## 2. Bug / celah logika
+Perhitungan `calc.py` terhadap §30.5: **tidak ditemukan bug**; vektor + 13 kasus tepi baru lolos penelusuran tangan (kelipatan kemasan tepat, desimal, diamond, bahan di dua level, kedalaman lewat memo, stok sumber 0/negatif, kemasan > stok sumber, BOM ganda per produk).
+Celah desain / perilaku (dilaporkan, tidak diubah):
+- **A (tinggi). Rencana `approved` tidak bisa dihitung ulang** sedangkan posting mensyaratkan snapshot stok <= 30 menit (`service.py` `post` `_check_snapshot_age`; `config.py:229`). Persetujuan > 30 menit setelah hitung => `stock_too_old` tanpa jalan keluar selain Batalkan + buat ulang. Usul: jendela umur dihitung dari persetujuan, atau izinkan `approved -> draft`, atau umur default >= 240.
+- **B (tinggi). Dokumen ditolak ESB (4xx) di tengah rangkaian = jalan buntu**: baris `failed` (`esb_rejected`) tidak bisa di-resend (`service.py:1042-1047` hanya `not_found_after_timeout`), baris berikutnya menunggu selamanya, `post` menolak fase yang sudah punya outbox (`:918`). Satu-satunya jalan = Batalkan (menghapus yang sudah confirmed; bila sudah di-authorize di ESB menjadi `delete_failed`). Status rencana `posted` dipasang saat enqueue, bukan saat semua dokumen confirmed.
+- **C (sedang). `resend` tanpa pemeriksaan ulang ESB**: setelah `not_found_after_timeout` dokumen bisa muncul terlambat di ESB; resend memakai marker sama dan menerbitkan dokumen kedua. Usul: `find_by_marker` sekali lagi sebelum menjadi `pending`.
+- **D (sedang). Usulan batch yang sudah diterima tidak bisa dibatalkan** dan bertahan setelah `put_demand`/hitung ulang (demand `source=suggestion` tidak dihapus `put_demand`, `_save_calculation` menyimpan usulan `accepted`): bila baris permintaan asal dihapus, batch tambahan tetap diproduksi. Usulan `rejected` dihapus dan muncul lagi setelah hitung ulang (`jobs.py:700`). Usulan terbuka basi masih bisa diterima saat `calc_status != fresh` (`decide_suggestion` tidak mengecek).
+- **E (rendah). `submit` dengan 0 baris produksi** mengembalikan `stale_calculation` ("hasil hitung kedaluwarsa") yang menyesatkan (`service.py:742-744`); `decide_transfer` boleh memutus ulang transfer yang sudah diputuskan; `_transfers_authorized` dibaca di luar transaksi (TOCTOU kecil dengan cancel).
+- **F (rendah). `cancel` meninggalkan baris `failed/not_found_after_timeout`** tanpa pemeriksaan ESB (dokumen bisa ada).
+- `recover_running` job menandai `interrupted` tanpa mengubah `calc_status` (aman).
+
+## 3. Perbaikan yang dilakukan
+- `services/prodplan/efn_prodplan/service.py` (`get_plan`): usulan batch memuat `material_code/material_name/product_code/product_name`, baris transfer memuat `product_name` (dari `requirements`/`production_lines` yang sudah dimuat; tanpa query baru).
+- `services/insight-web/lib/prodplan-errors.ts`: `sanitizeDetails` membaca `details.doc_numbers`.
+- `services/insight-web/lib/prodplan-format.ts`: `OUTBOX_ERROR_LABEL` + 7 kode yang ditulis worker.
+- `services/insight-web/components/pp/PlanFlow.tsx`: tombol Posting nonaktif dengan alasan bila fase itu sudah punya dokumen outbox (sebelumnya klik -> 409 generik).
+
+## 4. Tes ditambah (belum dijalankan; jalankan `ruff check` + `ruff format` pada file baru)
+- `services/prodplan/tests/test_calc_edges.py` (13 tes): kelipatan kemasan tepat, desimal, pembulatan kemasan vs stok sumber, sumber < 1 kemasan, stok 0/negatif, gabung transfer satu sumber, diamond, bahan dua level + usulan dua BOM, BOM ganda per produk, qty 0/negatif, demand ganda, siklus 3 simpul, batas kedalaman lewat memo.
+- `services/prodplan/tests/test_outbox_edges.py` (14 tes): penolakan di tengah rangkaian + pembatalan, resend, auth gagal (backoff 30/60), `client_error`, brand tidak aktif, konfirmasi menunggu/gagal baca, jalur hapus (not_sent, 404, rejected-tapi-hilang, tanpa nomor, write mati), pemilihan lintas rencana, blocker hapus. Mengimpor `test_outbox` (tetangga; `# noqa: I001` di baris impor pertama).
+- `services/prodplan/tests/test_service_contract.py`: pratinjau -> body ESB persis (simple, GTR, produksi actual/standard), digest tak bergantung urutan, matriks transisi 5x5, `cancelled` terminal, semua kode `ApiError` di service/api/workflow ada di `MESSAGES`.
+- `services/insight-web/tests/prodplan-contract.test.ts`: fixture bentuk nyata `get_plan`/preview/job, kode galat service vs tabel UI, `doc_numbers`, kode galat outbox, kunci body semua aksi.
+
+## 5. Area tanpa tes
+`service.py` handler SQL (hanya `build_preview`/validator diuji; konkurensi `FOR UPDATE`, `row_version`, `job_running` unique index, `post`/`cancel` atomik: hanya 3 tes integrasi PG yang di-skip lokal); `store.py` (claim/candidates/known_numbers tanpa tes selain integrasi); `jobs.JobRunner` (`_calculate` stok sumber, `_save_calculation`, `_pr_import` tanpa tes; hanya parser); `esb.py` klien nyata; semua komponen React (`PlanFlow`, `PlanParts`, `PpAction` polling, `DemandEditor`, `BomPicker`, `NewPlanForm`, `PackRuleEditor`) tanpa tes render; halaman `(pp)/produksi/**` tanpa tes; Odoo grup/peran PP sudah punya 86 tes (lead).
+
+## 6. Sisa risiko / belum terverifikasi
+UI di browser (aksesibilitas fokus, polling 5 menit, `router.refresh` setelah job); BOM multi-level pada data nyata; mode `standard`; jalur gagal outbox terhadap ESB nyata; `return-to-draft`/`resend` end-to-end; dua job bersamaan; purge/retensi; `ruff format --check` untuk file tes baru (CI menjalankannya); `# noqa: I001` mungkin tidak perlu bila ruff menganggap `test_outbox` first-party. UAT: `docs/qa/G66_UAT.md` (mengikuti folder `docs/qa/` yang sudah ada, bukan `docs/uat/`).

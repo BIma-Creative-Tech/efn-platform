@@ -394,6 +394,22 @@ pertanyaan architect di `docs/04` §28.12.
   restriksi · **Q-SM23** usulan lewat cut-off · **Q-SM24** cap kampanye · **Q-SM27** histori & target akurasi (R-T21) ·
   **Q-SM28** ambang near-expiry & service level · **Q-SM29** persona Insight.
 
+### 5.15 Production planning di atas ESB (G66, ADR-051 Proposed, 24 Nov 2026)
+Rincian di ADR-051 §5 dan `docs/04` §30. Tulis ke ESB **production terkunci di kode** sampai Q-PP1 + Q-PP2 terjawab.
+Usulan risiko baru (belum masuk tabel §4):
+- **R-S23** Kredensial/akun tulis ESB disalahgunakan atau menulis ke environment yang salah (production saat uji).
+  Mitigasi: allowlist host + method/path di kode + test, `PROD_WRITE_UNLOCKED=False`, banner environment di UI, akun
+  non-admin (Q-PP1), secret terpisah dari `esb-extract`, subnet egress sendiri. Terkait R-S17.
+- **R-O15** Dokumen produksi yang dibuat lewat API **langsung Authorized** di ESB (uji staging 24 Nov 2026) sehingga
+  stok/HPP salah bila rencana keliru. Mitigasi: SoD dua orang di aplikasi, ringkasan dampak sebelum posting, posting
+  eksplisit, pembatalan = DELETE dokumen, uji staging dulu, batas dokumen per posting.
+- **R-T23** Rencana dihitung dari stok/BOM basi atau tidak lengkap (tanpa netting WIP, tanpa FEFO, tanpa transfer
+  tertunda). Mitigasi: stok disegarkan di setiap hitung + umur maksimum saat submit/posting, peringatan per baris,
+  keterbatasan tampil di UI. Terkait R-T06.
+
+Pertanyaan terbuka klien **Q-PP1..Q-PP14**: `docs/04` §30.14 + §30.16 (paling menentukan: Q-PP1 akun API non-admin, Q-PP2
+penerimaan "produksi tanpa tahap draft", Q-PP3 mode costing PB production, Q-PP4 sumber pesanan outlet).
+
 ---
 
 ## 6. ARSITEKTUR TARGET (KONSOLIDASI)
