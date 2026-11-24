@@ -92,6 +92,9 @@ INSERT INTO ${DB}.fact_esb_transfer_request_line (brand, company_code, transfer_
     ('pb', 'PB', ${D30}, 'TF9', 7, 4, 3, 'Authorized', 'C', 1, 0, '', 1, 1, 'P1', 'Roti', 'EA', 4, 4, 0, 0, 0, ${V1}),
     ('pb', '', ${D30}, 'TFX', 7, 4, 3, 'Authorized', 'C', 0, 0, '', 1, 1, 'P1', 'Roti', 'EA', 4, 4, 0, 0, 0, ${V1}),
     ('pb', 'PB', ${D1}, 'TF6', 7, 4, 3, 'Authorized', 'C', 0, 0, '', 1, 1, 'P1', 'Roti', 'EA', 7, 7, 0, 0, 0, ${V1}),
+    ('pb', 'PB', ${D30}, 'TF10', 7, 4, 3, 'Authorized', 'C', 0, 0, '', 1, 1, 'P1', 'Roti', 'EA', 5, 5, 0, 0, 0, ${V1}),
+    ('pb', 'PB', ${D30}, 'TF11', 7, 4, 3, 'Authorized', 'C', 0, 0, '', 1, 1, 'P1', 'Roti', 'EA', 3, 3, 0, 0, 0, ${V1}),
+    ('pb', 'PB', ${D30}, 'TFE', 7, 4, 3, 'Authorized', 'C', 0, 0, '', 77, 1, '', 'Tak Terpetakan', 'EA', 6, 6, 0, 0, 0, ${V1}),
     ('wtz', 'WTZ', ${D30}, 'TW1', 9, 5, 3, 'Authorized', 'C', 0, 0, '', 1, 1, 'W1', 'Roti', 'EA', 3, 3, 0, 0, 0, ${V1});
 INSERT INTO ${DB}.fact_esb_delivery_ref_line (brand, company_code, delivery_date, doc_num, reference_num,
     trans_type, ref_date, origin_branch_id, dest_branch_id, product_code, uom, qty_sent, qty_received, _version) VALUES
@@ -102,7 +105,10 @@ INSERT INTO ${DB}.fact_esb_delivery_ref_line (brand, company_code, delivery_date
     ('pb', 'PB', ${D30} + 1, 'GD4', 'TF4', 'Transfer Request', NULL, 4, 7, 'P1', 'BOX', 1, 1, ${V1}),
     ('pb', 'PB', ${D30} + 1, 'GD5', 'TF5', 'Lain', NULL, 4, 7, 'P2', 'EA', 8, 8, ${V1}),
     ('pb', 'PB', ${D30} + 5, 'GD7', 'TF7', 'Transfer Request', NULL, 4, 7, 'P1', 'EA', 9, 9, ${V1}),
-    ('pb', 'PB', ${D30} + 5, 'GDZ', 'TF999', 'Transfer Request', NULL, 4, 7, 'P9', 'EA', 1, 1, ${V2});
+    ('pb', 'PB', ${D30} + 5, 'GDZ', 'TF999', 'Transfer Request', NULL, 4, 7, 'P9', 'EA', 1, 1, ${V2}),
+    ('pb', 'PB', ${D30} + 1, 'GD10A', 'TF10', 'Transfer Request', NULL, 4, 7, 'P1', 'EA', 0, 0, ${V1}),
+    ('pb', 'PB', ${D30} + 4, 'GD10B', 'TF10', 'Transfer Request', NULL, 4, 7, 'P1', 'EA', 5, 5, ${V1}),
+    ('pb', 'PB', ${D30} - 2, 'GD11', 'TF11', 'Transfer Request', NULL, 4, 7, 'P1', 'EA', 3, 3, ${V1});
 -- ---------------------------------------------------------------- jurnal item
 INSERT INTO ${DB}.fact_esb_item_journal_line (brand, company_code, journal_date, journal_num, detail_id, line_no,
     branch_id, location_id, location_name, status_id, status_name, template_name, purpose_id, purpose_name, product_id,
@@ -121,7 +127,10 @@ INSERT INTO ${DB}.fact_esb_profit_loss (brand, company_code, period_month, scope
     ('pb', 'PB', '2025-03-01', 'branch', 7, 'account', 'cogs', '5 1', '5.1', 'Lama', 40, 2025, 1, ${V1}),
     ('pb', 'PB', '2025-03-01', 'branch', 7, 'summary', 'netSales', '', '', 'Net', 200, 2025, 1, ${V2}),
     ('pb', 'PB', '2025-03-01', 'brand', 0, 'summary', 'netSales', '', '', 'Net', 250, 2025, 1, ${V2}),
-    ('wtz', 'WTZ', '2025-03-01', 'branch', 9, 'summary', 'netSales', '', '', 'Net', 77, 2025, 1, ${V2});
+    ('wtz', 'WTZ', '2025-03-01', 'branch', 9, 'summary', 'netSales', '', '', 'Net', 77, 2025, 1, ${V2}),
+    ('bacha', 'BCF', '2025-03-01', 'branch', 5, 'summary', 'netSales', '', '', 'Net', 120, 2025, 1, ${V2}),
+    ('bacha', 'BCR', '2025-03-01', 'branch', 6, 'summary', 'netSales', '', '', 'Net', 180, 2025, 1, ${V2}),
+    ('bacha', '', '2025-03-01', 'brand', 0, 'summary', 'netSales', '', '', 'Net', 300, 2025, 1, ${V2});
 -- ---------------------------------------------------------------- checkpoint (versi slice)
 INSERT INTO ${DB}.extract_checkpoint (brand, entity, scope_key, day, status, rows, calls, finished_at) VALUES
     ('pb', 'transfer_request', '*', ${D30}, 'done', 0, 0, ${V1}),
@@ -131,6 +140,11 @@ INSERT INTO ${DB}.extract_checkpoint (brand, entity, scope_key, day, status, row
     ('pb', 'delivery_ref', '*', ${D30} + 2, 'done', 0, 0, ${V1}),
     ('pb', 'delivery_ref', '*', ${D30} + 3, 'done', 0, 0, ${V1}),
     ('pb', 'delivery_ref', '*', ${D30} + 5, 'done', 0, 0, ${V2}),
+    ('pb', 'delivery_ref', '*', ${D30} + 4, 'done', 0, 0, ${V1}),
+    ('pb', 'delivery_ref', '*', ${D30} - 2, 'done', 0, 0, ${V1}),
+    ('bacha', 'profit_loss', '5', '2025-01-01', 'done', 0, 0, ${V2}),
+    ('bacha', 'profit_loss', '6', '2025-01-01', 'done', 0, 0, ${V2}),
+    ('bacha', 'profit_loss', '*', '2025-01-01', 'done', 0, 0, ${V2}),
     ('pb', 'item_journal', '*', ${D30}, 'done', 0, 0, ${V1}),
     ('wtz', 'item_journal', '*', ${D30}, 'done', 0, 0, ${V1}),
     ('pb', 'profit_loss', '7', '2025-01-01', 'done', 0, 0, ${V2}),
@@ -167,26 +181,39 @@ expect "fill: kiriman pertama TF3 (+1 hari)" \
   "$(a "SELECT dateDiff('day', transfer_date, first_delivery_date) FROM ${L} WHERE transfer_num = 'TF3'")" 1
 expect "fill: first_delivery_date NULL tanpa kiriman TF5" \
   "$(a "SELECT isNull(first_delivery_date) FROM ${L} WHERE transfer_num = 'TF5'")" 1
+# QA P3: GD qty 0 (+1 hari) diabaikan -> kiriman pertama = GD qty 5 (+4 hari); GD sebelum permintaan -> NULL.
+expect "fill: GD qty 0 tidak dihitung kiriman pertama TF10" "$(line TF10)" "5|0|1|1"
+expect "fill: kiriman pertama TF10 (+4 hari, bukan +1)" \
+  "$(a "SELECT dateDiff('day', transfer_date, first_delivery_date) FROM ${L} WHERE transfer_num = 'TF10'")" 4
+expect "fill: GD bertanggal sebelum permintaan TF11 -> first_delivery_date NULL" \
+  "$(a "SELECT concat(toString(toFloat64(qty_sent)), '|', toString(isNull(first_delivery_date))) FROM ${L}
+        WHERE transfer_num = 'TF11'")" "3|1"
+# QA P2#4: product_code '' tidak dihitung.
+expect "fill: GTR tanpa product_code TFE tidak dihitung" "$(line TFE)" "0|0|1|0"
 
 DAILY_COLS="concat(toString(requests), '|', toString(requests_full), '|', toString(lines), '|', toString(lines_full),
   '|', toString(lines_zero), '|', toString(round(line_ratio_sum, 4)), '|', toString(lines_uom_mismatch), '|',
   toString(lines_open), '|', toString(lead_days_sum), '|', toString(lead_days_n))"
-# D30: baris terhitung TF1 (0.6), TF2 (1), TF3 (1), TF5 (0), TF7 (0) -> rasio 2.6; penuh TF2+TF3; nol TF5+TF7;
-# mismatch TF4; waktu kirim TF1 1 + TF2 2 + TF3 1 = 4 / 3.
+# D30: baris terhitung TF1 (0.6), TF2 (1), TF3 (1), TF5 (0), TF7 (0), TF10 (1), TF11 (1) -> rasio 4.6; penuh
+# TF2+TF3+TF10+TF11; nol TF5+TF7; mismatch TF4; TFE (kode '') tidak dihitung; waktu kirim TF1 1 + TF2 2 + TF3 1 +
+# TF10 4 = 8 / 4 (TF11 tanpa first_delivery_date).
 expect "fill daily D30 (aditif)" \
   "$(a "SELECT ${DAILY_COLS} FROM ${DB}.v_esb_fill_rate_daily WHERE brand = 'pb' AND company_code = 'PB'
-        AND transfer_date = ${D30}")" "5|2|5|2|2|2.6|1|0|4|3"
+        AND transfer_date = ${D30}")" "7|4|7|4|2|4.6|1|0|8|4"
 expect "fill daily D1 (masih berjalan)" \
   "$(a "SELECT ${DAILY_COLS} FROM ${DB}.v_esb_fill_rate_daily WHERE brand = 'pb' AND transfer_date = ${D1}")" \
   "0|0|0|0|0|0|0|1|0|0"
 expect "fill daily: nama outlet & pemasok" \
   "$(a "SELECT concat(branch_name, '|', supplier_name) FROM ${DB}.v_esb_fill_rate_daily
         WHERE brand = 'pb' AND company_code = 'PB' AND transfer_date = ${D30}")" "Toko Tujuh|CK Sintetis"
-# P1 EA: TF1 (10/6), TF2 (10/15 -> capped 10), TF3 (10/10), TF7 (9/0) -> lines 4, req 39, capped 26, sent 31.
+# P1 EA: TF1 (10/6), TF2 (10/15 -> capped 10), TF3 (10/10), TF7 (9/0), TF10 (5/5), TF11 (3/3)
+# -> lines 6, req 47, capped 34, sent 39.
 expect "fill product monthly P1 EA" \
   "$(a "SELECT concat(toString(lines), '|', toString(toFloat64(request_qty)), '|', toString(toFloat64(sent_capped)),
         '|', toString(toFloat64(qty_sent))) FROM ${DB}.v_esb_fill_rate_product_monthly
-        WHERE brand = 'pb' AND company_code = 'PB' AND product_code = 'P1' AND uom = 'EA'")" "4|39|26|31"
+        WHERE brand = 'pb' AND company_code = 'PB' AND product_code = 'P1' AND uom = 'EA'")" "6|47|34|39"
+expect "fill product monthly: product_code '' tidak ada" \
+  "$(a "SELECT count() FROM ${DB}.v_esb_fill_rate_product_monthly WHERE product_code = ''")" 0
 expect "fill product monthly: P1 BOX (mismatch) tidak ada" \
   "$(a "SELECT count() FROM ${DB}.v_esb_fill_rate_product_monthly WHERE uom = 'BOX'")" 0
 
@@ -253,6 +280,14 @@ for w in w_pl w_usage w_usage_product w_fill w_fill_product; do
   expect "policy ${w}: scope PB melihat baris PB (kontrol positif)" \
     "$(u "$w" "company_code = 'PB'" "$PB_EXEC")" "$(a "SELECT count() FROM ${DB}.$w WHERE company_code = 'PB'")"
 done
+# SEC-G67-01: total brand Bacha (multi-PT, company_code '') tidak terlihat eksekutif PT mana pun; baris cabangnya tetap.
+BCF_EXEC="$(scope 4 BCF '' "$(sig3 4 BCF '')")"
+BOTH_EXEC="$(scope 4 BCF,BCR '' "$(sig3 4 BCF,BCR '')")"
+expect "SEC-G67-01: scope BCF tidak melihat total brand Bacha" "$(u w_pl "brand = 'bacha' AND scope = 'brand'" "$BCF_EXEC")" 0
+expect "SEC-G67-01: scope BCF+BCR tidak melihat total brand Bacha" \
+  "$(u w_pl "brand = 'bacha' AND scope = 'brand'" "$BOTH_EXEC")" 0
+expect "SEC-G67-01: scope BCF melihat cabang BCF saja (kontrol positif)" \
+  "$(u w_pl "brand = 'bacha' AND scope = 'branch'" "$BCF_EXEC")" 1
 expect "policy w_fill: baris PB ada (kontrol positif tidak kosong)" \
   "$(a "SELECT count() > 0 FROM ${DB}.w_fill WHERE company_code = 'PB'")" 1
 

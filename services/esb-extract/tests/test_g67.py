@@ -251,13 +251,19 @@ def test_extract_profit_loss_branch_params_whitelist_and_raw() -> None:
 
 def test_extract_profit_loss_brand_scope_and_past_year() -> None:
     esb = FakeEsb({PL_PATH: pl_route})
-    brand = run_slice(runtime(BACHA), SliceTask(date(2026, 1, 1), "profit_loss", "*"), V, esb.get)
+    # Positif: PB satu PT -> total brand ber-PT default.
+    brand = run_slice(runtime(), SliceTask(date(2026, 1, 1), "profit_loss", "*"), V, esb.get)
     assert esb.calls[0] == (PL_PATH, {"year": 2026, "month": 11})  # total brand: tanpa branchIDs
     facts = brand.tables["fact_esb_profit_loss"]
-    assert {r[PL["scope"]] for r in facts} == {"brand"} and {r[PL["company_code"]] for r in facts} == {"BCF"}
-    assert brand.raw[0].doc_key == "2026|*"
+    assert {r[PL["scope"]] for r in facts} == {"brand"} and {r[PL["company_code"]] for r in facts} == {"PB"}
+    assert brand.raw[0].doc_key == "2026|*" and not CFG.multi_company
+    # Negatif SEC-G67-01: Bacha multi-PT (BCF + override 6=BCR) -> total brand company_code '' (row policy membuang).
+    multi = run_slice(runtime(BACHA), SliceTask(date(2026, 1, 1), "profit_loss", "*"), V, esb.get)
+    assert BACHA.multi_company and {r[PL["company_code"]] for r in multi.tables["fact_esb_profit_loss"]} == {""}
+    same_pt = BrandConfig("bacha", "u", "p", "BCF", frozenset(), frozenset(), {6: "BCF"})
+    assert not same_pt.multi_company  # override ke PT yang sama bukan multi-PT
     past = run_slice(runtime(BACHA), SliceTask(date(2025, 1, 1), "profit_loss", "6"), V, esb.get)
-    assert esb.calls[1] == (PL_PATH, {"year": 2025, "month": 12, "branchIDs": 6})  # tahun lampau: month 12
+    assert esb.calls[2] == (PL_PATH, {"year": 2025, "month": 12, "branchIDs": 6})  # tahun lampau: month 12
     assert {r[PL["company_code"]] for r in past.tables["fact_esb_profit_loss"]} == {"BCR"}  # override cabang
 
 

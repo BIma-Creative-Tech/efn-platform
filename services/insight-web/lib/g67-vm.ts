@@ -21,16 +21,48 @@ type Raw = Record<string, string | string[] | undefined>;
 export const COVERAGE_KEYS = {
   pnl: ['profit_loss', 'pnl'],
   usage: ['item_journal', 'journal'],
-  fill: ['transfer_request', 'gtr', 'delivery_ref'],
+  /** Fill rate butuh DUA sumber sekaligus: permintaan (GTR) dan referensi kirim; rentang sah = IRISAN keduanya (`coverageIntersectHint`). */
+  fill: [['transfer_request', 'gtr'], ['delivery_ref']],
 } as const;
+
+const matches = (r: CoverageRow, keys: readonly string[]): boolean =>
+  keys.some((k) => r.entity === k || r.entity.includes(k)) && Boolean(r.first_day) && Boolean(r.last_day);
+
+function spanOf(rows: readonly CoverageRow[], keys: readonly string[]): { first: string; last: string } | null {
+  const mine = rows.filter((r) => matches(r, keys));
+  if (mine.length === 0) return null;
+  return {
+    first: mine.reduce((m, r) => (r.first_day < m ? r.first_day : m), mine[0].first_day),
+    last: mine.reduce((m, r) => (r.last_day > m ? r.last_day : m), mine[0].last_day),
+  };
+}
 
 export function coverageHint(rows: readonly CoverageRow[] | null, keys: readonly string[]): string | null {
   if (rows === null) return null;
-  const mine = rows.filter((r) => keys.some((k) => r.entity === k || r.entity.includes(k)) && r.first_day && r.last_day);
-  if (mine.length === 0) return null;
-  const first = mine.reduce((m, r) => (r.first_day < m ? r.first_day : m), mine[0].first_day);
-  const last = mine.reduce((m, r) => (r.last_day > m ? r.last_day : m), mine[0].last_day);
-  return `Data tersedia ${fmtSpan(first, last)}.`;
+  const s = spanOf(rows, keys);
+  return s === null ? null : `Data tersedia ${fmtSpan(s.first, s.last)}.`;
+}
+
+/**
+ * Rentang yang didukung SEMUA sumber (irisan: awal terakhir s.d. akhir terawal). Salah satu sumber tak dikenali -> null (tidak
+ * menjanjikan rentang); irisan kosong -> kalimat jujur bahwa sumber belum beririsan.
+ */
+export function coverageIntersectHint(rows: readonly CoverageRow[] | null, groups: readonly (readonly string[])[]): string | null {
+  if (rows === null) return null;
+  const spans = groups.map((g) => spanOf(rows, g));
+  if (spans.length === 0 || spans.some((s) => s === null)) return null;
+  const ok = spans as { first: string; last: string }[];
+  const first = ok.reduce((m, s) => (s.first > m ? s.first : m), ok[0].first);
+  const last = ok.reduce((m, s) => (s.last < m ? s.last : m), ok[0].last);
+  return first > last ? 'Data permintaan dan data kiriman belum beririsan pada rentang mana pun.' : `Data tersedia ${fmtSpan(first, last)} (irisan data permintaan dan kiriman).`;
+}
+
+export type FillRateEmpty = 'data' | 'immature' | 'none';
+
+/** Keadaan halaman fill rate: ada angka, hanya permintaan belum matang (`lines_open`), atau benar-benar kosong. */
+export function fillRateEmptyKind(linesCounted: number, hasPrev: boolean, outletRows: number, linesOpen: number): FillRateEmpty {
+  if (linesCounted > 0 || hasPrev || outletRows > 0) return 'data';
+  return linesOpen > 0 ? 'immature' : 'none';
 }
 
 // ---------- kelas pemakaian (/waste) ----------

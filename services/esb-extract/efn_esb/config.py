@@ -212,6 +212,11 @@ class BrandConfig:
     def company_for(self, branch_id: int) -> str:
         return self.branch_company.get(branch_id, self.company_code)
 
+    @property
+    def multi_company(self) -> bool:
+        """Brand dengan cabang lebih dari satu PT (override `ESB_BRANCH_COMPANY_OVERRIDES` ke PT lain)."""
+        return any(code != self.company_code for code in self.branch_company.values())
+
 
 @dataclass(frozen=True)
 class EsbSettings:

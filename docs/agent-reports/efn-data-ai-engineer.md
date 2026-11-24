@@ -74,6 +74,15 @@ purpose, grant positif/negatif, policy PT, `insight_reader` tanpa efn_dwh. Harne
 §31.6.1 (+ trans_type lain, status batal, bypass), angka daily/product, P&L versi slice + selisih brand, kelas/status
 jurnal, resolusi `ID:`, negatif row policy di kelima view (WTZ, `company_code ''`, `brs` terisi).
 
+### Putaran perbaikan (security + QA, 25 Nov 2026)
+- SEC-G67-01: `BrandConfig.multi_company` (override ke PT lain); total brand P&L brand multi-PT → `company_code=''`
+  (row policy membuang), PB tetap PT default. Test positif PB + negatif Bacha; harness: scope BCF / BCF+BCR tidak melihat
+  total brand Bacha. docs/04 §31.1.1 diselaraskan.
+- QA P2#4: `is_counted` + `r.product_code != ''` (quality `gtr_product_unmapped` sudah ada); harness TFE.
+- QA P3: `first_delivery_date` = `minIf(delivery_date, qty_sent > 0)`, NULL bila sebelum `transfer_date`; `lead_days_*`
+  hanya baris dengan `first_delivery_date` terisi; harness TF10 (GD qty 0 diabaikan → +4 hari), TF11 (GD sebelum
+  permintaan → NULL). Angka harness daily D30 `7|4|7|4|2|4.6|1|0|8|4`, produk P1 EA `6|47|34|39`.
+
 ### Belum terverifikasi
 Semua **[B]** §31.13 (struktur summaries, bentuk respons total brand, tanda beban, filter tanggal list, stabilitas `ID`,
 arti `hpp`/`qty` GTR/`bypassGoodsDelivery`, arah GTR, daftar status, `referenceNumber` header vs baris, performa view fill

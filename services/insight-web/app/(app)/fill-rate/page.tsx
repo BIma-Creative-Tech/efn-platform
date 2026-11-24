@@ -10,8 +10,9 @@ import { brandName, codeName } from '@/lib/brands';
 import { fmtInt, fmtRange } from '@/lib/format';
 import {
   COVERAGE_KEYS,
-  coverageHint,
+  coverageIntersectHint,
   fillRateByOutletSpec,
+  fillRateEmptyKind,
   fillRateTrendSpec,
   parseSuppliers,
   type WeeklyFillRow,
@@ -77,7 +78,8 @@ export default async function FillRatePage({ searchParams }: { searchParams: G67
     runEsb<Raw>(true, 'fr_trend_weekly', ctx, extra),
     runEsb<Raw>(true, 'fr_by_outlet', ctx, extra),
     runEsb<Raw>(true, 'fr_by_supplier', ctx, extra),
-    runEsb<Raw>(true, 'fr_top_short_products', ctx, extra),
+    // View produk bulanan tidak punya kolom pemasok (kontrak §31.6): dengan filter Pemasok aktif query tidak dijalankan, UI memberi catatan.
+    runEsb<Raw>(sup.supplier.length === 0, 'fr_top_short_products', ctx, extra),
     runEsb<Raw>(true, 'fr_suppliers', ctx, extra),
     loadCoverage(ctx),
   ]);
@@ -134,8 +136,8 @@ export default async function FillRatePage({ searchParams }: { searchParams: G67
   // Pilihan yang sudah dipilih tetap tampil walau tidak lagi ada pada rentang (agar bisa dicabut).
   const shownOptions = [...supplierOptions, ...sup.supplier.filter((s) => !supplierOptions.some((o) => o.value === s)).map((s) => ({ value: s, label: s }))];
 
-  const empty = kpiR.ok && linesCur === 0 && !hasPrev && outletRows.length === 0;
-  const hint = coverageHint(cov, COVERAGE_KEYS.fill);
+  const emptyKind = kpiR.ok ? fillRateEmptyKind(linesCur, hasPrev, outletRows.length, open) : 'data';
+  const hint = coverageIntersectHint(cov, COVERAGE_KEYS.fill);
 
   return (
     <>
@@ -164,7 +166,13 @@ export default async function FillRatePage({ searchParams }: { searchParams: G67
 
       {!kpiR.ok ? (
         fail(kpiR, 'Indikator utama')
-      ) : empty ? (
+      ) : emptyKind === 'immature' ? (
+        <EmptyState
+          title="Permintaan pada rentang ini belum matang (≤ 7 hari)."
+          reason={`${fmtInt(open)} baris permintaan masih berjalan dan belum masuk hitungan. Fill rate tampil setelah permintaan selesai atau berumur lebih dari 7 hari.`}
+          icon="clock"
+        />
+      ) : emptyKind === 'none' ? (
         <EmptyState
           title={`Data ESB untuk ${ptNames} belum tersedia pada rentang ini.`}
           reason={hint ?? 'Tidak ada permintaan matang pada rentang, cabang, dan pemasok terpilih. Coba perluas rentang tanggal.'}
@@ -216,7 +224,12 @@ export default async function FillRatePage({ searchParams }: { searchParams: G67
           </Section>
 
           <Section title="Produk paling sering kurang kirim" id="products">
-            {fail(productR, 'Produk kurang kirim') ?? (
+            {sup.supplier.length > 0 ? (
+              <p className="muted small" role="note">
+                Tabel produk tidak tersedia saat filter Pemasok aktif: data produk bulanan tidak dipecah per pemasok. Kosongkan filter Pemasok untuk melihatnya.
+              </p>
+            ) : (
+              fail(productR, 'Produk kurang kirim') ?? (
               <>
                 <p className="muted small">
                   Hingga 50 produk menurut qty kurang kirim. Data bulanan: mencakup bulan penuh yang tersentuh rentang. Qty per satuan (tidak dijumlah lintas
@@ -224,6 +237,7 @@ export default async function FillRatePage({ searchParams }: { searchParams: G67
                 </p>
                 <DataTable caption="Produk dengan qty kurang kirim terbesar" columns={PRODUCT_COLS} rows={productRows} defaultSort={{ key: 'short_qty', dir: 'desc' }} />
               </>
+              )
             )}
           </Section>
         </>

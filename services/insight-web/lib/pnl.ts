@@ -175,6 +175,34 @@ export interface StatementRaw {
   amount_sum: number;
 }
 
+/**
+ * Urutan & label baku pos ringkasan ESB (kunci camelCase persis seperti `section` yang disimpan esb-extract; urutan = normalize.PL_SUMMARY_POS).
+ * Pos di luar daftar ini tampil dengan nama aslinya, setelah pos baku.
+ */
+export const PL_SECTION_ORDER: readonly string[] = [
+  'sales', 'discounts', 'netSales', 'cogs', 'grossProfit', 'operationalExpenses', 'operationalProfitLoss', 'otherExpenses',
+  'earningBeforeInterestTaxDepreciationAmortization', 'depreciationAmortizationExpenses', 'earningBeforeInterestTax', 'interests',
+  'earningBeforeTax', 'taxes', 'netProfitLoss',
+];
+export const PL_SECTION_LABEL: Readonly<Record<string, string>> = {
+  sales: 'Penjualan',
+  discounts: 'Diskon',
+  netSales: 'Penjualan bersih',
+  cogs: 'HPP',
+  grossProfit: 'Laba kotor',
+  operationalExpenses: 'Biaya operasional',
+  operationalProfitLoss: 'Laba operasional',
+  otherExpenses: 'Biaya lain-lain',
+  earningBeforeInterestTaxDepreciationAmortization: 'EBITDA',
+  depreciationAmortizationExpenses: 'Penyusutan & amortisasi',
+  earningBeforeInterestTax: 'EBIT',
+  interests: 'Bunga',
+  earningBeforeTax: 'Laba sebelum pajak',
+  taxes: 'Pajak',
+  netProfitLoss: 'Laba bersih',
+};
+export const sectionLabel = (s: string): string => PL_SECTION_LABEL[s] ?? s;
+
 export const UNALLOCATED_LABEL = 'Tidak teralokasi ke outlet';
 export const monthKey = (iso: string): string => `m_${iso.slice(0, 7).replace('-', '_')}`;
 
@@ -201,14 +229,16 @@ export function buildStatement(rows: readonly StatementRaw[], months: readonly s
     else put(branch, r.section, r.period_month, v);
   }
   const rank = (s: string): number => {
+    const canon = PL_SECTION_ORDER.indexOf(s);
+    if (canon >= 0) return canon;
     const k = plKeyOf(s);
-    return k === null ? PL_KEYS.length : PL_KEYS.indexOf(k);
+    return PL_SECTION_ORDER.length + (k === null ? PL_KEYS.length : PL_KEYS.indexOf(k));
   };
   const sections = Array.from(new Set([...branch.keys(), ...brand.keys()])).sort((a, b) => rank(a) - rank(b) || a.localeCompare(b, 'id'));
   const out: Record<string, string | number | null>[] = [];
   for (const s of sections) {
     const b = branch.get(s);
-    const row: Record<string, string | number | null> = { label: s };
+    const row: Record<string, string | number | null> = { label: sectionLabel(s) };
     let total = 0;
     let any = false;
     for (const m of months) {
@@ -224,7 +254,7 @@ export function buildStatement(rows: readonly StatementRaw[], months: readonly s
 
     const br = brand.get(s);
     if (br) {
-      const diff: Record<string, string | number | null> = { label: `${UNALLOCATED_LABEL}: ${s}` };
+      const diff: Record<string, string | number | null> = { label: `${UNALLOCATED_LABEL}: ${sectionLabel(s)}` };
       let dTotal = 0;
       let material = false;
       for (const m of months) {

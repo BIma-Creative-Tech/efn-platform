@@ -169,6 +169,10 @@ $DC run --rm esb-extract \
 
 # Malam 1 (22:00-05:00 WIB): P&L per cabang x tahun (semua tipe cabang + nonaktif bila
 # ESB_BACKFILL_INCLUDE_INACTIVE=true) + total brand, lalu jurnal item (detail per dokumen).
+# PENTING (satu proses per brand, §5): tiga perintah `run -d` di bawah JANGAN berjalan bersamaan -- masing-masing punya token
+# bucket sendiri sehingga beban ke ESB berlipat. Jalankan SATU per satu; mulai berikutnya setelah `docker ps` tidak lagi
+# menampilkan container sebelumnya (log: `backfill brand=pb status=ok`). Alternatif: satu proses dengan beberapa
+# `--entity` (mis. `--entity profit_loss --entity item_journal`).
 $DC run -d --name efn-esb-backfill-pb-pl esb-extract \
   python -m efn_esb backfill --brand pb --from 2024-12-01 --to <kemarin> --entity profit_loss
 $DC run -d --name efn-esb-backfill-pb-ij esb-extract \
@@ -186,6 +190,10 @@ $DC run --rm esb-extract python -m efn_esb backfill --brand pb --from <hari> --t
 
 `delivery_ref` tanpa `delivery` ditolak `backfill` (exit 2): itu turunan tanpa GET sendiri; isi dari raw lewat
 `retransform`. `retransform` entitas lain → exit 2 "tidak didukung".
+
+Sebelum mengaktifkan `delivery_ref` harian, ulangi `retransform --entity delivery_ref` untuk rentang malam 0 sampai kemarin
+(hari setelah malam 0 tidak punya checkpoint `delivery_ref`; gap-fill harian hanya melihat checkpoint `delivery`, dan hari tanpa
+checkpoint dibaca fill rate sebagai "tidak ada kiriman" sehingga rasio terlihat terlalu rendah).
 
 Sesudah backfill, harian: tambahkan `profit_loss,item_journal,transfer_request,delivery_ref` ke `ESB_ENTITIES`
 (beban PB ±210 GET/hari). `profit_loss` ditarik sekali/hari setelah `ESB_SALES_READY_HOUR_WIB` untuk tahun yang memuat

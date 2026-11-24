@@ -6797,7 +6797,10 @@ ada di `area.value`, bulan sebelum M di `periods` (1 outlet: sales 4 akun, cogs 
 - Total brand (GET tanpa `branchIDs`, `scope='brand'`, `branch_id=0`) disimpan sebagai pembanding: **selisih** = total brand
   − Σ cabang per pos-bulan = jurnal tanpa cabang / alokasi HO (Q-ESB33). Halaman menampilkannya sebagai baris "Tidak
   teralokasi ke outlet" (tidak pernah dijumlah ganda).
-- `company_code` = `cfg.company_for(branch_id)`; `scope='brand'` → PT default brand.
+- `company_code` = `cfg.company_for(branch_id)`; `scope='brand'` → PT default brand **hanya bila brand satu PT** (PB).
+  Brand multi-PT (override `ESB_BRANCH_COMPANY_OVERRIDES` ke PT lain, mis. Bacha BCF + BCR) → total brand ditulis
+  `company_code=''` (SEC-G67-01, fail closed): row policy membuangnya sehingga eksekutif satu PT tidak bisa menurunkan
+  agregat PT lain lewat baris "Tidak teralokasi"; baris tetap ada untuk admin/`v_esb_g67_quality`.
 - Angka → `Decimal(20,2)` lewat `Decimal(str(x))`.
 - PDP: **whitelist** (bukan `redact()`: denylist membuang `description` = nama akun, pola `COA_FIELDS`) —
   `account, description, details, periods, key, value, area, id, total, allTotal, dynamicHeaders,
@@ -6998,12 +7001,14 @@ flowchart LR
   `Σ requests_full / Σ requests` (permintaan penuh = semua barisnya `full`). **Fill rate qty** hanya per produk-satuan
   (`sent_capped / request_qty`, `sent_capped = Σ least(qty_sent, request_qty)`); tidak ada fill rate qty lintas satuan.
 - **Waktu kirim** = `first_delivery_date − transfer_date` (hari) per baris terkirim; rata-rata = `Σ lead_days_sum / Σ
-  lead_days_n`.
+  lead_days_n`. `first_delivery_date` = GD pertama bersatuan sama dengan `qty_sent > 0` (GD qty 0 diabaikan); bila GD
+  itu bertanggal sebelum `transfer_date` → NULL dan baris tidak masuk `lead_days_*` (QA P3).
 - **Matang** (`is_mature`): `finished = 1` **atau** `transfer_date ≤ today('Asia/Jakarta') − 7` (konstanta
   `FILL_RATE_MATURE_DAYS = 7`, selaras koreksi H-7). Belum matang → `lines_open`, **tidak** masuk rasio.
 - **Dihitung** (`is_counted`): matang **dan** `status_id` ∈ `GTR_COUNTED_STATUS` (konstanta DDL; mengecualikan
   batal/tolak/void/draft — W-A mengisi dari distribusi status backfill **[B]**) **dan** `bypass_gd = 0` (dokumen yang
-  melewati goods delivery tidak punya pembanding kirim; dihitung terpisah di quality) **[B: arti flag]**.
+  melewati goods delivery tidak punya pembanding kirim; dihitung terpisah di quality) **[B: arti flag]** **dan**
+  `product_code != ''` (kode tak terpetakan tidak bisa dicocokkan ke GD; dihitung `gtr_product_unmapped`, QA P2#4).
 - Atribusi tanggal = **tanggal permintaan** (kohort), bukan tanggal kirim. `company_code` = PT outlet peminta.
 - Uji wajib W-A (fixture sintetis ClickHouse 24.8): kirim parsial, kirim lebih (rasio 1), dua GD untuk satu GTR, GD beda
   satuan, GTR tanpa GD (zero), GTR belum matang, GD dihapus lalu ditarik ulang (slice versi baru → kirim hilang).
@@ -7018,7 +7023,7 @@ flowchart LR
   (§28.15.7; sesi ber-cabang → 0 baris):
   `v_esb_pl_monthly`, `v_esb_item_usage_daily`, `v_esb_item_usage_product_monthly`, `v_esb_fill_rate_daily`,
   `v_esb_fill_rate_product_monthly`. `v_esb_fill_rate_line` dan `v_esb_g67_quality` **tidak** dibungkus.
-  Jumlah policy ESB **15 → 20** (`ESB_POLICY_EXPECTED` di `clickhouse-init.sh`, `test_insight_access.py`,
+  Jumlah policy ESB **17 → 22** (di kode: 17 kelas PT + 5 kelas BR; semula tertulis 15 → 20 sebelum YoY, direkonsiliasi QA 25 Nov) (`ESB_POLICY_EXPECTED` di `clickhouse-init.sh`, `test_insight_access.py`,
   `test_insight_fnb_access.py`; bila `20-esb-aggregates.sql` mengubah jumlah lebih dulu, angka direkonsiliasi saat merge).
   Pemeriksaan fail-closed "setiap view `efn_insight` punya policy" tetap.
 - **Tidak** di-grant: `metabase_reader`, `efn_t2s`/text2sql, `efn_forecast`, `mig_rw` (P&L = data keuangan sensitif per

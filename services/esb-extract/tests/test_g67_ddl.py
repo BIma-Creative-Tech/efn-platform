@@ -227,17 +227,20 @@ def test_fill_rate_line_join_and_flags() -> None:
     )
     assert line.count("WHERE trans_type = 'Transfer Request'") == 2
     assert "sum(qty_sent) AS sent_s" in line and "sum(qty_received) AS recv_s" in line
-    assert "min(delivery_date) AS first_d" in line
+    # QA P3: kiriman pertama = GD ber-qty > 0 saja; sebelum tanggal permintaan -> NULL.
+    assert "minIf(delivery_date, qty_sent > 0) AS first_d" in line
+    assert "toUInt8(countIf(qty_sent > 0) > 0) AS pos_hit" in line
     assert "GROUP BY brand, reference_num, product_code, uom_s\n" in line
     assert "delivery_date >=" not in line and "delivery_date <=" not in line  # tanpa batas tanggal kirim
     # Satuan beda = mismatch (tanpa konversi diam-diam).
     assert "toUInt8(a.hit_any = 1 AND s.hit = 0) AS uom_mismatch" in line
-    assert "if(s.hit = 1, s.first_d, NULL) AS first_delivery_date" in line
+    assert "if(s.pos_hit = 1 AND s.first_d >= r.transfer_date, s.first_d, NULL) AS first_delivery_date" in line
     mature = "r.finished = 1 OR r.transfer_date <= toDate(now(), 'Asia/Jakarta') - 7"  # FILL_RATE_MATURE_DAYS = 7
     assert f"toUInt8({mature}) AS is_mature" in line
     counted = flat(line.split("AS is_mature,", 1)[1].split("AS is_counted", 1)[0])
     assert f"({mature})" in counted
-    for cond in ("r.status_id IN (3, 6)", "r.bypass_gd = 0", "r.request_qty > 0"):  # GTR_COUNTED_STATUS [B]
+    # GTR_COUNTED_STATUS [B]; QA P2#4: product_code '' tidak dihitung.
+    for cond in ("r.status_id IN (3, 6)", "r.bypass_gd = 0", "r.request_qty > 0", "r.product_code != ''"):
         assert cond in counted, cond
     assert "r.request_qty AS request_qty" in line  # diminta = requestQty (Q-ESB31), bukan qty
 
@@ -253,7 +256,7 @@ def test_fill_rate_daily_additive_formulas() -> None:
         "countIf(l.is_counted = 1 AND l.uom_mismatch = 1) AS mismatch_q",
         "countIf(l.is_mature = 0 AND l.request_qty > 0) AS open_q",
         "dateDiff('day', l.transfer_date, assumeNotNull(l.first_delivery_date))",
-        f"countIf({counted} AND l.qty_sent > 0) AS lead_n_q",
+        f"countIf({counted} AND l.first_delivery_date IS NOT NULL) AS lead_n_q",
         "countIf(q.lines_q > 0) AS requests_s",
         "countIf(q.lines_q > 0 AND q.full_q = q.lines_q) AS requests_full_s",
         "GROUP BY transfer_date, brand, company_code, requester_branch_id, supplier_branch_id, transfer_num\n",

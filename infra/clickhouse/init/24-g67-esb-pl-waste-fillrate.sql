@@ -244,9 +244,11 @@ FROM
 --   qty_sent / qty_received = Σ fact_esb_delivery_ref_line trans_type 'Transfer Request' dengan reference_num =
 --     transfer_num, product_code DAN uom sama, versi slice delivery_ref terakhir, SEMUA tanggal kirim;
 --   uom_mismatch = ada kiriman produk itu untuk permintaan itu tetapi tidak satu pun bersatuan sama (tanpa konversi);
---   first_delivery_date = kiriman pertama bersatuan sama (NULL bila tidak ada);
+--   first_delivery_date = kiriman pertama bersatuan sama dengan qty_sent > 0 (GD qty 0 diabaikan); NULL bila tidak
+--     ada atau bila kiriman pertama itu bertanggal SEBELUM tanggal permintaan (data tidak wajar, QA P3);
 --   is_mature = finished = 1 ATAU transfer_date <= hari ini WIB - FILL_RATE_MATURE_DAYS (7);
---   is_counted = matang DAN status_id IN GTR_COUNTED_STATUS (3, 6) [B] DAN bypass_gd = 0 DAN request_qty > 0.
+--   is_counted = matang DAN status_id IN GTR_COUNTED_STATUS (3, 6) [B] DAN bypass_gd = 0 DAN request_qty > 0 DAN
+--     product_code != '' (kode tak terpetakan tidak bisa dicocokkan ke GD; dihitung gtr_product_unmapped, QA P2#4).
 CREATE OR REPLACE VIEW efn_dwh.v_esb_fill_rate_line AS
 SELECT
     r.transfer_date AS transfer_date, r.brand AS brand, CAST(r.company_code, 'String') AS company_code,
@@ -254,10 +256,10 @@ SELECT
     r.transfer_num AS transfer_num, r.product_code AS product_code, r.product_name AS product_name,
     r.uom_s AS uom, r.request_qty AS request_qty, s.sent_s AS qty_sent, s.recv_s AS qty_received,
     toUInt8(a.hit_any = 1 AND s.hit = 0) AS uom_mismatch,
-    if(s.hit = 1, s.first_d, NULL) AS first_delivery_date,
+    if(s.pos_hit = 1 AND s.first_d >= r.transfer_date, s.first_d, NULL) AS first_delivery_date,
     toUInt8(r.finished = 1 OR r.transfer_date <= toDate(now(), 'Asia/Jakarta') - 7) AS is_mature,
     toUInt8((r.finished = 1 OR r.transfer_date <= toDate(now(), 'Asia/Jakarta') - 7)
-            AND r.status_id IN (3, 6) AND r.bypass_gd = 0 AND r.request_qty > 0) AS is_counted
+            AND r.status_id IN (3, 6) AND r.bypass_gd = 0 AND r.request_qty > 0 AND r.product_code != '') AS is_counted
 FROM
 (
     SELECT transfer_date, brand, company_code, requester_branch_id, supplier_branch_id, transfer_num, product_code,
@@ -270,7 +272,8 @@ FROM
 LEFT JOIN
 (
     SELECT brand, reference_num, product_code, CAST(uom, 'String') AS uom_s, sum(qty_sent) AS sent_s,
-           sum(qty_received) AS recv_s, min(delivery_date) AS first_d, toUInt8(1) AS hit
+           sum(qty_received) AS recv_s, minIf(delivery_date, qty_sent > 0) AS first_d,
+           toUInt8(countIf(qty_sent > 0) > 0) AS pos_hit, toUInt8(1) AS hit
     FROM efn_dwh.fact_esb_delivery_ref_line FINAL
     WHERE trans_type = 'Transfer Request'
       AND (brand, delivery_date, _version) IN
@@ -295,7 +298,8 @@ LEFT JOIN
 -- Tanggal permintaan (kohort) x brand x PT peminta x outlet peminta x pemasok. Semua kolom ADITIF; rasio dihitung di
 -- query (§31.6.1): fill rate baris = Σ line_ratio_sum / Σ lines; % baris penuh = Σ lines_full / Σ lines;
 -- % permintaan penuh = Σ requests_full / Σ requests; waktu kirim = Σ lead_days_sum / Σ lead_days_n.
---   lines/lines_full/lines_zero/line_ratio_sum/lead_* = baris is_counted dan uom_mismatch = 0;
+--   lines/lines_full/lines_zero/line_ratio_sum/lead_* = baris is_counted dan uom_mismatch = 0 (lead_* hanya baris
+--   dengan first_delivery_date terisi);
 --   line_ratio = least(qty_sent / request_qty, 1) (kirim lebih tidak menaikkan skor);
 --   requests = permintaan dengan >= 1 baris terhitung; requests_full = semua baris terhitungnya penuh;
 --   lines_uom_mismatch = baris is_counted dengan uom_mismatch = 1 (di luar rasio);
@@ -331,8 +335,8 @@ FROM
                countIf(l.is_counted = 1 AND l.uom_mismatch = 1) AS mismatch_q,
                countIf(l.is_mature = 0 AND l.request_qty > 0) AS open_q,
                sumIf(toInt64(dateDiff('day', l.transfer_date, assumeNotNull(l.first_delivery_date))),
-                     l.is_counted = 1 AND l.uom_mismatch = 0 AND l.qty_sent > 0) AS lead_sum_q,
-               countIf(l.is_counted = 1 AND l.uom_mismatch = 0 AND l.qty_sent > 0) AS lead_n_q
+                     l.is_counted = 1 AND l.uom_mismatch = 0 AND l.first_delivery_date IS NOT NULL) AS lead_sum_q,
+               countIf(l.is_counted = 1 AND l.uom_mismatch = 0 AND l.first_delivery_date IS NOT NULL) AS lead_n_q
         FROM efn_dwh.v_esb_fill_rate_line AS l
         GROUP BY transfer_date, brand, company_code, requester_branch_id, supplier_branch_id, transfer_num
     ) AS q

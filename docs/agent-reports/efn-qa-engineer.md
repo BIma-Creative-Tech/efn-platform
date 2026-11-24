@@ -1277,3 +1277,41 @@ Celah desain / perilaku (dilaporkan, tidak diubah):
 
 ## 6. Sisa risiko / belum terverifikasi
 UI di browser (aksesibilitas fokus, polling 5 menit, `router.refresh` setelah job); BOM multi-level pada data nyata; mode `standard`; jalur gagal outbox terhadap ESB nyata; `return-to-draft`/`resend` end-to-end; dua job bersamaan; purge/retensi; `ruff format --check` untuk file tes baru (CI menjalankannya); `# noqa: I001` mungkin tidak perlu bila ruff menganggap `test_outbox` first-party. UAT: `docs/qa/G66_UAT.md` (mengikuti folder `docs/qa/` yang sudah ada, bukan `docs/uat/`).
+
+---
+
+# QA G67 (25 Nov 2026) — P&L outlet, waste & pemakaian internal, fill rate (branch feat/esb-insight-pl-waste-fillrate)
+
+Metode: baca kode saja (tanpa runtime; tidak ada test yang saya jalankan). Kontrak: docs/04 §31.
+
+## G67.1 Kecocokan yang diverifikasi
+- Kolom `efn_insight.*` (insight-access.sql:208-232) = kolom view `efn_dwh` (24-g67...sql:149-363) = §31.6; semua kolom yang dipakai query (`queries.ts:1127-1397`) ada dengan nama yang sama; alias keluaran tidak siklik.
+- Rumus fill rate di view (24-g67...sql:250-363) = §31.6.1: ratio `least(sent/req,1)`, full `sent>=req`, zero `sent=0`, mature `finished=1 OR <= hari-7`, counted (status 3,6; bypass 0; req>0), lead dari `first_delivery_date`; query menghitung rasio dari kolom aditif (`F_PCT`), bukan rata-rata rasio. Label halaman (`fill-rate/page.tsx`) = istilah kontrak; satuan persen/hari benar.
+- Waste: `value_net = -Σ value`, `docs` hanya dijumlah lintas hari/cabang pada purpose sama (komentar `queries.ts:1246` benar); waste % = waste / net sales PT/cabang sama.
+- Row policy: 5 view G67 ada di `insight-esb-policy.sh:40-44`; jumlah 22 konsisten di `clickhouse-init.sh:446`, `test_insight_access.py`, `test_insight_fnb_access.py:175`, `test_g67_ddl.py:315`.
+- Flag `INSIGHT_G67_ENABLED` terhubung: `docker-compose.yml:1852`, `deploy.sh:418`, `deploy-validate.sh:26,80,410`, `config.ts:117`, `proxy.ts:87`.
+- Retransform: raw GD yang ditulis `extract_delivery` (extract.py:280-289) memuat semua field yang dipakai `transform_delivery_ref` (tidak ada yang kena `is_pii_key`), jadi retransform = extract (test_g67.py:516).
+- `--entity` append, `delivery_ref` tanpa `delivery` ditolak, `esb_writer` punya SELECT raw_doc + 5 tabel G67 (esb-access.sql:22,58-62).
+
+## G67.2 Temuan
+| # | Sev | Temuan | Lokasi | Status |
+|---|---|---|---|---|
+| 1 | P2 | Label tabel P&L menampilkan kunci ESB mentah (`netProfitLoss`, `earningBeforeInterestTaxDepreciationAmortization`) dan urutan abjad, karena `buildStatement` memakai `section` apa adanya sementara esb-extract menyimpan camelCase | `lib/pnl.ts` buildStatement | DIPERBAIKI (label Indonesia + urutan laporan ESB; pos tak dikenal di akhir) + test |
+| 2 | P2 | Runbook §5b menyuruh tiga `run -d` berturut-turut (pl, ij, gtr) = tiga proses satu brand bersamaan, melanggar aturan §5 (token bucket per proses; beban ESB berlipat) | runbook esb-extract.md §5b | DIPERBAIKI (catatan jalankan satu per satu / satu proses multi `--entity`) |
+| 3 | P2 | Gap `delivery_ref`: hari setelah malam-0 retransform dan sebelum flag harian aktif tidak punya checkpoint (gap-fill hanya melihat checkpoint `delivery`); view membaca hari tanpa checkpoint sebagai "tidak ada kiriman" -> fill rate terlalu rendah | 24-g67...sql:272-281, planning.py:114 | runbook DITAMBAH langkah ulang retransform; desain tak diubah |
+| 4 | P2 | Baris GTR `product_code=''` (tak terpetakan) tidak pernah bisa cocok dengan GD (GD tanpa kode dibuang) tetapi tetap `is_counted=1` -> dihitung sebagai kirim 0 dan menurunkan fill rate; hanya tampil di quality `gtr_product_unmapped` | 24-g67...sql:259-260 | LAPORAN (usul: tambah `AND r.product_code != ''` pada `is_counted` + kasus harness) — perubahan semantik, putusan lead |
+| 5 | P2 | Cakupan fill rate: `COVERAGE_KEYS.fill` menggabung min/max `transfer_request`+`delivery_ref` (union), seharusnya irisan; banner "Data tersedia ..." bisa menjanjikan rentang yang kiriman-nya belum ada | `lib/g67-vm.ts:21-34` | LAPORAN |
+| 6 | P3 | Estimasi runbook "delivery raw_missing = kecil" dan kontrak §31.1.6: coverage `delivery` G41 hanya beberapa hari (komentar 19-insight-review.sql:97), jadi hampir seluruh 24 bulan akan `raw_missing` -> malam 2 = tarik ulang GD 24 bulan (GET per dokumen), bukan kecil | runbook §5b tabel, docs/04 §31.1.6 | LAPORAN (perbarui estimasi setelah malam 0) |
+| 7 | P3 | `first_delivery_date = min(delivery_date)` termasuk GD ber-qty 0, dan `dateDiff` bisa negatif bila GD bertanggal sebelum permintaan: waktu kirim bisa terlalu kecil | 24-g67...sql:272-274,333 | LAPORAN |
+| 8 | P3 | `fr_top_short_products` tidak menerima filter Pemasok (view bulanan tanpa kolom pemasok) padahal formulir menawarkannya; tabel produk tidak mengikuti filter itu | queries.ts:1382, fill-rate/page.tsx:79,151 | LAPORAN (tambahkan catatan di UI) |
+| 9 | P3 | Halaman kosong `/fill-rate` bila hanya ada baris belum matang menampilkan "belum tersedia" padahal `lines_open>0` | fill-rate/page.tsx:137 | LAPORAN |
+| 10 | P3 | Kontrak §31.10 menyebut waterfall pos; halaman memakai batang biasa (`posSpec`). Kontrak §31.9 "to dipotong H-1" untuk fill rate tak diimplementasi (tak berdampak: baris hari ini belum matang) | pnl/page.tsx:62, g67-page.ts | LAPORAN |
+| 11 | P3 | Kontrak §31.7 menulis policy 15 -> 20; kode 22 | docs/04 §31.7 | DIPERBAIKI (teks) |
+
+## G67.3 Perubahan file
+- `services/insight-web/lib/pnl.ts`: `PL_SECTION_ORDER`, `PL_SECTION_LABEL`, `sectionLabel`; `buildStatement` memakai label + urutan baku (fixture lama 'Net Sales'/'Gross Profit'/'Pos Lain' tetap berurutan sama).
+- `services/insight-web/tests/g67-logic.test.ts`: test kunci camelCase ESB -> label & urutan.
+- `docs/runbooks/esb-extract.md` (§5b: satu proses per brand; retransform ulang sebelum flag harian), `docs/04_SERVICE_CONTRACTS.md` (§31.7 jumlah policy).
+
+## G67.4 Sisa risiko
+Semua view/query belum dieksekusi oleh saya (hanya hasil hijau dari lead). Bergantung pada `join_use_nulls=0` (default) di view efn_dwh (`s.hit = 0`, `m.hit = 0`, `branch_name = ''`); bila profil user Insight mengubahnya, uom_mismatch, label cabang, dan quality berubah diam-diam (tambahkan test/asersi setting bila perlu). Semua konstanta [B] (status terhitung, arah GTR, tanda beban, nama pos summary) menunggu hasil backfill PB. UAT G67 belum ditulis di `docs/testing/UAT_SCENARIOS.md` (di luar permintaan ini).

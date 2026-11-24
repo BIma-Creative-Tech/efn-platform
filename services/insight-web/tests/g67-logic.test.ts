@@ -125,6 +125,11 @@ describe('buildStatement: pos x bulan + Tidak teralokasi ke outlet', () => {
     expect(t[2][monthKey('2026-11-01')]).toBeNull();
     expect(t[2].total).toBe(80);
   });
+  it('kunci pos ESB camelCase: berlabel Indonesia dan berurutan seperti laporan ESB (QA 25 Nov)', () => {
+    const esb = (section: string): StatementRaw => ({ period_month: '2026-11-01', scope: 'branch', section, amount_sum: 1 });
+    const t = buildStatement(['netProfitLoss', 'zzCustom', 'grossProfit', 'netSales', 'operationalExpenses'].map(esb), ['2026-11-01']);
+    expect(t.map((r) => r.label)).toEqual(['Penjualan bersih', 'Laba kotor', 'Biaya operasional', 'Laba bersih', 'zzCustom']);
+  });
   it('tanpa baris brand (filter cabang terisi): tidak ada baris selisih', () => {
     const t = buildStatement(rows.filter((r) => r.scope === 'branch'), months);
     expect(t.map((r) => r.label)).toEqual(['Net Sales', 'Gross Profit', 'Pos Lain']);

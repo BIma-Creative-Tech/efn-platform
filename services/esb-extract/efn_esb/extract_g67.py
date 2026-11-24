@@ -66,7 +66,12 @@ def extract_profit_loss(rt: BrandRuntime, task: SliceTask, version: datetime, ge
     if not isinstance(response, Mapping):
         raise ValueError("respons profit-loss bukan objek")
     payload = whitelist_tree(response, PL_FIELDS)
-    company = cfg.company_for(branch_id) if branch_id > 0 else cfg.company_code
+    # SEC-G67-01: total brand milik brand multi-PT (mis. Bacha BCF + override BCR) memuat agregat semua PT ->
+    # company_code '' (row policy efn_insight membuangnya; tetap ada untuk admin/quality). Satu PT (PB) -> PT default.
+    if branch_id > 0:
+        company = cfg.company_for(branch_id)
+    else:
+        company = "" if cfg.multi_company else cfg.company_code
     facts = transform_profit_loss(payload, cfg.key, company, branch_id, year, month, version)
     result = SliceResult(task, version, tables={"fact_esb_profit_loss": facts})
     result.raw.append(RawDoc("report/profit-loss/month-to-month", f"{year}|{task.scope}", task.day, payload))
