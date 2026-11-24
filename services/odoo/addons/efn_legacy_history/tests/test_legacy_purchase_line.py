@@ -100,6 +100,14 @@ class TestEfnLegacyPurchaseLine(TransactionCase):
         empty = self._slice(self.pb, [], date_from="2026-10-15")
         self.assertEqual(empty, {"rows_deleted": 1, "rows_inserted": 0})
 
+    def test_row_without_product_code_is_kept(self):
+        # PO aset tetap/seragam di ESB tidak punya kode produk (gladi efn-prod 24 Nov: 222 baris PB).
+        day = date(2026, 10, 3)
+        stats = self._slice(self.pb, [self._row(day, esb_product_code="", product_name="Rak display")])
+        self.assertEqual(stats["rows_inserted"], 1)
+        line = self.env[MODEL].search([("company_id", "=", self.pb.id), ("product_name", "=", "Rak display")])
+        self.assertFalse(line.esb_product_code)
+
     def test_slice_rejects(self):
         day = date(2026, 10, 3)
         cases = [

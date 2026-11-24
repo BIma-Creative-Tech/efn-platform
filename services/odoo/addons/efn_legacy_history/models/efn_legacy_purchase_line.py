@@ -43,7 +43,8 @@ class EfnLegacyPurchaseLine(models.Model):
     product_id = fields.Many2one(
         "product.product", string="Produk (Odoo)", readonly=True, check_company=True, ondelete="set null"
     )
-    esb_product_code = fields.Char(string="Kode produk ESB", size=64, required=True, readonly=True)
+    # Kosong = baris PO non-stok tanpa kode di ESB (aset tetap, seragam); nama produk tetap disimpan (G65 gladi 24 Nov).
+    esb_product_code = fields.Char(string="Kode produk ESB", size=64, readonly=True)
     product_name = fields.Char(string="Nama produk ESB", size=128, readonly=True)
     category_name = fields.Char(string="Kategori ESB", size=64, readonly=True)
     sub_category_name = fields.Char(string="Sub-kategori ESB", size=64, readonly=True)
@@ -76,7 +77,7 @@ class EfnLegacyPurchaseLine(models.Model):
         ("supplier_id", "m2o", False),
         ("supplier_name", "char:128", False),
         ("product_id", "m2o", False),
-        ("esb_product_code", "char:64", True),
+        ("esb_product_code", "char:64", False),
         ("product_name", "char:128", False),
         ("category_name", "char:64", False),
         ("sub_category_name", "char:64", False),
