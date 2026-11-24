@@ -212,6 +212,18 @@ class TestEsbImportG65(TransactionCase):
         products = (self.fin | self.rm).product_variant_ids
         return self.env["stock.move"].search([("product_id", "in", products.ids), ("is_inventory", "=", True)])
 
+    def test_stock_uom_incompatible_skipped_only_with_option(self):
+        # Gladi efn-prod 24 Nov: satuan dasar ESB (gram) ≠ UoM produk Odoo (Units) -> hanya terlihat di importer.
+        self.ICP.set_param(imp.PARAM_COST_AS_OF_PREFIX + CODE, CUTOVER)
+        rows = [self._quant(1, X("branch_wh", 1), "ZFIN", 5, "GR", "uom.product_uom_gram")]
+        strict = self._run(self._stock_bundle(rows))
+        self.assertEqual(strict.report["entities"]["quant"].get("failed"), 1)
+        loose = self._run(self._stock_bundle(rows, export_options={"skip_unconvertible_stock": True}))
+        self.assertEqual(loose.exit_code, imp.EXIT_OK, loose.report["errors"])
+        self.assertEqual(loose.report["entities"]["quant"].get("skipped"), 1)
+        self.assertEqual(loose.report["stock_skipped"]["uom_incompatible"], 1)
+        self.assertEqual(loose.report["stock_skipped"]["uom_incompatible_keys"], ["1|ZFIN"])
+
     def test_stock_absolute_dated_and_idempotent(self):
         self.ICP.set_param(imp.PARAM_COST_AS_OF_PREFIX + CODE, CUTOVER)
         result = self._run(self._stock_bundle(self._stock_rows()))

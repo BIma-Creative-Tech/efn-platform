@@ -1491,6 +1491,13 @@ class _Run:
                 qty, problem = self._stock_qty(row["data"], product)
             except (ValueError, ArithmeticError) as exc:
                 qty, problem = None, f"quantity tidak valid ({type(exc).__name__})"
+            if problem and problem.startswith("uom_incompatible") and self._skip_unconvertible_stock():
+                # Keputusan user 24 Nov 2026 (--skip-unconvertible-stock): satuan dasar ESB ≠ UoM produk Odoo
+                # (hanya terlihat di sisi Odoo) -> dilewati + dilaporkan, sama dengan STOCK_UOM_SKIPPED di export.
+                skipped["uom_incompatible"] = skipped.get("uom_incompatible", 0) + 1
+                skipped.setdefault("uom_incompatible_keys", []).append(row["esb_key"])
+                self._count(m.STOCK_ENTITY, "skipped")
+                continue
             if problem:
                 self._count(m.STOCK_ENTITY, "failed")
                 self._error(m.STOCK_ENTITY, row["esb_key"], problem)
@@ -1506,6 +1513,10 @@ class _Run:
             keep |= {(location_id, product.id) for _i, product, _q in items}
             self._apply_location(Quant, location_id, items, acc_date, move_date)
         self._missing_quants(Quant, keep, acc_date, move_date)
+
+    def _skip_unconvertible_stock(self):
+        """Opsi export `--skip-unconvertible-stock` tercatat di manifest bertanda tangan (export_options)."""
+        return bool((self.man.get("export_options") or {}).get("skip_unconvertible_stock"))
 
     def _ensure_quarantine(self):
         """G65b §4.6 (keputusan user 24 Nov): lokasi karantina per gudang dibuat/ditemukan SAAT langkah stock.
