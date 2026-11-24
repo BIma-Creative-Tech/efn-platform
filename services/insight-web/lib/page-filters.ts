@@ -10,6 +10,7 @@ export const PAGE_FILTERS: Record<string, readonly FilterKey[]> = {
   '/flow': ['date', 'pt', 'branch', 'product'],
   '/sales': ['date', 'pt', 'branch', 'cat'],
   '/payments': ['date', 'pt', 'branch'],
+  '/yoy': ['date', 'pt', 'branch', 'cat'],
   '/distribution': ['date', 'pt', 'branch', 'product'],
   '/data-quality': ['pt'],
   '/forecast': [],
@@ -66,6 +67,7 @@ export const NAV = {
   payments: { href: '/payments', label: 'Pembayaran', icon: 'card' },
   flow: { href: '/flow', label: 'Produksi vs Penjualan', icon: 'flow' },
   distribution: { href: '/distribution', label: 'Distribusi CK', icon: 'truck' },
+  yoy: { href: '/yoy', label: 'Tahun lalu vs sekarang', icon: 'trend' },
   dataQuality: { href: '/data-quality', label: 'Kualitas Data ESB', icon: 'check' },
   forecast: { href: '/forecast', label: 'Forecast', icon: 'trend' },
 } as const satisfies Record<string, NavItem>;
@@ -73,6 +75,6 @@ export const NAV = {
 /** Item grup Ringkasan (F&B + Supermarket). Keputusan pemilik proyek 22 Nov 2026: hanya Ikhtisar. */
 export const SUMMARY_ITEMS: readonly NavItem[] = [NAV.overview];
 /** Item grup Food & Beverage (22 Nov 2026: Penjualan, Pembayaran, Forecast juga di grup Supermarket). */
-export const FNB_ITEMS: readonly NavItem[] = [NAV.sales, NAV.payments, NAV.flow, NAV.distribution, NAV.forecast, NAV.dataQuality];
+export const FNB_ITEMS: readonly NavItem[] = [NAV.sales, NAV.payments, NAV.yoy, NAV.flow, NAV.distribution, NAV.forecast, NAV.dataQuality];
 /** Halaman bersama yang digandakan ke grup Supermarket (sesi exec ber-SMD). */
 export const SHARED_HREFS: readonly string[] = [NAV.sales.href, NAV.payments.href, NAV.forecast.href];

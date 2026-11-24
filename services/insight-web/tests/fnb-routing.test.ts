@@ -85,7 +85,7 @@ describe('sesi ber-cabang (store-only F&B)', () => {
       expect(fnbRouteDenial(p, branched, true), p).toBe(TW);
       expect(fnbRouteDenial(`${p}/x`, branched, true), p).toBe(TW);
     }
-    expect(BRANCH_BLOCKED_PATHS).toEqual(['/sales', '/payments', '/flow', '/distribution', '/forecast', '/data-quality']);
+    expect(BRANCH_BLOCKED_PATHS).toEqual(['/sales', '/payments', '/yoy', '/flow', '/distribution', '/forecast', '/data-quality']);
     expect(fnbRouteDenial('/', branched, true)).toBeNull(); // dialihkan ke /fnb/store oleh pageCtx
     expect(fnbRouteDenial('/glosarium', branched, true)).toBeNull();
   });
@@ -114,7 +114,7 @@ describe('smRouteDenial untuk sesi F&B berpersona (G52)', () => {
 });
 
 const hrefs = (g: { items: readonly { href: string }[] }): string[] => g.items.map((i) => i.href);
-const FNB_BASE = ['/sales', '/payments', '/flow', '/distribution', '/forecast', '/data-quality'];
+const FNB_BASE = ['/sales', '/payments', '/yoy', '/flow', '/distribution', '/forecast', '/data-quality'];
 
 describe('navGroups dengan item persona F&B (§28.15.9)', () => {
   it('flag aktif: item persona di urutan teratas grup F&B (Eksekutif, Toko, Marketing) sebelum halaman bersama', () => {

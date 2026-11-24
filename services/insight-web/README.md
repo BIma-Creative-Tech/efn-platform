@@ -23,7 +23,7 @@ Mati secara default: `INSIGHT_ENABLED` harus tepat `true`. Bila tidak, semua hal
 | `POST /logout` | hapus cookie -> 303 `/keluar` |
 | `GET /api/health` | `{"status":"ok"}` tanpa detail, tidak menyentuh ClickHouse |
 | `GET /api/export/<tabel>?<filter>` | CSV (BOM, escape formula C3). Tabel: `branch-rank flow-outliers flow-products top-menu menu-mix-branch pay-methods pay-branches dist-matrix dist-gap mov-category dq-freshness dq-alias dq-no-sales dq-non-ea dq-last-run`. Cakupan = sesi, data = pemuat yang sama dengan halaman. 401/503/500 tanpa badan. |
-| `/`, `/flow`, `/sales`, `/payments`, `/distribution`, `/data-quality`, `/forecast`, `/glosarium` | halaman F&B/gabungan (Forecast: ESB belum ada, SMD sudah). Path mengikuti §26.8; `/glosarium` = daftar istilah. |
+| `/`, `/flow`, `/sales`, `/payments`, `/yoy`, `/distribution`, `/data-quality`, `/forecast`, `/glosarium` | halaman F&B/gabungan (Forecast: ESB belum ada, SMD sudah). Path mengikuti §26.8; `/glosarium` = daftar istilah. |
 | `/exec`, `/store`, `/dc`, `/category`, `/marketing` | halaman Supermarket per persona |
 | `/belum-aktif`, `/sesi-berakhir`, `/keluar` | halaman informasi publik |
 
@@ -31,7 +31,7 @@ Mati secara default: `INSIGHT_ENABLED` harus tepat `true`. Bila tidak, semua hal
 Sidebar tiga grup yang **bisa dilipat**, dan sidebar bisa **diciutkan jadi ikon** (>= 1280 px; di bawahnya otomatis rail). Preferensi (`insight-nav`) disimpan di
 `localStorage` (try/catch; nilai rusak -> bawaan). Tombol grup `aria-expanded`; saat ciut, nama tetap ada untuk pembaca layar dan tooltip lewat `title`.
 - **Ringkasan** (F&B + Supermarket): Ikhtisar `/`, Penjualan `/sales`, Pembayaran `/payments`
-- **Food & Beverage**: Produksi vs Penjualan `/flow`, Distribusi CK `/distribution`, Kualitas Data ESB `/data-quality`
+- **Food & Beverage**: Tahun lalu vs sekarang `/yoy`, Produksi vs Penjualan `/flow`, Distribusi CK `/distribution`, Kualitas Data ESB `/data-quality`
 - **Supermarket**: Eksekutif `/exec`, Toko `/store`, DC `/dc`, Kategori `/category`, Marketing `/marketing`, Forecast `/forecast`
 Visibilitas = aturan sesi yang ada (`lib/sm-personas.ts navGroups`): Ringkasan bila ada PT F&B atau exec ber-SMD; F&B bila ada kode ESB (exec ber-SMD tanpa
 PT F&B hanya melihat "Distribusi CK / DC" = bagian DC supermarket); Supermarket = persona di `roles` + `INSIGHT_SM_ENABLED`, Forecast hanya untuk exec ber-SMD.
@@ -137,6 +137,26 @@ Query G52 (18; **belum dijalankan terhadap ClickHouse 24.8**, view `efn_insight.
 `fexec_margin_monthly`, `fexec_pt_compare`, `fexec_mdr_cost`, `fexec_branch_rank`, `fexec_yoy_coverage`, `fstore_kpi`, `fstore_daily_vs_lastweek`, `fstore_top_menu`,
 `fstore_payment_mix`, `fstore_ck_receipts`, `fstore_branch_list`, `fmkt_discount_kpi`, `fmkt_discount_trend`, `fmkt_discount_menu`, `fmkt_discount_branch`,
 `fmkt_channel_mix`, `fmkt_takeaway_share`. Query `fstore_*` tidak boleh memuat `cogs`/`mdr` (diuji statis di `tests/fnb-queries.test.ts`).
+
+## Tahun lalu vs sekarang (`/yoy`, 24 Nov 2026)
+
+Tujuan: perbandingan tahunan yang sah (temuan analisis 24 Nov: tabel bulanan lama membandingkan Nov 2025 penuh dengan
+1-20 Nov 2026, hari 17 Nov 2026 hanya separuh toko, dan "harga net per unit" tercampur item gratis/paket).
+
+- Pembanding = rentang filter digeser **364 hari** (hari dalam minggu sama). Maks. 364 hari; bagian promo/menu maks. 124
+  hari (membaca baris penjualan, bukan agregat).
+- Hanya pasangan cabang-hari yang slice `sales` selesai di **kedua** sisi (`efn_insight.v_esb_sales_done_day`); hari yang
+  belum lengkap dikeluarkan dari dua sisi dan disebut di banner (`yoy_gaps`).
+- Cabang sebanding = berjualan di kedua periode dan penjualan pertama >= 28 hari sebelum awal periode tahun lalu. Jembatan:
+  efek transaksi + efek nilai per transaksi (cabang sebanding) + cabang baru/tutup/belum sebanding = selisih total.
+- Harga jual vs COGS per menu (`efn_insight.v_esb_menu_econ_daily`, per **nama** menu): harga list = baris a la carte
+  berbayar (price > 0); item gratis (price 0) dan komponen paket dipisah; potongan bundel = nilai list komponen - harga
+  paket (tidak ada di kolom diskon ESB).
+- Eksekutif F&B (`/fnb/exec`) memakai aturan pembanding yang sama: `yoy_from/yoy_to` = 364 hari (sebelumnya tanggal
+  kalender -1 tahun); delta YoY dari kolom `*_cmp` vs `*_yoy` (pasangan lengkap), nilai periode ini tetap penuh.
+- ADR-040/041 (Proposed). Logika murni `lib/yoy.ts` (tests/yoy.test.ts); SQL `infra/clickhouse/init/23-insight-yoy.sql`.
+- Belum: COGS ESB tidak memuat roti tidak terjual, komisi ojol, MDR; apakah ESB menghitung ulang COGS transaksi lama belum
+  diverifikasi terhadap laporan ESB arsip Finance.
 
 ## Dev
 ```

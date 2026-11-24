@@ -97,6 +97,13 @@ const SALES_BRANCH_OR_UNKNOWN = `(branch_id = 0 OR ${SALES_BRANCH})`;
 const MBR =
   "(empty({branch:Array(String)}) OR has({branch:Array(String)}, concat(brand, ':', toString(origin_branch_id))) OR has({branch:Array(String)}, concat(brand, ':', toString(dest_branch_id))))";
 
+// YoY sebanding (/yoy, /fnb/exec): periode pembanding yoy_from/yoy_to = 364 hari sebelumnya (diisi server, bukan input pengguna).
+// Pasangan cabang-hari yang slice penjualannya selesai di KEDUA sisi; baris tahun lalu dipetakan ke hari padanannya (+364).
+const YOY_DONE_PAIRS = `SELECT brand, branch_id, day FROM efn_insight.v_esb_sales_done_day
+      WHERE ${PT} AND day BETWEEN {from:Date} AND {to:Date}
+        AND (brand, branch_id, day - 364) IN (SELECT brand, branch_id, day FROM efn_insight.v_esb_sales_done_day WHERE ${PT} AND day BETWEEN {yoy_from:Date} AND {yoy_to:Date})`;
+const YOY_PAIR = `((brand, branch_id, if(sales_date >= {from:Date}, sales_date, sales_date + 364)) IN (${YOY_DONE_PAIRS}))`;
+
 export const QUERIES = {
   // ---------- filter global ----------
   list_branches: {
@@ -694,13 +701,17 @@ LIMIT 500`,
     params: ['from', 'to', 'yoy_from', 'yoy_to', 'pt', 'branch'],
     sql: `SELECT
     toFloat64(sumIf(net, ${CUR}))          AS net_cur,
-    toFloat64(sumIf(net, ${YOY}))          AS net_yoy,
     toFloat64(sumIf(cogs, ${CUR}))         AS cogs_cur,
-    toFloat64(sumIf(cogs, ${YOY}))         AS cogs_yoy,
     toFloat64(sumIf(net - cogs, ${CUR}))   AS gm_cur,
-    toFloat64(sumIf(net - cogs, ${YOY}))   AS gm_yoy,
     sumIf(trx_count, ${CUR})               AS trx_cur,
-    sumIf(trx_count, ${YOY})               AS trx_yoy
+    toFloat64(sumIf(net, ${CUR} AND ${YOY_PAIR}))        AS net_cmp,
+    toFloat64(sumIf(cogs, ${CUR} AND ${YOY_PAIR}))       AS cogs_cmp,
+    toFloat64(sumIf(net - cogs, ${CUR} AND ${YOY_PAIR})) AS gm_cmp,
+    sumIf(trx_count, ${CUR} AND ${YOY_PAIR})             AS trx_cmp,
+    toFloat64(sumIf(net, ${YOY} AND ${YOY_PAIR}))        AS net_yoy,
+    toFloat64(sumIf(cogs, ${YOY} AND ${YOY_PAIR}))       AS cogs_yoy,
+    toFloat64(sumIf(net - cogs, ${YOY} AND ${YOY_PAIR})) AS gm_yoy,
+    sumIf(trx_count, ${YOY} AND ${YOY_PAIR})             AS trx_yoy
 FROM efn_insight.v_esb_sales_branch_daily
 WHERE ${CUR_OR_YOY}
   AND ${PT}
@@ -727,7 +738,8 @@ LIMIT 500`,
        toFloat64(sumIf(net - cogs, ${CUR})) AS gm,
        ${GM_PCT(CUR)}                       AS gm_pct,
        sumIf(trx_count, ${CUR})             AS trx,
-       toFloat64(sumIf(net, ${YOY}))        AS net_yoy
+       toFloat64(sumIf(net, ${CUR} AND ${YOY_PAIR})) AS net_cmp,
+       toFloat64(sumIf(net, ${YOY} AND ${YOY_PAIR})) AS net_yoy
 FROM efn_insight.v_esb_sales_branch_daily
 WHERE ${CUR_OR_YOY}
   AND ${PT}
@@ -755,9 +767,10 @@ LIMIT 500`,
        toFloat64(sumIf(net, ${CUR}))        AS net_sum,
        toFloat64(sumIf(net - cogs, ${CUR})) AS gm,
        ${GM_PCT(CUR)}                       AS gm_pct,
-       toFloat64(sumIf(net, ${YOY}))        AS net_yoy,
-       if(sumIf(net, ${YOY}) <= 0, NULL,
-          (toFloat64(sumIf(net, ${CUR})) - toFloat64(sumIf(net, ${YOY}))) / toFloat64(sumIf(net, ${YOY})) * 100) AS growth_pct
+       toFloat64(sumIf(net, ${YOY} AND ${YOY_PAIR})) AS net_yoy,
+       if(sumIf(net, ${YOY} AND ${YOY_PAIR}) <= 0, NULL,
+          (toFloat64(sumIf(net, ${CUR} AND ${YOY_PAIR})) - toFloat64(sumIf(net, ${YOY} AND ${YOY_PAIR})))
+          / toFloat64(sumIf(net, ${YOY} AND ${YOY_PAIR})) * 100) AS growth_pct
 FROM efn_insight.v_esb_sales_branch_daily
 WHERE ${CUR_OR_YOY}
   AND ${PT}
@@ -974,6 +987,106 @@ WHERE ${PT}
 GROUP BY company_code, product_code
 ORDER BY yhat_sum DESC
 LIMIT 20`,
+  },
+
+  // ---------- Tahun lalu vs sekarang (/yoy, 24 Nov 2026; init/23-insight-yoy.sql) ----------
+  // (tambahan) Pembanding = rentang yang sama digeser 364 hari (hari dalam minggu sama). Hanya pasangan cabang-hari yang
+  // slice penjualannya selesai di KEDUA sisi (YOY_PAIR); hari yang belum lengkap (mis. 17 Nov 2026) dikeluarkan di dua sisi.
+  yoy_branch: {
+    params: ['from', 'to', 'yoy_from', 'yoy_to', 'pt', 'branch'],
+    sql: `SELECT x.brand AS brand, x.branch_id AS branch_id, any(x.b_name) AS branch_name, any(x.c_code) AS company_code,
+       toFloat64(sumIf(x.v_net, x.cur = 1)) AS net_cur, toFloat64(sumIf(x.v_net, x.cur = 0)) AS net_ly,
+       toFloat64(sumIf(x.v_gross, x.cur = 1)) AS gross_cur, toFloat64(sumIf(x.v_gross, x.cur = 0)) AS gross_ly,
+       toFloat64(sumIf(x.v_disc, x.cur = 1)) AS disc_cur, toFloat64(sumIf(x.v_disc, x.cur = 0)) AS disc_ly,
+       toFloat64(sumIf(x.v_cogs, x.cur = 1)) AS cogs_cur, toFloat64(sumIf(x.v_cogs, x.cur = 0)) AS cogs_ly,
+       toFloat64(sumIf(x.v_trx, x.cur = 1)) AS trx_cur, toFloat64(sumIf(x.v_trx, x.cur = 0)) AS trx_ly,
+       countIf(x.cur = 1 AND x.v_net > 0) AS days_cur, countIf(x.cur = 0 AND x.v_net > 0) AS days_ly,
+       toString(any(f.first_sale)) AS first_sale
+FROM
+(
+    SELECT brand, branch_id, branch_name AS b_name, company_code AS c_code, net AS v_net, gross AS v_gross,
+           discount AS v_disc, cogs AS v_cogs, trx_count AS v_trx, toUInt8(sales_date >= {from:Date}) AS cur
+    FROM efn_insight.v_esb_sales_branch_daily
+    WHERE ${CUR_OR_YOY}
+      AND ${PT}
+      AND ${BR}
+      AND ${SALES_BRANCH}
+      AND ${YOY_PAIR}
+) AS x
+LEFT JOIN
+(
+    SELECT brand, branch_id, min(sales_date) AS first_sale
+    FROM efn_insight.v_esb_sales_branch_daily
+    WHERE ${PT} AND net > 0
+    GROUP BY brand, branch_id
+) AS f ON f.brand = x.brand AND f.branch_id = x.branch_id
+GROUP BY x.brand, x.branch_id
+ORDER BY net_cur DESC
+LIMIT 500`,
+  },
+  yoy_daily: {
+    params: ['from', 'to', 'yoy_from', 'yoy_to', 'pt', 'branch'],
+    sql: `SELECT toString(if(sales_date >= {from:Date}, sales_date, sales_date + 364)) AS day, brand, branch_id,
+       toFloat64(sumIf(net, sales_date >= {from:Date})) AS net_cur, toFloat64(sumIf(net, sales_date < {from:Date})) AS net_ly,
+       toFloat64(sumIf(trx_count, sales_date >= {from:Date})) AS trx_cur,
+       toFloat64(sumIf(trx_count, sales_date < {from:Date})) AS trx_ly
+FROM efn_insight.v_esb_sales_branch_daily
+WHERE ${CUR_OR_YOY}
+  AND ${PT}
+  AND ${BR}
+  AND ${SALES_BRANCH}
+  AND ${YOY_PAIR}
+GROUP BY day, brand, branch_id
+ORDER BY day
+LIMIT 20000`,
+  },
+  yoy_gaps: {
+    params: ['from', 'to', 'yoy_from', 'yoy_to', 'pt', 'branch'],
+    sql: `SELECT toString(g.d) AS day, toUInt32(countIf(g.c = 1 AND g.l = 0)) AS miss_ly, toUInt32(countIf(g.c = 0 AND g.l = 1)) AS miss_cur
+FROM
+(
+    SELECT u.brand AS brand, u.branch_id AS branch_id, u.d AS d, max(u.src_c) AS c, max(u.src_l) AS l
+    FROM
+    (
+        SELECT brand, branch_id, day AS d, toUInt8(1) AS src_c, toUInt8(0) AS src_l
+        FROM efn_insight.v_esb_sales_done_day
+        WHERE ${PT} AND ${BR} AND day BETWEEN {from:Date} AND {to:Date}
+        UNION ALL
+        SELECT brand, branch_id, day + 364 AS d, toUInt8(0) AS src_c, toUInt8(1) AS src_l
+        FROM efn_insight.v_esb_sales_done_day
+        WHERE ${PT} AND ${BR} AND day BETWEEN {yoy_from:Date} AND {yoy_to:Date}
+    ) AS u
+    WHERE (u.brand, u.branch_id) IN (${SALES_BRANCH_SET})
+    GROUP BY u.brand, u.branch_id, u.d
+) AS g
+GROUP BY g.d
+HAVING miss_ly + miss_cur > 0
+ORDER BY g.d
+LIMIT 400`,
+  },
+  yoy_menu: {
+    params: ['from', 'to', 'yoy_from', 'yoy_to', 'pt', 'branch', 'cat'],
+    sql: `SELECT menu_name, anyIf(menu_category, menu_category != '') AS category,
+       toFloat64(sumIf(qty_paid, sales_date >= {from:Date})) AS qty_paid_cur, toFloat64(sumIf(qty_paid, sales_date < {from:Date})) AS qty_paid_ly,
+       toFloat64(sumIf(gross_paid, sales_date >= {from:Date})) AS gross_paid_cur, toFloat64(sumIf(gross_paid, sales_date < {from:Date})) AS gross_paid_ly,
+       toFloat64(sumIf(disc_paid, sales_date >= {from:Date})) AS disc_paid_cur, toFloat64(sumIf(disc_paid, sales_date < {from:Date})) AS disc_paid_ly,
+       toFloat64(sumIf(cogs_paid, sales_date >= {from:Date})) AS cogs_paid_cur, toFloat64(sumIf(cogs_paid, sales_date < {from:Date})) AS cogs_paid_ly,
+       toFloat64(sumIf(qty_free, sales_date >= {from:Date})) AS qty_free_cur, toFloat64(sumIf(qty_free, sales_date < {from:Date})) AS qty_free_ly,
+       toFloat64(sumIf(cogs_free, sales_date >= {from:Date})) AS cogs_free_cur, toFloat64(sumIf(cogs_free, sales_date < {from:Date})) AS cogs_free_ly,
+       toFloat64(sumIf(qty_pkg, sales_date >= {from:Date})) AS qty_pkg_cur, toFloat64(sumIf(qty_pkg, sales_date < {from:Date})) AS qty_pkg_ly,
+       toFloat64(sumIf(cogs_pkg, sales_date >= {from:Date})) AS cogs_pkg_cur, toFloat64(sumIf(cogs_pkg, sales_date < {from:Date})) AS cogs_pkg_ly,
+       toFloat64(sumIf(pkg_gross, sales_date >= {from:Date})) AS pkg_gross_cur, toFloat64(sumIf(pkg_gross, sales_date < {from:Date})) AS pkg_gross_ly,
+       toFloat64(sumIf(pkg_disc, sales_date >= {from:Date})) AS pkg_disc_cur, toFloat64(sumIf(pkg_disc, sales_date < {from:Date})) AS pkg_disc_ly
+FROM efn_insight.v_esb_menu_econ_daily
+WHERE ${CUR_OR_YOY}
+  AND ${PT}
+  AND ${BR}
+  AND ${CAT}
+  AND ${SALES_BRANCH}
+  AND ${YOY_PAIR}
+GROUP BY menu_name
+ORDER BY gross_paid_cur + pkg_gross_cur DESC
+LIMIT 3000`,
   },
 } as const satisfies Record<string, QueryDef>;
 

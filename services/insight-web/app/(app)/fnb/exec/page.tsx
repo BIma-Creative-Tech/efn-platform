@@ -16,10 +16,13 @@ export const dynamic = 'force-dynamic';
 export const metadata: Metadata = { title: 'Eksekutif F&B' };
 
 interface KpiRaw {
-  net_cur: number; net_yoy: number; cogs_cur: number; cogs_yoy: number; gm_cur: number; gm_yoy: number; trx_cur: number; trx_yoy: number;
+  net_cur: number; cogs_cur: number; gm_cur: number; trx_cur: number;
+  /** Pasangan cabang-hari yang lengkap di kedua sisi (pembilang delta YoY). */
+  net_cmp: number; cogs_cmp: number; gm_cmp: number; trx_cmp: number;
+  net_yoy: number; cogs_yoy: number; gm_yoy: number; trx_yoy: number;
 }
 interface MonthlyRow { month: string; company_code: string; net_sum: number; cogs_sum: number; gm: number }
-interface PtRow { brand: string; company_code: string; net_sum: number; cogs_sum: number; gm: number; gm_pct: number | null; trx: number; net_yoy: number }
+interface PtRow { brand: string; company_code: string; net_sum: number; cogs_sum: number; gm: number; gm_pct: number | null; trx: number; net_cmp: number; net_yoy: number }
 interface MdrRow { company_code: string; method: string; amount_sum: number; mdr_sum: number; mdr_pct: number | null }
 interface RankRow { brand: string; company_code: string; branch_id: number; branch_label: string; net_sum: number; gm: number; gm_pct: number | null; net_yoy: number; growth_pct: number | null }
 
@@ -47,7 +50,7 @@ export default async function FnbExecPage({ searchParams }: { searchParams: FnbS
     { header: 'Margin kotor', align: 'right', cell: (r) => fmtIdr(num(r.gm)) },
     { header: 'Margin kotor (%)', align: 'right', cell: (r) => pctText(numOrNull(r.gm_pct)) },
     { header: 'Transaksi', align: 'right', cell: (r) => fmtInt(num(r.trx)) },
-    { header: 'Penjualan vs tahun lalu', align: 'right', cell: (r) => growthText(yoyS.forCode(r.company_code) ? growthPct(num(r.net_sum), num(r.net_yoy)) : null) },
+    { header: 'Penjualan vs tahun lalu', align: 'right', cell: (r) => growthText(yoyS.forCode(r.company_code) ? growthPct(num(r.net_cmp), num(r.net_yoy)) : null) },
   ];
 
   const rankCols: SmColumn<RankRow>[] = [
@@ -76,7 +79,8 @@ export default async function FnbExecPage({ searchParams }: { searchParams: FnbS
       />
       <FilterNotice adjusted={adjusted} />
       <p className="muted small">
-        Periode: {fmtRange(from, to)}. Pembanding tahun lalu: {fmtRange(yoy.from, yoy.to)}. Basis tanpa pajak (sebelum PB1/service). Hanya brand F&B;
+        Periode: {fmtRange(from, to)}. Pembanding tahun lalu: {fmtRange(yoy.from, yoy.to)} (digeser 364 hari, hari dalam minggu sama). Perubahan
+        vs tahun lalu hanya dihitung dari cabang-hari yang datanya lengkap di kedua tahun (rincian di menu Tahun lalu vs sekarang). Basis tanpa pajak (sebelum PB1/service). Hanya brand F&B;
         supermarket ada di menu Supermarket.
       </p>
       {yoyS.note ? (
@@ -96,6 +100,7 @@ export default async function FnbExecPage({ searchParams }: { searchParams: FnbS
             const gm = num(k.gm_cur);
             const mC = pctOfSafe(gm, net);
             const mY = pctOfSafe(num(k.gm_yoy), num(k.net_yoy));
+            const mCmp = pctOfSafe(num(k.gm_cmp), num(k.net_cmp));
             const d = (cur: number, prev: number, goodWhen: 'up' | 'down' | 'neutral') => ({
               value: yoyS.available ? growthPct(cur, prev) : null,
               kind: 'pct' as const,
@@ -104,23 +109,23 @@ export default async function FnbExecPage({ searchParams }: { searchParams: FnbS
             });
             return (
               <KpiRow>
-                <KpiTile label="Penjualan bersih" value={net} fmt="idr-short" note="Sebelum PB1/service" delta={d(net, num(k.net_yoy), 'up')} />
-                <KpiTile label="HPP" value={num(k.cogs_cur)} fmt="idr-short" delta={d(num(k.cogs_cur), num(k.cogs_yoy), 'neutral')} />
+                <KpiTile label="Penjualan bersih" value={net} fmt="idr-short" note="Sebelum PB1/service" delta={d(num(k.net_cmp), num(k.net_yoy), 'up')} />
+                <KpiTile label="HPP" value={num(k.cogs_cur)} fmt="idr-short" delta={d(num(k.cogs_cmp), num(k.cogs_yoy), 'neutral')} />
                 <KpiTile
                   label="Margin kotor"
                   value={gm}
                   fmt="idr-short"
-                  delta={d(gm, num(k.gm_yoy), 'up')}
+                  delta={d(num(k.gm_cmp), num(k.gm_yoy), 'up')}
                   info="Margin kotor = penjualan bersih tanpa pajak dikurangi HPP dari ESB."
                 />
                 <KpiTile
                   label="Margin kotor (%)"
                   value={mC}
                   fmt="pct"
-                  delta={{ value: yoyS.available ? ppDelta(mC, mY) : null, kind: 'pp', goodWhen: 'up', compareLabel: 'tahun lalu' }}
+                  delta={{ value: yoyS.available ? ppDelta(mCmp, mY) : null, kind: 'pp', goodWhen: 'up', compareLabel: 'tahun lalu' }}
                   info="Margin kotor dibagi penjualan bersih."
                 />
-                <KpiTile label="Transaksi" value={num(k.trx_cur)} fmt="int" delta={d(num(k.trx_cur), num(k.trx_yoy), 'up')} />
+                <KpiTile label="Transaksi" value={num(k.trx_cur)} fmt="int" delta={d(num(k.trx_cmp), num(k.trx_yoy), 'up')} />
               </KpiRow>
             );
           }}

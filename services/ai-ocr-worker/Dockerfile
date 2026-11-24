@@ -17,8 +17,9 @@ WORKDIR /app
 # (CVE-2026-8286/8927/92392), keduanya dependensi transitif tesseract. Gate Trivy di CI = pemeriksa hasilnya.
 # APT_REFRESH: layer ini di-cache build (GHA) -> `apt-get upgrade` tidak berjalan ulang saat Debian merilis perbaikan
 # baru. Ganti tanggalnya untuk memaksa layer dibangun ulang. 2026-10-24 (PR #68, Trivy): libbrotli1 1.1.0-2+deb13u1
-# (CVE-2026-111497, dependensi transitif tesseract via libfreetype).
-ARG APT_REFRESH=2026-10-24
+# (CVE-2026-111497, dependensi transitif tesseract via libfreetype). 2026-11-24 (PR #160, Trivy): krb5 (libgssapi-krb5-2
+# dkk., CVE-2026-71199/71200/112321/112322/112323/118380/119079) dan zlib1g 1.3.1-1+deb13u1 (CVE-2026-85091).
+ARG APT_REFRESH=2026-11-24
 RUN echo "apt refresh ${APT_REFRESH}" \
     && apt-get update \
     && apt-get upgrade -y --no-install-recommends \
