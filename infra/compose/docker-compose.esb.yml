@@ -100,6 +100,11 @@ services:
       ESB_HTTP_TIMEOUT_SECONDS: ${ESB_HTTP_TIMEOUT_SECONDS:-60}
       ESB_MAX_PAGES: ${ESB_MAX_PAGES:-500}
       ESB_COMPANY_BACHA: ${ESB_COMPANY_BACHA:-BCF}
+      # G67 margin bahan (docs/04 §31.2): kosong = fitur mati; brand wajib di ESB_BRANDS + purchase_line di ESB_ENTITIES.
+      ESB_MARGIN_BRANDS: ${ESB_MARGIN_BRANDS:-}
+      ESB_MARGIN_MONTHS: ${ESB_MARGIN_MONTHS:-13}
+      ESB_MARGIN_WEEKDAY: ${ESB_MARGIN_WEEKDAY:-0}
+      ESB_MARGIN_HOUR_WIB: ${ESB_MARGIN_HOUR_WIB:-2}
       # ClickHouse HTTPS 8443, CA internal, user efn_esb (role esb_writer: SELECT/INSERT efn_esb.* + efn_dwh.*esb*).
       CH_HOST: clickhouse
       CH_PORT: "8443"

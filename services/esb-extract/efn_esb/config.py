@@ -294,6 +294,43 @@ class EsbSettings:
 
 
 @dataclass(frozen=True)
+class MarginSettings:
+    """G67 "Margin bahan" (docs/04 §31.2, L-259/L-261). Tanpa secret: dipakai juga CLI `refresh-margin` yang hanya
+    membaca/menulis ClickHouse (jalan dengan ESB_ENABLED=false). `brands` kosong = fitur mati (default)."""
+
+    brands: tuple[str, ...] = ()
+    months: int = 13
+    weekday: int = 0  # 0 = Senin (WIB)
+    hour_wib: int = 2
+
+    @classmethod
+    def from_env(cls, env: Mapping[str, str] | None = None) -> Self:
+        e: Mapping[str, str] = os.environ if env is None else env
+        brands = tuple(dict.fromkeys(item.lower() for item in _items(_str(e, "ESB_MARGIN_BRANDS", ""))))
+        if any(brand not in KNOWN_BRANDS for brand in brands):
+            raise RuntimeError(f"ESB_MARGIN_BRANDS: brand tidak dikenal; pilihan {', '.join(KNOWN_BRANDS)}")
+        return cls(
+            brands=brands,
+            months=_int_range(e, "ESB_MARGIN_MONTHS", 13, 2, 24),
+            weekday=_int_range(e, "ESB_MARGIN_WEEKDAY", 0, 0, 6),
+            hour_wib=_int_range(e, "ESB_MARGIN_HOUR_WIB", 2, 0, 23),
+        )
+
+
+def validate_margin(settings: EsbSettings, margin: MarginSettings) -> None:
+    """Loop `run` (fail-fast saat start): brand margin wajib aktif di ESB_BRANDS (snapshot bom_detail butuh login) dan
+    entitas `purchase_line` wajib aktif (harga PO harian, §31.1)."""
+    if not margin.brands:
+        return
+    active = {cfg.key for cfg in settings.brands}
+    missing = [brand for brand in margin.brands if brand not in active]
+    if missing:
+        raise RuntimeError(f"ESB_MARGIN_BRANDS: {', '.join(missing)} tidak ada di ESB_BRANDS")
+    if "purchase_line" not in settings.entities:
+        raise RuntimeError("ESB_MARGIN_BRANDS membutuhkan entitas purchase_line di ESB_ENTITIES")
+
+
+@dataclass(frozen=True)
 class ClickHouseSettings:
     host: str = "clickhouse"
     port: int = 8443

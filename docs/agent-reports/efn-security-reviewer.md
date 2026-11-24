@@ -94,3 +94,14 @@ wrapper tetap view DEFINER bernama sama di bawah row policy `efn_insight_scope` 
 - **SEC-AG-04 (Info):** `CH_DATABASE`/`CH_RAW_DATABASE` disisipkan tanpa validasi identifier (pola lama). Saran: regex di config.
 - **SEC-AG-05 (Info):** DROP pada agg = bisa mengosongkan Insight (setara dampak INSERT yang ada); runbook §6a belum memuat langkah pulih.
 - Belum terverifikasi: perilaku grant engine/disk dinamis di ClickHouse 24.8.14; durasi refresh nyata multi-tahun. Tidak ada yang dijalankan.
+
+## 25 Nov 2026 — G67 "Margin bahan" (`feat/insight-margin-bahan`)
+
+Laporan: `docs/reviews/SECURITY_REVIEW_2026-11-25_margin-bahan.md`. **Verdict: boleh merge ke dev** (tanpa Critical/High).
+- **SEC-MB-01 (Medium) — ditutup di PR:** brand multi-PT ditolak job (`multi_company`), tidak lagi dilabel PT mayoritas.
+- **SEC-MB-02 (Low) — sebagian:** hasil harga/kelompok kosong ditolak sebelum tulis. Sisa: INSERT gagal di tengah tetap bisa
+  menampilkan versi campur sampai refresh berikutnya.
+- **SEC-MB-03 (Low) — ditutup:** wrapper harga tanpa `receipt_qty`/`value`/`price`/`price_4m`.
+- **SEC-MB-04 (Low, pra-ada):** persona `exec` dipakai bersama SM/F&B; peran `fnb_exec`/Finance = revisi `eit` (R-S16), terbuka.
+- **SEC-MB-05 (Info):** `ESB_MARGIN_BRANDS` tanpa `purchase_line` menghentikan `run` saat start (disengaja, terdokumentasi).
+- **SEC-MB-06 (Info) — ditutup:** fakta analisis klien dan nama sub-kategori nyata dihapus dari docs/04 §31.

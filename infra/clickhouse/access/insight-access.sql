@@ -92,6 +92,14 @@ GRANT SELECT ON efn_dwh.v_esb_menu_mix_agg TO efn_insight_definer;
 REVOKE SELECT ON efn_dwh.v_esb_sales_branch_daily FROM efn_insight_definer;
 REVOKE SELECT ON efn_dwh.v_esb_sales_daily FROM efn_insight_definer;
 REVOKE SELECT ON efn_dwh.v_esb_menu_mix FROM efn_insight_definer;
+-- G67 "Margin bahan" (init/24-margin-bahan.sql, docs/04 §31.4): 3 view versi terakhir + tabel dasarnya. Data komersial
+-- sensitif (L-260): wrapper kelas PT, insight-web membatasi ke persona exec; tidak di-grant ke role lain.
+GRANT SELECT ON efn_dwh.v_esb_ing_price_monthly TO efn_insight_definer;
+GRANT SELECT ON efn_dwh.v_esb_menu_cost_monthly TO efn_insight_definer;
+GRANT SELECT ON efn_dwh.v_esb_ing_group_monthly TO efn_insight_definer;
+GRANT SELECT ON efn_dwh.mart_esb_ing_price_monthly TO efn_insight_definer;
+GRANT SELECT ON efn_dwh.mart_esb_menu_cost_monthly TO efn_insight_definer;
+GRANT SELECT ON efn_dwh.mart_esb_ing_group_monthly TO efn_insight_definer;
 
 CREATE DATABASE IF NOT EXISTS efn_insight;
 
@@ -200,3 +208,17 @@ CREATE OR REPLACE VIEW efn_insight.v_esb_forecast_daily DEFINER = efn_insight_de
 SELECT company_code, brand, warehouse_id, warehouse_code, warehouse_name, product_id, product_code, product_name,
        category, forecast_date, yhat, p10, p90, model, generated_at
 FROM efn_dwh.v_esb_forecast_daily;
+
+-- G67 "Margin bahan" (docs/04 §31.4, init/24-margin-bahan.sql): versi refresh terakhir per brand, kolom = tabel mart
+-- tanpa _version. Row policy kelas PT (insight-esb-policy.sh). company_code = PT brand (satu PT per brand).
+CREATE OR REPLACE VIEW efn_insight.v_esb_ing_price_monthly DEFINER = efn_insight_definer SQL SECURITY DEFINER AS
+SELECT brand, company_code, month, product_code, product_name, ing_group, uom, idx, usage_value
+FROM efn_dwh.v_esb_ing_price_monthly;
+
+CREATE OR REPLACE VIEW efn_insight.v_esb_menu_cost_monthly DEFINER = efn_insight_definer SQL SECURITY DEFINER AS
+SELECT brand, company_code, month, menu_name, menu_category, qty, net, cogs, bom_matched, cost_idx, leaf_coverage
+FROM efn_dwh.v_esb_menu_cost_monthly;
+
+CREATE OR REPLACE VIEW efn_insight.v_esb_ing_group_monthly DEFINER = efn_insight_definer SQL SECURITY DEFINER AS
+SELECT brand, company_code, month, ing_group, basket_value, base_value
+FROM efn_dwh.v_esb_ing_group_monthly;

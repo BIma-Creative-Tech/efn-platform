@@ -85,6 +85,14 @@ GRANT SELECT, INSERT, TRUNCATE ON efn_dwh.agg_esb_sales_daily_build TO esb_write
 GRANT SELECT, INSERT, ALTER DELETE ON efn_dwh.agg_esb_flow_daily TO esb_writer;
 GRANT SELECT, INSERT, TRUNCATE ON efn_dwh.agg_esb_flow_daily_build TO esb_writer;
 
+-- G67 "Margin bahan" (init/24-margin-bahan.sql, docs/04 §31.3, L-263; efn_esb/margin.py): versi-insert -> SELECT +
+-- INSERT saja (tanpa CREATE/DROP/ALTER/TRUNCATE; versi lama terbuang lewat TTL 60 hari). Sumber hitung sudah di-grant
+-- SELECT di atas: dim_esb_bom, dim_esb_bom_line, fact_esb_purchase_line, dim_esb_branch, agg_esb_sales_daily,
+-- extract_checkpoint; kesegaran + kunci = aggregate_refresh / aggregate_refresh_lock (sama dengan refresh agregat).
+GRANT SELECT, INSERT ON efn_dwh.mart_esb_ing_price_monthly TO esb_writer;
+GRANT SELECT, INSERT ON efn_dwh.mart_esb_menu_cost_monthly TO esb_writer;
+GRANT SELECT, INSERT ON efn_dwh.mart_esb_ing_group_monthly TO esb_writer;
+
 -- Analis (opsional, §25.7): view v_esb_* + tabel dasarnya (view INVOKER; v_esb_data_quality membaca extract_run).
 -- Tanpa raw_doc (payload mentah) dan bom_ratio.
 -- metabase-access.sql berjalan SETELAH file ini (urutan alfabet) -> role dibuat di sini juga (idempoten).

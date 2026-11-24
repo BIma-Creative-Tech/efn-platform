@@ -19,11 +19,12 @@ DDL21 = (CH / "init" / "21-g52-insight-fnb.sql").read_text(encoding="utf-8")
 DDL22 = (CH / "init" / "22-g53-insight-fnb-forecast.sql").read_text(encoding="utf-8")
 DDL23 = (CH / "init" / "23-insight-yoy.sql").read_text(encoding="utf-8")
 DDL20 = (CH / "init" / "20-esb-aggregates.sql").read_text(encoding="utf-8")
+DDL24 = (CH / "init" / "24-margin-bahan.sql").read_text(encoding="utf-8")
 ACCESS = (CH / "access" / "insight-access.sql").read_text(encoding="utf-8")
 INIT_SH = (CH / "clickhouse-init.sh").read_text(encoding="utf-8")
 ESB_POLICY_SH = (CH / "access" / "insight-esb-policy.sh").read_text(encoding="utf-8")
-# G52 §28.15.7 + G53 + YoY 24 Nov 2026: jumlah policy ESB (12 PT + 5 BR); sama dengan ESB_POLICY_EXPECTED di init.
-ESB_POLICY_COUNT = 17
+# G52 §28.15.7 + G53 + YoY 24 Nov 2026 + G67: jumlah policy ESB (15 PT + 5 BR); sama dengan ESB_POLICY_EXPECTED di init.
+ESB_POLICY_COUNT = 20
 
 # G52: WHERE opsional satu baris (hanya v_esb_store_payment_daily: `WHERE branch_id != 0`).
 INSIGHT_VIEW_RE = re.compile(
@@ -51,6 +52,9 @@ EXPECTED_INSIGHT_VIEWS = {
     "v_esb_store_receipt_daily",
     "v_esb_sales_done_day",  # Insight YoY 24 Nov 2026 (23-insight-yoy.sql)
     "v_esb_menu_econ_daily",
+    "v_esb_ing_price_monthly",  # G67 margin bahan (24-margin-bahan.sql)
+    "v_esb_menu_cost_monthly",
+    "v_esb_ing_group_monthly",
 }
 REVIEW_DWH_VIEWS = {"v_esb_movement_daily", "v_esb_coverage"}
 YOY_DWH_VIEWS = {"v_esb_sales_done_day", "v_esb_menu_econ_daily"}
@@ -89,9 +93,9 @@ def strip_comments(sql: str) -> str:
 
 
 def dwh_view_body(name: str) -> str:
-    """Badan view efn_dwh.<name> (tanpa komentar) dari 12/13/19/20/21/22/23."""
+    """Badan view efn_dwh.<name> (tanpa komentar) dari 12/13/19/20/21/22/23/24."""
     header = f"CREATE OR REPLACE VIEW efn_dwh.{name} AS"
-    for ddl in (DDL23, DDL22, DDL21, DDL20, DDL19, DDL13, DDL12):
+    for ddl in (DDL24, DDL23, DDL22, DDL21, DDL20, DDL19, DDL13, DDL12):
         if header in ddl:
             return strip_comments(ddl.split(header, 1)[1].split(";", 1)[0])
     raise AssertionError(f"view efn_dwh.{name} tidak ditemukan")

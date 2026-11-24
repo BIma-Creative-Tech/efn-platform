@@ -16,17 +16,18 @@ import logging
 import threading
 import time
 import uuid
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from typing import Any, Protocol
 
-from efn_esb.aggregates import TRIGGER_ENTITIES, RefreshStore, error_label, refresh_all
-from efn_esb.config import DAILY_ENTITIES, EsbSettings
+from efn_esb.aggregates import TRIGGER_ENTITIES, RefreshResult, RefreshStore, error_label, refresh_all
+from efn_esb.config import DAILY_ENTITIES, EsbSettings, MarginSettings
 from efn_esb.extract import BrandRuntime, SliceResult, run_slice
 from efn_esb.heartbeat import heartbeat_line
 from efn_esb.http import CallBudgetExceeded, EsbAuthError
+from efn_esb.margin import is_due, last_ok, record, refresh_margin, refresh_name
 from efn_esb.paging import Getter
 from efn_esb.planning import (
     BRAND_SCOPE,
@@ -417,6 +418,68 @@ class RefreshTrigger:
             self.dirty = False
             return True
         return False
+
+
+class MarginSchedule:
+    """G67 (docs/04 §31.2): refresh margin bahan mingguan di loop `run`. Per brand di ESB_MARGIN_BRANDS yang jatuh
+    tempo (margin.is_due): (1) snapshot `bom_detail` brand itu, (2) hitung + tulis (margin.refresh_margin). Paling
+    banyak satu percobaan per brand per hari WIB (di memori). Tidak pernah melempar: gagal = log + aggregate_refresh
+    `error`, ekstraksi harian tidak terpengaruh (pola agregat §25.7)."""
+
+    def __init__(self, margin: MarginSettings) -> None:
+        self.margin = margin
+        self.attempted: dict[str, date] = {}
+
+    def run_due(
+        self,
+        settings: EsbSettings,
+        runtimes: Mapping[str, tuple[BrandRuntime, Budgeted]],
+        store: Any,
+        breaker: AuthBreaker,
+        now: datetime,
+        stop: threading.Event,
+        on_written: Callable[[SliceResult], None] | None = None,
+    ) -> list[RefreshResult]:
+        results: list[RefreshResult] = []
+        for brand in self.margin.brands:
+            pair = runtimes.get(brand)
+            if stop.is_set() or pair is None or breaker.suspended(brand):
+                continue
+            try:
+                previous = last_ok(store, brand)
+            except Exception as exc:  # ClickHouse tidak terjangkau: coba lagi siklus berikutnya
+                log.error("margin=%s cek jadwal gagal error=%s", brand, error_label(exc))
+                continue
+            if not is_due(now, self.margin.weekday, self.margin.hour_wib, previous, self.attempted.get(brand)):
+                continue
+            today = wib_today(now)
+            self.attempted[brand] = today
+            try:
+                results.append(self._refresh(settings, pair, store, brand, today, stop, on_written))
+            except Exception as exc:  # pertahanan berlapis: loop ekstraksi tidak boleh berhenti karena margin
+                log.error("margin=%s refresh gagal error=%s", brand, error_label(exc))
+        return results
+
+    def _refresh(
+        self,
+        settings: EsbSettings,
+        pair: tuple[BrandRuntime, Budgeted],
+        store: Any,
+        brand: str,
+        today: date,
+        stop: threading.Event,
+        on_written: Callable[[SliceResult], None] | None,
+    ) -> RefreshResult:
+        rt, client = pair
+        started = version_now()
+        snap = run_snapshot(settings, rt, client, store, ["bom_detail"], today, stop, on_written=on_written)
+        if snap.status != "ok":
+            # Resep basi tidak dihitung diam-diam: refresh berikutnya minggu depan atau `refresh-margin` manual.
+            label = f"snapshot_{snap.status}"
+            result = RefreshResult(refresh_name(brand), "error", started, version_now(), error=label)
+            record(store, result)
+            return result
+        return refresh_margin(store, brand, self.margin.months, today)
 
 
 def run_backfill(
