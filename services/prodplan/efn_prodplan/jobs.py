@@ -2,6 +2,10 @@
 
 `calculate`: segarkan BOM + stok dari ESB (GET saja), hitung `calc.compute_plan`, simpan snapshot stok + hasil dalam
 satu transaksi bila rencana masih `draft` dan `row_version` tidak berubah sejak job diminta.
+
+§30.17.9: job memakai token sesi hidup milik `job.requested_by_sub` (tanpa sesi / token ditolak -> `failed`
+`needs_login`; GET saja, aman diulang setelah login). Sumber transfer = semua lokasi cabang sesi PEMICU (maks 20 cabang,
+kecuali lokasi produksi); cache katalog BOM dikunci per aktor (`cache_scope`).
 """
 
 import logging
@@ -26,12 +30,45 @@ from efn_prodplan.calc import (
     short_materials,
     to_decimal,
 )
-from efn_prodplan.esb import CallBudgetExceeded, EsbAuthError, EsbError, encode_doc_number, page_rows
+from efn_prodplan.esb import (
+    CallBudgetExceeded,
+    EsbAuthError,
+    EsbError,
+    EsbTokenRejected,
+    encode_doc_number,
+    page_rows,
+)
 from efn_prodplan.logs import log_event
+from efn_prodplan.names import parse_names
 from efn_prodplan.workflow import JOB_ERROR_CODES
 
 BOM_FETCH_MAX = 400
 PR_NUMBER_KEYS = ("purchaseRequestNum", "purchaseRequestNumber", "prNum")
+SOURCE_BRANCHES_MAX = 20
+
+
+def cache_scope(actor_id: int, brand: str) -> str:
+    """Kunci cache per aktor (§30.17.6, R-T24): data ESB tidak dibagi antar-pengguna lewat cache."""
+    return f"{int(actor_id)}:{brand}"
+
+
+def source_branches(branch_ids: Iterable[int], prod_branch: int) -> tuple[list[int], list[int]]:
+    """Cabang sumber transfer dari sesi pemicu: cabang produksi dulu, lalu naik; maks 20 -> (dipakai, diabaikan)."""
+    ordered = sorted({int(b) for b in branch_ids})
+    if prod_branch in ordered:
+        ordered.remove(prod_branch)
+        ordered.insert(0, prod_branch)
+    return ordered[:SOURCE_BRANCHES_MAX], ordered[SOURCE_BRANCHES_MAX:]
+
+
+def source_locations(locations: Mapping[int, Iterable[int]], prod_branch: int, prod_loc: int) -> list[tuple[int, int]]:
+    """Semua lokasi cabang sumber kecuali lokasi produksi rencana (urutan sumber final tetap `calc.order_sources`)."""
+    return [
+        (br, loc)
+        for br in locations
+        for loc in sorted({int(x) for x in locations[br]})
+        if (br, loc) != (prod_branch, prod_loc)
+    ]
 
 
 class JobAbort(Exception):
@@ -142,8 +179,9 @@ def validate_search(q: Any) -> str:
 
 
 class BomCatalog:
-    """Daftar + header BOM Assembly per brand, cache memori TTL pendek (thread-safe). Semua GET lewat klien yang
-    diberikan pemanggil (token bucket brand + anggaran panggilan job tetap berlaku)."""
+    """Daftar + header BOM Assembly per `scope` (= `cache_scope(actor_id, brand)`, §30.17.6: tidak ada data ESB yang
+    dibagi antar-pengguna), cache memori TTL pendek (thread-safe). Semua GET lewat klien bertoken pemanggil (token
+    bucket brand + anggaran panggilan job tetap berlaku). Parameter `brand` di bawah = scope."""
 
     def __init__(self, ttl_seconds: float = 900.0, clock: Callable[[], float] = time.monotonic) -> None:
         self._ttl = ttl_seconds
@@ -387,6 +425,8 @@ def job_error_code(exc: BaseException) -> str:
         return exc.code if exc.code in JOB_ERROR_CODES else "internal"
     if isinstance(exc, CallBudgetExceeded):
         return "call_budget_exceeded"
+    if isinstance(exc, EsbTokenRejected):
+        return "needs_login"  # §30.17.9: token pemicu ditolak di tengah job (sesi sudah dibuang)
     if isinstance(exc, EsbAuthError):
         return "esb_auth_failed"
     if isinstance(exc, EsbError):
@@ -485,10 +525,12 @@ class JobRunner:
         db: Any,
         job_store: Any,
         settings: Any,
-        clients: Mapping[str, Any],
+        clients: Callable[[int, str], tuple[Any, Any] | None],
         clock: Callable[[], datetime],
         catalog: BomCatalog | None = None,
     ) -> None:
+        """`clients(actor_id, brand)` -> (sesi, klien ESB beranggaran `PRODPLAN_JOB_MAX_CALLS`) milik pemicu, atau
+        None bila aktor itu tidak punya sesi hidup (job -> `needs_login`)."""
         self._db = db
         self._jobs = job_store
         self._settings = settings
@@ -510,12 +552,15 @@ class JobRunner:
         client = None
         try:
             plan = self._load_plan(job["plan_id"])
-            client = self._clients[plan["esb_brand"]]
-            client.reset_budget(self._settings.job_max_calls)
+            owned = self._clients(int(job["requested_by_sub"]), plan["esb_brand"])
+            if owned is None:
+                raise JobAbort("needs_login")  # tanpa panggilan ESB
+            session, client = owned
+            scope = cache_scope(session.actor_id, plan["esb_brand"])
             if kind == "pr_import":
-                result = self._pr_import(job, plan, client)
+                result = self._pr_import(job, plan, client, scope)
             else:
-                result = self._calculate(job, plan, client)
+                result = self._calculate(job, plan, client, scope, session.branch_ids)
             self._jobs.finish_job(job["id"], "done", result, None, client.calls)
             status = "done"
         except Exception as exc:  # noqa: BLE001 - job gagal tercatat, worker tetap hidup
@@ -560,7 +605,7 @@ class JobRunner:
             )
 
     # ------------------------------------------------------------------ pr_import
-    def _pr_import(self, job: Mapping[str, Any], plan: Mapping[str, Any], client: Any) -> dict[str, Any]:
+    def _pr_import(self, job: Mapping[str, Any], plan: Mapping[str, Any], client: Any, scope: str) -> dict[str, Any]:
         params = job["params"] or {}
         query: dict[str, Any] = {
             "requiredDateFrom": params["required_date_from"],
@@ -583,7 +628,7 @@ class JobRunner:
             detail = client.get(f"/purchase/purchase-request/{encode_doc_number(num)}")
             if isinstance(detail, Mapping):
                 details.append((num, detail))
-        bom_for_product, headers = self._catalog.index(plan["esb_brand"], client)
+        bom_for_product, headers = self._catalog.index(scope, client)
         agg, unknown = aggregate_pr(details)
         demand, unmapped = map_pr_demand(agg, bom_for_product, headers)
         unmapped.extend(unknown)
@@ -623,7 +668,19 @@ class JobRunner:
         return {"prs": len(nums), "demand_lines": len(demand), "unmapped": len(unmapped)}
 
     # ------------------------------------------------------------------ calculate
-    def _calculate(self, job: Mapping[str, Any], plan: Mapping[str, Any], client: Any) -> dict[str, Any]:
+    def _source_locations(
+        self, client: Any, branch_ids: Iterable[int], prod_branch: int, prod_loc: int
+    ) -> tuple[list[tuple[int, int]], list[int]]:
+        """§30.17.6: lokasi semua cabang sesi pemicu (GET `/location/branch/{id}`, maks 20 cabang)."""
+        used, dropped = source_branches(branch_ids, prod_branch)
+        locations: dict[int, list[int]] = {}
+        for b in used:
+            locations[b] = list(parse_names(client.get(f"/location/branch/{b}"), "locationID", "locationName"))
+        return source_locations(locations, prod_branch, prod_loc), dropped
+
+    def _calculate(
+        self, job: Mapping[str, Any], plan: Mapping[str, Any], client: Any, scope: str, branch_ids: Iterable[int]
+    ) -> dict[str, Any]:
         settings = self._settings
         brand = settings.brand(plan["esb_brand"])
         if brand is None:
@@ -640,13 +697,14 @@ class JobRunner:
         pack_rules = {r["product_code"]: Decimal(r["pack_qty"]) for r in pack_rows}
         branch_id, loc_id = int(plan["branch_id"]), int(plan["production_location_id"])
 
-        bom_for_product, headers = self._catalog.index(plan["esb_brand"], client)
+        bom_for_product, headers = self._catalog.index(scope, client)
         master_uom = parse_master_uom(client.get_all("/product", {}, limit=500, max_pages=40))
         boms, prod_stock, skipped, invalid_qty = fetch_boms(
             client, [d.bom_id for d in demands], bom_for_product, headers, branch_id, loc_id
         )
         stock: dict[tuple[int, int, int], Decimal] = {(branch_id, loc_id, k): v for k, v in prod_stock.items()}
-        sources = brand.source_locations()
+        sources: list[tuple[int, int]] = []  # diisi hanya bila ada kekurangan (hemat GET lokasi)
+        dropped: list[int] = []
 
         def compute() -> PlanResult:
             return compute_plan(
@@ -664,11 +722,11 @@ class JobRunner:
 
         result = compute()
         short = short_materials(result)
+        if short:
+            sources, dropped = self._source_locations(client, branch_ids, branch_id, loc_id)
         if short and sources:
             covering = boms_covering(short, boms)
             for src_branch, src_loc in sources:
-                if (src_branch, src_loc) == (branch_id, loc_id):
-                    continue
                 for bom_id in covering:
                     rows = client.get(f"/product/bom/detail/{bom_id}", {"branchID": src_branch, "locationID": src_loc})
                     detail = parse_bom_detail(headers[bom_id], _rows(rows))
@@ -683,6 +741,8 @@ class JobRunner:
         if invalid_qty:
             merged = set(out["warnings"].get("invalid_bom_qty", [])) | set(invalid_qty)
             out["warnings"]["invalid_bom_qty"] = sorted(merged)
+        if dropped:
+            out["warnings"]["source_branches_truncated"] = dropped  # cabang sesi ke-21 dst. diabaikan
         return out
 
     def _save_calculation(

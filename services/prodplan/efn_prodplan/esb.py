@@ -7,12 +7,16 @@ Salinan yang DIKERASKAN dari `services/esb-extract/efn_esb/http.py` (tidak ada i
   `allow_write=True` (worker outbox + `PRODPLAN_WRITE_ENABLED=true`).
 - Base URL hanya dua nilai persis (`config.ESB_BASE_URLS`); https; TLS >= 1.2 + verifikasi hostname (CA publik certifi);
   `http.client` langsung: tanpa proxy env, tanpa redirect.
-- GET: login ulang sekali pada 401; retry terbatas pada jaringan/429/5xx. POST/DELETE tulis: TANPA retry otomatis.
+- §30.17 (amandemen A1): klien membawa token akses ESB MILIK PENGGUNA (sesi memori prodplan). Tidak ada akun service,
+  tidak ada login ulang otomatis (prodplan tidak memegang password): 401 -> callback `on_unauthorized` (sesi dibuang)
+  + `EsbTokenRejected`. `login()` hanya dipakai `POST /v1/session` (satu kali, tanpa retry); `refreshToken` dibuang.
+- GET: retry terbatas pada jaringan/429/5xx. POST/DELETE tulis: TANPA retry otomatis.
   Transport membedakan gagal SEBELUM request terkirim (`EsbNotSent`) dan SETELAH terkirim (`EsbSentUnknown`).
 - Nomor dokumen di-URL-encode (`"SM202611240001 - 1"` -> `SM202611240001%20-%201`) setelah lolos regex §30.4.
-- Password, token, header Authorization, body, query string tidak pernah masuk log/pesan exception.
+- Password, token, header Authorization, body, query string tidak pernah masuk log/pesan exception/repr.
 """
 
+import base64
 import http.client
 import json
 import logging
@@ -23,7 +27,7 @@ import threading
 import time
 import urllib.parse
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Protocol
 
 import certifi
@@ -34,6 +38,9 @@ from efn_prodplan.logs import log_event
 
 USER_AGENT = "efn-prodplan/0.1"
 LOGIN_PATH = "/auth/login"
+LOGOUT_PATH = "/auth/logout"
+LOGOUT_TIMEOUT_SECONDS = 5.0
+LOGIN_TIMEOUT_SECONDS = 8.0  # SEC-236: antrean 5 dtk + login 8 dtk < timeout insight-web 15 dtk
 RETRY_STATUSES = frozenset({429, 500, 502, 503, 504})
 ERROR_BODY_MAX_BYTES = 64 * 1024
 _READ_CHUNK = 64 * 1024
@@ -65,7 +72,8 @@ GET_EXACT = frozenset(
         "/product/list",
         "/product/bom",
         "/product/branch-stock",
-        "/branch/list/user",  # nama cabang untuk tampilan (G66 putaran 2, keputusan lead)
+        "/branch/list/user",  # cabang pengguna (pembatasan cabang §30.17.6) + nama tampilan
+        "/user/access",  # izin pengguna -> peran (§30.17.6)
         "/purchase/purchase-request",
         "/simple-transfer",
         "/inventory/goods-transfer-request",
@@ -108,7 +116,19 @@ class EsbForbiddenCall(EsbError):
 
 
 class EsbAuthError(EsbError):
-    """Login ditolak / token ditolak setelah login ulang."""
+    """Login ditolak / token ditolak."""
+
+
+class EsbInvalidCredentials(EsbAuthError):
+    """`POST /auth/login` ditolak (HTTP 400/401/403 atau envelope gagal) -> `invalid_credentials`."""
+
+
+class EsbTokenRejected(EsbAuthError):
+    """ESB membalas 401 untuk token pengguna -> sesi dibuang (`esb_401`); tidak ada login ulang otomatis."""
+
+
+class EsbUnavailable(EsbError):
+    """Login gagal karena jaringan/timeout/5xx/respons tak terbaca (tidak dihitung lockout)."""
 
 
 class EsbHttpError(EsbError):
@@ -178,8 +198,8 @@ def classify_call(method: str, path: str, *, mfg_mode: str, allow_write: bool) -
         or len(path) > 200
     ):
         raise EsbForbiddenCall("path ESB tidak valid")
-    if method == "POST" and path == LOGIN_PATH:
-        return LOGIN_PATH
+    if method == "POST" and path in (LOGIN_PATH, LOGOUT_PATH):
+        return path  # sesi pengguna (§30.17.3); diizinkan tanpa allow_write
     if method == "GET":
         if path in GET_EXACT:
             return path
@@ -218,8 +238,8 @@ def validate_esb_url(url: str, base_url: str) -> None:
 @dataclass(frozen=True)
 class HttpResponse:
     status: int
-    body: bytes
-    headers: Mapping[str, str]
+    body: bytes = field(repr=False)  # SEC-241: body login memuat accessToken/refreshToken
+    headers: Mapping[str, str] = field(repr=False)
 
 
 class Transport(Protocol):
@@ -359,15 +379,53 @@ def doc_number(kind: str, result: Any) -> str | None:
     return None
 
 
+def jwt_claims(token: str) -> dict[str, Any]:
+    """Payload JWT `accessToken` TANPA verifikasi tanda tangan (token diterima langsung dari ESB lewat TLS; hanya untuk
+    penjadwalan `exp` + `userRoleID`). Tak terbaca -> {}. Klaim tidak pernah dilog."""
+    parts = token.split(".") if isinstance(token, str) else []
+    if len(parts) != 3:
+        return {}
+    segment = parts[1]
+    try:
+        raw = base64.urlsafe_b64decode(segment + "=" * (-len(segment) % 4))
+        data = json.loads(raw.decode("utf-8"))
+    except (ValueError, UnicodeDecodeError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+@dataclass(frozen=True)
+class LoginResult:
+    """Hasil `POST /auth/login` yang dipakai prodplan. Field lain (termasuk `refreshToken`) dibuang saat diterima."""
+
+    access_token: str = field(repr=False)
+    full_name: str = field(repr=False)
+    company_code: str
+    flag_active: bool
+
+
+def parse_login(result: Any) -> LoginResult:
+    if not isinstance(result, Mapping):
+        raise EsbUnavailable("respons login ESB tidak terbaca")
+    token = result.get("accessToken")
+    full_name = result.get("fullName")
+    company = result.get("companyCode")
+    return LoginResult(
+        access_token=token if isinstance(token, str) else "",
+        full_name=full_name.strip() if isinstance(full_name, str) else "",
+        company_code=company.strip() if isinstance(company, str) else "",
+        flag_active=result.get("flagActive") in (1, True),  # ESB mengirim int 1 (uji staging 25 Nov 2026)
+    )
+
+
 # ====================================================================== klien
 class EsbClient:
-    """Klien satu brand. Thread-safe (job worker dan outbox worker boleh berbagi)."""
+    """Klien satu token pengguna (atau tanpa token, khusus `login`). Thread-safe."""
 
     def __init__(
         self,
         base_url: str,
-        username: str,
-        password: str,
+        token: str | None,
         transport: Transport,
         bucket: TokenBucket,
         *,
@@ -378,14 +436,14 @@ class EsbClient:
         max_retries: int = 2,
         sleep: Callable[[float], None] = time.sleep,
         clock: Callable[[], float] = time.monotonic,
+        on_unauthorized: Callable[[], None] | None = None,
     ) -> None:
         if base_url not in ESB_BASE_URLS:
             raise EsbForbiddenCall("base URL ESB tidak diizinkan")
         if mfg_mode not in MFG_MODES:
             raise EsbForbiddenCall("mode produksi tidak dikenal")
         self._base = base_url
-        self._username = username
-        self._password = password
+        self._token = token or None
         self._transport = transport
         self._bucket = bucket
         self.mfg_mode = mfg_mode
@@ -395,25 +453,27 @@ class EsbClient:
         self._max_retries = max(0, min(3, max_retries))
         self._sleep = sleep
         self._clock = clock
-        self._token: str | None = None
+        self._on_unauthorized = on_unauthorized
         self._calls = 0
         self._lock = threading.Lock()
-        self._login_lock = threading.Lock()
 
     def __repr__(self) -> str:
-        return f"EsbClient(base={self._base!r}, user=***, calls={self._calls})"
+        return f"EsbClient(base={self._base!r}, token=***, calls={self._calls})"
 
     @property
     def calls(self) -> int:
         return self._calls
 
-    def reset_budget(self, max_calls: int | None) -> None:
-        with self._lock:
-            self._calls = 0
-            self._max_calls = max_calls
-
     # ------------------------------------------------------------------ inti
-    def _send(self, method: str, path: str, query: str, body: bytes | None, token: str | None) -> HttpResponse:
+    def _send(
+        self,
+        method: str,
+        path: str,
+        query: str,
+        body: bytes | None,
+        token: str | None,
+        timeout: float | None = None,
+    ) -> HttpResponse:
         template = classify_call(method, path, mfg_mode=self.mfg_mode, allow_write=self.allow_write)
         url = self._base + path + (f"?{query}" if query else "")
         validate_esb_url(url, self._base)
@@ -430,7 +490,7 @@ class EsbClient:
         started = self._clock()
         status_label = "error"
         try:
-            response = self._transport.send(method, url, headers, body, self._timeout)
+            response = self._transport.send(method, url, headers, body, timeout or self._timeout)
             status_label = str(response.status)
             return response
         except EsbNotSent:
@@ -453,7 +513,7 @@ class EsbClient:
             )
 
     def _send_retry(self, method: str, path: str, query: str, body: bytes | None, token: str | None) -> HttpResponse:
-        """Hanya untuk GET dan login (idempoten)."""
+        """Hanya untuk GET (idempoten)."""
         attempt = 0
         while True:
             try:
@@ -470,52 +530,54 @@ class EsbClient:
                 continue
             return response
 
-    def login(self) -> None:
-        body = json.dumps({"username": self._username, "password": self._password}).encode("utf-8")
-        response = self._send_retry("POST", LOGIN_PATH, "", body, None)
+    # ------------------------------------------------------------------ sesi pengguna (§30.17.3)
+    def login(self, username: str, password: str) -> LoginResult:
+        """`POST /auth/login` SATU kali (tanpa retry). 400/401/403/envelope gagal -> `EsbInvalidCredentials`;
+        jaringan/timeout/5xx/respons tak terbaca -> `EsbUnavailable`. Password hanya ada di body request ini."""
+        body = json.dumps({"username": username, "password": password}).encode("utf-8")
+        try:
+            response = self._send("POST", LOGIN_PATH, "", body, None, LOGIN_TIMEOUT_SECONDS)
+        except (EsbNotSent, EsbSentUnknown, EsbResponseTooLarge) as exc:
+            raise EsbUnavailable(f"ESB tidak terjangkau saat login ({type(exc).__name__})") from None
         if response.status in (400, 401, 403):
-            raise EsbAuthError(f"login ESB ditolak (HTTP {response.status})")
+            raise EsbInvalidCredentials(f"login ESB ditolak (HTTP {response.status})")
         if not 200 <= response.status < 300:
-            raise EsbHttpError(response.status, LOGIN_PATH)
+            raise EsbUnavailable(f"login ESB gagal (HTTP {response.status})")
         try:
             result = parse_envelope(response, LOGIN_PATH)
         except EsbRejected:
-            raise EsbAuthError("login ESB ditolak") from None
-        token = result.get("accessToken") if isinstance(result, Mapping) else None
-        if not isinstance(token, str) or not token:
-            raise EsbAuthError("respons login ESB tanpa token")
-        with self._lock:
-            self._token = token
+            raise EsbInvalidCredentials("login ESB ditolak") from None
+        except EsbProtocolError:
+            raise EsbUnavailable("respons login ESB tidak terbaca") from None
+        return parse_login(result)
 
-    def _current_token(self) -> str:
-        with self._login_lock:
-            if self._token is None:
-                self.login()
-            token = self._token
-        if token is None:  # pragma: no cover
-            raise EsbAuthError("token ESB kosong")
-        return token
+    def logout(self) -> None:
+        """`POST /auth/logout` (body `{}`) dengan token ini, timeout 5 dtk; galat apa pun diabaikan (best-effort)."""
+        if not self._token:
+            return
+        try:
+            self._send("POST", LOGOUT_PATH, "", b"{}", self._token, LOGOUT_TIMEOUT_SECONDS)
+        except EsbError:
+            pass
 
-    def _invalidate(self, token: str) -> None:
-        with self._lock:
-            if self._token == token:
-                self._token = None
+    def _require_token(self) -> str:
+        if not self._token:
+            raise EsbTokenRejected("klien ESB tanpa token pengguna")
+        return self._token
+
+    def _rejected(self) -> EsbTokenRejected:
+        if self._on_unauthorized is not None:
+            self._on_unauthorized()
+        return EsbTokenRejected("token ESB pengguna ditolak (401)")
 
     # ------------------------------------------------------------------ baca
     def get_response(self, path: str, params: Mapping[str, Any] | None = None) -> HttpResponse:
         classify_call("GET", path, mfg_mode=self.mfg_mode, allow_write=self.allow_write)
         query = urllib.parse.urlencode([(k, v) for k, v in (params or {}).items() if v is not None])
-        relogged = False
-        while True:
-            token = self._current_token()
-            response = self._send_retry("GET", path, query, None, token)
-            if response.status == 401:
-                self._invalidate(token)
-                if relogged:
-                    raise EsbAuthError("token ESB ditolak setelah login ulang")
-                relogged = True
-                continue
-            return response
+        response = self._send_retry("GET", path, query, None, self._require_token())
+        if response.status == 401:
+            raise self._rejected()
+        return response
 
     def get(self, path: str, params: Mapping[str, Any] | None = None) -> Any:
         template = classify_call("GET", path, mfg_mode=self.mfg_mode, allow_write=self.allow_write)
@@ -569,22 +631,11 @@ class EsbClient:
     # ------------------------------------------------------------------ tulis (tanpa retry otomatis)
     def _write(self, method: str, path: str, body: bytes | None) -> HttpResponse:
         classify_call(method, path, mfg_mode=self.mfg_mode, allow_write=self.allow_write)
-        relogged = False
-        while True:
-            try:
-                token = self._current_token()
-            except EsbAuthError:
-                raise
-            except EsbError as exc:
-                # Login gagal = dokumen belum terkirim.
-                raise EsbNotSent(f"login ESB gagal sebelum tulis ({type(exc).__name__})") from None
-            response = self._send(method, path, "", body, token)
-            if response.status == 401 and not relogged:
-                # 401 = ditolak autentikasi, permintaan tidak diproses -> aman diulang SEKALI setelah login ulang.
-                self._invalidate(token)
-                relogged = True
-                continue
-            return response
+        response = self._send(method, path, "", body, self._require_token())
+        if response.status == 401:
+            # Tanpa login ulang (prodplan tidak memegang password): sesi dibuang, baris outbox -> `needs_login`.
+            raise self._rejected()
+        return response
 
     def post_doc(self, kind: str, body: Mapping[str, Any]) -> str:
         """POST dokumen; kembalikan nomor dokumen. `EsbRejected` / `EsbNotSent` / `EsbSentUnknown` sesuai §30.9."""
@@ -595,8 +646,6 @@ class EsbClient:
         response = self._write("POST", path, raw)
         if response.status >= 500:
             raise EsbSentUnknown(f"ESB HTTP {response.status} setelah request")
-        if response.status == 401:
-            raise EsbAuthError("token ESB ditolak setelah login ulang")
         if not 200 <= response.status < 300:
             raise EsbRejected(response.status, _envelope_code(response))
         try:
@@ -616,8 +665,6 @@ class EsbClient:
             raise EsbSentUnknown(f"ESB HTTP {response.status} setelah request")
         if response.status == 404:
             return "not_found"
-        if response.status == 401:
-            raise EsbAuthError("token ESB ditolak setelah login ulang")
         if not 200 <= response.status < 300:
             raise EsbRejected(response.status, _envelope_code(response))
         try:

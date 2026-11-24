@@ -1,23 +1,22 @@
 /**
- * Akses modul Production Order (`/produksi*`, docs/04 §30.7 + §30.12, G66, ADR-051 Proposed). Murni (tanpa I/O): dipakai
- * proxy.ts (lapis pertama), halaman/route handler (lapis kedua), navGroups, dan test.
+ * Modul Production Order (`/produksi*`, docs/04 §30.17, G66, ADR-051 §8). Murni (tanpa I/O).
  *
- * Aturan: flag INSIGHT_PRODPLAN_ENABLED -> sesi eis3 -> peran PP + kode ESB + tanpa pembatasan cabang (T9 membuat sesi sah
- * selalu memenuhi dua syarat terakhir; diperiksa lagi di sini sebagai pertahanan berlapis).
+ * AKSES ke `/produksi*` kini berdasarkan SESI ESB per pengguna (cookie `__Host-epp`, lib/prodplan-session.ts; gerbang di
+ * proxy.ts + lib/pp-page.ts), BUKAN peran PP di sesi Odoo `eis3`. Yang tersisa di sini:
+ *  - `isProduksiPath`: pemisah jalur gerbang;
+ *  - `ppAccessDenial` / `ppNavItems`: HANYA untuk menampilkan tautan menu "Produksi" ke pengguna Odoo ber-peran PP (§30.17.2);
+ *    tidak memberi akses apa pun;
+ *  - `ppCaps` / `ppRoleLabel`: dari peran di respons sesi prodplan (`SessionView.roles`).
+ * `PP_ROLES` dan aturan T9 tidak dihapus (tujuan pemetaan migrasi, §30.17.11).
  */
 import { esbCodesOf, ppRolesOf, type PpRole } from './claims';
 import type { NavItem } from './page-filters';
 
 export const PP_PREFIX = '/produksi';
+/** Halaman masuk (§30.17.2): satu-satunya jalur `/produksi*` yang terbuka tanpa cookie sesi ESB. */
+export const PP_LOGIN_PATH = '/produksi/masuk';
 
 export type PpDenial = 'pp-belum-aktif' | 'tidak-berwenang' | 'buka-ulang';
-
-/** Halaman informasi publik tujuan rewrite/redirect untuk tiap penolakan. */
-export const PP_DENIAL_PATH: Readonly<Record<PpDenial, string>> = {
-  'pp-belum-aktif': '/pp-belum-aktif',
-  'tidak-berwenang': '/tidak-berwenang',
-  'buka-ulang': '/buka-ulang',
-};
 
 export interface PpSessionLike {
   v: number;
@@ -33,13 +32,7 @@ export function isProduksiPath(pathname: string): boolean {
 
 export const hasPpRole = (roles: readonly string[]): boolean => ppRolesOf(roles).length > 0;
 
-/** Keputusan akses (null = boleh). Selain rute /produksi selalu null. */
-export function ppRouteDenial(pathname: string, session: PpSessionLike, ppEnabled: boolean): PpDenial | null {
-  if (!isProduksiPath(pathname)) return null;
-  return ppAccessDenial(session, ppEnabled);
-}
-
-/** Sama seperti ppRouteDenial tetapi tanpa pemeriksaan path (halaman dan route handler API). */
+/** Kelayakan menampilkan menu "Produksi" untuk sesi Odoo (null = tampil). BUKAN gerbang akses (§30.17.2). */
 export function ppAccessDenial(session: PpSessionLike, ppEnabled: boolean): PpDenial | null {
   if (!ppEnabled) return 'pp-belum-aktif';
   if (session.v < 3) return 'buka-ulang';
@@ -78,7 +71,8 @@ export const PP_NAV_ITEMS: readonly NavItem[] = [
 ];
 
 /**
- * Item menu "Produksi": hanya sesi yang lolos ppAccessDenial (flag aktif + peran PP). Sesi ber-cabang tidak mendapat menu.
+ * Item menu "Produksi" untuk pengguna Odoo: hanya sesi yang lolos ppAccessDenial (flag aktif + peran PP). Sesi ber-cabang
+ * tidak mendapat menu. Mengeklik tautan membawa ke halaman masuk ESB bila belum ada sesi ESB.
  */
 export function ppNavItems(s: PpSessionLike, ppEnabled: boolean): readonly NavItem[] {
   return ppAccessDenial(s, ppEnabled) === null ? PP_NAV_ITEMS : [];

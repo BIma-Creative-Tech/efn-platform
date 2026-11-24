@@ -2,8 +2,14 @@
 # Runbook: docs/runbooks/prodplan.md.
 #
 # Mengapa overlay, bukan service di base (pola docker-compose.esb.yml G41 / forecast G44):
-#   - Tanpa overlay TIDAK ada service yang memegang password ESB prodplan, jalur keluar ke ESB, atau DB efn_prodplan
-#     yang bisa dijangkau lewat network. Base tidak berubah (§30.1).
+#   - Tanpa overlay TIDAK ada service dengan jalur keluar ke ESB atau DB efn_prodplan yang bisa dijangkau lewat network.
+#     Base tidak berubah (§30.1).
+#
+# Amandemen A1 (docs/04 §30.17, ADR-051 §8): login PER PENGGUNA ke ESB. Akun service ESB prodplan DIHAPUS (§30.17.10):
+# tidak ada env PRODPLAN_ESB_USER_<BRAND> / PRODPLAN_ESB_PASSWORD_<BRAND>_FILE dan tidak ada secret
+# esb_prodplan_password_<brand> (check-encryption.sh menolak bila muncul lagi). Token ESB pengguna hanya di memori proses
+# (<= 1 jam); restart prodplan = semua pengguna login ulang (L-260). Provisioning JIT ke Odoo = overlay terpisah
+# docker-compose.prodplan-odoo.yml (tanpa overlay itu PRODPLAN_ODOO_PROVISION_ENABLED dipaku "false" di bawah).
 #   - Image prodplan belum masuk rantai rilis bertanda tangan (IMAGE_* di deploy.yml/efn-deploy/deploy.sh, SEC-42):
 #     build-push.yml menandatanganinya, tetapi deploy.sh TIDAK menyertakan overlay ini (tindak lanjut, runbook §9).
 #   Dev/staging lokal:
@@ -17,6 +23,7 @@
 #                                     production) + method/path ditegakkan DI APLIKASI (§30.4); allowlist tingkat
 #                                     jaringan (nftables subnet .25 -> IP ESB:443) = sisa risiko (pola SEC-183 esb-extract).
 #   prodplan TIDAK di data/internal/esb/insight-data/egress: tanpa RabbitMQ, ClickHouse, Odoo, MinIO, Loki. Tanpa Traefik.
+#   (A1: overlay docker-compose.prodplan-odoo.yml menambah prodplan-rpc (.26) -> HANYA odoo-rpc-gateway, satu method.)
 #   K25-02: bila stack data pindah mesin, prodplan-db menjadi lintas host (WireGuard) -> tinjau ulang (L-252).
 #
 # TLS: API prodplan plaintext HANYA di loopback namespace-nya (127.0.0.1:8080). Masuk lewat sidecar prodplan-tls
@@ -25,14 +32,10 @@
 #
 # Secret (§30.2; daftar di scripts/secrets.list; mount least privilege dicek check-encryption.sh):
 #   pg_password_prodplan      random        postgres (00-roles.sh, role opsional) + prodplan
-#   prodplan_assert_key       hex32         insight-web (penanda tangan ppa1) + prodplan (pemverifikasi)
-#   esb_prodplan_password_pb  host:disabled prodplan saja. TERPISAH dari esb_core_password_pb (R-S17, Q-PP1). File
-#                                           sumber bisa dialihkan lewat PRODPLAN_ESB_PASSWORD_PB_SECRET_FILE di .env lokal
-#                                           (mis. password staging), nama secret di container tetap.
+#   prodplan_assert_key       hex32         insight-web (penanda tangan ppa2, §30.17.7) + prodplan (pemverifikasi)
 #   tls_prodplan_*            pki (server)  prodplan-tls saja
 #   tls_insight_web_pp_*      pki (client)  insight-web-pp-tls saja
-# Username API ESB (SEC-180): TIDAK di repo. PRODPLAN_ESB_USER_<BRAND> dari infra/compose/.env lokal / config rilis;
-# default kosong (brand aktif tanpa user -> exit 2, fail-closed di efn_prodplan/config.py).
+# Password ESB: TIDAK ada di disk. Pengguna mengetiknya di /produksi/masuk; hanya di memori request (§30.17.1).
 services:
   prodplan:
     image: ${IMAGE_PRODPLAN:-ghcr.io/${EFN_STACK:-efn}/prodplan:dev}
@@ -67,11 +70,21 @@ services:
       PRODPLAN_ESB_BASE_URL: ${PRODPLAN_ESB_BASE_URL:-https://stg7.esb.co.id/core-stg}
       PRODPLAN_ESB_MFG_MODE: ${PRODPLAN_ESB_MFG_MODE:-actual}
       PRODPLAN_BRANDS: ${PRODPLAN_BRANDS:-pb}
-      # SEC-180: username API ESB per brand dari .env lokal / config rilis saja (default kosong). v1 hanya pb.
-      PRODPLAN_ESB_USER_PB: ${PRODPLAN_ESB_USER_PB:-}
-      PRODPLAN_ESB_PASSWORD_PB_FILE: /run/secrets/esb_prodplan_password_pb
+      # §30.17.13: companyCode ESB per brand aktif (`pb=<companyCode>[;wtz=...]`), dari .env lokal karena staging !=
+      # production. Bukan rahasia. Kosong + brand aktif = exit 2 di kode (login tidak bisa memetakan brand).
+      PRODPLAN_ESB_COMPANY_CODES: "${PRODPLAN_ESB_COMPANY_CODES:-}"
+      # §30.17.6: izin ESB -> peran PP & akses dokumen. Tata bahasa `KODE:hak[+hak];...`, hak view|insert|update|delete
+      # (authorize DITOLAK). Aturan tak sah = exit 2 (prodplan_config_error reason=esb_role_rule).
+      PRODPLAN_ESB_ROLE_PLANNER: "${PRODPLAN_ESB_ROLE_PLANNER:-B.4:view+insert;K.5:view;D.16:view;C.1:view}"
+      PRODPLAN_ESB_ROLE_WAREHOUSE: "${PRODPLAN_ESB_ROLE_WAREHOUSE:-D.9:view+insert;D.4:view+insert;D.16:view}"
+      PRODPLAN_ESB_DOC_ACCESS: "${PRODPLAN_ESB_DOC_ACCESS:-simple_transfer=D.9;goods_transfer_request=D.4;simple_manufacturing=B.4}"
+      # Cabang sumber transfer kini dari /branch/list/user milik pengguna (Q-PP6); PRODPLAN_SOURCE_LOCATIONS dihapus.
       PRODPLAN_CK_BRANCHES: "${PRODPLAN_CK_BRANCHES:-pb:4=7}"
-      PRODPLAN_SOURCE_LOCATIONS: "${PRODPLAN_SOURCE_LOCATIONS:-}"
+      # §30.17.11: provisioning JIT ke Odoo. Dipaku "false" LITERAL di overlay ini (bukan dari .env): hanya overlay
+      # docker-compose.prodplan-odoo.yml (network prodplan-rpc + API key + sertifikat klien) yang boleh menimpanya.
+      PRODPLAN_ODOO_PROVISION_ENABLED: "false"
+      # Nilai tetap (§30.17.13: nilai lain -> exit 2). Nama host = SAN sertifikat odoo-rpc-gateway.
+      PRODPLAN_ODOO_RPC_URL: https://odoo-rpc-gateway:8443
       PRODPLAN_APPLY_YIELD: ${PRODPLAN_APPLY_YIELD:-false}
       PRODPLAN_STOCK_MAX_AGE_MINUTES: "${PRODPLAN_STOCK_MAX_AGE_MINUTES:-30}"
       PRODPLAN_POST_MAX_DOCS: "${PRODPLAN_POST_MAX_DOCS:-60}"
@@ -95,12 +108,14 @@ services:
     secrets:
       - pg_password_prodplan
       - prodplan_assert_key
-      - esb_prodplan_password_pb
       - efn_ca_crt
     networks: [prodplan-db, insight-plan, egress-prodplan]
     read_only: true
     tmpfs: [/tmp]
     cap_drop: [ALL]
+    # §30.17.4 (R-S25): token ESB pengguna ada di memori proses -> tanpa core dump (dicek check-encryption.sh).
+    ulimits:
+      core: { soft: 0, hard: 0 }
     deploy:
       resources:
         limits: { cpus: "1", memory: 384M }
@@ -205,7 +220,7 @@ services:
     labels:
       service: insight-web-pp-tls
 
-  # insight-web (§30.3 tambahan, §30.12): network insight-plan + kunci asersi ppa1. Daftar network/secret digabung
+  # insight-web (§30.3 tambahan, §30.12, §30.17.2): network insight-plan + kunci asersi ppa2. Daftar network/secret digabung
   # dengan base. Tanpa overlay: tidak ada env/secret prodplan di insight-web (halaman /produksi nonaktif).
   insight-web:
     environment:
@@ -252,9 +267,6 @@ networks:
 secrets:
   pg_password_prodplan: { file: ../../secrets/pg_password_prodplan.txt }
   prodplan_assert_key: { file: ../../secrets/prodplan_assert_key.txt }
-  # Default = file per nama secret. Dev lokal dengan ESB staging: set PRODPLAN_ESB_PASSWORD_PB_SECRET_FILE di
-  # infra/compose/.env (path relatif terhadap infra/compose atau absolut), mis. ../../secrets/esb_core_password_stg.txt.
-  esb_prodplan_password_pb: { file: "${PRODPLAN_ESB_PASSWORD_PB_SECRET_FILE:-../../secrets/esb_prodplan_password_pb.txt}" }
   tls_prodplan_crt: { file: ../../secrets/tls_prodplan_crt.txt }
   tls_prodplan_key: { file: ../../secrets/tls_prodplan_key.txt }
   tls_insight_web_pp_crt: { file: ../../secrets/tls_insight_web_pp_crt.txt }

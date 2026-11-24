@@ -5,7 +5,6 @@ from datetime import UTC, date, datetime, timedelta
 import pytest
 
 from efn_prodplan.actor import Actor
-from efn_prodplan.config import BRAND_CODES
 from efn_prodplan.service import build_preview, req_decimal, req_int, req_str, to_json
 from efn_prodplan.workflow import (
     ApiError,
@@ -23,8 +22,8 @@ from efn_prodplan.workflow import (
 NOW = datetime(2026, 11, 24, 3, 0, tzinfo=UTC)  # 10:00 WIB
 
 
-def actor(sub=7, roles=("pp_planner",), codes=("PB",)):
-    return Actor(sub=sub, name="Uji", roles=frozenset(roles), codes=frozenset(codes))
+def actor(sub=7, roles=("pp_planner",), brand="pb"):
+    return Actor(sub=sub, name="Uji", roles=frozenset(roles), brand=brand, branch_ids=frozenset({4}))
 
 
 def code_of(fn, *args):
@@ -75,10 +74,10 @@ def test_sod_creator_or_submitter_cannot_approve():
 def test_roles_and_brand():
     require_role(actor(), {"pp_planner"})
     assert code_of(require_role, actor(roles=("pp_warehouse",)), {"pp_planner"}) == (403, "forbidden")
-    require_brand(actor(), "pb", ["pb"], BRAND_CODES)
-    assert code_of(require_brand, actor(codes=("WTZ",)), "pb", ["pb"], BRAND_CODES) == (403, "forbidden")
-    assert code_of(require_brand, actor(codes=("WTZ",)), "wtz", ["pb"], BRAND_CODES) == (403, "forbidden")
-    require_brand(actor(codes=("BCR",)), "bacha", ["bacha"], BRAND_CODES)
+    require_brand(actor(), "pb", ["pb"])
+    assert code_of(require_brand, actor(brand="wtz"), "pb", ["pb"]) == (403, "forbidden")  # brand sesi lain
+    assert code_of(require_brand, actor(brand="wtz"), "wtz", ["pb"]) == (403, "forbidden")  # brand tidak aktif
+    require_brand(actor(brand="bacha"), "bacha", ["bacha"])
 
 
 def test_check_version():

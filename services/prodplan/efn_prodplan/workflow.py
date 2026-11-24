@@ -64,6 +64,17 @@ MESSAGES: Mapping[str, str] = {
     "bad_input": "Input pencarian tidak valid",
     "invalid_quantity": "Jumlah pada dokumen ESB tidak valid (harus lebih dari nol)",
     "reconcile_incomplete": "Pemeriksaan dokumen di ESB belum tuntas; coba lagi nanti",
+    # §30.17.5 / §30.17.13 (pesan login tetap; tidak membedakan "user tidak ada" vs "password salah")
+    "invalid_credentials": "Username atau password ESB salah.",
+    "login_locked": "Terlalu banyak percobaan masuk. Coba lagi dalam 15 menit.",
+    "no_pp_access": "Akun ESB ini tidak memiliki izin modul Produksi.",
+    "esb_company_not_allowed": "Akun ESB ini tidak memiliki izin modul Produksi.",
+    "session_capacity": "ESB sedang tidak dapat dihubungi. Coba beberapa saat lagi.",
+    "session_expired": "Sesi ESB berakhir (maksimal 1 jam). Silakan masuk lagi.",
+    "branch_forbidden": "Akun ESB Anda tidak memegang cabang dokumen ini",
+    "esb_access_missing": "Akun ESB Anda tidak memiliki izin dokumen ini di ESB",
+    "resume_requires_original_user": "Hanya pengguna yang memulai posting yang boleh melanjutkan dokumen ini",
+    "nothing_to_resume": "Tidak ada posting yang menunggu dilanjutkan",
 }
 
 # Semua kode galat job (`job.error_code`) yang bisa ditulis worker/store — satu tempat (frontend memberi label).
@@ -82,6 +93,7 @@ JOB_ERROR_CODES = frozenset(
         "not_found",
         "forbidden",
         "interrupted",  # store.recover_running saat restart
+        "needs_login",  # §30.17.9: tanpa token sesi hidup milik pemicu / token ditolak di tengah job
         "internal",
     }
 )
@@ -101,6 +113,9 @@ CONTENT_ACTIONS = (
 # posting_state (ringkasan outbox untuk UI, QA-B).
 _ACTIVE_OUTBOX = frozenset({"pending", "sending", "sent", "unknown", "delete_pending", "deleting"})
 _ATTENTION_ERRORS = frozenset({"doc_not_found", "marker_mismatch", "reconcile_incomplete"})
+NEEDS_LOGIN = "needs_login"
+# Baris outbox yang belum terminal (§30.17.9 resume / cancel).
+NONTERMINAL_OUTBOX = frozenset(_ACTIVE_OUTBOX | {NEEDS_LOGIN})
 
 
 class ApiError(Exception):
@@ -122,12 +137,70 @@ def require_role(actor: Actor, allowed: Iterable[str]) -> None:
         raise ApiError(403, "forbidden")
 
 
-def require_brand(
-    actor: Actor, brand: str, active_brands: Iterable[str], brand_codes: Mapping[str, frozenset[str]]
-) -> None:
-    """§30.7: brand ∈ PRODPLAN_BRANDS dan kode PT-nya ∈ klaim `codes`."""
-    if brand not in set(active_brands) or not (brand_codes.get(brand, frozenset()) & actor.codes):
+def require_brand(actor: Actor, brand: str, active_brands: Iterable[str]) -> None:
+    """§30.17.7: brand ∈ PRODPLAN_BRANDS dan = brand sesi ESB pemanggil."""
+    if brand not in set(active_brands) or brand != actor.brand:
         raise ApiError(403, "forbidden")
+
+
+def require_branches(actor: Actor, branch_ids: Iterable[Any]) -> None:
+    """§30.17.6: pemanggil wajib memegang semua cabang (`/branch/list/user` saat login) -> 403 `branch_forbidden`."""
+    if not {int(b) for b in branch_ids} <= actor.branch_ids:
+        raise ApiError(403, "branch_forbidden")
+
+
+def require_doc_access(actor: Actor, insert_kinds: Iterable[str] = (), delete_kinds: Iterable[str] = ()) -> None:
+    """§30.17.6: `doc_insert`/`doc_delete` sesi wajib mencakup doc_kind -> 403 `esb_access_missing` (+ doc_kinds)."""
+    missing = (set(insert_kinds) - actor.doc_insert) | (set(delete_kinds) - actor.doc_delete)
+    if missing:
+        raise ApiError(403, "esb_access_missing", {"doc_kinds": sorted(missing)})
+
+
+def run_as(row: Mapping[str, Any]) -> int:
+    """Aktor yang tokennya dipakai untuk baris outbox: `coalesce(run_as_sub, created_by_sub)`."""
+    return int(row.get("run_as_sub") or row.get("created_by_sub") or 0)
+
+
+def _waiting_login(row: Mapping[str, Any]) -> bool:
+    return row.get("status") == NEEDS_LOGIN or row.get("last_error_code") == NEEDS_LOGIN
+
+
+def _maybe_created(row: Mapping[str, Any]) -> bool:
+    """Baris yang MUNGKIN sudah tercipta di ESB oleh aktor sebelumnya (§30.17.9 resume langkah 2)."""
+    status = row.get("status")
+    return status in ("unknown", "sent") or (
+        status == NEEDS_LOGIN and int(row.get("attempts") or 0) > 0 and not row.get("esb_doc_number")
+    )
+
+
+def resume_status(row: Mapping[str, Any]) -> str:
+    """Status baru saat dilanjutkan: `needs_login` -> pending (belum pernah dikirim) / unknown (pernah dikirim, tanpa
+    nomor: rekonsiliasi marker dulu, TIDAK langsung POST) / delete_pending (nomor ada). Status lain tetap."""
+    status = str(row.get("status"))
+    if status != NEEDS_LOGIN:
+        return status
+    if row.get("esb_doc_number"):
+        return "delete_pending"
+    return "unknown" if int(row.get("attempts") or 0) > 0 else "pending"
+
+
+def plan_resume(
+    rows: Iterable[Mapping[str, Any]], actor: Actor, row_branches: Mapping[Any, Iterable[int]]
+) -> list[tuple[Any, str]]:
+    """`POST /v1/plans/{id}/resume-posting` langkah 1-3 (murni). Kembalikan [(outbox_id, status_baru)] semua baris
+    non-terminal (langkah 4: semuanya `run_as_sub` = pemanggil). `row_branches[id]` = cabang asal/tujuan baris."""
+    live = [r for r in rows if r.get("status") in NONTERMINAL_OUTBOX]
+    if not any(_waiting_login(r) for r in live):
+        raise ApiError(409, "nothing_to_resume")
+    if any(_maybe_created(r) and run_as(r) != actor.sub for r in live):
+        raise ApiError(403, "resume_requires_original_user")
+    branches = {b for r in live for b in row_branches.get(r["id"], ())}
+    require_branches(actor, branches)
+    targets = [(r, resume_status(r)) for r in live]
+    insert_kinds = {str(r["doc_kind"]) for r, s in targets if s == "pending"}
+    delete_kinds = {str(r["doc_kind"]) for r, s in targets if s in ("delete_pending", "deleting")}
+    require_doc_access(actor, insert_kinds, delete_kinds)
+    return [(r["id"], s) for r, s in targets]
 
 
 def require_status(status: str, allowed: Iterable[str]) -> None:
@@ -163,6 +236,8 @@ def posting_state(rows: Iterable[Mapping[str, Any]]) -> str:
     active = [r for r in rows if not (r.get("status") == "failed" and r.get("last_error_code") == "cancelled")]
     if not active:
         return "none"
+    if any(_waiting_login(r) for r in active):
+        return "needs_attention"  # §30.17.9: "Posting berhenti karena sesi ESB berakhir" + Lanjutkan posting
     if any(r.get("status") in ("failed", "delete_failed") for r in active) or any(
         r.get("status") in ("sent", "unknown") and r.get("last_error_code") in _ATTENTION_ERRORS for r in active
     ):

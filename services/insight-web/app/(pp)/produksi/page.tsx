@@ -1,7 +1,7 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
 import { EmptyState, PageHeader, Section, StatusPill } from '@/components/ui';
-import { firstParam, requirePpSession, type SearchParams } from '@/lib/pp-page';
+import { firstParam, redirectIfExpired, requirePpSession, type SearchParams } from '@/lib/pp-page';
 import { loadMeta, loadPlans } from '@/lib/prodplan-data';
 import { CALC_STATUS, PLAN_STATUS, fmtPlace, isIsoDate, placeHint, postingBadge } from '@/lib/prodplan-format';
 import { fmtDate } from '@/lib/format';
@@ -14,9 +14,10 @@ const STATUS_FILTERS = ['draft', 'submitted', 'approved', 'posted', 'cancelled']
 
 /** Daftar rencana produksi (docs/04 §30.12 `/produksi`): filter brand, tanggal produksi, status. Data hanya dari API prodplan. */
 export default async function PlansPage({ searchParams }: { searchParams: SearchParams }) {
-  const { session, caps } = await requirePpSession();
+  const { sid, caps } = await requirePpSession();
   const raw = await searchParams;
-  const metaRes = await loadMeta(session);
+  const metaRes = await loadMeta(sid);
+  redirectIfExpired(metaRes);
   const brands = metaRes.ok ? metaRes.data.brands : [];
 
   const brandParam = firstParam(raw, 'brand');
@@ -31,7 +32,8 @@ export default async function PlansPage({ searchParams }: { searchParams: Search
   const offset = Number.isSafeInteger(offsetN) && offsetN >= 0 && offsetN <= 100_000 ? offsetN : 0;
   const rangeBad = Boolean((fromP && !from) || (toP && !to) || (from && to && from > to));
 
-  const plans = brand && !rangeBad ? await loadPlans(session, { brand, from, to, status, limit: PAGE, offset }) : null;
+  const plans = brand && !rangeBad ? await loadPlans(sid, { brand, from, to, status, limit: PAGE, offset }) : null;
+  if (plans) redirectIfExpired(plans);
 
   const qs = (extra: Record<string, string | number>): string => {
     const q = new URLSearchParams();

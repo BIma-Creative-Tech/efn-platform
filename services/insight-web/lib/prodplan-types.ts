@@ -19,7 +19,9 @@ export type OutboxStatus =
   | 'delete_pending'
   | 'deleting'
   | 'deleted'
-  | 'delete_failed';
+  | 'delete_failed'
+  /** Sesi ESB pemicu berakhir sebelum dokumen dikirim/dihapus (§30.17.9); lanjut lewat `resume-posting`. */
+  | 'needs_login';
 export type DocKind = 'simple_transfer' | 'goods_transfer_request' | 'simple_manufacturing';
 export type DemandSource = 'pr' | 'manual' | 'suggestion';
 export type PostPhase = 'transfers' | 'production';

@@ -114,6 +114,8 @@ RPC publik baru (terdaftar `efn_core/tests/test_rpc_surface.py` `RPC_ALLOWLIST`)
 - `TECHNICAL_GROUP_XMLIDS` + `efn_pos_bff_order.group_qr_bff` (user teknis QR ponsel per PT F&B): user teknis tidak
   boleh diberi peran (`efn_role:line_technical_user`) dan grup itu tidak boleh menjadi isi peran
   (`efn_role:role_technical_group`). Opsional: dilewati bila `efn_pos_bff_order` belum terpasang.
+- G66b (19.0.1.2.5, docs/04 §30.17.11): `TECHNICAL_GROUP_XMLIDS` + `efn_esb_identity.group_esb_provisioner` (user
+  teknis prodplan untuk provisioning shadow user ESB). Aturan sama; dilewati bila `efn_esb_identity` belum terpasang.
 - Parameter `efn_role.sensitive_group_xmlids` = **parameter kontrol efn_audit**: `models/efn_audit_rule.py`
   menambah (OR) filter spesifikasi bawaan `ir.config_parameter` sehingga create/write/unlink parameter itu selalu
   dicatat walau aturan admin diarsipkan, dan lognya tidak ikut GC. Kunci `efn_role.*` tidak cocok filter `efn.%`

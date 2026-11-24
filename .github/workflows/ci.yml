@@ -37,7 +37,7 @@ env:
     efn_online_order efn_setup_online efn_online_pos_sale efn_pos_refund_origin efn_online_pos_counter
     efn_setup_org efn_loyalty_accounting efn_l10n_id_coretax_rounding efn_role efn_region
     efn_setup_role efn_pos_bff_order efn_online_kds_bridge efn_online_transfer
-    efn_mgm_policy efn_data_ask efn_insight efn_legacy_history
+    efn_mgm_policy efn_data_ask efn_insight efn_legacy_history efn_esb_identity
     efn_demand_forecast efn_assortment efn_replenishment efn_expiry_monitor efn_setup_supermarket efn_campaign efn_insight_sm
     efn_setup_supermarket_online efn_web_home efn_setup_menu
     efn_account_asset efn_petty_cash efn_account_reconcile efn_bank_import efn_account_batch_payment
@@ -80,7 +80,7 @@ jobs:
             login-gateway: ['services/login-gateway/**', '.github/workflows/ci.yml']   # G62 halaman masuk staf (ADR-050)
             wa-unofficial: ['services/wa-unofficial/**', '.github/workflows/ci.yml']   # G50 WA tidak resmi (ADR-044)
             odoo:   ['services/odoo/**', 'scripts/check-odoo-deps.sh', '.github/workflows/ci.yml']
-            python: ['services/ai-ocr-worker/**', 'services/etl/**', 'services/text2sql/**', 'services/esb-extract/**', 'infra/clickhouse/**', 'services/forecast-worker/**', 'scripts/migration/**', 'scripts/check-py-lock.sh', 'scripts/lock-python-deps.sh', 'services/segment-worker/**', 'services/odoo/addons/efn_campaign/**', 'services/api-gateway/src/behavior/dto/**', 'infra/postgres/init/20-platform-g50a.sql', 'services/prodplan/**', 'infra/postgres/init/23-prodplan-g66.sql', '.github/workflows/ci.yml']
+            python: ['services/ai-ocr-worker/**', 'services/etl/**', 'services/text2sql/**', 'services/esb-extract/**', 'infra/clickhouse/**', 'services/forecast-worker/**', 'scripts/migration/**', 'scripts/check-py-lock.sh', 'scripts/lock-python-deps.sh', 'services/segment-worker/**', 'services/odoo/addons/efn_campaign/**', 'services/api-gateway/src/behavior/dto/**', 'infra/postgres/init/20-platform-g50a.sql', 'services/prodplan/**', 'infra/postgres/init/23-prodplan-g66.sql', 'infra/postgres/init/24-prodplan-esb-login.sql', '.github/workflows/ci.yml']
             ai-ocr-worker: ['services/ai-ocr-worker/**', '.github/workflows/ci.yml']
             etl:           ['services/etl/**', 'services/api-gateway/src/behavior/dto/**', 'infra/postgres/init/20-platform-g50a.sql', '.github/workflows/ci.yml']
             text2sql:      ['services/text2sql/**', '.github/workflows/ci.yml']
@@ -88,7 +88,7 @@ jobs:
             segment-worker: ['services/segment-worker/**', 'services/odoo/addons/efn_campaign/**', '.github/workflows/ci.yml']     # G50 (docs/04 §28.7, ADR-047)
             esb-migrate:   ['scripts/migration/**', '.github/workflows/ci.yml']      # G43 (docs/04 §27.2)
             forecast-worker: ['services/forecast-worker/**', 'scripts/check-py-lock.sh', '.github/workflows/ci.yml']   # G44 (docs/04 §28.2, ADR-046); SEC-214 lock
-            prodplan:      ['services/prodplan/**', 'infra/postgres/init/23-prodplan-g66.sql', '.github/workflows/ci.yml']   # G66 (docs/04 §30, ADR-051)
+            prodplan:      ['services/prodplan/**', 'infra/postgres/init/23-prodplan-g66.sql', 'infra/postgres/init/24-prodplan-esb-login.sql', '.github/workflows/ci.yml']   # G66 (docs/04 §30, ADR-051; A1 §30.17)
             infra:  ['infra/**', 'services/**/Dockerfile', '.github/workflows/**', 'scripts/**', 'Makefile']
 
   node:
@@ -752,12 +752,15 @@ jobs:
           P=(--profile core --profile data --profile ai --profile observability --profile ops --profile wa-unofficial)
           for env in dev prod; do
             docker compose -f docker-compose.yml -f "docker-compose.${env}.yml" -f docker-compose.prodplan.yml "${P[@]}" config -q
+            # G66 A1 (docs/04 §30.17.11): + overlay provisioning Odoo (network prodplan-rpc ke odoo-rpc-gateway)
+            docker compose -f docker-compose.yml -f "docker-compose.${env}.yml" -f docker-compose.prodplan.yml \
+              -f docker-compose.prodplan-odoo.yml "${P[@]}" config -q
             docker compose -f docker-compose.yml -f "docker-compose.${env}.yml" -f docker-compose.esb.yml \
               -f docker-compose.forecast.yml -f docker-compose.segment.yml -f docker-compose.wa-unofficial.yml \
-              -f docker-compose.prodplan.yml "${P[@]}" config -q
+              -f docker-compose.prodplan.yml -f docker-compose.prodplan-odoo.yml "${P[@]}" config -q
           done
           published=$(docker compose -f docker-compose.yml -f docker-compose.prod.yml -f docker-compose.prodplan.yml \
-            "${P[@]}" config --format json \
+            -f docker-compose.prodplan-odoo.yml "${P[@]}" config --format json \
             | jq -r '.services | to_entries[] | select(.value.ports != null and (.value.ports | length) > 0) | .key')
           [ "$published" = "traefik" ] || { echo "::error::overlay prodplan: port publish selain traefik: $published"; exit 1; }
       - name: Prod hanya mem-publish port Traefik
@@ -784,12 +787,14 @@ jobs:
           # G44: odoo_api_key_forecast_* + tls_forecast_worker_* hanya di overlay docker-compose.forecast.yml -> ikut juga.
           # G50: odoo_api_key_segment_smd + tls_segment_worker_* (overlay segment) dan wa_unofficial_* +
           # rabbitmq_password_wa_unofficial + tls_wa_unofficial_* (overlay wa-unofficial, profil wa-unofficial) -> ikut juga.
-          # G66: pg_password_prodplan, prodplan_assert_key, esb_prodplan_password_pb, tls_prodplan_*, tls_insight_web_pp_*
-          # hanya di overlay docker-compose.prodplan.yml -> ikut juga.
+          # G66: pg_password_prodplan, prodplan_assert_key, tls_prodplan_*, tls_insight_web_pp_* hanya di overlay
+          # docker-compose.prodplan.yml; A1: odoo_api_key_esb_provisioner + tls_prodplan_odoo_* hanya di overlay
+          # docker-compose.prodplan-odoo.yml -> keduanya ikut. (esb_prodplan_password_pb dihapus, docs/04 §30.17.10.)
           cfg=$(docker compose -f docker-compose.yml -f docker-compose.prod.yml -f docker-compose.payment.yml \
             -f docker-compose.pii.yml -f docker-compose.llm.yml -f docker-compose.llm-text2sql.yml \
             -f docker-compose.esb.yml -f docker-compose.migration.yml -f docker-compose.forecast.yml \
             -f docker-compose.segment.yml -f docker-compose.wa-unofficial.yml -f docker-compose.prodplan.yml \
+            -f docker-compose.prodplan-odoo.yml \
             "${overlays[@]}" \
             --profile core --profile data --profile ai --profile observability --profile ops --profile migrate \
             --profile wa-unofficial \

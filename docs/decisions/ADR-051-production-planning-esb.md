@@ -2,9 +2,11 @@
 
 - **Status:** Proposed — belum disetujui klien. G66 boleh dibangun mengikuti rekomendasi ini dengan
   `PRODPLAN_ENABLED=false` dan `PRODPLAN_WRITE_ENABLED=false` default. **Tulis ke ESB production terkunci di kode**
-  (bukan env) sampai ADR ini `Accepted`, akun API non-admin tersedia (Q-PP1), dan penyimpangan §3.4 dikonfirmasi pemilik
-  proyek (Q-PP2).
-- **Tanggal:** 2026-11-24 (Gelombang 66) · revisi 2026-11-24 (hasil uji tulis staging ESB, §1.3 butir 5–7, §3.4)
+  (bukan env). **Amandemen A1 (25 Nov 2026, §8):** Q-PP2 **disetujui pemilik proyek** (penyimpangan §3.4 diterima);
+  Q-PP1 **diganti** keputusan pemilik proyek "login per pengguna ke ESB" (disetujui); syarat membuka kunci tulis production
+  kini = akun ESB **perorangan non-admin** per planner/kepala gudang + PR terpisah (§8.6). Rincian teknis A1 tetap Proposed.
+- **Tanggal:** 2026-11-24 (Gelombang 66) · revisi 2026-11-24 (hasil uji tulis staging ESB, §1.3 butir 5–7, §3.4) ·
+  amandemen A1 2026-11-25 (identitas per pengguna ESB, §8)
 - **Pemutus:** pemilik proyek (lingkup, penyimpangan draft §3.4), IT klien (akun API non-admin, staging ESB), kepala
   gudang + planner CK PB (proses persetujuan), Finance (dampak stok/HPP dokumen produksi), Security (allowlist tulis)
 - **Referensi review:** R-S17 (akun admin ESB), R-O09 (perubahan API ESB), R-O10 (beban ESB), R-S18 (kunci Insight),
@@ -142,7 +144,7 @@ menekan **Posting** (ringkasan dampak stok wajib dikonfirmasi) → outbox: trans
 - insight-web tetap tanpa akses DB/ESB; ia hanya meneruskan aksi pengguna ke API prodplan dengan identitas dari sesi
   terverifikasi (amandemen terbatas ADR-041 §3.7).
 
-### 3.4 Penyimpangan dari syarat "draft di ESB" (menunggu konfirmasi pemilik proyek, Q-PP2)
+### 3.4 Penyimpangan dari syarat "draft di ESB" (Q-PP2 — **diterima pemilik proyek 25 Nov 2026**, §8.1)
 Uji staging membuktikan dokumen produksi tidak bisa dibuat sebagai draft (langsung Authorized, stok bergerak) dan
 goods-transfer-request lahir Authorized (stok bergerak saat goods delivery). Keputusan lead:
 - Gerbang persetujuan manusia untuk **produksi** dipindah ke aplikasi: posting hanya dari rencana `approved`, penyetuju ≠
@@ -216,3 +218,144 @@ lewat PR · **Q-PP5** arti `yieldPercent` · **Q-PP6** daftar lokasi/cabang sumb
 - CKWH cabang 38 (production-order) perlu ditulis, atau brand kedua.
 - Cutover Odoo PB (G43): prodplan dihentikan untuk PB, rencana terbuka dimigrasi/ditutup, logika pindah ke Odoo MRP.
 - Paling lambat **31 Mar 2027**.
+
+---
+
+## 8. Amandemen A1 — identitas per pengguna ESB (25 Nov 2026)
+
+> **Ringkasan manajemen.** Planner dan kepala gudang PB masuk ke modul Produksi dengan **akun ESB masing-masing**
+> (bukan akun Odoo, bukan satu akun bersama). Data yang tampil dan dokumen yang dibuat di ESB memakai hak akun itu sendiri,
+> sehingga jejak di ESB menunjukkan siapa pembuatnya. Password ESB **tidak pernah disimpan**; aplikasi hanya meneruskannya
+> sekali ke ESB lalu memegang token sesi ESB (maks. 1 jam) di memori server. Pengguna yang berhasil masuk dicatat sebagai
+> user Odoo nonaktif (tanpa password) agar siap saat migrasi ESB → Odoo. Biaya tambahan ±3 minggu-engineer, Rp0 lisensi.
+> Tulis ke ESB production tetap terkunci sampai ada akun ESB perorangan non-admin dan PR terpisah.
+
+Kontrak rinci: `docs/04` §30.17 (menang atas §30.3–§30.12 dan §30.16 bila berbeda).
+
+### 8.1 Keputusan pemilik proyek 25 Nov 2026 (dicatat apa adanya)
+| # | Keputusan | Status |
+|---|---|---|
+| 1 | **Q-PP2 diterima**: dokumen produksi via API langsung Authorized di ESB; gerbang persetujuan = SoD dua orang di aplikasi (§3.4) | **Disetujui** |
+| 2 | **Q-PP1 diganti**: pemilik proyek hanya punya akun API admin → **login per pengguna ke ESB**. Modul Produksi punya halaman login yang meneruskan username+password ke `POST /auth/login` ESB; data tersaring izin pengguna di ESB; semua baca/tulis ESB memakai token pengguna itu, bukan akun service bersama | **Disetujui** (prinsip); rincian teknis Proposed |
+| 3 | **Login ESB yang berhasil diduplikasi ke Odoo** (`res.users` just-in-time) agar pengguna & perannya sudah ada saat migrasi dan login bisa dialihkan ke Odoo | **Disetujui** (prinsip); rincian (§8.5) Proposed + menunggu fit-gap `efn-odoo-functional` |
+| 4 | Sementara memakai akun yang ada (admin) untuk PB; **staging dulu** | **Disetujui** |
+| 5 | Setiap POST/DELETE dari akun admin ke ESB production **ditahan** → `PROD_WRITE_UNLOCKED` tetap `False`; syarat membuka = akun ESB perorangan non-admin per planner/kepala gudang + PR terpisah | **Disetujui** |
+| 6 | **Q-PP6**: lokasi/cabang sumber transfer mengikuti izin cabang pengguna di ESB (`GET /branch/list/user`), tanpa daftar terpisah di aplikasi | **Disetujui** |
+
+### 8.2 Konteks: yang bertentangan dengan keputusan ini
+| Sumber | Bunyi | Pertentangan |
+|---|---|---|
+| §2.3 / §3.1 butir 4 | "Grup Odoo `efn_insight.group_prodplan_planner` … peran di klaim `roles` token `eit3`/sesi `eis3`" | Pengguna PB adalah pengguna ESB, belum punya akun Odoo; peran kini dari izin ESB |
+| §3.1 butir 3 | "Username dari env non-repo (SEC-180), password dari `/run/secrets/*`" | Tidak ada lagi akun service; kredensial = milik pengguna, dipegang sesaat |
+| `docs/04` §30.3 | `PRODPLAN_SOURCE_LOCATIONS` (allowlist lokasi sumber) | Q-PP6: sumber = cabang yang diizinkan ESB untuk pengguna |
+| `docs/04` §30.7 | Asersi `ppa1` membawa `sub` = uid Odoo, `roles` dari sesi Insight | Identitas = pengguna ESB + id sesi yang dipegang prodplan |
+| `docs/04` §30.1 | "`prodplan` … tidak menjangkau … Odoo" | Provisioning JIT butuh satu jalur sempit prodplan → `odoo-rpc-gateway` (§8.5) |
+| Prinsip "password tidak disimpan" (ADR-050: login-gateway "tidak memegang password") | – | prodplan + insight-web kini **melihat** password ESB sesaat (credential relay) |
+
+### 8.3 Opsi yang dipertimbangkan
+| # | Opsi | Kelebihan | Kekurangan | Biaya / waktu (perkiraan architect) | Keputusan |
+|---|---|---|---|---|---|
+| S | Akun service bersama (status G66) | Sudah dibangun; tanpa sesi | Hanya akun admin tersedia; tidak ada penyaringan per pengguna; jejak ESB satu akun; password admin di disk host | Rp0 tambahan | **Ditolak pemilik proyek** |
+| D | Login ganda: SSO Odoo (identitas) + login ESB (data) | Identitas tetap Odoo | Pengguna PB tidak punya akun Odoo → admin harus membuat dulu; dua kali login; dua sumber peran yang bisa tidak cocok | +±1 minggu di atas U (pemetaan dua identitas) | **Ditolak** |
+| **U** | **Login ESB per pengguna; token di memori prodplan; browser hanya cookie buram; JIT user Odoo nonaktif** | Satu login; hak = hak ESB; tanpa password tersimpan; token tidak pernah ke browser | Aplikasi melihat password sesaat; sesi maks 1 jam (tanpa refresh, Q-PP15); restart prodplan = semua login ulang | ±3 minggu-engineer (prodplan 1–1,5; insight-web 0,5–1; Odoo + fit-gap 0,5–1; devsecops 0,5; QA/security 0,5) | **Dipilih** |
+| U-pg | Seperti U, token di tabel PG terenkripsi | Bertahan saat restart | Butuh dependency kripto baru (stdlib tanpa AES) atau `pgcrypto` (kunci lewat SQL/log); manfaat < 1 jam karena TTL token 3600 dtk | +±3 hari + kunci baru | Ditolak (ditinjau bila Q-PP15 menemukan refresh token) |
+| U-cookie | Token ESB terenkripsi di cookie browser | Stateless | Token ESB keluar dari server; ESB terjangkau dari internet → bocor = akses langsung ke ERP klien | – | **Ditolak** |
+| P | Simpan password (terenkripsi) untuk login ulang otomatis | Tanpa putus sesi | Melanggar keputusan "password tidak pernah disimpan"; target bernilai tinggi | – | **Ditolak** |
+| O | SSO sungguhan ESB → Odoo (OIDC/SAML) | Tanpa relay password; login terpusat | ESB sebagai provider OIDC/SAML tidak ditemukan di spec (**belum terverifikasi**); `auth_oauth` CE membuat user aktif saat signin | Tidak diestimasi | **Ditunda — di luar lingkup (keputusan pemilik proyek 25 Nov 2026)** |
+| L | Login Odoo yang memeriksa password ke ESB (Odoo memanggil `POST /auth/login`) | Satu password, pengguna langsung di Odoo | Odoo butuh egress ke internet (melanggar prinsip); Odoo menjadi perantara kredensial; tetap tanpa refresh | Tidak diestimasi | **Ditunda — di luar lingkup (keputusan pemilik proyek 25 Nov 2026)** |
+
+### 8.4 Keputusan teknis (rinci di `docs/04` §30.17)
+1. **Login**: halaman `insight-web` `/produksi/masuk` → `POST /api/prodplan/login` → prodplan `POST /v1/session` → ESB
+   `POST /auth/login`, lalu `GET /user/access` + `GET /branch/list/user`. Password hanya ada di memori request dua proses
+   itu; tidak pernah ditulis ke log, PG, Odoo, cookie, atau respons.
+2. **Token ESB hanya di memori proses prodplan** (dict per sesi, TTL = `exp` token, maks 1 jam). Browser memegang cookie
+   buram `__Host-epp` (32 byte acak); prodplan menyimpan hanya SHA-256-nya. Restart prodplan = semua sesi hilang, pengguna
+   login ulang; outbox yang belum selesai berhenti aman di status `needs_login` (tanpa POST ganda).
+3. **Sesi Insight terpisah**: cookie `__Host-epp` hanya membuka `/produksi*` dan `/api/prodplan/*`; halaman Insight lain
+   tetap mensyaratkan `__Host-eis` (SSO Odoo) dan tidak membaca `__Host-epp`. Peran PP di `eis3` tidak lagi dipakai untuk
+   akses `/produksi` (grup Odoo PP tetap ada sebagai tujuan pemetaan saat migrasi).
+4. **Peran dari izin ESB**: `pp_planner` / `pp_warehouse` dihitung dari `GET /user/access` dengan aturan env non-rahasia
+   (default berbasis kode akses B.4/K.5/D.16/C.1 dan D.9/D.4/D.16); cabang dari `GET /branch/list/user` membatasi rencana
+   yang terlihat, sumber transfer (Q-PP6), persetujuan, dan posting.
+5. **Asersi `ppa2`** menggantikan `ppa1`: tidak lagi membawa identitas; membawa id sesi (`sid`). prodplan = otoritas
+   identitas. SoD = dua **akun ESB** berbeda (identitas internal `prodplan.actor`).
+6. **Outbox/worker/job memakai token orang yang memicu** (atau yang menekan "Lanjutkan posting"); token habis → status
+   `needs_login`, tidak pernah POST tanpa token, tidak pernah POST ulang tanpa rekonsiliasi marker.
+7. **Akun service ESB dihapus** untuk semua keperluan (baca maupun tulis); env `PRODPLAN_ESB_USER_*` dan secret
+   `esb_prodplan_password_*` dihapus dari repo/compose; file di host dihancurkan operator.
+8. **Provisioning JIT ke Odoo** (§8.5) di belakang `PRODPLAN_ODOO_PROVISION_ENABLED=false`, di thread latar, tidak pernah
+   menggagalkan atau memperlambat login ESB.
+
+### 8.5 Jalur migrasi ke Odoo (provisioning JIT; selaras fit-gap `efn-odoo-functional` 25 Nov 2026, "G66b")
+- Setelah login ESB sukses (dan hanya bila `PRODPLAN_ODOO_PROVISION_ENABLED=true`), prodplan memasukkan payload ke antrean
+  **memori** berbatas dan thread latar memanggil `POST /json/2/efn.esb.identity/efn_esb_provision` lewat `odoo-rpc-gateway`
+  (filter L7 yang sudah ada, pola `forecast-worker` §28.2: mTLS verify-full CA internal dengan CN khusus + bearer API key
+  user teknis `efn_esb_provisioner` + satu path persis) melalui network overlay baru `prodplan-rpc`. Non-blocking,
+  idempoten; gagal = log + metrik, diulang otomatis pada login berikutnya (tanpa tabel antrean di PG, tanpa RabbitMQ).
+  Odoo tetap tidak terjangkau dari internet; prodplan tidak menyentuh Odoo selain satu method itu.
+- Modul baru **`efn_esb_identity`**, model `efn.esb.identity` (unik `esb_account` + `esb_username`; `state`
+  `shadow|revoked|activated`). Shadow user = `res.users` **internal yang diarsipkan (`active=False`) sejak dibuat**, grup
+  hanya `base.group_user`, tanpa password/email, login `esb:<akun>:<username>` (mis. `esb:pb:<username>`). Arsip menutup
+  login password, API key, reset, dan OAuth sekaligus (diverifikasi fit-gap dari source CE 19).
+- **Peran PP tidak diberikan sebagai `res.groups`** (SEC-228: grup sensitif wajib manual); izin ESB hanya dicerminkan
+  sebagai data `esb_pp_roles` dan ditimpa setiap login. `efn_insight_esb_branch_ids` **tidak** diisi. Tidak ada penautan
+  otomatis ke user Odoo yang sudah ada; user tidak pernah dihapus.
+- **Konsekuensi untuk sesi:** karena shadow user arsip dan tanpa grup PP, sesi modul Produksi **tidak bergantung pada Odoo**
+  sama sekali; peran sesi berasal dari izin ESB (§8.4 butir 4). Odoo mati = provisioning tertunda, login tetap jalan.
+- **Saat cutover PB (G43):** Superadmin meninjau identitas → ganti login ke format final, isi email kerja, unarchive,
+  tetapkan peran lewat `efn_role` (manual, berdasarkan cermin), reset password standar `auth_signup` (butuh SMTP) + TOTP →
+  `/produksi` beralih ke SSO Odoo (`eis3` + grup PP, mekanisme G66) atau prodplan dipensiunkan untuk PB (§4.3).
+- Pertanyaan pemilik proyek terkait: **Q-ESBU1..Q-ESBU6** (`docs/agent-reports/efn-odoo-functional.md` "G66b" §5).
+
+### 8.6 Gerbang tulis ESB production (keputusan #5)
+`PROD_WRITE_UNLOCKED = False` tetap. Membukanya hanya lewat **PR terpisah** dengan review security, setelah: (a) ADR-051
+`Accepted`; (b) setiap planner dan kepala gudang PB punya akun ESB production **perorangan non-admin** dengan hak sesuai
+Q-PP17 (tanpa authorize); (c) PR itu sekaligus menambah penolakan runtime tulis production dari sesi yang `userRoleID`-nya
+termasuk `PRODPLAN_ESB_ADMIN_ROLE_IDS` (wajib tidak kosong saat production + tulis aktif, selain itu exit 2). Baca (GET)
+production dengan akun admin boleh (keputusan #4) setelah staging lulus.
+
+### 8.7 Konsekuensi
+**Positif:** satu login bagi pengguna PB; hak dan jejak dokumen di ESB per orang; tidak ada password admin di disk host
+prodplan; Q-PP6 selesai tanpa master data baru; daftar pengguna + peran siap untuk migrasi Odoo.
+
+**Negatif / diterima:**
+- Aplikasi menjadi **perantara kredensial** (R-S24): password ESB melewati browser → Traefik → insight-web → prodplan → ESB.
+  Semua hop TLS; tidak dicatat; batas laju + lockout; halaman hanya lewat WireGuard (sama dengan Insight).
+- **Token pengguna di memori server** (R-S25) selama ≤ 1 jam; dump memori/crash dump prodplan = token aktif. Mitigasi:
+  container non-root `read_only`, tanpa core dump, token tidak pernah ke log/PG/browser, logout memanggil `POST /auth/logout`.
+- **Sesi maks. 1 jam tanpa refresh** (R-O16, Q-PP15): posting panjang bisa terhenti → `needs_login` + tombol "Lanjutkan".
+- **Penyaringan per pengguna di ESB belum terbukti** (R-T24, Q-PP16): hanya akun admin yang diuji. Aplikasi menegakkan
+  sendiri pembatasan cabang dari `/branch/list/user`; tidak boleh diklaim "data tersaring ESB" sampai diuji dengan akun
+  non-admin.
+- **SoD butuh dua akun ESB.** Dengan satu akun admin di staging, alur approve tidak bisa diuji sampai ada akun staging kedua
+  (Q-PP17).
+- prodplan mendapat jalur sempit ke Odoo (overlay `prodplan-rpc`, satu path) → PKI leaf client baru (intermediate
+  staging/prod diterbitkan ulang) + API key user teknis baru.
+- Kolom aktor `*_sub` di skema prodplan berubah arti: id `prodplan.actor` (bukan uid Odoo). Rencana staging lama dibatalkan
+  saat migrasi skema.
+
+### 8.8 Risiko baru (usulan, nomor lanjut `docs/01` §5.15)
+| ID | Ringkas | Mitigasi |
+|---|---|---|
+| **R-S24** | Credential relay: password ESB pengguna terlihat oleh insight-web & prodplan; penyerang di jalur/aplikasi bisa memanennya | TLS di semua hop (WireGuard + Traefik + mTLS); password tidak pernah disimpan/dicatat (test grep log); body login ber-nonce agar `bh` tidak menjadi hash password; batas laju per IP + lockout per username; review security wajib untuk kode jalur login |
+| **R-S25** | Token ESB pengguna (akses langsung ke ERP klien yang terjangkau internet) bocor dari memori/log prodplan | Hanya di memori, TTL ≤ 1 jam, tidak ke browser/PG/log; cookie buram dengan hash di server; logout = `POST /auth/logout`; batas sesi per pengguna & total; kontainer dikeraskan |
+| **R-S26** | Provisioning JIT membuat akun Odoo yang kemudian disalahgunakan (eskalasi hak dari ESB ke ERP) | User dibuat **diarsipkan tanpa password/email**, hanya `base.group_user`, tanpa grup PP; aktivasi hanya manual oleh Superadmin saat migrasi; tanpa penautan otomatis ke user yang ada; bot `efn_esb_provisioner` (bukan superuser/ERP manager) hanya satu method lewat L7 gateway; payload tertutup; flag default `false` |
+| **R-O16** | Token ESB 1 jam tanpa refresh → posting/job terhenti di tengah | Cek sisa umur token ≥ 120 dtk sebelum tiap tulis; `needs_login` tanpa POST ganda; tombol "Lanjutkan posting"; alert `EfnProdplanNeedsLogin`; Q-PP15 |
+| **R-T24** | Asumsi "data tersaring izin ESB" salah (ESB tidak menyaring transaksi/stok per pengguna, atau cache aplikasi mencampur data antar-pengguna) | Pembatasan cabang ditegakkan aplikasi; cache per aktor; uji dengan akun non-admin sebelum production (Q-PP16); UI tidak mengklaim penyaringan ESB |
+
+Risiko lama yang berubah: **R-S17** (akun admin) — tulis production dari akun admin dilarang (keputusan #5); **R-S23** —
+tidak ada lagi secret password ESB prodplan; kendali bergeser ke R-S24/R-S25.
+
+### 8.9 Pertanyaan terbuka baru (dijawab klien / IT klien; rinci `docs/04` §30.17.14)
+**Q-PP15** endpoint refresh token ESB · **Q-PP16** apakah ESB menyaring transaksi/stok per pengguna/cabang · **Q-PP17**
+akun ESB perorangan (staging: minimal dua akun non-admin untuk uji SoD; production: per planner/kepala gudang) dan hak
+minimum per peran · **Q-PP18** kebijakan lockout/percobaan login di sisi ESB · **Q-PP19** arti klaim `authorized` dan
+`userRoleID` mana yang admin. Provisioning Odoo: **Q-ESBU1..Q-ESBU6** (fit-gap G66b: peran → grup otomatis atau cermin data,
+kunci identitas, cakupan JIT vs impor batch, retensi shadow user, cabang per user, reset password saat aktivasi).
+
+### 8.10 Kapan ditinjau ulang (tambahan)
+- Q-PP15 menemukan refresh token (tinjau U-pg / umur sesi).
+- Q-PP16 terbukti **tidak** ada penyaringan per pengguna di ESB (tinjau apakah login per pengguna masih bernilai vs akun
+  service non-admin).
+- Akun ESB perorangan non-admin production tersedia (PR pembuka kunci §8.6).
+- Fit-gap `efn-odoo-functional` untuk provisioning selesai; cutover PB (G43).

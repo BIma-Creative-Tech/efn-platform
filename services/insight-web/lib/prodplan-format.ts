@@ -65,6 +65,7 @@ export const OUTBOX_STATUS: Readonly<Record<OutboxStatus, Labeled>> = {
   deleting: { label: 'Sedang dibatalkan di ESB', tone: 'warn' },
   deleted: { label: 'Dibatalkan di ESB', tone: 'neutral' },
   delete_failed: { label: 'Gagal dibatalkan di ESB', tone: 'bad' },
+  needs_login: { label: 'Berhenti: sesi ESB berakhir, perlu masuk lagi', tone: 'bad' },
 };
 
 export const DOC_KIND_LABEL: Readonly<Record<DocKind, string>> = {
@@ -106,7 +107,16 @@ export const OUTBOX_ERROR_LABEL: Readonly<Record<string, string>> = {
   marker_mismatch: 'Dokumen di ESB tidak cocok dengan penanda rencana; hubungi administrator',
   cancelled: 'Tidak dikirim karena rencana dibatalkan',
   client_error: 'Permintaan ke ESB dihentikan oleh pengaman; hubungi administrator',
+  needs_login: 'Sesi ESB pengguna yang memicu sudah berakhir; belum ada panggilan ke ESB. Masuk lagi lalu pilih "Lanjutkan posting"',
 };
+
+/**
+ * Dokumen outbox yang berhenti karena sesi ESB berakhir: status `needs_login`, atau status lain (sent/unknown/deleting) dengan
+ * `last_error_code = needs_login` (§30.17.9). Dasar tombol "Lanjutkan posting".
+ */
+export const isNeedsLogin = (o: Pick<OutboxItem, 'status' | 'last_error_code'>): boolean => o.status === 'needs_login' || o.last_error_code === 'needs_login';
+
+export const hasNeedsLogin = (outbox: readonly Pick<OutboxItem, 'status' | 'last_error_code'>[]): boolean => outbox.some(isNeedsLogin);
 
 export function outboxErrorLabel(code: string | null | undefined): string {
   if (!code) return '';
@@ -172,8 +182,13 @@ export const hasOpenShortage = (reqs: readonly Pick<Requirement, 'shortage_qty'>
 
 // ---------------------------------------------------------------- SoD & aksi
 
-/** Alasan aktor tidak boleh menyetujui (pembuat atau pengaju rencana, §30.6 CHECK + §30.8 403). null = boleh. */
-export function sodBlock(plan: Pick<Plan, 'created_by_sub' | 'submitted_by_sub'>, sub: number): string | null {
+/**
+ * Alasan aktor tidak boleh menyetujui (pembuat atau pengaju rencana, §30.6 CHECK + §30.8 403). null = boleh.
+ * `sub` = id aktor ESB (prodplan.actor.id, §30.17.8) bila respons sesi memuatnya; null = tidak diketahui -> tanpa petunjuk
+ * (server tetap menolak dengan `sod_violation`).
+ */
+export function sodBlock(plan: Pick<Plan, 'created_by_sub' | 'submitted_by_sub'>, sub: number | null): string | null {
+  if (sub === null) return null;
   if (plan.created_by_sub === sub) return 'Anda pembuat rencana ini; pemisahan tugas melarang pembuat menyetujui.';
   if (plan.submitted_by_sub === sub) return 'Anda pengaju rencana ini; pemisahan tugas melarang pengaju menyetujui.';
   return null;

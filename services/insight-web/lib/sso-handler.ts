@@ -59,7 +59,7 @@ function errorPage(status: number, title: string, message: string, openUrl: stri
   });
 }
 
-async function readBodyLimited(req: Request, max: number): Promise<string | null> {
+export async function readBodyLimited(req: Request, max: number): Promise<string | null> {
   const len = req.headers.get('content-length');
   if (len !== null && Number(len) > max) return null;
   if (!req.body) return '';

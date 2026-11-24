@@ -5,6 +5,36 @@ ADR terkait (semua `Proposed`): ADR-003, ADR-006, ADR-007, ADR-008, ADR-010, ADR
 
 **Tidak ada yang dijalankan.** Mesin penulis tidak punya Python; semua kode, test, dan SQL belum pernah dieksekusi. Validasi pertama terjadi di CI / oleh QA.
 
+## G66 amandemen A1 — prodplan: login per pengguna ESB (docs/04 §30.17, ADR-051 §8) (25 Nov 2026)
+
+Worktree `efn-platform-pplogin`, branch `feat/prodplan-esb-login`. **Belum dijalankan** (tanpa shell): ruff + pytest
+oleh lead di container.
+
+**File (services/prodplan/efn_prodplan):** `actor.py` (ppa2: 8 kunci, `sid`, `Actor` dari sesi), `session.py` (baru:
+`SessionStore` memori, `LoginLimiter`, `LoginGate`, `EsbClients`, `LoginService`), `access.py` (baru: aturan
+`KODE:hak` + `/user/access` + `/branch/list/user`), `provision.py` (baru: provisioning Odoo, flag default mati),
+`esb.py` (klien bertoken pengguna, `login()` sekali tanpa retry, `logout()` 5 dtk, 401 → `EsbTokenRejected` + sesi
+dibuang, allowlist `POST /auth/logout` + `GET /user/access`), `config.py` (hapus akun service + `SOURCE_LOCATIONS`;
+`PRODPLAN_ESB_COMPANY_CODES`, aturan peran, `PRODPLAN_ODOO_*`; `PROD_WRITE_UNLOCKED=False` tetap), `api.py` (route
+sesi, aturan `sid`, `session_expired`, DELETE, `resume-posting`), `service.py` (visibilitas brand+cabang → 404,
+`branch_forbidden`/`esb_access_missing`, `run_as_sub`, `resume_posting`, GET bertoken pemanggil), `outbox.py`
+(`needs_login`, token 120/30 dtk), `jobs.py` (token pemicu, sumber transfer = cabang sesi maks 20, cache per aktor),
+`workflow.py`, `store.py` (`PgActorStore`, purge aktor 400 hari), `metrics.py`, `logs.py`, `__main__.py`.
+**Migrasi:** `infra/postgres/init/24-prodplan-esb-login.sql`. **Test baru:** `test_session.py`, `test_access.py`,
+`test_needs_login.py`, `test_provision.py`, `test_migration_24.py`; diperbarui: actor, api, config, esb, outbox,
+outbox_edges, round2, workflow.
+
+**Asumsi skema ESB:** kode akses di `accessDetails[].accessID` (hak = boolean `true` persis); cabang
+`branchID`/`branchName` + `dataCount`; JWT `exp`/`userRoleID` dibaca tanpa verifikasi tanda tangan; `companyCode`
+login dicocokkan persis dengan `PRODPLAN_ESB_COMPANY_CODES`.
+
+**Penyimpangan/keputusan kecil:** `SessionView` + `actor_id` (permintaan insight-web); `expires_at` ISO 8601 UTC `Z`;
+payload provisioning `company_code` = kode PT internal (`PB`), bukan `companyCode` ESB; `cancel` menolak baris
+`needs_login` yang mungkin sudah tercipta (409 `invalid_state`); job tanpa sesi = `JobAbort("needs_login")`; outbox
+brand tanpa sesi → `needs_login` (dulu ditunda 600 dtk); `GET /v1/meta` dengan sid tak dikenal → `session_expired`.
+
+**Belum terverifikasi:** semua eksekusi; bentuk `/json/2` Odoo; guard `RAISE EXCEPTION` migrasi di PG nyata; nama
+constraint CHECK status (dicari lewat definisi); path filter CI `prodplan` belum memuat `24-*.sql` (bukan lingkup).
 ## Gelombang 67 — "Margin bahan", sisi data (25 Nov 2026)
 
 Branch `feat/insight-margin-bahan` (tanpa commit). Kontrak `docs/04` §31 (+ §25.7, pola PR #164). Tanpa ADR baru

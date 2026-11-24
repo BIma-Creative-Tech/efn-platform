@@ -312,6 +312,41 @@ groups:
           summary: "prodplan: {{ $value }} dokumen ESB gagal dihapus saat pembatalan rencana"
           description: "ESB menolak DELETE (goods delivery sudah ada / stok hasil terpakai). Dokumen tetap di ESB; tangani manual di ESB oleh admin gudang/produksi."
           runbook_url: https://github.com/efn/efn-platform/blob/main/docs/runbooks/prodplan.md#efnprodplandeletefailed
+      # A1 (docs/04 §30.17.13): login per pengguna ESB. Ambang longgar (bukan per percobaan salah ketik): > 20 gagal/terkunci
+      # dalam 15 menit = pola tebak password terhadap akun ESB (R-S24) atau akun dikunci ESB sendiri (Q-PP18).
+      - alert: EfnProdplanLoginFailures
+        expr: sum(increase(prodplan_login_total{job="prodplan",result=~"invalid_credentials|login_locked"}[15m])) > 20
+        labels:
+          severity: warning
+          team: ops
+        annotations:
+          summary: "prodplan: {{ $value | humanize }} login ESB gagal/terkunci dalam 15 menit"
+          description: "Indikasi tebak password ke akun ESB lewat /produksi/masuk (hanya lewat WireGuard). Cek log pp_login (user_mask, tanpa password) dan perangkat staf yang terhubung; akun ESB bisa ikut dikunci kebijakan ESB."
+          runbook_url: https://github.com/efn/efn-platform/blob/main/docs/runbooks/prodplan.md#efnprodplanloginfailures
+      # Token ESB maks 1 jam tanpa refresh (R-O16): posting berhenti aman di needs_login sampai pemicu login lagi.
+      - alert: EfnProdplanNeedsLogin
+        expr: sum(prodplan_outbox_rows{job="prodplan",status="needs_login"}) > 0
+        for: 30m
+        labels:
+          severity: warning
+          team: ops
+        annotations:
+          summary: "prodplan: {{ $value }} dokumen posting ESB menunggu login ulang > 30 menit"
+          description: "Sesi ESB pemicu posting berakhir (maks 1 jam) atau prodplan di-restart. Dokumen BELUM/MUNGKIN sudah terkirim; pengguna login lagi lalu tekan Lanjutkan posting. Jangan UPDATE outbox lewat SQL."
+          runbook_url: https://github.com/efn/efn-platform/blob/main/docs/runbooks/prodplan.md#efnprodplanneedslogin
+      # Provisioning JIT Odoo (§30.17.11): seri hanya bertambah bila PRODPLAN_ODOO_PROVISION_ENABLED=true. `unless`
+      # (bukan `ok == 0`) agar tetap berbunyi bila seri ok belum pernah ada.
+      - alert: EfnProdplanOdooProvisionFailing
+        expr: |
+          sum(increase(prodplan_odoo_provision_total{job="prodplan",result="failed"}[6h])) > 0
+          unless sum(increase(prodplan_odoo_provision_total{job="prodplan",result="ok"}[6h])) > 0
+        labels:
+          severity: info
+          team: ops
+        annotations:
+          summary: "prodplan: provisioning identitas ESB ke Odoo gagal terus selama 6 jam"
+          description: "Login ESB tetap berjalan; hanya pencatatan identitas untuk migrasi Odoo yang tertunda (diulang pada login berikutnya). Cek odoo-rpc-gateway (why=), API key efn_esb_provisioner, sertifikat prodplan-odoo, modul efn_esb_identity."
+          runbook_url: https://github.com/efn/efn-platform/blob/main/docs/runbooks/prodplan.md#efnprodplanodooprovisionfailing
 
   # ─────────────────────────── Penjualan online (G17, docs/04 §10.11) ───────────────────────────
   # Metrik BFF (services/api-gateway/src/odoo-rpc/online-metrics.ts), scrape job api-gateway (mTLS :9464). Selama

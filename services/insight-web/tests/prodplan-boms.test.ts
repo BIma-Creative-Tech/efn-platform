@@ -4,9 +4,8 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { authFn, state } = vi.hoisted(() => ({ authFn: vi.fn(), state: { enabled: true } }));
+const { state } = vi.hoisted(() => ({ state: { enabled: true } }));
 
-vi.mock('@/lib/auth', () => ({ authFromRequest: authFn }));
 vi.mock('@/lib/runtime', async () => {
   const { RateLimiter } = await import('@/lib/rate-limit');
   const mut = new RateLimiter(60, 60_000);
@@ -27,22 +26,10 @@ import { parseBomQuery } from '@/lib/prodplan-actions';
 import { searchBoms } from '@/lib/prodplan-call';
 import { parseBoms } from '@/lib/prodplan-types';
 
-const session = (roles: string[], over: Record<string, unknown> = {}) => ({
-  v: 3,
-  sub: 21,
-  name: 'Rina',
-  codes: ['PB'],
-  cids: [5],
-  roles,
-  brs: [] as string[],
-  wids: [] as number[],
-  cats: [] as number[],
-  iat: 1,
-  exp: 2,
-  ...over,
-});
-const asSession = (roles: string[], over: Record<string, unknown> = {}) => authFn.mockReturnValue({ status: 'ok', session: session(roles, over) });
-const get = (qs: string): Promise<Response> => GET(new Request(`https://insight.test/api/prodplan/boms${qs}`));
+// Sesi = cookie `__Host-epp` (docs/04 §30.17); peran bukan urusan route baca ini (prodplan menegakkan).
+const SID = 'B'.repeat(43);
+const get = (qs: string, cookie: string | null = `__Host-epp=${SID}`): Promise<Response> =>
+  GET(new Request(`https://insight.test/api/prodplan/boms${qs}`, { headers: cookie === null ? {} : { cookie } }));
 
 type FetchCall = { url: string; init: RequestInit };
 let calls: FetchCall[] = [];
@@ -68,7 +55,6 @@ beforeEach(() => {
 afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
-  authFn.mockReset();
 });
 
 describe('parseBomQuery', () => {
@@ -100,7 +86,6 @@ describe('parseBoms', () => {
 
 describe('GET /api/prodplan/boms', () => {
   it('meneruskan hanya brand + q + limit tetap; parameter lain diabaikan', async () => {
-    asSession(['pp_warehouse', 'user']);
     stubFetch(200, { items: [ITEM], secret: 'x' });
     const res = await get('?brand=pb&q=%20roti%20&limit=500&evil=1&esb_brand=wtz');
     expect(res.status).toBe(200);
@@ -108,11 +93,11 @@ describe('GET /api/prodplan/boms', () => {
     expect(calls).toHaveLength(1);
     expect(calls[0].url).toBe('http://127.0.0.1:7443/v1/boms?brand=pb&q=roti&limit=20');
     expect(calls[0].init.method).toBe('GET');
+    expect((calls[0].init.headers as Record<string, string>)['X-EFN-Actor']).toMatch(/^ppa2\./);
     expect(res.headers.get('cache-control')).toBe('no-store');
   });
 
   it('q < 2 karakter / brand tidak sah / tanpa parameter -> 422 tanpa memanggil prodplan', async () => {
-    asSession(['pp_planner', 'user']);
     stubFetch(200, { items: [] });
     for (const qs of ['?brand=pb&q=a', '?brand=PB&q=roti', '', '?q=roti', '?brand=pb']) {
       const res = await get(qs);
@@ -122,21 +107,26 @@ describe('GET /api/prodplan/boms', () => {
     expect(calls).toHaveLength(0);
   });
 
-  it('flag mati 503; tanpa sesi 401; tanpa peran PP 403', async () => {
+  it('flag mati 503; tanpa cookie sesi ESB / hanya cookie Odoo 401 session_expired', async () => {
     stubFetch(200, { items: [] });
     state.enabled = false;
-    asSession(['pp_planner', 'user']);
     expect((await get('?brand=pb&q=roti')).status).toBe(503);
     state.enabled = true;
-    authFn.mockReturnValue({ status: 'unauthenticated' });
-    expect((await get('?brand=pb&q=roti')).status).toBe(401);
-    asSession(['exec', 'user']);
-    expect((await get('?brand=pb&q=roti')).status).toBe(403);
+    expect((await get('?brand=pb&q=roti', null)).status).toBe(401);
+    const odoo = await get('?brand=pb&q=roti', `__Host-eis=eis3.${'a'.repeat(30)}.${'b'.repeat(43)}`);
+    expect(odoo.status).toBe(401);
+    expect(((await odoo.json()) as { error: { code: string } }).error.code).toBe('session_expired');
     expect(calls).toHaveLength(0);
   });
 
-  it('batas baca 150/menit per pengguna -> 429', async () => {
-    asSession(['pp_planner', 'user']);
+  it('sesi habis di prodplan -> 401 + cookie dihapus', async () => {
+    stubFetch(401, { error: { code: 'session_expired' } });
+    const res = await get('?brand=pb&q=roti');
+    expect(res.status).toBe(401);
+    expect(res.headers.get('set-cookie')).toContain('__Host-epp=; Max-Age=0');
+  });
+
+  it('batas baca 150/menit per sesi -> 429', async () => {
     stubFetch(200, { items: [] });
     for (let i = 0; i < 150; i += 1) expect((await get('?brand=pb&q=roti')).status).toBe(200);
     const over = await get('?brand=pb&q=roti');
@@ -145,7 +135,6 @@ describe('GET /api/prodplan/boms', () => {
   });
 
   it('galat prodplan dipetakan tanpa detail internal (422 bad_input, 502)', async () => {
-    asSession(['pp_planner', 'user']);
     stubFetch(422, { error: { code: 'bad_input', message: 'SELECT * FROM bom', details: { stack: 'x' } } });
     const a = await get('?brand=pb&q=roti');
     expect(a.status).toBe(422);
