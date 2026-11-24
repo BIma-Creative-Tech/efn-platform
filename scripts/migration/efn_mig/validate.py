@@ -433,6 +433,9 @@ def _check_g65(
         if not cutover or meta.get("opening_date") != cutover:
             out.error("STOCK_OPENING_DATE", "quant", meta.get("opening_date"),
                       "fact_esb_stock_opening.opening_date ≠ cutover_date manifest")  # fmt: skip
+        for branch_id in man.get("stock_empty_branches_declared") or []:
+            out.warn("STOCK_EMPTY_DECLARED", "quant", branch_id,
+                     "cabang dideklarasikan tanpa kartu stok ESB (--stock-empty-branch) -> stok awal 0")  # fmt: skip
         for branch_id in man.get("stock_opening_missing_branches") or []:
             out.error("STOCK_CHECKPOINT_MISSING", "quant", branch_id,
                       "cabang non-skip tanpa checkpoint stock_opening pada cutover")  # fmt: skip

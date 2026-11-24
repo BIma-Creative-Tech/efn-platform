@@ -107,6 +107,9 @@ class RunParams:
     options: m.ExportOptions = field(default_factory=m.ExportOptions)  # default ketat (fail closed)
     purchase_statuses: tuple[str, ...] = m.PURCHASE_PRICE_STATUSES  # --purchase-statuses (Q-ESB28)
     purchase_discount_mode: str = "nominal"  # --purchase-discount-mode (Q-G65-2)
+    # --stock-empty-branch: cabang yang dideklarasikan operator TANPA kartu stok di ESB (keputusan user 24 Nov 2026:
+    # PB 39/40 Makassar) -> stok awal 0, bukan gerbang STOCK_CHECKPOINT_MISSING; dicatat manifest + warning validator.
+    stock_empty_branches: frozenset[int] = frozenset()
 
     def __post_init__(self) -> None:
         if self.purchase_discount_mode not in m.DISCOUNT_MODES:
@@ -445,7 +448,10 @@ def export_master(
         meta = inputs.opening_meta or {"opening_date": None, "max_version": "", "branches_checkpointed": []}
         manifest["source"]["snapshot"]["fact_esb_stock_opening"] = meta
         missing = missing_opening_branches(maps.branch, data.branches, meta.get("branches_checkpointed") or [])
+        declared = sorted(b for b in params.stock_empty_branches if b in missing)
+        missing = [b for b in missing if b not in params.stock_empty_branches]
         manifest["stock_opening_missing_branches"] = missing
+        manifest["stock_empty_branches_declared"] = declared
         manifest["stock_without_cost"] = result.stock_without_cost
         manifest["stock_by_branch"] = result.stock.branch_stats()
     manifest.update(files=files, maps=map_entries, unmapped_branches=index.unmapped, skipped=skipped)

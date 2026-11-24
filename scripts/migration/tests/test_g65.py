@@ -328,6 +328,17 @@ def test_stock_gates(tmp_path: Path, keys: b.Keys, source: FakeSource) -> None:
     (written,) = list((tmp_path / "missing").glob("*.efnmig"))  # bundel tetap ditulis untuk diperiksa
     report = validate_bundle(b.read_bundle(written, keys, "bundle"))
     assert "STOCK_CHECKPOINT_MISSING" in codes(report)
+    # Deklarasi operator (--stock-empty-branch): cabang tanpa kartu stok ESB -> peringatan, bukan gerbang.
+    (tmp_path / "declared").mkdir()
+    declared = _stock_bundle(tmp_path / "declared", keys, source, stock_empty_branches=frozenset({12, 30, 999}))
+    assert declared.manifest["stock_opening_missing_branches"] == []
+    assert declared.manifest["stock_empty_branches_declared"] == [12, 30]
+    report = validate_bundle(declared)
+    assert "STOCK_CHECKPOINT_MISSING" not in codes(report)
+    assert "STOCK_EMPTY_DECLARED" in codes(report, "warning")
+    (tmp_path / "partial").mkdir()
+    with pytest.raises(StockGateError, match="1 cabang"):
+        _stock_bundle(tmp_path / "partial", keys, source, stock_empty_branches=frozenset({12}))
 
 
 def test_stock_product_without_cost_and_mixed_uom(tmp_path: Path, keys: b.Keys, source: FakeSource) -> None:

@@ -82,6 +82,13 @@ def parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
         default="nominal",
         help="arti discount ESB untuk supplierinfo (Q-G65-2)",
     )
+    exp.add_argument(
+        "--stock-empty-branch",
+        action="append",
+        type=int,
+        default=[],
+        help="branch_id ESB tanpa kartu stok sama sekali -> stok awal 0 (deklarasi operator, dicatat manifest)",
+    )
     exp.add_argument("--out", type=Path)
     wb = sub.add_parser("writeback", help="hasil impor -> efn_dwh.map_esb_odoo")
     wb.add_argument("--result", required=True, type=Path)
@@ -126,6 +133,7 @@ def build_params(args: argparse.Namespace, settings: MigSettings) -> RunParams:
         ),
         purchase_statuses=tuple(s.strip() for s in args.purchase_statuses.split(",") if s.strip()),
         purchase_discount_mode=args.purchase_discount_mode,
+        stock_empty_branches=frozenset(args.stock_empty_branch),
     )
 
 
