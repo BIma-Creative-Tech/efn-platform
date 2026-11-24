@@ -732,7 +732,7 @@ def zero_cost_fixture(source: FakeSource) -> None:
         opening(11, "ZC1", "4", "0"),
         opening(12, "ZC1", "1", "0"),  # semua amount_balance 0 -> kandidat cost 0
         opening(11, "NV1", "2", "0"),
-        opening(12, "NV1", "-1", "-500"),  # ada nilai ≠ 0 -> tetap QUANT_NO_COST walau opsi aktif
+        opening(12, "NV1", "-1", "-500"),  # nilai ≠ 0 hanya di baris negatif (tidak dimuat) -> tetap kandidat cost 0
         opening(11, "RM001", "1", "100"),
     ]
 
@@ -742,6 +742,9 @@ def test_zero_value_codes_rules() -> None:
             opening(11, "C", "-1", "0"), opening(11, "D", "3", "0")]  # fmt: skip
     assert m.zero_value_codes(rows, {"A", "B", "C", "D"}, {"D"}) == ["A"]  # B bernilai, C tanpa qty > 0, D ber-HPP
     assert m.zero_value_codes(rows, {"B"}, set()) == []
+    # Baris negatif (tidak dimuat) tidak membatalkan nilai 0 baris positif (WIP0022 gladi efn-prod).
+    mixed = [opening(11, "E", "0.03", "0"), opening(12, "E", "-0.11", "-2.01")]
+    assert m.zero_value_codes(mixed, {"E"}, set()) == ["E"]
 
 
 def test_allow_zero_cost_off_is_error(tmp_path: Path, keys: b.Keys, source: FakeSource) -> None:
@@ -765,18 +768,18 @@ def test_allow_zero_cost_on_cost_zero_and_warning(tmp_path: Path, keys: b.Keys, 
     by = {r["esb_key"]: r["data"] for r in rows["cost"]}
     assert by["ZC1"] == {**by["ZC1"], "standard_price": 0, "source": "stock_opening", "as_of": "2026-12-01",
                          "source_uom": "KG"}  # fmt: skip
-    assert "NV1" not in by and result.zero_cost_products == {"PB|ZC1"}
+    assert by["NV1"]["standard_price"] == 0 and result.zero_cost_products == {"PB|NV1", "PB|ZC1"}
     # Tanpa opsi: tidak ada baris cost 0.
     plain, _ = master_records(master_data(source), "pb", maps_with(), ["cost"], None, None, inputs, params(),
                               G65Result())  # fmt: skip
     assert "ZC1" not in {r["esb_key"] for r in plain["cost"]}
     bundle = _stock_bundle(tmp_path, keys, source, options=opts)
     man = bundle.manifest
-    assert man["stock_without_cost"] == ["PB|NV1"] and man["zero_cost_products"] == ["PB|ZC1"]
+    assert man["stock_without_cost"] == [] and man["zero_cost_products"] == ["PB|NV1", "PB|ZC1"]
     assert man["export_options"]["allow_zero_cost"] is True
     report = validate_bundle(bundle)
     assert "QUANT_ZERO_COST" in codes(report, "warning")
-    assert "QUANT_NO_COST" in codes(report)  # NV1 (nilai ≠ 0) tetap error
+    assert "QUANT_NO_COST" not in codes(report)
     assert "allow_zero_cost=True" in report.to_markdown()
     assert report.to_json()["export_options"]["allow_zero_cost"] is True
 

@@ -915,15 +915,16 @@ def build_costs(
 
 def zero_value_codes(opening: Iterable[Mapping[str, Any]], product_codes: set[str], priced: set[str]) -> list[str]:
     """G65b `--allow-zero-cost`: produk master tanpa sumber HPP (`priced`) yang punya baris saldo awal qty > 0 dan
-    SEMUA `amount_balance` barisnya tepat 0. Nilai ≠ 0 di baris mana pun -> bukan kandidat (tetap QUANT_NO_COST)."""
+    SEMUA `amount_balance` baris qty > 0-nya tepat 0. Baris qty ≤ 0 tidak dimuat langkah stock (Q-ESB27) sehingga tidak
+    ikut menentukan (gladi efn-prod 24 Nov: WIP0022 baris positif nilai 0, baris negatif −2,01). Nilai ≠ 0 di baris
+    qty > 0 mana pun -> bukan kandidat (tetap QUANT_NO_COST)."""
     stocked: set[str] = set()
     valued: set[str] = set()
     for row in opening:
         code = str(row["product_code"])
-        if code not in product_codes or code in priced:
+        if code not in product_codes or code in priced or dec(row.get("qty_balance")) <= 0:
             continue
-        if dec(row.get("qty_balance")) > 0:
-            stocked.add(code)
+        stocked.add(code)
         if dec(row.get("amount_balance")) != 0:
             valued.add(code)
     return sorted(stocked - valued)
