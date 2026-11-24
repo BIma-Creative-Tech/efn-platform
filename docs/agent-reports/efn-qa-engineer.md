@@ -1193,6 +1193,44 @@ Verifikasi hanya dengan membaca kode (tanpa runtime). Dikecualikan atas perminta
 
 ---
 
+# Review QA G65 — histori pembelian, harga beli supplier, HPP cutover, stok awal (24 Nov 2026)
+
+Verifikasi hanya dengan membaca kode (tanpa runtime; pytest/ruff/Odoo test TIDAK dijalankan oleh saya). Cakupan: esb-extract, DDL 23-g65, akses CH, `scripts/migration`, `efn_legacy_history`.
+
+## Antarmuka tiga sisi: cocok
+- DDL `23-g65...sql` vs `source.py` (`PURCHASE_COLUMNS`, `OPENING_COLUMNS`) vs `transform_g65.py` (`G65_TABLES`): semua kolom ada, tipe sejalan; pola checkpoint `(brand, day/scope, _version) IN (...finished_at)` sama dengan sales.
+- `mapping.HISTORY_KEYS/OPTIONAL_KEYS["legacy_purchase_line"]` = `esb_import/mapping.py` (identik); `DATA_KEYS["quant"]` = `QUANT_DATA_KEYS`; `supplierinfo` esb_key/xmlid dihitung sama di kedua sisi.
+- `odoo_totals.legacy_purchase_line` (`importer.compute`, key `month, company_code, branch_name`, `rows/qty/total`) = `reconcile._purchase_key` + `PURCHASE_LINE_SUMS`; `odoo_totals.quant` (`company_code, location_key, product_key, quantity, value`) = `_item2_stock`.
+- Grant `esb_writer` (SELECT dim_esb_supplier untuk `load_suppliers`) dan `mig_rw` ada; metabase/insight/forecast tidak diberi hak atas tabel G65.
+
+## Temuan dan perbaikan
+| # | P | Temuan | Sisi (file:line) | Tindakan |
+|---|---|---|---|---|
+| 1 | P2 | Harga supplierinfo per PACK dikirim apa adanya dengan `uom_xmlid` = Unit (PACK=6 EA dan EA sama-sama Unit di `uom_map`); importer tidak mengonversi harga (`supplierinfo_plan`) -> Odoo membaca harga per Unit (selisih x6). Qty stok sudah dikonversi, harga belum. | `mapping.py build_supplierinfos` vs `esb_import/mapping.py supplierinfo_plan` | DIPERBAIKI: `build_supplierinfos(..., product_uoms)` mengonversi `price / ea_beli x ea_produk` bila xmlid sama dan teks beda; `export.py master_records` meneruskan `uom_by_code`. Test baru `test_supplierinfo_price_converted_to_product_uom_same_xmlid`. |
+| 2 | P2 | `cost` sumber `purchase_last`/`bom_last_hpp` dengan satuan beda: importer hanya mengonversi bila `uom.jsonl`/`product.jsonl` ada di bundel yang sama (`_Run.uoms/products`, importer.py:578-579, 1044). Bundel G65 (`--step cost`) tidak membawa keduanya -> `convert_price` diam-diam tanpa konversi -> HPP per PACK jadi HPP per Unit. | `importer.py:1044` vs `mapping.build_costs` | DIPERBAIKI sebagian di export: `_price_in_product_uom` mengonversi satuan keluarga sama (xmlid sama). Test baru `test_cost_purchase_last_and_bom_converted_to_product_uom_same_xmlid`. Kasus xmlid beda (G vs KG) tetap apa adanya -> LAPORAN (lihat risiko 2). |
+| 3 | P3 | Kontrak §27.13.2 menyebut cek kualitas ditambah ke `v_esb_data_quality`, DDL membuat view terpisah `v_esb_g65_quality`; `source.data_quality` hanya membaca view lama -> cek G65 tidak pernah muncul di rekonsiliasi butir 7. | `23-g65...sql:85` vs `source.py data_quality` | DIPERBAIKI: `data_quality` membaca kedua view; kontrak §27.13.2 diselaraskan ke DDL. |
+| 4 | P3 | Kontrak §27.13.1 menulis header `currencyID`; kode memakai `currencySign` (keputusan lead). | docs/04 §27.13.1 vs `normalize.PURCHASE_HEADER_FIELDS` | Lapor (dokumen belum diubah). |
+
+## Test yang ditambah
+- `scripts/migration/tests/test_g65.py`: 2 test (konversi harga supplierinfo; konversi HPP purchase_last/bom satuan keluarga sama + kasus xmlid beda tidak ditebak). Belum dijalankan.
+
+## Sisa risiko / butir terbuka
+1. **P2 `IDR_CODES = {"", "IDR"}`** (`mapping.py`): bila `currencySign` IDR di ESB ternyata `Rp`, SEMUA baris dianggap non-IDR (supplierinfo kosong, histori kosong; hanya muncul sebagai `skipped.currency` besar + peringatan). Verifikasi nilai `currencySign` IDR di dry-run (probe lead hanya menyebut `currencyID` 1=IDR).
+2. **P2 HPP/harga satuan xmlid beda** (mis. beli G, produk KG): `cost` tetap apa adanya dengan `source_uom=G`; importer bundel `cost` tanpa master tidak bisa mengonversi. Saran: importer memuat `uom.jsonl` dari Odoo/ir.model.data atau export menolak (masuk `cost_mixed_uom`). Keputusan desain.
+3. **P3 `char:32` pada `purchase_num`/`esb_product_code`** (`efn_legacy_purchase_line._efn_upsert_spec`) vs extractor `text(..., 64)`: nilai >32 karakter menolak SELURUH irisan company x bulan (`ROW_ERRORS`) bukan satu baris. Cek panjang PO nyata di dry-run.
+4. **P3 `reconcile --final`**: `run_totals` menghitung `legacy_purchase_line` untuk semua bulan yang diminta; bulan yang pernah dimuat tetapi tidak ada di bundel parent run akan tampil selisih pemblokir (sama seperti sales_line).
+5. **P3 HPP stock_opening** (`opening_costs`): rata-rata tertimbang memakai SEMUA baris cabang company termasuk cabang `skip` dan lokasi `location_map=skip` (Damage/Expired). Bisa menurunkan/menaikkan HPP; pertimbangkan filter sama dengan `build_quants`.
+6. **P3 xmlid supplierinfo** `f"{supplier}_{code}"`: kode berunderscore dapat bertabrakan (`A_B`+`C` vs `A`+`B_C`); validator hanya cek duplikat `(company, supplier, product)`, bukan duplikat xmlid.
+7. `check_branch` stock_opening gagal untuk semua cabang bila API tidak mengembalikan `branchID` ([B]); terlihat langsung di slice error dry-run.
+8. Presisi arsip: `price_unit`/`pricelist_price` Float(16,2) vs sumber 4 desimal; rekonsiliasi hanya qty + total.
+9. UAT G65 belum ditulis di `docs/testing/UAT_SCENARIOS.md` (di luar permintaan ini): usulan skenario: PO tanpa header (map_source name/none), harga 0/qty negatif tidak jadi supplierinfo, snapshot cabang gagal -> gerbang `STOCK_CHECKPOINT_MISSING`, cost_as_of != cutover -> exit 4, re-run stok = 0 move, stock.move >= cutover -> ditolak, PACK vs EA.
+
+## G65b QA delta (24 Nov 2026, worktree efn-platform-esbmig; 5ac0ddc..81bca63) — baca kode saja, TIDAK ada test dijalankan
+**Cocok:** `quarantine_of`/`branch_quarantine` (export `mapping.py:1238-1289`, validator `validate.py:531-541`, importer `mapping.py:247-271` + `importer.py:1406-1412,1521-1554`; prefix xmlid sama); `export_options.skip_unconvertible_stock` dibaca importer `importer.py:1519`; `zero_cost_products` hanya export<->validator (`export.py:278,471`, `validate.py:424-440`), importer tidak perlu; kunci `legacy_purchase_line` (required/optional) identik export vs importer; `--allow-cutover-shift` (run-import.sh:51/89 -> odoo_import_esb.py:182 -> importer.py:423) cocok; re-run karantina idempoten (xmlid ada -> lokasi dipakai ulang, quant dalam toleransi = skipped).
+**P2 (diperbaiki)** `reconcile.py` `_item2_stock`: baris yang dilewati importer (`--skip-unconvertible-stock`, `stock_skipped.uom_incompatible_keys`, `importer.py:1494-1500`) tidak punya quant -> `odoo_totals.quant` qty 0 vs bundel > 0 -> butir `2_stok_qty` SELISIH PEMBLOKIR (45 baris pada gladi 17 Nov). Kini kunci itu dikeluarkan dari sisi sumber + baris info `2_stok_dilewati_importer`; kunci yang tidak dilaporkan dilewati tetap selisih. Test baru `test_reconcile_stock_importer_skipped_is_info` (test_g65.py).
+**P3 (runbook diperbaiki, `migrasi-esb-odoo.md` §4.6)** efn-prod = `APP_ENV=production`, jadi lokasi Damage/Expired/Temporary tanpa entri `location_map.csv` = exit 4 (SEC-G65-03), bukan peringatan; teks lama bilang peringatan di efn-prod. Ditambah pointer ke `import_report.stock_skipped`.
+**Urutan runbook "Langkah 1 Des":** konsisten (history sudah memuat purchase; cost -> stock -> cutover-param; `$SHIFT` di tiap bundel; bundel cost tidak memeriksa shift karena `_check_history_gates` mengembalikan None tanpa history/stock/cutover-param — flag berlebih tapi tidak berbahaya). Dry-run `stock` hanya lolos setelah `cost` RUN NYATA (gerbang c) dan dry-run `cutover-param` setelah segmen Nov NYATA — urutan "dry-run lalu nyata per bundel" sudah memenuhi.
+**Sisa risiko:** (a) `esb_key` kuantum stok & karantina sama (`<cabang>|<produk>`) -> pesan error/`stock_skipped_keys` ambigu; reconcile mengeluarkan KEDUA baris bila salah satu dilewati (gagal-aman: bila hanya satu yang dilewati muncul selisih). (b) `_ensure_quarantine` membuat lokasi di run nyata sebelum validasi qty; lokasi kosong tertinggal bila seluruh baris gagal (tidak berbahaya). (c) tidak ada test importer untuk kombinasi karantina + `--skip-unconvertible-stock` (Odoo test tak bisa dijalankan di sini).
 # QA G66 — Production planning di atas ESB (24 Nov 2026)
 
 Cakupan: `services/prodplan` (api, service, workflow, calc, jobs, outbox, payloads, store), `services/insight-web` (lib/prodplan-*, components/pp, rute `(pp)/produksi`, `api/prodplan`), skema `23-prodplan-g66.sql`, kontrak §30. **Semua verifikasi dari membaca kode; tidak ada runtime** (pytest/vitest/ruff dijalankan lead). Tes baru belum pernah dijalankan; angka di dalamnya dihitung tangan (komentar di file).

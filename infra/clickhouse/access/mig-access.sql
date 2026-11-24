@@ -59,5 +59,10 @@ GRANT SELECT ON efn_dwh.dim_esb_coa TO mig_rw;
 GRANT SELECT ON efn_dwh.fact_esb_stock_opname TO mig_rw;
 GRANT SELECT ON efn_dwh.fact_esb_ap_open TO mig_rw;
 GRANT SELECT ON efn_dwh.fact_esb_ar_open TO mig_rw;
+-- Tabel G65 (23-g65-esb-purchase-stock.sql, docs/04 §27.13.3) + view cek kualitas G65 (INVOKER; tabel dasarnya
+-- fact_esb_purchase_line, fact_esb_stock_opening, dim_esb_branch, extract_checkpoint sudah di-grant).
+GRANT SELECT ON efn_dwh.fact_esb_purchase_line TO mig_rw;
+GRANT SELECT ON efn_dwh.fact_esb_stock_opening TO mig_rw;
+GRANT SELECT ON efn_dwh.v_esb_g65_quality TO mig_rw;
 -- Satu-satunya tabel yang boleh ditulis (writeback hasil impor; ReplacingMergeTree -> ulang = idempoten).
 GRANT SELECT, INSERT ON efn_dwh.map_esb_odoo TO mig_rw;

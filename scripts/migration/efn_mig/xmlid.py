@@ -15,8 +15,8 @@ _BRAND = re.compile(r"^[a-z0-9]{2,16}$")
 _COMPANY = re.compile(r"^[A-Z0-9]{2,8}$")
 ENTITIES = frozenset(
     {
-        "branch_wh", "branch_loc", "branch_pos", "category", "pos_category", "uom", "product", "menu", "combo",
-        "bom", "supplier", "customer", "payment_term", "supplierinfo",
+        "branch_wh", "branch_loc", "branch_quarantine", "branch_pos", "category", "pos_category", "uom", "product",
+        "menu", "combo", "bom", "supplier", "customer", "payment_term", "supplierinfo",
     }
 )  # fmt: skip
 

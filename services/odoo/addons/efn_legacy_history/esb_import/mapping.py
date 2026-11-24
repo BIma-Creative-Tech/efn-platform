@@ -9,7 +9,10 @@ Konvensi `Plan.owned` (field milik migrasi, §27.4) dan `Plan.create_only` (hany
   (satu baris 100 %); `payment_method_ids` (create_only pos.config) = tuple kosong -> tanpa metode bayar (milik admin).
 """
 
+import csv
 import hashlib
+import io
+import re
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from datetime import date
@@ -24,7 +27,7 @@ ENVELOPE = frozenset({"entity", "company_code", "esb_key", "xmlid", "data"})
 # Urutan entitas master = urutan impor §27.2 (langkah 1-7). Partner: payment_term dulu (direferensikan customer).
 MASTER_ORDER = (
     "branch", "uom", "category", "pos_category", "product", "menu", "payment_term", "supplier", "customer", "bom",
-    "cost",
+    "supplierinfo", "cost",
 )  # fmt: skip
 STEP_ENTITIES = {
     "branch": ("branch",),
@@ -34,7 +37,7 @@ STEP_ENTITIES = {
     "menu": ("menu",),
     "partner": ("payment_term", "supplier", "customer"),
     "bom": ("bom",),
-    "supplierinfo": (),
+    "supplierinfo": ("supplierinfo",),  # G65 §27.13.4 (sumber fact_esb_purchase_line)
     "cost": ("cost",),
 }
 MASTER_STEPS = tuple(STEP_ENTITIES)
@@ -42,8 +45,73 @@ HISTORY_STEPS = {
     "legacy_flow": "legacy_flow_daily",
     "legacy_sales_daily": "legacy_sales_daily",
     "legacy_sales_line": "legacy_sales_line",
+    "legacy_purchase_line": "legacy_purchase_line",  # G65 §27.13.4
 }
-OPENING_STEPS = ("stock", "opening")
+# G65 §27.13.7: `stock` dibangun (berkas quant.jsonl, bundel cutover tunggal); `opening` tetap ditolak (Q-ESB21).
+STOCK_STEP = "stock"
+STOCK_ENTITY = "quant"
+OPENING_STEPS = ("opening",)
+# Kunci `data` quant (= DATA_KEYS["quant"] export §27.13.4; semua wajib, nilai boleh null untuk uom_*).
+QUANT_DATA_KEYS = frozenset(
+    {
+        "location_key", "product_key", "product_code", "quantity", "uom_esb", "uom_xmlid", "esb_branch_id",
+        "esb_locations", "amount", "accounting_date",
+    }
+)  # fmt: skip
+# G65b §4.6: kunci OPSIONAL hanya pada baris karantina (xmlid `branch_wh` gudang induk lokasi karantina).
+QUANT_QUARANTINE_KEY = "quarantine_of"
+COST_SOURCES = frozenset({"stock_opening", "bom_last_hpp", "purchase_last"})
+# SEC-G65-03: salinan `scripts/migration/efn_mig/mapping.py` SUSPECT_LOCATION (pola sama dijaga test pytest
+# `test_suspect_location_matches_export`). Importer production memeriksa ulang `esb_locations` quant.
+SUSPECT_LOCATION = re.compile(r"damage|rusak|expired|kadaluar?sa|temporary|sementara|reject", re.I)
+LOCATION_MAP_MEMBER = "maps/location_map.csv"
+# docs/04 §27.13.8: izin eksplisit geser cutover di production, string persis `<CODE>:<lama>:<baru>`.
+CUTOVER_SHIFT = re.compile(r"([A-Z0-9]{2,8}):([0-9]{4}-[0-9]{2}-[0-9]{2}):([0-9]{4}-[0-9]{2}-[0-9]{2})")
+
+
+def parse_cutover_shift(value: Any) -> tuple[str, date, date] | None:
+    """`PB:2026-11-17:2026-12-01` -> ("PB", date lama, date baru). Format/tanggal salah atau tidak MAJU -> None
+    (fail closed: pemanggil memperlakukan None = tanpa izin)."""
+    match = CUTOVER_SHIFT.fullmatch(value) if isinstance(value, str) else None
+    if not match:
+        return None
+    try:
+        old, new = date.fromisoformat(match[2]), date.fromisoformat(match[3])
+    except ValueError:
+        return None
+    return (match[1], old, new) if new > old else None
+
+
+def mapped_locations(csv_text: str, brand: str) -> set[tuple[int, str]]:
+    """`location_map.csv` bundel -> {(branch_id, NAMA LOKASI ternormalisasi)} untuk brand (semua action). Baris rusak
+    diabaikan di sini (validator yang menolak); hasilnya hanya dipakai untuk MELONGGARKAN gerbang lokasi suspect."""
+    out: set[tuple[int, str]] = set()
+    for row in csv.DictReader(io.StringIO(csv_text)):
+        branch = str(row.get("branch_id") or "").strip()
+        if str(row.get("brand") or "").lower() == brand and branch.isdigit():
+            out.add((int(branch), location_key_name(row.get("esb_location_name"))))
+    return out
+
+
+def location_key_name(value: Any) -> str:
+    """= `efn_mig.mapping.location_name_key` (spasi dirapatkan, huruf besar)."""
+    return re.sub(r"\s+", " ", str(value or "").strip()).upper()
+
+
+def suspect_locations(brand: str, rows: Iterable[Mapping[str, Any]], csv_text: str | None) -> list[str]:
+    """Baris quant (amplop) -> daftar `<branch_id>|<lokasi>` berpola damage/expired tanpa entri location_map (Q-ESB25;
+    sama dengan validator LOCATION_SUSPECT)."""
+    mapped = mapped_locations(csv_text, brand) if csv_text else set()
+    found = []
+    for row in rows:
+        data = row["data"]
+        for name in data.get("esb_locations") or []:
+            key = (int(data.get("esb_branch_id") or 0), location_key_name(name))
+            if SUSPECT_LOCATION.search(str(name)) and key not in mapped:
+                found.append(f"{key[0]}|{name}")
+    return sorted(set(found))
+
+
 FLOW_COLUMNS = ("sold", "ck_prod", "store_prod", "ck_out", "in_ck", "in_other", "st_in", "st_out")
 SALES_DAILY_SUMS = ("qty", "gross", "discount", "net", "cogs", "trx_count")
 # Salinan `efn_mig.mapping.HISTORY_KEYS` (dijaga test kesamaan di scripts/migration/tests).
@@ -59,16 +127,31 @@ HISTORY_KEYS: dict[str, tuple[str, ...]] = {
         "sales_num", "line_no", "date", "branch_key", "menu_key", "esb_menu_code", "qty", "price", "total",
         "discount", "cogs", "row_type", "is_takeaway",
     ),
+    # G65 docs/04 §27.13.4: esb_branch_id/esb_supplier_code = jejak sumber (rekonsiliasi), tidak disimpan model.
+    "legacy_purchase_line": (
+        "purchase_num", "line_no", "date", "date_required", "branch_key", "branch_name", "supplier_key",
+        "supplier_name", "product_key", "esb_branch_id", "esb_supplier_code", "esb_product_code", "uom_name", "qty",
+        "receipt_qty", "pricelist_price", "price_unit", "discount", "vat_value", "total", "status", "map_source",
+    ),
 }  # fmt: skip
-HISTORY_DATE_FIELD = {"legacy_flow_daily": "day", "legacy_sales_daily": "day", "legacy_sales_line": "date"}
+HISTORY_DATE_FIELD = {
+    "legacy_flow_daily": "day",
+    "legacy_sales_daily": "day",
+    "legacy_sales_line": "date",
+    "legacy_purchase_line": "date",
+}
 HISTORY_MODEL = {
     "legacy_flow_daily": "efn.legacy.flow.daily",
     "legacy_sales_daily": "efn.legacy.sales.daily",
     "legacy_sales_line": "efn.legacy.sales.line",
+    "legacy_purchase_line": "efn.legacy.purchase.line",
 }
+# Berkas histori yang diiris per gudang `target_warehouses` (SEC-197); pembelian = irisan company × bulan.
+WAREHOUSE_SLICED = frozenset({"legacy_flow_daily", "legacy_sales_daily", "legacy_sales_line"})
 _XMLID_ENTITY = {
     "uom": "uom", "category": "category", "pos_category": "pos_category", "product": "product", "menu": "menu",
     "payment_term": "payment_term", "supplier": "supplier", "customer": "customer", "bom": "bom",
+    "supplierinfo": "supplierinfo",
 }  # fmt: skip
 # Referensi antar-entitas di `data`: kunci -> entitas xmlid tujuan (per entitas sumber bila beda).
 _REFS = {
@@ -78,6 +161,7 @@ _REFS = {
     "payment_term_key": "payment_term",
     "alias_of": "menu",
     "pos_xmlid": "branch_pos",
+    "partner_key": "supplier",  # supplierinfo (G65)
 }
 _PARENT_REF = {"category": "category", "pos_category": "pos_category", "branch": "branch_wh"}
 
@@ -87,7 +171,7 @@ def row_xmlid_entity(entity: str, data: Mapping[str, Any]) -> str | None:
     """Entitas xmlid (§27.4) untuk baris master; `cost` tanpa xmlid."""
     if entity == "branch":
         return "branch_loc" if data.get("type") == "location" else "branch_wh"
-    if entity == "cost":
+    if entity in ("cost", STOCK_ENTITY):
         return None
     try:
         return _XMLID_ENTITY[entity]
@@ -125,7 +209,14 @@ def check_master_row(brand: str, entity: str, row: Mapping[str, Any], companies:
     if not isinstance(esb_key, str) or not esb_key:
         raise IntegrityError(f"{entity}: esb_key kosong")
     target = row_xmlid_entity(entity, data)
-    expected = xmlid(brand, company, target, esb_key) if target else None
+    if entity == "supplierinfo":
+        # §27.13.4: esb_key = "<supplier_code>|<product_code>", xmlid dari esb_key (QA G65 P3: `|` -> hash kode utuh).
+        sup, prod = data.get("supplier_code"), data.get("product_code")
+        if not sup or not prod or esb_key != f"{sup}|{prod}":
+            raise IntegrityError("supplierinfo: esb_key tidak sama dengan supplier_code|product_code")
+        expected = xmlid(brand, company, "supplierinfo", esb_key)
+    else:
+        expected = xmlid(brand, company, target, esb_key) if target else None
     if row["xmlid"] != expected:
         raise IntegrityError(f"{entity}: xmlid tidak sama dengan hasil hitung ulang (§27.4)")
     for key, target_entity in _REFS.items():
@@ -143,8 +234,47 @@ def check_master_row(brand: str, entity: str, row: Mapping[str, Any], companies:
         expected_pos = xmlid(brand, company, "branch_pos", esb_key) if data.get("type") == "store" else None
         if data.get("pos_xmlid") != expected_pos:
             raise IntegrityError("branch: pos_xmlid tidak sama dengan hasil hitung ulang")
-    if entity == "cost" and data.get("product_key") != xmlid(brand, company, "product", data.get("product_code")):
-        raise IntegrityError("cost: product_key tidak sama dengan hasil hitung ulang")
+    if entity in ("cost", "supplierinfo", STOCK_ENTITY):
+        code = data.get("product_code")
+        if not code or data.get("product_key") != xmlid(brand, company, "product", code):
+            raise IntegrityError(f"{entity}: product_key tidak sama dengan hasil hitung ulang")
+    if entity == "cost" and "source" in data and data["source"] not in COST_SOURCES:
+        raise IntegrityError("cost: source di luar stock_opening/bom_last_hpp/purchase_last")
+    if entity == STOCK_ENTITY:
+        check_quant_data(brand, company, esb_key, data)
+
+
+def check_quant_data(brand: str, company: str, esb_key: str, data: Mapping[str, Any]) -> None:
+    """Baris `quant.jsonl` (§27.13.4): kunci persis, esb_key `<branch_id>|<product_code>`, lokasi = xmlid gudang
+    (`branch_wh` -> `lot_stock_id`) atau lokasi cabang (`branch_loc`) milik brand × company, qty > 0.
+    G65b §4.6: baris karantina = `quarantine_of` (xmlid `branch_wh` PT sama) + `location_key` = xmlid
+    `branch_quarantine` cabang `esb_branch_id` (esb_key tetap `<branch_id>|<product_code>`); baris lain dilarang
+    membawa `quarantine_of`."""
+    keys = set(data)
+    quarantine = QUANT_QUARANTINE_KEY in keys
+    if keys - {QUANT_QUARANTINE_KEY} != QUANT_DATA_KEYS:
+        raise IntegrityError("quant: kunci data tidak sesuai kontrak")
+    if esb_key != f"{data.get('esb_branch_id')}|{data.get('product_code')}":
+        raise IntegrityError("quant: esb_key tidak sama dengan esb_branch_id|product_code")
+    loc = data.get("location_key")
+    if quarantine:
+        _check_ref(brand, company, "branch_wh", data[QUANT_QUARANTINE_KEY] or "", QUANT_QUARANTINE_KEY)
+        try:
+            expected = xmlid(brand, company, "branch_quarantine", data.get("esb_branch_id"))
+        except ValueError:
+            raise IntegrityError("quant: esb_branch_id kosong pada baris karantina") from None
+        if loc != expected:
+            raise IntegrityError("quant: location_key karantina bukan xmlid branch_quarantine cabang baris")
+    else:
+        prefixes = tuple(f"{company_prefix(brand, company)}{e}_" for e in ("branch_wh", "branch_loc"))
+        if not isinstance(loc, str) or not loc.startswith(prefixes) or any(loc == p for p in prefixes):
+            raise IntegrityError("quant: location_key bukan xmlid branch_wh/branch_loc milik brand × company")
+    try:
+        qty = Decimal(str(data.get("quantity")))
+    except ArithmeticError:
+        raise IntegrityError("quant: quantity bukan angka") from None
+    if not qty.is_finite() or qty <= 0:
+        raise IntegrityError("quant: quantity wajib > 0 (stok negatif/nol tidak diekspor, §27.13.4)")
 
 
 # Kunci OPSIONAL per berkas histori (nama tampilan, data bisnis — bukan PII; diisi bila export menyertakannya).
@@ -152,9 +282,22 @@ HISTORY_OPTIONAL_KEYS: dict[str, frozenset[str]] = {
     "legacy_flow_daily": frozenset({"esb_product_name"}),
     "legacy_sales_daily": frozenset({"menu_name", "menu_category"}),
     "legacy_sales_line": frozenset(),
+    "legacy_purchase_line": frozenset({"product_name", "category_name", "sub_category_name"}),
 }
 # Panjang kolom model histori (Char size) -> dipotong agar satu nama panjang tidak menolak satu irisan.
-_NAME_SIZE = {"esb_product_name": 256, "menu_name": 256, "menu_category": 128}
+_NAME_SIZE = {
+    "esb_product_name": 256,
+    "menu_name": 256,
+    "menu_category": 128,
+    # efn.legacy.purchase.line (teks tampilan ESB; kunci purchase_num/esb_product_code TIDAK dipotong -> error)
+    "product_name": 128,
+    "category_name": 64,
+    "sub_category_name": 64,
+    "branch_name": 64,
+    "supplier_name": 128,
+    "uom_name": 16,
+    "status": 32,
+}
 
 
 def check_history_row(file: str, row: Mapping[str, Any]) -> None:
@@ -345,6 +488,52 @@ def supplier_plan(data: Mapping[str, Any], company_id: int) -> Plan:
         "active": bool(data.get("active", True)),
     }
     return Plan("res.partner", owned, {"company_id": company_id})
+
+
+def supplierinfo_plan(data: Mapping[str, Any], company_id: int, resolver: Resolver, currency_id: int | None) -> Plan:
+    """`supplierinfo.jsonl` -> product.supplierinfo (§27.13.4, fit-gap G65 §2). Field milik migrasi: `price`,
+    `discount` (%), `date_start`, `product_uom_id`, `sequence`, `min_qty`, `currency_id`; saat create `partner_id`,
+    `product_tmpl_id`, `company_id`. Kontrak final W-B: harga SELALU per UoM produk -> `product_uom_id` = UoM produk;
+    `uom_xmlid` (bila diisi) wajib = UoM produk, selain itu baris ditolak (`failed`, tidak dimuat dengan harga salah
+    satuan). `currency_id` di-resolve importer (IDR).
+    """
+    partner = resolver.res_id(data.get("partner_key"))
+    tmpl = resolver.res_id(data.get("product_key"))
+    uom = resolver.uom_of(data.get("product_key"))
+    missing = []
+    if not partner:
+        missing.append("partner_key (supplier belum ada di Odoo)")
+    if not tmpl:
+        missing.append("product_key (produk belum ada di Odoo)")
+    if data.get("uom_xmlid"):
+        sent = resolver.std_ref(data.get("uom_xmlid"), UOM_MODEL)
+        if not sent:
+            missing.append("uom_xmlid")
+        elif uom and sent != uom:
+            missing.append("uom_xmlid ≠ UoM produk (harga wajib per UoM produk)")
+    if not uom:
+        missing.append("UoM produk")
+    if not currency_id:
+        missing.append("currency (hanya IDR)")
+    price = Decimal(str(data.get("price") if data.get("price") is not None else 0))
+    if price <= 0:
+        missing.append("price > 0")
+    discount = Decimal(str(data.get("discount") or 0))
+    if not 0 <= discount <= 100:
+        missing.append("discount 0..100")
+    raw_start = data.get("date_start")
+    seq = data.get("sequence")
+    owned = {
+        "price": _round6(price),
+        "discount": _round6(discount),
+        "date_start": date.fromisoformat(str(raw_start)) if raw_start else False,
+        "product_uom_id": uom or False,
+        "sequence": seq if isinstance(seq, int) and not isinstance(seq, bool) and seq > 0 else 1,
+        "min_qty": _round6(Decimal(str(data.get("min_qty") or 0))),
+        "currency_id": currency_id or False,
+    }
+    create_only = {"partner_id": partner or False, "product_tmpl_id": tmpl or False, "company_id": company_id}
+    return Plan("product.supplierinfo", owned, create_only, missing)
 
 
 def customer_plan(data: Mapping[str, Any], company_id: int, resolver: Resolver) -> Plan:
@@ -593,6 +782,38 @@ def sales_line_vals(row: Mapping[str, Any], *, product_id: int | None) -> dict[s
         "cogs": row.get("cogs"),
         "row_type": row.get("row_type") or None,
         "is_takeaway": bool(row.get("is_takeaway")),
+    }
+
+
+def purchase_line_vals(
+    row: Mapping[str, Any], *, warehouse_id: int | None, supplier_id: int | None, product_id: int | None
+) -> dict[str, Any]:
+    """Baris `legacy_purchase_line` -> spesifikasi bulk `efn.legacy.purchase.line` (company diisi irisan). Teks
+    tampilan ESB dipotong ke ukuran kolom; `esb_branch_id`/`esb_supplier_code` = jejak bundel, tidak disimpan."""
+    return {
+        "date": row["date"],
+        "date_required": row.get("date_required") or None,
+        "purchase_num": row.get("purchase_num"),
+        "line_no": row.get("line_no"),
+        "warehouse_id": warehouse_id,
+        "branch_name": _name(row, "branch_name"),
+        "supplier_id": supplier_id,
+        "supplier_name": _name(row, "supplier_name"),
+        "product_id": product_id,
+        "esb_product_code": row.get("esb_product_code"),
+        "product_name": _name(row, "product_name"),
+        "category_name": _name(row, "category_name"),
+        "sub_category_name": _name(row, "sub_category_name"),
+        "uom_name": _name(row, "uom_name"),
+        "qty": row.get("qty"),
+        "receipt_qty": row.get("receipt_qty"),
+        "pricelist_price": row.get("pricelist_price"),
+        "price_unit": row.get("price_unit"),
+        "discount": row.get("discount"),
+        "vat_value": row.get("vat_value"),
+        "total": row.get("total"),
+        "status": _name(row, "status"),
+        "map_source": row.get("map_source") or None,
     }
 
 

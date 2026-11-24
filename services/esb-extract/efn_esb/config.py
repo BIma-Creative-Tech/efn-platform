@@ -23,12 +23,17 @@ KNOWN_BRANDS = ("pb", "wtz", "bacha", "imd", "cup")
 DEFAULT_COMPANY = {"pb": "PB", "wtz": "WTZ", "bacha": "BCF", "imd": "IMD", "cup": "CUP"}
 # Kode PT docs/04 §12.1 + IMD/CUP (dicadangkan G43, L-108).
 ALLOWED_COMPANY_CODES = frozenset({"EFN", "GL", "PB", "BCR", "BCF", "WTZ", "FARM", "IMD", "CUP"})
-ENTITIES = ("branch", "master", "sales", "fin_sold", "payment", "production", "delivery", "transfer", "stock")
+ENTITIES = (
+    "branch", "master", "sales", "fin_sold", "payment", "production", "delivery", "transfer", "stock", "purchase_line",
+)  # fmt: skip
 # Entitas harian (punya tanggal). `branch` & `master` = snapshot per hari jalan.
-DAILY_ENTITIES = ("sales", "fin_sold", "payment", "production", "delivery", "transfer", "stock")
+DAILY_ENTITIES = ("sales", "fin_sold", "payment", "production", "delivery", "transfer", "stock", "purchase_line")
 # `stock` bersyarat (§25.4): default tidak aktif sampai parameter terbukti di production.
+# `purchase_line` (G65, docs/04 §27.13.1): opt-in lewat ESB_ENTITIES / `backfill --entity`, default MATI.
 DEFAULT_ENTITIES = ("branch", "master", "sales", "fin_sold", "payment", "production", "delivery", "transfer")
 BRANCH_SCOPED = frozenset({"sales", "fin_sold", "stock"})
+# Entitas `snapshot` yang satu slice per cabang (semua cabang dim_esb_branch), bukan per brand (G65 §27.13.1).
+SNAPSHOT_BRANCH_SCOPED = frozenset({"stock_opening"})
 # docs/04 §27.11 (G43): CK per brand hasil prototipe migrasi. Bacha tanpa CK (Q-ESB8).
 DEFAULT_CK_BRANCHES = "pb:4|38,wtz:5|6,imd:2,cup:4|6"
 _BRAND_RE = re.compile(r"^[a-z0-9]{2,16}$")

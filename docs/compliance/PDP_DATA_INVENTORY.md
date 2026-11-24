@@ -588,6 +588,18 @@ ulang. Enkripsi: disk/backup terenkripsi seperti seluruh DB Odoo (§2.5); tanpa 
 - **Prasyarat run nyata production:** entri ini disetujui DPO; Q-ESB24 (retensi bundel & penandatangan); prasyarat
   §2.8.11 (data ESB production) terpenuhi.
 
+**(d) (v21) Tambahan G65 — pembelian, harga beli supplier, stok awal (docs/04 §27.13, ADR-042 §0b, SEC-G65-04)** —
+status: **MENUNGGU DPO**
+| Tempat | Isi | Data pribadi? | Akses | Retensi (usulan) |
+|---|---|---|---|---|
+| ClickHouse `efn_dwh.fact_esb_purchase_line` + `efn_esb.raw_doc` (entitas `purchase_line`) | baris PO: nomor PO, tanggal, cabang, **nama & kode supplier**, produk, qty, harga, diskon, PPN, total, status | **Residu:** `supplier_name` bila supplier **perorangan**. Pelaku dokumen (`createdBy`, `printedBy`, `emailSupplier`), `notes`, `additionalInfo` dibuang sebelum `raw_doc` (whitelist `normalize.py`) | `esb_writer` (tulis), `mig_rw` (baca); **tidak** Insight/Metabase/forecast/text2sql | Ikut datamart ESB §2.8.11 |
+| `efn_dwh.fact_esb_stock_opening` | saldo awal per cabang × lokasi × produk: qty, nilai | Tidak | idem | idem |
+| Bundel (`supplierinfo.jsonl`, `quant.jsonl`, `legacy_purchase_line.jsonl.gz`) | seperti (a) | Residu idem (nama supplier perorangan) | seperti (a) | seperti (a) |
+| Odoo `efn.legacy.purchase.line` | arsip baris PO 24 bulan (teks supplier & produk asli) | Residu idem | `purchase.group_purchase_user` baca saja, rule per PT | 10 th (dokumen pembelian, Q-P2) — keputusan Finance/DPO |
+| Odoo `product.supplierinfo` | harga beli terakhir per supplier × produk × PT | Tidak (partner = `res.partner` §(c)) | standar Purchase | Standar Odoo |
+
+- **Pertanyaan DPO:** apakah teks `supplier_name` perorangan di arsip pembelian cukup dilindungi disk/backup terenkripsi
+  (seperti `sales.line`), atau perlu dipseudonimkan ke kode supplier saja sebelum production.
 #### 2.8.15 (v20) Production planning di atas ESB — Gelombang 66 (docs/04 §30, ADR-051 Proposed) — status: **MENUNGGU DPO**
 
 - **Lokasi:** PostgreSQL database `efn_prodplan` skema `prodplan` (role aplikasi sendiri, TLS verify-full).

@@ -1,4 +1,4 @@
-
+# KONTRAK ANTAR-SERVICE (v21.5 — 24 Nov 2026, G65 §27.13 migrasi ESB → Odoo PB tambahan: entitas esb-extract `purchase_line` (harian) + `stock_opening` (snapshot Beginning `/report/stock-movement`), tabel `fact_esb_purchase_line`/`fact_esb_stock_opening` + `dim_esb_supplier.supplier_id`, langkah `supplierinfo`/`cost` (HPP dari saldo nilai)/`stock`/`legacy_purchase_line`, model `efn.legacy.purchase.line`, cutover uji PB 2026-12-01, `opening` tetap NOT_BUILT, L-250..L-258, Q-ESB25..Q-ESB29 — kontrak, belum dibangun; v21.3 — 23 Nov 2026, kanal online SMD (pickup + pre-order, tanpa QR meja/reservasi) + tenant web `supermarket` §12.1/§13.5/§28.8 — dibangun; v21.2 — 23 Nov 2026, G53 §28.16 forecast F&B di insight-web `/forecast`: view `efn_insight.v_esb_forecast_daily` (policy ESB kelas PT, 15 policy), query `fnb_fc_*`, env `INSIGHT_FNB_DC_CODES` — dibangun G53; v21.1 — 22 Nov 2026, G52 §28.15 Insight F&B persona dari data ESB: halaman `/fnb/exec`, `/fnb/store`, `/fnb/marketing` (query `fexec_*`/`fstore_*`/`fmkt_*`), sidebar Ringkasan = Ikhtisar + halaman bersama di grup F&B dan Supermarket, grup persona pindah ke `efn_insight` 19.0.3.0.0 (xmlid tetap), model `efn.insight.esb.branch` + `res.users.efn_insight_esb_branch_ids`, kepala toko F&B dibatasi cabang (klaim `brs` `"<brand>:<id>"`, pencabutan cakupan PT penuh tanpa bergantung flag), token `eit3`/`eis3`, `SQL_efn_brs` + `SQL_efn_sig3`, policy ESB kelas PT/BR (14), 4 view `v_esb_store_*`, flag `INSIGHT_FNB_PERSONA_ENABLED`/`INSIGHT_ACCEPT_EIT2`, L-237..L-249, Q-INS-F1..Q-INS-F4 — kontrak, belum dibangun; v21.0 — 21 Nov 2026, G51 §28.14 SMD end-to-end: SMD sebagai filter halaman F&B Insight untuk persona `exec` (cabang `sm:<id>`, omzet termasuk PPN, basis campuran berlabel), view `v_sm_payment_daily`/`v_sm_product_sales_daily`/`v_sm_forecast_daily`/`v_sm_lot_stock` + `v_sm_product_list.shelf_life_days`, policy SM 33, store hanya bersama exec (SEC-G51-01), rekonstruksi stok `ETL_SM_STOCK_RECONSTRUCT_DAYS` (default 0), histori forecast as-of demo, seed A1–A7 demo saja, deploy `--renew-anon-volumes`, outlet online opsional, L-219..L-236, Q-SM46..Q-SM47 (terjawab 21 Nov) — dibangun G51; v20.5 — 21 Nov 2026, G47 review: L-216 store + marketing/dc, sesi Insight 2 jam L-217, kartu fase 2 L-218; v20.4 — 21 Nov 2026, G47 §28.13: koreksi fit-gap C-1..C-9 diserap dari kode (L-204..L-215), keputusan pemilik proyek 21 Nov: `kpi_admin` tanpa SoD kode, penerimaan outlet SMD dua langkah; v20.3 — 20 Nov 2026, G47 §28.13 Insight supermarket per persona: token `eit2`/`eis2` (`wids`, persona, `cats`), `SQL_efn_sig2`, row policy outlet + persona, mart `fact_replenishment`/`fact_dc_fill_rate`/`fact_dc_purchase_line`/`agg_sm_stock_daily`/`fact_lot_expiry`/`fact_campaign_result`, view `efn_insight.v_sm_*`, pemetaan `outlet_code` (Q-SM37), konfigurasi KPI per PT `efn.insight.sm.kpi` → `dim_sm_kpi_config`, Omzet termasuk PPN, L-186..L-203, Q-SM40..Q-SM45 — kontrak, belum dibangun; v20.2 dipakai PR #117 G50; v20.0 — 18 Nov 2026, Supermarket §28: forecast API worker→Odoo, usulan replenishment DC, assortment, event perilaku `POST /v1/events`, queue `behavior.event`/`promo.campaign.requested`/`notify.restock`/`notify.price_alert`/`notify.email`/`notify.wa_unofficial`, wishlist/notify-me/price alert, flag (ADR-044..048 Proposed, belum dibangun; §27 + L-127..L-143 dicadangkan G43); v18.0 — 18 Nov 2026, G42 §26 Insight web + SSO Odoo (token eit1 HMAC sekali pakai via POST form, cookie eis1, row policy `efn_insight_scope`, ADR-041 Proposed); v17.0 — 17 Nov 2026, G41 §25 ESB Core → datamart ClickHouse (esb-extract GET-only per brand, ADR-040 Proposed); v16.2 — 1 Nov 2026, G39 §24 asisten analisis "Analisis bertahap" (text2sql POST /v1/analyze: rencana ≤3 query → eksekusi per PT → ringkasan AI); v16.1 — 1 Nov 2026, G38 §23 Text-to-SQL "Tanya Data" (Odoo → text2sql → 9router/Ollama → ClickHouse per PT); v16.0 — 1 Nov 2026, G37 §22 gateway LLM 9router + fallback Ollama untuk OCR tahap 2 (K25-01, ADR-037); v15.1 — 31 Okt 2026, G33 §20.11 notifikasi reward MGM + layar referral Super-App; v15.0 — 30 Okt 2026, G32 §21 mart & dashboard waste/yield (K25-08); v14.1 — 30 Okt 2026, G31b §20.10 dasar MGM per baris (`excluded_categ_ids`); v14.0 — 30 Okt 2026, G31 §20 engine MGM: referral, akrual, settle, clawback; v13.0 — 29 Okt 2026, G30 §19 kebijakan MGM per PT (K25-10); v11.0 — 25 Okt 2026, G26 §17 pesanan online wajib lunas: VA, e-wallet, transfer + bukti, kiosk; v10.1 — 24 Okt 2026, G24 §16 entitas WTZ Wetzel's Pretzels; v10.0 — 21 Okt 2026, G23 §15 reservasi meja & pre-order berjadwal; v9.1 — 19 Okt 2026, G22 §14 sinkron r15 K1–K3 + L-82; v9.0 — 19 Okt 2026, G22 §14; v8.0 — G21 §13; v7.0 — G20 §12; v6.0 — G19 §11; v5.1 — 10 Okt 2026, privasi G18 L-21; v5.0 — 9 Okt 2026; §8 v3.x, §9 v4.x Fase 1, §10 v5.0 Fase 3 penjualan online; **§27 G43 v19.1** migrasi ESB → Odoo + arsip histori `efn_legacy_history`, ADR-042 Accepted)
 # KONTRAK ANTAR-SERVICE (v21.4 — 24 Nov 2026, G66 §30 production planning CK di atas ESB: service `prodplan` (PostgreSQL `efn_prodplan`, allowlist POST/DELETE transfer + produksi ke ESB, outbox + marker `pp:`), network `prodplan-db`/`insight-plan`/`egress-prodplan`, mTLS `insight-web-pp`→`prodplan-tls` + asersi aktor `ppa1`, peran `pp_planner`/`pp_warehouse` di `eit3`/`eis3` (T9), halaman Insight `/produksi`, L-250..L-257, Q-PP1..Q-PP12 (ADR-051 Proposed) — kontrak, belum dibangun; v21.3 — 23 Nov 2026, kanal online SMD (pickup + pre-order, tanpa QR meja/reservasi) + tenant web `supermarket` §12.1/§13.5/§28.8 — dibangun; v21.2 — 23 Nov 2026, G53 §28.16 forecast F&B di insight-web `/forecast`: view `efn_insight.v_esb_forecast_daily` (policy ESB kelas PT, 15 policy), query `fnb_fc_*`, env `INSIGHT_FNB_DC_CODES` — dibangun G53; v21.1 — 22 Nov 2026, G52 §28.15 Insight F&B persona dari data ESB: halaman `/fnb/exec`, `/fnb/store`, `/fnb/marketing` (query `fexec_*`/`fstore_*`/`fmkt_*`), sidebar Ringkasan = Ikhtisar + halaman bersama di grup F&B dan Supermarket, grup persona pindah ke `efn_insight` 19.0.3.0.0 (xmlid tetap), model `efn.insight.esb.branch` + `res.users.efn_insight_esb_branch_ids`, kepala toko F&B dibatasi cabang (klaim `brs` `"<brand>:<id>"`, pencabutan cakupan PT penuh tanpa bergantung flag), token `eit3`/`eis3`, `SQL_efn_brs` + `SQL_efn_sig3`, policy ESB kelas PT/BR (14), 4 view `v_esb_store_*`, flag `INSIGHT_FNB_PERSONA_ENABLED`/`INSIGHT_ACCEPT_EIT2`, L-237..L-249, Q-INS-F1..Q-INS-F4 — kontrak, belum dibangun; v21.0 — 21 Nov 2026, G51 §28.14 SMD end-to-end: SMD sebagai filter halaman F&B Insight untuk persona `exec` (cabang `sm:<id>`, omzet termasuk PPN, basis campuran berlabel), view `v_sm_payment_daily`/`v_sm_product_sales_daily`/`v_sm_forecast_daily`/`v_sm_lot_stock` + `v_sm_product_list.shelf_life_days`, policy SM 33, store hanya bersama exec (SEC-G51-01), rekonstruksi stok `ETL_SM_STOCK_RECONSTRUCT_DAYS` (default 0), histori forecast as-of demo, seed A1–A7 demo saja, deploy `--renew-anon-volumes`, outlet online opsional, L-219..L-236, Q-SM46..Q-SM47 (terjawab 21 Nov) — dibangun G51; v20.5 — 21 Nov 2026, G47 review: L-216 store + marketing/dc, sesi Insight 2 jam L-217, kartu fase 2 L-218; v20.4 — 21 Nov 2026, G47 §28.13: koreksi fit-gap C-1..C-9 diserap dari kode (L-204..L-215), keputusan pemilik proyek 21 Nov: `kpi_admin` tanpa SoD kode, penerimaan outlet SMD dua langkah; v20.3 — 20 Nov 2026, G47 §28.13 Insight supermarket per persona: token `eit2`/`eis2` (`wids`, persona, `cats`), `SQL_efn_sig2`, row policy outlet + persona, mart `fact_replenishment`/`fact_dc_fill_rate`/`fact_dc_purchase_line`/`agg_sm_stock_daily`/`fact_lot_expiry`/`fact_campaign_result`, view `efn_insight.v_sm_*`, pemetaan `outlet_code` (Q-SM37), konfigurasi KPI per PT `efn.insight.sm.kpi` → `dim_sm_kpi_config`, Omzet termasuk PPN, L-186..L-203, Q-SM40..Q-SM45 — kontrak, belum dibangun; v20.2 dipakai PR #117 G50; v20.0 — 18 Nov 2026, Supermarket §28: forecast API worker→Odoo, usulan replenishment DC, assortment, event perilaku `POST /v1/events`, queue `behavior.event`/`promo.campaign.requested`/`notify.restock`/`notify.price_alert`/`notify.email`/`notify.wa_unofficial`, wishlist/notify-me/price alert, flag (ADR-044..048 Proposed, belum dibangun; §27 + L-127..L-143 dicadangkan G43); v18.0 — 18 Nov 2026, G42 §26 Insight web + SSO Odoo (token eit1 HMAC sekali pakai via POST form, cookie eis1, row policy `efn_insight_scope`, ADR-041 Proposed); v17.0 — 17 Nov 2026, G41 §25 ESB Core → datamart ClickHouse (esb-extract GET-only per brand, ADR-040 Proposed); v16.2 — 1 Nov 2026, G39 §24 asisten analisis "Analisis bertahap" (text2sql POST /v1/analyze: rencana ≤3 query → eksekusi per PT → ringkasan AI); v16.1 — 1 Nov 2026, G38 §23 Text-to-SQL "Tanya Data" (Odoo → text2sql → 9router/Ollama → ClickHouse per PT); v16.0 — 1 Nov 2026, G37 §22 gateway LLM 9router + fallback Ollama untuk OCR tahap 2 (K25-01, ADR-037); v15.1 — 31 Okt 2026, G33 §20.11 notifikasi reward MGM + layar referral Super-App; v15.0 — 30 Okt 2026, G32 §21 mart & dashboard waste/yield (K25-08); v14.1 — 30 Okt 2026, G31b §20.10 dasar MGM per baris (`excluded_categ_ids`); v14.0 — 30 Okt 2026, G31 §20 engine MGM: referral, akrual, settle, clawback; v13.0 — 29 Okt 2026, G30 §19 kebijakan MGM per PT (K25-10); v11.0 — 25 Okt 2026, G26 §17 pesanan online wajib lunas: VA, e-wallet, transfer + bukti, kiosk; v10.1 — 24 Okt 2026, G24 §16 entitas WTZ Wetzel's Pretzels; v10.0 — 21 Okt 2026, G23 §15 reservasi meja & pre-order berjadwal; v9.1 — 19 Okt 2026, G22 §14 sinkron r15 K1–K3 + L-82; v9.0 — 19 Okt 2026, G22 §14; v8.0 — G21 §13; v7.0 — G20 §12; v6.0 — G19 §11; v5.1 — 10 Okt 2026, privasi G18 L-21; v5.0 — 9 Okt 2026; §8 v3.x, §9 v4.x Fase 1, §10 v5.0 Fase 3 penjualan online; **§27 G43 v19.1** migrasi ESB → Odoo + arsip histori `efn_legacy_history`, ADR-042 Accepted)
 
 Status: **Draft untuk Fase 0 / PoC**. Mengikuti rekomendasi ADR yang masih `Proposed`. Semua service (Odoo, BFF, Next.js, worker) wajib memakai nama, path, dan payload di dokumen ini. Perubahan kontrak = ubah dokumen ini dulu.
@@ -3249,7 +3249,7 @@ belum terautentikasi sebelum tag diperiksa.
 - Entitas & `key`: `branch_wh`/`branch_loc`/`branch_pos` (`branch_id`), `category` (path ternormalisasi), `pos_category`
   (path), `uom` (teks ESB), `product` (`product_code`), `menu` (`menu_code`; menu takeaway `" T"` → **xmlid kedua**
   menunjuk record yang sama), `combo` (kode menu paket), `bom` (`bom_id`), `supplier`, `customer` (kode), `payment_term`
-  (`net_<hari>`), `supplierinfo` (`<supplier>_<product>`). Tanpa xmlid: quant (idempoten lewat `inventory_quantity`
+  (`net_<hari>`), `supplierinfo` (`<supplier>|<product>`). Tanpa xmlid: quant (idempoten lewat `inventory_quantity`
   absolut), jurnal pembukaan (`ref = EFN-MIG-OPEN/<CODE>/<cutover>`), histori (**(v19.1)** idempoten lewat
   ganti-per-irisan §27.8a; `flow.daily` & `sales.daily` juga punya kunci unik §27.8).
 
@@ -3584,6 +3584,390 @@ default ADR-042 §3.6 sampai PO menyatakan lain). Lainnya masih terbuka.
   Q-ESB5) = default ADR-042 §3.6.
 - **Q-ESB24** (Finance/DPO) Siapa penandatangan berita acara rekonsiliasi per brand (usulan: Finance + Ops brand + PO),
   dan retensi bundel migrasi maks 90 hari setelah cutover diterima?
+
+### 27.13 (v21.4) G65 — histori pembelian, harga beli supplier, HPP cutover, stok awal (PB; ADR-042 amandemen §0b)
+
+> **Ringkasan manajemen.** Paris Baguette kini juga membawa stok awal (qty + nilai), HPP, harga beli terakhir per
+> supplier, dan arsip histori pembelian 24 bulan ke Odoo. Neraca pembukaan dan utang/piutang **tetap ditunda**
+> (Q-ESB21). Target gladi efn-prod lokal, cutover uji **2026-12-01**. Biaya ±13–16 hari-engineer; jadwal ketat.
+
+Dasar: keputusan user 24 Nov 2026 (G65-1..G65-4, ADR-042 §0b.1), probe GET production PB 24 Nov 2026 (efn-lead),
+fit-gap `docs/fit-gap/G65_MIGRASI_PEMBELIAN_STOK.md` (efn-odoo-functional; **diselaraskan 24 Nov 2026** — bila
+bertentangan, fit-gap menang untuk fakta CE 19, kontrak ini untuk nama berkas/kunci/kolom/jalur ekstraksi; selisih yang
+disengaja: ekstraksi pembelian per **hari** bukan per bulan (§27.13.1), daftar status izin (Q-ESB28), kolom tambahan
+`map_source`), fakta DB efn-prod (lead, 24 Nov 2026). §27.13 **mengubah** §27.2 (langkah 7 dan 11, grup `cutover`/`history`), §27.3 (daftar berkas),
+§27.4 (field milik migrasi supplierinfo/cost), §27.5 (butir 2, butir 5e), §27.6 (`stock`), §27.7, §27.8, §27.11.
+Status: **kontrak, belum dibangun.** Bertanda **[B]** = belum terverifikasi, wajib diuji di dry-run.
+
+Pembagian kerja paralel: **W-A** = esb-extract (§27.13.1–27.13.3, efn-data-ai-engineer); **W-B** = `scripts/migration`
+export + validator + reconcile (§27.13.4–27.13.5); **W-C** = Odoo model + importer (§27.13.6–27.13.7, efn-odoo-engineer).
+Antarmuka W-A↔W-B = tabel ClickHouse §27.13.2; W-B↔W-C = berkas bundel + kunci §27.13.4.
+
+#### 27.13.1 esb-extract: entitas baru
+| Entitas | Mode | Endpoint (GET) | Grain slice (`scope_key`, `day`) | Tabel |
+|---|---|---|---|---|
+| `purchase_line` | **harian + backfill** (`ESB_ENTITIES` opt-in, default **mati**) | `/report/purchase/purchase-recapitulation/purchase?dateFrom=D&dateTo=D&page&limit=1000` **dan** `/purchase/purchase-order?dateFrom=D&dateTo=D&page&limit` | `('*', D)` per brand | `fact_esb_purchase_line` |
+| `stock_opening` | **snapshot** (`snapshot --entity stock_opening --date D`), bukan loop `run` | `/report/stock-movement?startPeriod=D&endPeriod=D&branchCode=<kode>&unitToShow=Base Unit&page&limit=100` | `(<branch_id>, D)` per cabang | `fact_esb_stock_opening` |
+
+**`purchase_line`** (pola slice §25.4: versi slice + checkpoint terakhir, tanggal fakta = hari slice):
+- Satu slice = brand × hari PO. Tarik recap (limit 1000; ±80–100 baris/hari PB → 1 GET) lalu header PO hari yang sama
+  (±40–50 dokumen/hari → 1 GET bila `limit` ≥ 100; batas `limit` header **[B]**, mulai 100). **Jangan** memakai filter
+  cabang recap (`branchID[]` diabaikan server, `branchID=` → 0 baris; probe 24 Nov).
+- Join baris recap → header lewat `purchaseNum` (header hari yang sama). Hasil `branch_id`, `supplier_id` dari header
+  (`map_source='header'`). Header tidak ditemukan → fallback **nama**: `branchName` → `dim_esb_branch.branch_name`,
+  `supplierName` → `dim_esb_supplier.supplier_name` (normalisasi: upper, NFKC, trim, spasi ganda; cocok **tepat satu**)
+  → `map_source='name'`; tidak cocok/ambigu → `branch_id=0` / `supplier_code=''`, `map_source='none'` (baris tetap
+  disimpan, masuk `v_esb_data_quality` cek baru `purchase_unmapped`).
+- `supplier_code` = `dim_esb_supplier.supplier_code` lewat kolom baru `supplier_id` (ALTER §27.13.2; diisi entitas
+  `master` dari `/supplier` `supplierID` **[B]** nama field). `company_code` = `cfg.company_for(branch_id)` (PT cabang;
+  `branch_id=0` → PT default brand).
+- `line_no` stabil per `purchaseNum` (pola L-113): urut `(productCode, uomName, qty, price, total)`, pemecah seri
+  `(discount, vatValue, receiptQty, productName)`, nomor 1..n.
+- Angka: `qty`/`receiptQty` → `Decimal(18,3)`; `price`, `pricelistPrice` → `Decimal(18,4)`; `discount`, `vatValue`,
+  `total` → `Decimal(18,2)` (int/float campur di respons → parse lewat `Decimal(str(x))`, bukan float). Arti `discount`
+  (nominal vs persen) dan apakah `total` termasuk PPN **[B]** — dicatat apa adanya, tidak ditafsirkan di extractor.
+- **PDP (L-110):** whitelist kunci recap `purchaseNum, purchaseDate, requiredDate, branchName, supplierName,
+  productCode, categoryName, subCategoryName, productName, uomName, qty, receiptQty, pricelistPrice, price, discount,
+  vatValue, total, statusName`; header `purchaseNum, purchaseDate, branchID, branchName, supplierID, supplierName,
+  currencyID, currencySign, purchaseTotal, statusID, statusName`. **Dibuang** sebelum `raw_doc`: `notes`, `additionalInfo`,
+  `costCenterName`, `projectName`, `createdBy`, `editedBy`, `authorizer*`, `creator*`, `emailSupplier`, `printedBy`, dan
+  kunci identitas lain (denylist `redact()` tetap berlaku). `supplierName` disimpan (nama perusahaan; supplier
+  perorangan = data pribadi → hanya `esb_writer`/`mig_rw`, §27.13.3).
+- `raw_doc`: `endpoint` `report/purchase-recapitulation` dan `purchase/purchase-order`, `doc_key=<hari>`, semua
+  halaman digabung, ter-whitelist.
+- Jadwal `run`: sama entitas harian lain (H-1, koreksi H-7, gap fill 7 hari). Status PO berubah > 7 hari (Receiving →
+  Finished) ditangkap lewat `backfill --force` bulanan + **wajib** sekali tepat sebelum export cutover (L-114).
+- Beban: ±2–3 GET/hari; backfill 24 bulan ≈ **±1,5–2,2 rb GET** (≈ 15–20 menit pada 2 req/dtk) — satu malam, dalam
+  `ESB_BACKFILL_MAX_CALLS`. Alternatif per bulan (±60 GET recap) **ditolak**: melanggar model slice harian (tanggal fakta
+  = hari slice, ganti-per-hari saat koreksi).
+
+**`stock_opening`** (snapshot G65; **`--date` = tanggal cutover**, berbeda dari P2 lain yang memakai `cutover − 1`):
+- Baris `transactionType="Beginning"` pada `startPeriod=endPeriod=D` = saldo **awal** hari D = saldo akhir `D − 1`.
+  CLI wajib `--date` eksplisit (tanpa default hari ini untuk entitas ini) dan `D ≤ hari ini WIB`; dijalankan **setelah
+  freeze ESB** (runbook). Untuk dry-run boleh tanggal uji lebih awal (mis. 2026-11-25).
+- Semua cabang di `dim_esb_branch` (semua tipe, aktif dan nonaktif): parameter `branchCode` = `dim_esb_branch.branch_code`
+  **[B]** (probe: kode 3 huruf dari baris stock-movement berfungsi, satu cabang ±910 baris; kesamaan dengan `branch_code`
+  `/branch/list/user` diverifikasi extractor: setiap baris respons wajib `branchID` = cabang diminta, selain itu slice
+  `error`). Satu cabang = satu slice + checkpoint (resumable; cabang gagal tidak membatalkan cabang lain).
+- `limit=100` (maks; 200/500 → HTTP 400), `ESB_MAX_PAGES` berlaku per slice. Beban PB ±47,7 rb baris = ±477 GET + ±1
+  GET/cabang ≈ **±4–8 menit** (±0,4 dtk/GET, token bucket 2 req/dtk).
+- Simpan **hanya** `transactionType = "Beginning"` **dan** `qtyBalance ≠ 0` (probe: ±5 % baris Beginning non-nol);
+  baris mutasi hari D dibuang. `raw_doc` (`endpoint` `report/stock-movement`, `doc_key=<D>|<branchID>`) berisi baris yang
+  disimpan saja + ringkasan `{pages, rows_total, rows_beginning, rows_kept}`.
+- Angka: `qtyBalance` (int di probe) → `Decimal(18,3)`; `valuePerUnit` (int/float campur) → `Decimal(18,4)`;
+  `amountBalance` → `Decimal(18,2)` (Rupiah bulat? **[B]**). Satuan = `UOM` baris apa adanya, **wajib** dengan
+  `unitToShow=Base Unit` (G65b, gladi 24 Nov 2026; konstanta `extract_g65.STOCK_MOVEMENT_UNIT`): default endpoint =
+  satuan campur per baris (BOX/PACK/EA…); `Base Unit` (persis, dengan spasi; `Stock Unit`/`baseUnit` → HTTP 400) =
+  semua baris dalam satuan dasar produk ESB (BOX→GR, PACK→PCS), total `amountBalance` identik. Satuan ini menjadi
+  satuan produk export bila `dim_esb_product.uom` kosong (§27.13.4). Snapshot sebelum G65b wajib diambil ulang.
+- PDP: kolom yang dipakai tidak memuat orang; `redact()` tetap dijalankan.
+
+#### 27.13.2 ClickHouse (`infra/clickhouse/init/23-g65-esb-purchase-stock.sql`, idempoten; DDL menang untuk detail)
+Nomor 20 dipakai `20-esb-aggregates.sql` (branch agregat, belum di `main`); 23 = nomor bebas berikut. Semua tabel
+memuat `brand`, `company_code` (`LowCardinality(String)`), `_version DateTime64(3,'UTC')` (= versi slice), `_loaded_at
+DEFAULT now64(3)`.
+
+| Tabel | Kolom bisnis | Engine / ORDER BY | Partisi |
+|---|---|---|---|
+| `efn_dwh.fact_esb_purchase_line` | `purchase_date Date, purchase_num String, line_no UInt32, required_date Nullable(Date), branch_id UInt32, branch_name String, supplier_id UInt64, supplier_code String, supplier_name String, status_id Int32, status_name LowCardinality(String), currency LowCardinality(String), product_code String, product_name String, category_name String, sub_category_name String, uom LowCardinality(String), qty Decimal(18,3), receipt_qty Decimal(18,3), pricelist_price Decimal(18,4), price Decimal(18,4), discount Decimal(18,2), vat_value Decimal(18,2), total Decimal(18,2), map_source LowCardinality(String)` (`header`\|`name`\|`none`) | RMT(`_version`) `(company_code, brand, purchase_date, purchase_num, line_no)` | `toYYYYMM(purchase_date)` |
+| `efn_dwh.fact_esb_stock_opening` | `opening_date Date` (= D = cutover), `branch_id UInt32, branch_code String, location_name String, product_id UInt64, product_detail_id UInt64, product_code String, product_name String, uom LowCardinality(String), value_per_unit Decimal(18,4), qty_balance Decimal(18,3), amount_balance Decimal(18,2)` | RMT(`_version`) `(company_code, brand, opening_date, branch_id, location_name, product_code, product_detail_id, uom)` | `toYYYYMM(opening_date)` |
+| `efn_dwh.dim_esb_supplier` (**ALTER**) | `ADD COLUMN IF NOT EXISTS supplier_id UInt64 DEFAULT 0` | (tetap) | — |
+
+- `company_code` purchase = PT cabang (header `branchID`); stock_opening = PT cabang (`cfg.company_for(branch_id)`).
+- Pembaca (export) memakai pola §25.4: `FINAL` **dan** hanya versi slice ber-checkpoint (`extract_checkpoint` entitas
+  `purchase_line` scope `*`, entitas `stock_opening` scope `<branch_id>`).
+- **View terpisah `efn_dwh.v_esb_g65_quality`** (bukan tambahan `v_esb_data_quality`: view itu INVOKER dan dibaca
+  `metabase_reader`/`efn_insight_definer` yang sengaja tanpa hak atas tabel G65; hanya `mig_rw`; DDL menang) dengan 2 cek:
+  `purchase_unmapped` (30 hari, value = jumlah baris `map_source != 'header'`), `stock_opening_missing_branch` (cabang aktif
+  tanpa checkpoint `stock_opening` pada `opening_date` terakhir). `reconcile` butir 7 membaca kedua view (QA 24 Nov).
+
+#### 27.13.3 Akses ClickHouse & konfigurasi
+- `esb_writer` (§25.7): `SELECT, INSERT` pada `fact_esb_purchase_line`, `fact_esb_stock_opening` (per tabel). Kolom baru
+  `dim_esb_supplier.supplier_id` tidak butuh grant baru.
+- `mig_rw` (§27.10): `SELECT` pada kedua tabel. **Tidak** di-grant ke `efn_insight`, `metabase_reader`, `efn_forecast`
+  (harga beli per dokumen = data komersial sensitif; nama supplier perorangan = PII). Test akses (`test_mig_access.py`,
+  `test_insight_access.py`) wajib menegaskan.
+- Env: `ESB_ENTITIES` menerima `purchase_line` (default daftar **tidak** berubah); `snapshot --entity stock_opening`
+  tidak memerlukan `--allow-unverified` (endpoint diverifikasi probe 24 Nov), tetapi menolak tanpa `--date`.
+- Retensi: ikut DWH (#59); `raw_doc` TTL 36 bulan (L-109).
+
+#### 27.13.4 Mesin migrasi `scripts/migration` (W-B)
+Langkah (perubahan atas §27.2):
+| Langkah | Grup | Sumber | Status |
+|---|---|---|---|
+| `supplierinfo` | `master` (#7) | `fact_esb_purchase_line` | **dibangun G65** (sebelumnya tanpa sumber) |
+| `cost` | `master` (#7) | urutan sumber di bawah | diperluas |
+| `legacy_purchase_line` | `history` (#10a, setelah `legacy_sales_line`) | `fact_esb_purchase_line` | **baru** |
+| `stock` | `cutover` (#11) | `fact_esb_stock_opening` + `cost` | **dibangun G65** (keluar dari `NOT_BUILT`) |
+| `opening` | `cutover` (#12) | — | **tetap `NOT_BUILT`** (Q-ESB21); grup `cutover` = `stock`, `history`, `cutover-param` |
+
+**`supplierinfo`** (berkas `supplierinfo.jsonl`, satu baris per company × supplier × produk):
+- Acuan `ref` = `--cutover-date` bila ada, selain itu hari ini WIB; jendela `[ref − 12 bulan, ref)`.
+- Baris dihitung: `status_name ∈ PURCHASE_PRICE_STATUSES` (default `Authorized, Receiving, Finished, Closed`; konstanta +
+  opsi export `--purchase-statuses`, nilai efektif dicatat di manifest; Q-ESB28), `map_source != 'none'`,
+  `supplier_code != ''`, `qty > 0`, `price > 0`, `currency` = IDR (lain → dilewati + `skipped.currency`).
+- Per kunci `(company_code, supplier_code, product_code)`: baris dengan `purchase_date` terbaru, seri → `purchase_num`
+  terbesar → `line_no` terbesar. `price` = kolom `price` (harga satuan sebelum diskon, tanpa PPN **[B]**, Q-ESB26).
+- `sequence` per company × produk: 1..n urut `date_start` menurun (supplier terbaru = 1).
+- `discount` (%): opsi export `--purchase-discount-mode {nominal,percent}` (default `nominal`, Q-G65-2): `nominal` →
+  `discount / (price × qty) × 100` (dibulatkan 2 desimal, dibatasi 0..100); `percent` → apa adanya. Mode dicatat di
+  manifest.
+- `esb_key` = `<supplier_code>|<product_code>`; xmlid = `xmlid(brand, company, "supplierinfo",
+  esb_key)` (normalisasi + hash §27.4; `|` selalu memicu hash kode utuh sehingga `A_B`+`C` ≠ `A`+`B_C`, QA G65 P3; validator menolak xmlid ganda `DUPLICATE_XMLID`).
+- `DATA_KEYS["supplierinfo"]` = `{partner_key, product_key, supplier_code, product_code, price, discount, currency,
+  min_qty, sequence, date_start, uom_esb, uom_xmlid, source_purchase_num}` (`min_qty` = 0, `date_start` = tanggal PO
+  terakhir, `date_end`/`product_id` kosong). Field milik migrasi (meralat §27.4 baris `product.supplierinfo`, fit-gap
+  §2.2): `price`, `discount`, `date_start`, `product_uom_id`, `sequence`, `min_qty`, `currency_id`.
+- Satuan beli (fit-gap §2.2, [V] `product_uom_id` di CE 19): `uom_name` ESB terpetakan di `uom_map.csv` →
+  `product_uom_id` = UoM itu dan harga per UoM itu (CE mengonversi saat RFQ **[B]** perilaku RFQ); tak terpetakan →
+  harga dikonversi ke UoM produk dengan `convert_price` (`ea_factor`) + peringatan; tak bisa keduanya → dilewati.
+- Supplier/produk tanpa xmlid di bundel master **atau** Odoo → dilewati + `skipped.supplierinfo_unmapped` (peringatan).
+
+**`cost`** (berkas `cost.jsonl`; `DATA_KEYS["cost"]` += `source`, `as_of`): per company × produk, sumber pertama yang
+menghasilkan nilai > 0:
+1. `stock_opening` (hanya bila `--cutover-date`): Σ `amount_balance` / Σ `qty_balance` atas baris `qty_balance > 0`
+   produk itu di semua cabang company, `opening_date = cutover`, dalam satuan produk (aturan satuan di bawah);
+2. `bom_last_hpp`: perilaku lama `build_costs` (`lastHpp` komponen BOM terbesar);
+3. `purchase_last`: `price` baris supplierinfo terbaru produk itu (satuan produk);
+4. tidak ada → tidak ada baris `cost` (validator: error bila produk punya baris `quant`). **Pengecualian eksplisit
+   `--allow-zero-cost`** (G65b, keputusan user 24 Nov 2026; `ExportOptions.allow_zero_cost`, default mati): produk
+   yang punya baris saldo awal dimuat dengan qty > 0 dan **semua** `amount_balance` barisnya tepat 0 → baris `cost`
+   `standard_price = 0`, `source = stock_opening`, `as_of = cutover` (`mapping.zero_value_codes`). Manifest:
+   `export_options.allow_zero_cost` + `zero_cost_products` (`<PT>|<kode>`, langkah `cost` dan `stock`). Produk dengan
+   nilai ≠ 0 di baris mana pun tetap tanpa cost (`QUANT_NO_COST` error). **[B]** importer Odoo menerima
+   `standard_price = 0` (paket W-C).
+`as_of` = cutover atau tanggal export. Langkah `cost` wajib dijalankan ulang **dengan** `--cutover-date` sebelum
+`stock`; importer `cost` (run nyata) menulis `efn_mig_esb.cost_as_of.<CODE>` = `as_of`, dan langkah `stock` menolak
+(exit 4) bila nilainya ≠ cutover.
+
+**Aturan satuan (stok & harga):** `uom` ESB baris dinormalisasi `norm_uom`. Sama dengan `uom_esb` produk → apa adanya.
+Beda → export mengirim `uom_esb` + `uom_xmlid` (dari `uom_map.csv`) dan **importer** mengonversi ke UoM produk
+(`_compute_quantity`/`_compute_price` antar-UoM berreferensi sama, **[B]** API Odoo 19). Tidak ada di `uom_map` →
+error validator; tidak dapat dikonversi di Odoo → `failed` (`uom_incompatible`). Tidak ditebak. Opsi eksplisit
+`--skip-unconvertible-stock` (G65b, `ExportOptions.skip_unconvertible_stock`, default mati): baris stok tanpa faktor
+tetap **tidak dimuat** dan tetap di `skipped.uom_unconvertible`; validator menurunkan `STOCK_UOM_UNCONVERTIBLE` menjadi
+peringatan `STOCK_UOM_SKIPPED` (opsi dibaca dari manifest `export_options`, ikut laporan bertanda tangan). Untuk `cost` sumber
+`stock_opening`/`purchase_last` dengan satuan beda, export mengirim nilai per satuan ESB + `source_uom`; importer
+mengonversi (field `source_uom` sudah ada).
+
+**Satuan produk efektif (G65b, gladi efn-prod 24 Nov 2026):** `dim_esb_product.uom` kosong untuk semua produk PB → dulu
+534 baris `STOCK_UOM_UNCONVERTIBLE` + 709 item `cost_uom_unconvertible` (`uom=''`). Aturan export
+(`mapping.opening_uoms`): produk yang satuannya kosong (`dim_esb_product.uom` + fallback BOM) memakai satuan dasar dari
+baris `fact_esb_stock_opening` SELURUH brand pada cutover (extract `unitToShow=Base Unit` §27.13.1 → satu satuan per
+produk). Satuan efektif ini dipakai `to_product_qty`, HPP `stock_opening` (per satuan efektif), `quant.uom_esb`/
+`uom_xmlid`. Produk itu dengan > 1 satuan di snapshot → **ditolak** (tidak ada quant; `skipped.uom_conflict =
+{count, items:[{product_code, uoms}]}`, error validator `STOCK_UOM_CONFLICT`; HPP `stock_opening` dilewati →
+`cost_uom_unconvertible` dengan `uom` = satuan baris dipisah koma). Produk yang satuannya sudah terisi tidak berubah.
+**[B]** master `product` (uom.jsonl/product.jsonl) belum memakai satuan efektif ini — UoM produk Odoo (`default_uom`)
+bisa berbeda dari `quant.uom_xmlid`; importer wajib memeriksa/mengonversi (`uom_incompatible`).
+
+**`stock`** (berkas `quant.jsonl`, bundel cutover tunggal §27.3a):
+- Sumber: `fact_esb_stock_opening` `opening_date = cutover`. Gerbang export: setiap cabang non-`skip` di `branch_map`
+  punya checkpoint `stock_opening` pada tanggal itu, selain itu exit 1 (daftar cabang hilang di manifest).
+- Lokasi: cabang → `branch_loc` (cabang tipe `location` → lokasi induk `parent_branch_id`). Nama lokasi ESB
+  (`location_name`) dipetakan lewat tabel klien baru **`location_map.csv`** (opsional, di `--maps`, hash di manifest;
+  fit-gap §4.2): kolom wajib `brand,branch_id,esb_location_name,action` dengan `action ∈ {stock, skip, quarantine}`.
+  Default (tidak ada di map) = `stock` → dijumlahkan ke `lot_stock_id` gudang cabang + peringatan `location_unmapped`.
+  Nama cocok `/(damage|rusak|expired|kadaluar?sa|temporary|sementara|reject)/i` tanpa entri map → peringatan **khusus**
+  di non-production, **error** di `APP_ENV=production` (Q-ESB25). `quarantine` **didukung** (G65b, keputusan user
+  24 Nov 2026): baris lokasi itu menjadi quant **terpisah** dengan `location_key` = `xmlid(brand, company,
+  "branch_quarantine", branch_id)` (entity baru di `xmlid.py`) dan kolom data opsional `quarantine_of` = xmlid
+  `branch_wh` gudang (induk) cabang; qty/konversi satuan/HPP sama dengan stok biasa (ikut rata-rata HPP
+  `stock_opening`). `esb_key` tetap `<branch_id>|<product_code>` (identitas quant = company × lokasi × produk; satu
+  cabang × produk bisa punya baris stok + baris karantina). Manifest: `quarantine_rows` (jumlah baris sumber yang dimuat
+  ke karantina) menggantikan `skipped.quarantine`.
+  **Antarmuka importer (W-C):** baris dengan `quarantine_of` → importer membuat/menemukan lokasi internal karantina
+  (xmlid = `location_key`, induk = gudang `quarantine_of`, company baris) lalu memuat quant ke sana; `quarantine_of`
+  hanya ada di baris karantina (validator: `QUANT_QUARANTINE_OF`, `QUANT_LOCATION` untuk xmlid karantina cabang lain).
+  Salinan `esb_import/efn_mig/xmlid.py` wajib disalin ulang (entity `branch_quarantine`).
+- Hanya produk `is_storable=True`; non-storable dilewati + dihitung (`skipped.non_storable`).
+- Agregasi: Σ `qty_balance` per company × lokasi Odoo × produk (beberapa lokasi ESB `stock` → satu lokasi Odoo).
+  Hasil < 0 → **tidak diekspor**, dicatat `skipped.negative_stock` (jumlah + daftar kode produk × cabang) → peringatan
+  validator + laporan Ops (Q-ESB27). Hasil = 0 → tidak diekspor.
+- Baris: `{"entity":"quant","company_code","esb_key":"<branch_id>|<product_code>","xmlid":null,"data":{…}}`,
+  `DATA_KEYS["quant"]` = `{location_key, product_key, product_code, quantity, uom_esb, uom_xmlid, esb_branch_id,
+  esb_locations, amount, accounting_date, quarantine_of}` (`esb_locations` = daftar nama lokasi ESB yang dijumlah;
+  `amount` = Σ `amount_balance` untuk rekonsiliasi; `accounting_date` = `cutover − 1`; `quarantine_of` **opsional**,
+  hanya baris karantina, G65b).
+- Produk `tracking != none` di Odoo → error (ESB tanpa lot; Q-34).
+
+**`legacy_purchase_line`** (berkas `legacy_purchase_line.jsonl.gz` dalam bundel segmen histori company × bulan §27.3a;
+bila segmen dipecah per gudang karena berkas histori lain, seluruh baris pembelian bulan itu ikut **part 1**):
+- Rentang: `[awal bulan(cutover) − 24 bulan, cutover − 1]` (sama `sales.daily`; tanpa parameter baru — ±60 rb baris PB).
+  Semua status PO dimuat (status disimpan).
+- `HISTORY_KEYS["legacy_purchase_line"]` = `("purchase_num", "line_no", "date", "date_required", "branch_key",
+  "branch_name", "supplier_key", "supplier_name", "product_key", "esb_branch_id", "esb_supplier_code",
+  "esb_product_code", "uom_name", "qty", "receipt_qty", "pricelist_price", "price_unit", "discount", "vat_value",
+  "total", "status", "map_source")`; `HISTORY_OPTIONAL_KEYS` = `{"product_name", "category_name",
+  "sub_category_name"}` (identik di importer Odoo `esb_import/mapping.py`). `esb_branch_id`/`esb_supplier_code` = jejak
+  sumber di bundel (rekonsiliasi), tidak disimpan model.
+- **Semua** baris dimuat (arsip lengkap, semua status): `branch_key`/`supplier_key`/`product_key` boleh `null`
+  (cabang `skip`/HO/tak terpetakan → `warehouse_id` kosong; `map_source='none'` tetap dimuat, dihitung di rekonsiliasi).
+  Baris `currency ≠ IDR` → tidak diekspor, `skipped.currency`.
+- `company_code` = `segment.company_code` (PT cabang; `branch_id=0` → PT default brand). Segmen dipecah per gudang
+  **tidak** berlaku untuk berkas ini (irisan company × bulan, ±2,5 rb baris/bulan PB).
+
+**Manifest** (+): `source.snapshot.fact_esb_stock_opening` = `{"opening_date", "max_version", "branches_checkpointed"}`;
+`source.snapshot.fact_esb_purchase_line` = max `_version` + hari checkpoint terakhir; `purchase_statuses`;
+`purchase_discount_mode`; `skipped.{negative_stock, non_storable, supplierinfo_unmapped, currency, location_unmapped,
+uom_conflict}`; `quarantine_rows` (G65b). `ENTITY_FILES` += `supplierinfo`,
+`quant`, `legacy_purchase_line`. `MAP_FILES` += `location_map.csv`. Catatan manifest lama "supplierinfo: belum ada sumber
+ESB" dihapus.
+
+**Urutan PB gladi (runbook `migrasi-esb-odoo.md` diperbarui W-B):** (1) `backfill --entity purchase_line` 24 bulan +
+`backfill --force` 30 hari terakhir; (2) setelah freeze pada/setelah 2026-12-01: `snapshot --entity stock_opening --date
+2026-12-01`; (3) `export --step master --cutover-date 2026-12-01` (`supplierinfo` + `cost` sumber stok); (4) `export
+--step history --cutover-date 2026-12-01 --months 2026-11` (November ulang: flow, sales.daily, sales.line, purchase) +
+`--step legacy_purchase_line` untuk 23 bulan sebelumnya; (5) `export --step stock --cutover-date 2026-12-01`;
+(6) `cutover-param`. Setiap bundel: validasi → dry-run → nyata.
+
+#### 27.13.5 Validator & rekonsiliasi (W-B)
+Tambahan §27.7:
+| Pemeriksaan | Tingkat |
+|---|---|
+| Kunci `data`/baris di luar whitelist `supplierinfo`, `quant`, `cost`, `legacy_purchase_line` | Error (PII fail closed) |
+| `supplierinfo`: `price ≤ 0`, `currency ≠ IDR`, duplikat `(company, supplier_code, product_code)`, `sequence` tidak 1..n | Error |
+| `cost.source ∉ {stock_opening, bom_last_hpp, purchase_last}`; `as_of` ≠ cutover untuk `source=stock_opening` | Error |
+| `quant`: qty ≤ 0, lokasi bukan milik PT, produk tanpa `cost` (dan tanpa `standard_price` di Odoo), satuan tanpa `uom_map`, produk tanpa satuan dengan > 1 satuan saldo awal (`STOCK_UOM_CONFLICT`, G65b), `quarantine_of` hilang/salah atau ada di baris non-karantina (`QUANT_QUARANTINE_OF`, G65b) | Error |
+| `quant`: lokasi berpola damage/expired tanpa `location_map` | Peringatan (non-production) / Error (production) |
+| `supplierinfo`: `discount` di luar 0..100 | Error |
+| `quant`: `fact_esb_stock_opening.opening_date ≠ manifest.cutover_date`; cabang non-`skip` tanpa checkpoint | Error (exit 4 di importer) |
+| `skipped.negative_stock` > 0; `location_unmapped` > 0; `supplierinfo_unmapped` > 0 | Peringatan |
+| G65b `--allow-zero-cost`: produk di `zero_cost_products` (`QUANT_ZERO_COST`); `--skip-unconvertible-stock`: `skipped.uom_unconvertible` > 0 (`STOCK_UOM_SKIPPED`, tanpa opsi = Error `STOCK_UOM_UNCONVERTIBLE`) | Peringatan (hanya bila opsi tercatat di `export_options`) |
+| `cost.standard_price ≤ 0` tanpa `allow_zero_cost` atau produk tidak di `zero_cost_products`; `zero_cost_products` tanpa opsi (`COST_ZERO_WITHOUT_OPTION`) | Error |
+| `legacy_purchase_line`: duplikat `(purchase_num, line_no)` per segmen; tanggal di luar segmen/rentang | Error |
+| `legacy_purchase_line`: `map_source='name'` | Peringatan |
+
+Rekonsiliasi (§27.5) — **mengubah butir 2 dan 4, menambah 1a dan 5e:**
+| # | Butir | Pemblokir? |
+|---|---|---|
+| 1a | Jumlah `supplierinfo` & `cost` (per `source`) bundel vs Odoo dibuat/diperbarui/konflik/gagal | Ya bila gagal > 0 |
+| 2 | **(G65)** Σ qty per company × lokasi Odoo × produk: `quant.jsonl` vs `stock.quant.quantity` setelah apply = 0 selisih; Σ qty `fact_esb_stock_opening` (non-negatif, non-`skip`) vs Σ `quant.jsonl` per cabang = 0 selain `skipped`; **nilai**: Σ (qty × `standard_price`) per lokasi vs Σ `amount_balance` per lokasi + total per company (selisih karena HPP rata-rata company) | qty: **Ya**; nilai: laporan Finance (peringatan bila > 1 % per company) |
+| 4 | Neraca pembukaan / kliring = 0 | **Tidak dievaluasi di G65** (`opening` NOT_BUILT); tetap pemblokir cutover production |
+| 5e | Jumlah baris + Σ `qty`, `total` per company × bulan × cabang (`branch_name`) `efn.legacy.purchase.line` vs `fact_esb_purchase_line` (versi ber-checkpoint, semua status, IDR); `skipped.currency` dan jumlah baris `map_source ≠ header` dilaporkan terpisah; query pemeriksa 5d juga untuk tabel ini | Ya |
+| 2b | Opname ESB (`fact_esb_stock_opname`, bila ada di sekitar cutover) vs saldo stok awal per produk — validator, bukan sumber (fit-gap §4.2) | Peringatan |
+
+#### 27.13.6 Odoo: model `efn.legacy.purchase.line` (W-C; **diselaraskan dengan fit-gap G65 §1.2**, 24 Nov 2026)
+Di `efn_legacy_history` (versi **19.0.1.1.0**; depends **+ `purchase`** — fit-gap §1.2; `purchase`, `purchase_stock`,
+`stock_account`, `efn_legacy_history` berstatus *installed* di DB efn-prod, dicek lead 24 Nov). Aturan bersama §27.8
+berlaku (read-only, `_check_company_auto`, rule global multi-company `noupdate=1`, ACL hanya read, create/write/unlink
+lewat `check_import_allowed`, label "arsip sistem lama — bukan transaksi Odoo", tanpa relasi ke
+`purchase.order`/`stock.move`/`account.move`, **tidak** dibaca `purchase.report`/ETL `fact_dc_purchase_line`).
+`_log_access = False`, `_order = "date desc, id desc"`, `_rec_name = "purchase_num"`, semua field `readonly=True`.
+
+| Field | Tipe | Kunci bundel (`HISTORY_KEYS`) | Catatan |
+|---|---|---|---|
+| `company_id` | M2o `res.company`, required | `segment.company_code` | PT cabang |
+| `date` | Date, required | `date` | `purchaseDate`; kunci irisan |
+| `date_required` | Date | `date_required` | `requiredDate` |
+| `purchase_num` | Char(32), required | `purchase_num` | nomor PO ESB (ID dokumen, bukan PII) |
+| `line_no` | Integer, required | `line_no` | §27.13.1 (stabil per `purchaseNum`) |
+| `warehouse_id` | M2o `stock.warehouse`, **nullable**, `check_company` | `branch_key` | HO/cabang `skip`/tak terpetakan → kosong |
+| `branch_name` | Char(64) | `branch_name` | teks asli, selalu diisi |
+| `supplier_id` | M2o `res.partner`, nullable, `check_company`, `ondelete set null` | `supplier_key` | xmlid `supplier` |
+| `supplier_name` | Char(128) | `supplier_name` | nama perusahaan (L-110); supplier perorangan = PII tak terenkripsi → dicatat ke DPO (inventaris PDP §2.8.14) |
+| `product_id` | M2o `product.product`, nullable, `check_company`, `ondelete set null` | `product_key` | |
+| `esb_product_code` | Char(32), required | `esb_product_code` | |
+| `product_name` | Char(128) | `product_name` | |
+| `category_name`, `sub_category_name` | Char(64) | sama | kategori ESB asli |
+| `uom_name` | Char(16) | `uom_name` | teks ESB, **tidak** dikonversi |
+| `qty`, `receipt_qty` | Float (16,3) | sama | satuan = `uom_name` |
+| `pricelist_price` | Float (16,2) | sama | |
+| `price_unit` | Float (16,2), `aggregator="avg"` | `price_unit` | `price` ESB |
+| `discount` | Float (16,2) | `discount` | nominal atau % **[B]** (Q-G65-2) |
+| `vat_value`, `total` | Float (16,2) | sama | |
+| `status` | Char(32) | `status` | `statusName` (Char, bukan Selection) |
+| `map_source` | Char(8) | `map_source` | `header`\|`name`\|`none` (tambahan architect, jejak pemetaan §27.13.1) |
+| `cost_center` | Char(64) | — | disediakan fit-gap; **tidak diisi** G65 (`costCenterName` dibuang extractor, §27.13.1) |
+- **Tanpa** constraint unik (fit-gap). Indeks `(company_id, date)`, `(company_id, product_id, date)`,
+  `(company_id, supplier_id, date)`, `purchase_num` btree.
+- Irisan ganti = **company × bulan** (bukan per gudang, karena `warehouse_id` nullable): `bulk.py` mendapat varian
+  irisan tanpa gudang (`warehouse_id=None` = seluruh PT), bukan gudang dummy (fit-gap §1.2).
+- ACL: `purchase.group_purchase_user` baca saja (`1,0,0,0`); tidak ada grup tulis. Menu baru **Purchase › Histori ESB
+  (arsip)** (parent `purchase.menu_purchase_root`, sequence 98, grup `purchase.group_purchase_user`); entri Inventaris
+  hanya bila Q-G65-4 meminta. View list + pivot + graph, filter default 3 bulan terakhir.
+- Mata uang: tanpa kolom per baris (IDR); header `currencySign` (probe 24 Nov: `currencyID` 1 = `IDR`, 2 = `USD`) ≠ IDR → baris ditolak export + dilaporkan.
+
+#### 27.13.7 Odoo: importer `odoo_import_esb.py` / `esb_import` (W-C)
+| Handler | Perilaku | Idempotensi |
+|---|---|---|
+| `_do_supplierinfo` | upsert `product.supplierinfo`: saat create `partner_id` (dari `partner_key`), `product_tmpl_id` (dari `product_key`), `company_id`; field milik migrasi §27.13.4 (`price`, `discount`, `date_start`, `product_uom_id`, `sequence`, `min_qty`, `currency_id`); supplier yang tidak muncul lagi → **tidak** dihapus, dilaporkan | xmlid §27.4; konflik bila diubah pengguna (L-131) |
+| `_do_cost` | (ada) tulis `standard_price` per company; pertahankan penolakan `conflict_has_stock` (HPP produk berstok tidak diubah); catat `source` di laporan; tulis `efn_mig_esb.cost_as_of.<CODE>` = `as_of` (run nyata) | absolut |
+| `_do_stock` | fit-gap §4.3: per (lokasi, produk) quant `(product_id, location_id, lot/package/owner kosong)` konteks `inventory_mode=True` → `inventory_quantity` = target absolut (UoM produk) + **`accounting_date = cutover − 1`**; apply hanya quant `inventory_diff_quantity ≠ 0` lewat **`action_apply_inventory(date=<cutover − 1, 23:59:59 WIB dalam UTC>)`** (agar `stock.move.date` = cutover − 1; `accounting_date` saja tidak mengubah tanggal move), konteks `inventory_name="Saldo awal ESB <cutover − 1>"`; hasil berupa dict aksi (wizard konflik) → **error**; produk di Odoo tapi tidak di snapshot → dilaporkan (flag `zero_missing` hanya non-production, gladi ulang) | absolut (`inventory_quantity`); ulang data sama = 0 move |
+| `legacy_purchase_line` | loader bulk `bulk.py`, irisan company × bulan tanpa gudang (§27.13.6) | ganti-per-irisan |
+
+`esb_import/mapping.py`: `OPENING_STEPS` dipecah — `stock` dibangun, `opening` tetap ditolak (`import_opening_balances`
+hanya untuk `opening`). Gerbang tambahan langkah `stock` (exit 4): (a) company tidak di `EFN_MIG_SALDO_BLOCKED`;
+(b) **tidak ada** `stock.move` `state='done'` dengan `is_inventory=False` di lokasi target dengan `date ≥ cutover`, dan
+tidak ada sesi POS PB terbuka (cegah menimpa transaksi nyata); (c) `efn_mig_esb.cost_as_of.<CODE>` = cutover;
+(d) manifest `opening_date` = `cutover_date`; (e) produk `tracking != none` → error (fakta efn-prod 24 Nov: semua
+produk PB `tracking=none`, jadi lot dummy fit-gap §4.4 **tidak** dibangun G65).
+
+**Valuasi (fakta efn-prod 24 Nov: 13 kategori PB `property_cost_method=average`, 67 default; `property_valuation`
+kosong semua = periodik):** apply **tidak** membuat jurnal (fit-gap §4.1). Pengakuan nilai = `res.company.
+action_close_stock_valuation(at_date=cutover − 1, auto_post=False)` → jurnal **draft** "Stock Closing"; dijalankan
+**runbook** (bukan importer) setelah `valuation_account_id` lokasi *Inventory adjustment* PB diarahkan ke akun "Saldo
+Awal – Kliring" (Finance, Q-ESB16/Q-G65-6); posting oleh Finance. Cron closing tidak diaktifkan sebelum akun dikonfirmasi.
+Filter `at_date` terhadap `stock.move.date` **[B]**.
+
+#### 27.13.8 Parameter `efn_mig_esb.cutover_date.PB` (geser 2026-11-17 → 2026-12-01)
+- Ditulis langkah `cutover-param` (run nyata). Menggeser **maju** diizinkan di `APP_ENV` non-production bila irisan
+  histori `[cutover lama, cutover baru − 1]` sudah dimuat untuk setiap langkah histori yang pernah dimuat company itu
+  (importer memeriksa `import_report` tersimpan / jumlah baris per bulan; kurang → exit 4). Menggeser **mundur** → exit 4
+  (baris histori ≥ cutover baru melanggar §27.5 (5)); hapus irisan dulu (runbook).
+- Production: perubahan parameter setelah cutover nyata = di luar kontrak (berita acara + keputusan user).
+  **Override eksplisit** (keputusan user 24 Nov 2026, dasar untuk gladi `efn-prod` lokal PB 2026-11-17 → 2026-12-01):
+  opsi importer `allow_cutover_shift` = string persis `<CODE>:<lama>:<baru>` (`run-import.sh --allow-cutover-shift
+  PB:2026-11-17:2026-12-01`, wajib di setiap run yang bundelnya ber-cutover baru sampai `cutover-param` tertulis).
+  Diterima hanya bila cocok persis dengan PT, parameter lama di DB, dan `cutover_date` manifest; hanya maju; syarat
+  irisan histori di atas tetap berlaku. Tanpa opsi / tidak cocok → exit 4 (format salah → exit 2). Nilai dicatat di
+  `import_report.cutover_shift_override`. Production nyata tetap butuh berita acara di samping opsi ini.
+- Efek forecast: batas hook `_efn_legacy_outflow` ikut 2026-12-01; `stock.move` PB < 2026-12-01 (data demo) tidak
+  dibaca forecast.
+- Parameter baru `efn_mig_esb.cost_as_of.<CODE>` (§27.13.4/§27.13.7) — diisi importer, gerbang `stock`.
+
+#### 27.13.9 Keputusan (L-250..L-258) dan pertanyaan klien (Q-ESB25..Q-ESB29)
+| # | Keputusan |
+|---|---|
+| L-250 | Stok awal = baris `Beginning` `/report/stock-movement` start=end=cutover per cabang, simpan hanya qty ≠ 0 (`fact_esb_stock_opening`); stock opname/stock-list bukan sumber qty (ADR-042 §0b.4). |
+| L-251 | `stock_opening --date` = tanggal **cutover** (pengecualian konvensi P2 `cutover − 1`), wajib eksplisit, dijalankan setelah freeze. |
+| L-252 | HPP cutover: `stock_opening` rata-rata tertimbang per company → `bom_last_hpp` → `purchase_last`; `cost` dijalankan ulang dengan `--cutover-date` sebelum `stock` (gerbang `cost_as_of`). |
+| L-253 | `supplierinfo` = harga baris PO terakhir 12 bulan per company × supplier × produk, status `Authorized/Receiving/Finished/Closed` (konfigurabel), `sequence` = supplier terbaru dulu. |
+| L-254 | `purchase_line` = slice harian brand × hari (recap + header PO, join `purchaseNum`); filter cabang recap tidak dipakai; fallback nama berlabel `map_source`. |
+| L-255 | Histori pembelian = `efn.legacy.purchase.line` read-only 24 bulan (field = fit-gap G65 §1.2 + `map_source`), depends `purchase`, baca `purchase.group_purchase_user`, bulk ganti-per-irisan company × bulan; `purchase.order` histori ditolak. |
+| L-256 | `stock` dibangun (keluar `NOT_BUILT`): `inventory_quantity` absolut + `accounting_date = cutover − 1` + `action_apply_inventory(date=cutover − 1 23:59:59 WIB)`; valuasi periodik → closing draft `action_close_stock_valuation(auto_post=False)` lewat runbook; `opening` tetap `NOT_BUILT` (Q-ESB21); butir rekonsiliasi 4 tidak dievaluasi di gladi, tetap pemblokir production. |
+| L-257 | Stok negatif ESB tidak dimigrasi (dilaporkan); `location_map.csv` opsional (default `stock`), lokasi berpola damage/expired tanpa peta = peringatan di non-production, error di production. |
+| L-258 | Tabel G65 hanya untuk `esb_writer` + `mig_rw`; tidak ke Insight/Metabase/forecast. DDL `23-g65-esb-purchase-stock.sql`. |
+
+- **Q-ESB25** (Ops PB) Lokasi Damage/Expired/Temporary (dan sejenis) di saldo ESB: dimigrasi ke lokasi utama, lokasi
+  karantina, atau tidak dimigrasi (dihapusbukukan di ESB sebelum freeze)? Default kontrak: **error sampai dipetakan**.
+- **Q-ESB26** (Finance) HPP cutover = rata-rata tertimbang nilai buku ESB per PT (bukan per lokasi) diterima? Harga
+  supplierinfo = harga satuan PO sebelum diskon, tanpa PPN?
+- **Q-ESB27** (Ops/Finance) Saldo stok **negatif** di ESB pada tanggal cutover: diterima dinolkan di Odoo (daftar
+  dikirim ke Ops untuk koreksi di ESB sebelum freeze)?
+- **Q-ESB28** (Purchasing) Status PO yang mewakili harga beli sah: `Authorized, Receiving, Finished, Closed`? Ada status
+  lain di ESB PB?
+- **Q-ESB29** (PO) efn-prod: parameter cutover PB masih 2026-11-17 dan stok internal PB = 0 (dicek lead 24 Nov).
+  Transaksi demo PB sebelum 1 Des tidak memblokir gerbang `stock` (b), tetapi transaksi PB **pada/setelah 1 Des sebelum
+  stok awal dimuat** akan memblokirnya. Setuju: tidak ada transaksi PB di efn-prod mulai 1 Des sampai langkah `stock`
+  selesai (rekomendasi), atau reset Odoo efn-prod (`docs/runbooks/efn-prod-odoo-reset.md`) sebelum gladi?
+
+Pemetaan ke pertanyaan fit-gap G65: Q-ESB26 ⊃ Q-G65-6 (HPP rata-rata, akun kliring); Q-ESB28 = Q-G65-3 (default kontrak =
+**daftar izin** `Authorized, Receiving, Finished, Closed` dari probe, lebih ketat dari default fit-gap "semua kecuali
+Cancel/Draft/Reject" — status tak dikenal tidak menjadi harga); Q-G65-1 (join `purchaseNum`, dipakai), Q-G65-2 (arti
+`discount`, opsi `--purchase-discount-mode`), Q-G65-4 (pembaca histori), Q-G65-5 (lot — **gugur**: PB tanpa tracking)
+tetap di fit-gap.
+
+**Belum terverifikasi [B]:** nama field `supplierID` di `/supplier`; batas `limit` header PO; kesamaan `branchCode`
+stock-movement dengan `dim_esb_branch.branch_code`; arti default `unitToShow`; `amountBalance` bulat; arti `discount`/
+`total` (PPN); perilaku RFQ dengan `product_uom_id` ≠ UoM produk; `create` quant mode inventaris pada quant yang sudah
+ada; efek `date` mundur pada AVCO; filter `at_date` closing valuasi; apakah `dateFrom/dateTo` recap dan header PO
+sama-sama memfilter `purchaseDate`. **Terverifikasi (fit-gap G65, source 19.0):** `product.supplierinfo.product_uom_id`,
+`discount` (%), `stock.quant.accounting_date` + `action_apply_inventory(date=…)`, `action_close_stock_valuation`.
+**Fakta efn-prod (lead, 24 Nov):** modul `purchase`/`purchase_stock`/`stock_account`/`efn_legacy_history` installed;
+PB company id 4, 37 gudang, stok internal 0, kategori 13 `average` + 67 default, valuasi periodik, tracking none;
+parameter `cutover_date.PB`=2026-11-17, `sales_line_months`=24, `legacy_days`=400.
+
 ## 28. Supermarket — forecast, replenishment DC, assortment, perilaku visitor, kampanye, kanal email & WA unofficial (ADR-041 rev, ADR-044..048, Proposed) (v20.0, 18 Nov 2026)
 
 > **Penomoran.** §27 dan **L-127..L-143** dicadangkan untuk G43 (migrasi ESB → Odoo, branch terpisah yang belum masuk

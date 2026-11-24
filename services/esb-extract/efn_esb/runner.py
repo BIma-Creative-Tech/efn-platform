@@ -36,6 +36,7 @@ from efn_esb.planning import (
     in_window,
     incremental_tasks,
     snapshot_due,
+    snapshot_tasks,
     wib_today,
 )
 from efn_esb.records import (
@@ -49,12 +50,18 @@ from efn_esb.records import (
     raw_rows,
     version_now,
 )
-from efn_esb.transform import MART_TABLES, BomRatio
+from efn_esb.transform import DIM_SUPPLIER_COLUMNS, MART_TABLES, BomRatio
+from efn_esb.transform_g65 import G65_TABLES
 from efn_esb.transform_mig import MIG_TABLES
 
 log = logging.getLogger("efn_esb.runner")
-# Tabel mart G41 + tabel migrasi G43 (14-g43-migration.sql).
-ALL_TABLES: dict[str, tuple[str, ...]] = {**MART_TABLES, **MIG_TABLES}
+# Tabel mart G41 + tabel migrasi G43 (14-g43-migration.sql) + G65 (23-g65-esb-purchase-stock.sql).
+ALL_TABLES: dict[str, tuple[str, ...]] = {**MART_TABLES, **MIG_TABLES, **G65_TABLES}
+# G65: entitas yang memetakan supplier lewat dim_esb_supplier.supplier_id (docs/04 §27.13.1).
+SUPPLIER_ID_ENTITIES = frozenset({"purchase_line"})
+_SUP_ID = DIM_SUPPLIER_COLUMNS.index("supplier_id")
+_SUP_CODE = DIM_SUPPLIER_COLUMNS.index("supplier_code")
+_SUP_NAME = DIM_SUPPLIER_COLUMNS.index("supplier_name")
 
 # SEC-186: jumlah siklus `auth_failed` berturut-turut sebelum brand ditangguhkan.
 AUTH_SUSPEND_AFTER = 2
@@ -73,6 +80,8 @@ class Store(Protocol):
     def load_aliases(self, brand: str) -> dict[str, str]: ...
 
     def load_bom_ratios(self, brand: str) -> dict[int, BomRatio]: ...
+
+    def load_suppliers(self, brand: str) -> list[tuple[int, str, str]]: ...
 
 
 class Budgeted(Protocol):
@@ -131,6 +140,13 @@ def _absorb(rt: BrandRuntime, result: SliceResult) -> None:
         rt.aliases.update(result.aliases)
     if result.task.entity == "branch":
         rt.branch_rows = result.tables.get("dim_esb_branch", [])
+    if result.task.entity == "master":
+        suppliers = [
+            (int(row[_SUP_ID]), str(row[_SUP_CODE]), str(row[_SUP_NAME]))
+            for row in result.tables.get("dim_esb_supplier", [])
+        ]
+        with rt.lock:
+            rt.suppliers = suppliers
 
 
 def execute(
@@ -216,10 +232,22 @@ def prepare_brand(
     checkpoints: dict[tuple[str, str, date], datetime],
     stop: threading.Event,
     force_master: bool = False,
+    need_supplier_ids: bool = False,
 ) -> Outcome:
-    """Cabang (setiap run, dibutuhkan daftar toko) + alias & rasio dari ClickHouse + master bila jatuh tempo."""
+    """Cabang (setiap run, dibutuhkan daftar toko) + alias & rasio dari ClickHouse + master bila jatuh tempo.
+
+    G65 `need_supplier_ids` (entitas `purchase_line` aktif): supplier dimuat dari dim_esb_supplier; bila belum ada satu
+    pun `supplier_id` > 0 (kolom baru, master belum jalan sejak deploy) master dipaksa SEKALI per proses agar join
+    header PO -> kode supplier tidak jatuh ke fallback nama."""
     rt.aliases = store.load_aliases(rt.cfg.key)
     rt.ratios = store.load_bom_ratios(rt.cfg.key)
+    if need_supplier_ids:
+        suppliers = store.load_suppliers(rt.cfg.key)
+        with rt.lock:
+            rt.suppliers = suppliers
+        if not rt.master_forced_for_ids and not any(supplier_id > 0 for supplier_id, _, _ in suppliers):
+            rt.master_forced_for_ids = True
+            force_master = True
     outcome = execute([SliceTask(today, "branch", BRAND_SCOPE)], rt, store, get, 1, stop)
     if outcome.slices == 0:
         return outcome  # tanpa daftar cabang slice lain tidak bisa direncanakan
@@ -260,9 +288,10 @@ def run_cycle(
         today = wib_today(now)
         lookback = max(max(settings.correction_days), settings.gap_fill_days) + 1
         checkpoints = store.checkpoints(rt.cfg.key, today - timedelta(days=lookback))
-        outcome = prepare_brand(rt, store, client.get, today, checkpoints, stop)
+        entities = [e for e in settings.entities if e in DAILY_ENTITIES]
+        need_ids = bool(SUPPLIER_ID_ENTITIES & set(entities))
+        outcome = prepare_brand(rt, store, client.get, today, checkpoints, stop, need_supplier_ids=need_ids)
         if outcome.slices and not (outcome.auth or outcome.budget):
-            entities = [e for e in settings.entities if e in DAILY_ENTITIES]
             tasks = incremental_tasks(
                 entities,
                 rt.stores(include_inactive=False),
@@ -423,9 +452,10 @@ def run_backfill(
             return _finish(run, client, outcome, store, started)
         today = wib_today(now_fn())
         checkpoints = store.checkpoints(rt.cfg.key, min(start, today))
-        outcome = prepare_brand(rt, store, client.get, today, checkpoints, stop)
+        daily = [e for e in entities if e in DAILY_ENTITIES]
+        need_ids = bool(SUPPLIER_ID_ENTITIES & set(daily))
+        outcome = prepare_brand(rt, store, client.get, today, checkpoints, stop, need_supplier_ids=need_ids)
         if outcome.slices and not (outcome.auth or outcome.budget):
-            daily = [e for e in entities if e in DAILY_ENTITIES]
             tasks = backfill_tasks(daily, date_range(start, end), rt.stores(), checkpoints, force)
             log.info("brand=%s backfill slices=%d (%s..%s)", rt.cfg.key, len(tasks), start, end)
             outcome.merge(
@@ -460,9 +490,10 @@ def run_snapshot(
     now_fn: Callable[[], datetime] = lambda: datetime.now(UTC),
     on_written: Callable[[SliceResult], None] | None = None,
 ) -> RunRecord:
-    """Snapshot entitas migrasi G43 (`extract_mig.SNAPSHOT_ENTITIES`) satu brand: cabang (+ master bila jatuh tempo)
-    lalu satu slice per entitas (scope '*', `day`). Selalu ditarik ulang (bukan resumable): snapshot = keadaan ESB saat
-    perintah dijalankan. Mode `extract_run` = `snapshot`. Anggaran panggilan = `ESB_BACKFILL_MAX_CALLS`."""
+    """Snapshot entitas migrasi G43 (`extract_mig.SNAPSHOT_ENTITIES`) + G65 `stock_opening` satu brand: cabang (+ master
+    bila jatuh tempo) lalu satu slice per entitas (scope '*', `day`); `stock_opening` satu slice per cabang
+    (`planning.snapshot_tasks`, semua cabang dim_esb_branch). Selalu ditarik ulang (bukan resumable): snapshot = keadaan
+    ESB saat perintah dijalankan. Mode `extract_run` = `snapshot`. Anggaran panggilan = `ESB_BACKFILL_MAX_CALLS`."""
     started = time.monotonic()
     run = RunRecord(rt.cfg.key, "snapshot", datetime.now(UTC), uuid.uuid4())
     outcome = Outcome()
@@ -472,7 +503,8 @@ def run_snapshot(
         checkpoints = store.checkpoints(rt.cfg.key, today)
         outcome = prepare_brand(rt, store, client.get, today, checkpoints, stop)
         if outcome.slices and not (outcome.auth or outcome.budget):
-            tasks = [SliceTask(day, entity, BRAND_SCOPE) for entity in entities]
+            branch_ids = [int(row[2]) for row in rt.branch_rows]
+            tasks = snapshot_tasks(entities, day, branch_ids)
             outcome.merge(execute(tasks, rt, store, client.get, 1, stop, on_written=on_written))
         elif not outcome.slices and not (outcome.auth or outcome.budget):
             run.status = "error"

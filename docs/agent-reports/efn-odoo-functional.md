@@ -1413,3 +1413,35 @@ Ada di README `efn_setup_pos` bagian "Denah meja — langkah UI standar". Ringka
 - Posisi persis menu *Edit Plan* di UI (hanya diverifikasi dari template navbar).
 - Multi-edit `pos.config` di list view sebagai alternatif massal.
 - Tidak ada test/instalasi yang dijalankan dalam tugas ini (dokumen saja).
+
+## 24 Nov 2026 — G65 fit-gap migrasi pembelian & stok PB (dokumen saja)
+
+Worktree `efn-platform-esbmig`, branch `feat/esb-migration-purchase-stock`. Keluaran:
+`docs/fit-gap/G65_MIGRASI_PEMBELIAN_STOK.md` (addendum G43 untuk PB, cutover uji 2026-12-01, stok awal saja).
+
+- **Histori pembelian 24 bln:** gap → model arsip baru `efn.legacy.purchase.line` di `efn_legacy_history` (pola
+  sales line; read-only, record rule company, ACL `purchase.group_purchase_user` baca). Bukan `purchase.order` (stok,
+  jurnal, nomor ganda). Tambah depends `purchase`. Menu di bawah `purchase.menu_purchase_root`, karena Purchase ›
+  Reporting hanya untuk manager [V]. `bulk_replace_slice` perlu varian tanpa gudang (irisan company × bulan).
+- **Harga beli:** standar `product.supplierinfo` (modul `product`, field `product_uom_id`, `discount` dalam %) [V],
+  dari PO terakhir 12 bulan per PT × supplier × produk.
+- **HPP:** standar `standard_price` (company-dependent) [V], dari Σ amountBalance/Σ qtyBalance baris Beginning
+  stock-movement per PT. Fallback lastHpp BOM, lalu harga PO terakhir. PB = AVCO + periodik (G61 placeholder).
+- **Stok awal:** standar `stock.quant` mode inventaris [V]. Temuan: `accounting_date`/`force_period_date` hanya
+  menentukan tanggal jurnal, bukan `stock.move.date` → pakai `action_apply_inventory(date=…)`. Periodik = tanpa jurnal
+  saat apply. Kliring lewat `valuation_account_id` lokasi Inventory adjustment + `action_close_stock_valuation(at_date)`.
+- Audit duplikasi: tidak ada; langkah `cost`/`supplierinfo`/`stock` importer memakai API CE standar.
+- Pertanyaan klien baru Q-G65-1..7; daftar [B] untuk engineer di §6 dokumen.
+
+## 24 Nov 2026 — G65b karantina stok awal (dokumen saja)
+
+Keputusan user Q-ESB25/Q-G65-7: 5 gudang damage PB (cabang ESB 3, 13, 23, 25, 37) → lokasi karantina. Tambahan
+§4.6 di `docs/fit-gap/G65_MIGRASI_PEMBELIAN_STOK.md`. Standar CE, tanpa modul/model baru.
+- Lokasi `internal` "Karantina ESB", induk `warehouse.view_location_id` (saudara Stock). Reservasi `_gather` memakai
+  `child_of` lokasi sumber (= `lot_stock_id`) [V] → karantina tidak di-reserve/putaway. xmlid
+  `efn_mig_esb.<brand>_<company>_branch_quarantine_<branch_id>`, dibuat di langkah `branch`; `replenish_location=False`.
+- Koreksi brief: `scrap_location`/`return_location` **tidak ada** di `stock.location` 19.0 [V] → jangan ditulis.
+- Bernilai (internal ber-company) → ikut periodik + kliring §4.5. Catatan: `qty_available` per gudang ikut menghitung
+  karantina (domain `view_location_id`) [V]; orderpoint & reservasi tidak.
+- Ops: transfer internal (→ Stock) atau `stock.scrap` standar. Record rule: tidak perlu tambahan.
+- Kontrak docs/04 §27.13.4 perlu diubah oleh pemilik kontrak: `quarantine` menjadi didukung.

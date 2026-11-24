@@ -40,9 +40,12 @@ def data(source: FakeSource) -> MasterData:
 
 def test_expand_steps() -> None:
     assert expand_steps(["master"])[:2] == ["branch", "uom"] and "cost" in expand_steps(["master"])
-    assert expand_steps(["history", "legacy_flow"]) == ["legacy_flow", "legacy_sales_daily", "legacy_sales_line"]
-    assert expand_steps(["cutover"])[-1] == "cutover-param"
-    for bad in (["stock"], ["opening"], ["apa"]):
+    assert expand_steps(["history", "legacy_flow"]) == [
+        "legacy_flow", "legacy_sales_daily", "legacy_sales_line", "legacy_purchase_line"
+    ]  # fmt: skip
+    assert expand_steps(["cutover"])[-2:] == ["stock", "cutover-param"]
+    assert expand_steps(["stock"]) == ["stock"]  # G65: stock dibangun
+    for bad in (["opening"], ["cutover", "opening"], ["apa"]):
         with pytest.raises(StepError):
             expand_steps(bad)
 

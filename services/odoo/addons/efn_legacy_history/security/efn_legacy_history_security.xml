@@ -37,5 +37,12 @@
             <field name="model_id" ref="model_efn_legacy_sales_line"/>
             <field name="domain_force">[('company_id', 'in', company_ids)]</field>
         </record>
+        <!-- G65 (docs/04 §27.13.6): histori pembelian ESB. Upgrade 19.0.1.1.0: record baru di blok noupdate tetap
+             dibuat saat -u (noupdate hanya melindungi record yang sudah ada). -->
+        <record id="efn_legacy_purchase_line_rule_company" model="ir.rule">
+            <field name="name">EFN histori baris pembelian ESB: multi-company</field>
+            <field name="model_id" ref="model_efn_legacy_purchase_line"/>
+            <field name="domain_force">[('company_id', 'in', company_ids)]</field>
+        </record>
     </data>
 </odoo>

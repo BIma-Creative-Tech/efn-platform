@@ -3,6 +3,7 @@
 Jalan di container sekali jalan `esb-migrate` (image esb-extract, network `esb` saja, tmpfs /work):
   python esb_to_odoo.py export --brand pb --step master --maps /maps --out /out [--cutover-date D]
   python esb_to_odoo.py export --brand pb --step history --cutover-date D --maps /maps --out /out [--months 2025-01,...]
+  python esb_to_odoo.py export --brand pb --step stock --cutover-date D --maps /maps --out /out   (G65, §27.13.4)
   python esb_to_odoo.py writeback --result /out/<run_id>.result.efnmig
   python esb_to_odoo.py reconcile --bundle <f> [--bundle <f> ...] --result <f> [...] --out /out [--with-source]
   python esb_to_odoo.py reconcile --final --parent-run-id X --bundle <semua segmen> --result <hasil totals> --out /out
@@ -22,7 +23,8 @@ from typing import TYPE_CHECKING
 
 from efn_mig.bundle import Bundle, IntegrityError, read_bundle, write_secure
 from efn_mig.export import (
-    MASTER_STEPS,
+    SINGLE_STEPS,
+    G65Inputs,
     GateError,
     Maps,
     MasterData,
@@ -32,7 +34,7 @@ from efn_mig.export import (
     export_history,
     export_master,
 )
-from efn_mig.mapping import ExportOptions, MapError
+from efn_mig.mapping import DISCOUNT_MODES, PURCHASE_PRICE_STATUSES, ExportOptions, MapError
 from efn_mig.reconcile import reconcile, reconcile_final
 from efn_mig.results import DryRunResult, map_rows
 from efn_mig.segments import MAX_LEGACY_DAYS, MAX_SALES_LINE_MONTHS, SALES_DAILY_MONTHS, add_months, month_start
@@ -63,10 +65,39 @@ def parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
     exp.add_argument("--allow-default-ratio", action="store_true", help="BoM FIN tanpa bom_ratio -> product_qty 1")
     exp.add_argument("--drop-zero-qty-components", action="store_true", help="buang komponen BoM qty <= 0")
     exp.add_argument(
+        "--allow-zero-cost",
+        action="store_true",
+        help="G65b: produk ber-stok tanpa sumber HPP dan nilai saldo awal ESB tepat 0 -> cost 0 (peringatan)",
+    )
+    exp.add_argument(
+        "--skip-unconvertible-stock",
+        action="store_true",
+        help="G65b: baris stok satuan tanpa faktor tetap tidak dimuat; validator error -> peringatan",
+    )
+    exp.add_argument(
         "--recent-menu-days",
         type=int,
         default=30,
         help="L-166: menu histori yang terjual dalam N hari sebelum cutover = aktif (0 = semua arsip; 0..365)",
+    )
+    # G65 (docs/04 §27.13.4): nilai efektif dicatat di manifest.
+    exp.add_argument(
+        "--purchase-statuses",
+        default=",".join(PURCHASE_PRICE_STATUSES),
+        help="status PO harga beli sah, dipisah koma (Q-ESB28; default Authorized,Receiving,Finished,Closed)",
+    )
+    exp.add_argument(
+        "--purchase-discount-mode",
+        choices=DISCOUNT_MODES,
+        default="nominal",
+        help="arti discount ESB untuk supplierinfo (Q-G65-2)",
+    )
+    exp.add_argument(
+        "--stock-empty-branch",
+        action="append",
+        type=int,
+        default=[],
+        help="branch_id ESB tanpa kartu stok sama sekali -> stok awal 0 (deklarasi operator, dicatat manifest)",
     )
     exp.add_argument("--out", type=Path)
     wb = sub.add_parser("writeback", help="hasil impor -> efn_dwh.map_esb_odoo")
@@ -109,7 +140,12 @@ def build_params(args: argparse.Namespace, settings: MigSettings) -> RunParams:
             skip_unlinked_menu_boms=args.skip_unlinked_menu_boms,
             allow_default_ratio=args.allow_default_ratio,
             drop_zero_qty_components=args.drop_zero_qty_components,
+            allow_zero_cost=args.allow_zero_cost,
+            skip_unconvertible_stock=args.skip_unconvertible_stock,
         ),
+        purchase_statuses=tuple(s.strip() for s in args.purchase_statuses.split(",") if s.strip()),
+        purchase_discount_mode=args.purchase_discount_mode,
+        stock_empty_branches=frozenset(args.stock_empty_branch),
     )
 
 
@@ -128,8 +164,9 @@ def cmd_export(args: argparse.Namespace, settings: MigSettings) -> int:
         raise StepError("--recent-menu-days di luar rentang 0..365")
     recent_since = anchor - timedelta(days=args.recent_menu_days) if args.recent_menu_days else None
     data = MasterData.load(src, args.brand, archive_from, anchor, recent_since)
-    if any(s in MASTER_STEPS or s == "cutover-param" for s in steps):
-        path = export_master(data, params, steps, maps, keys, out_dir)
+    if any(s in SINGLE_STEPS for s in steps):
+        g65 = G65Inputs.load(src, args.brand, steps, args.cutover_date)
+        path = export_master(data, params, steps, maps, keys, out_dir, g65=g65)
         print(f"export master: {path.name}")
     months = [x.strip() for x in args.months.split(",") if x.strip()] if args.months else None
     parent, segments = export_history(src, data, params, steps, maps, keys, out_dir, settings.workdir, months)

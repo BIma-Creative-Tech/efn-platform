@@ -121,6 +121,35 @@ GET-only) → ekspor resmi Finance (Q-ESB21). Snapshot selalu menarik ulang (buk
 `ESB_BACKFILL_MAX_CALLS`, satu slice/checkpoint per (entitas, `*`, hari), `extract_run.mode='snapshot'`. Grant tabel baru
 hanya `esb_writer` + `mig_rw` (tidak ke Metabase/Insight).
 
+**G65 (docs/04 §27.13, ADR-042 §0b, L-250..L-258).** Histori pembelian + saldo stok awal (pilot PB), modul
+`extract_g65.py` / `transform_g65.py`, DDL `23-g65-esb-purchase-stock.sql`:
+```
+python -m efn_esb backfill --brand pb --from 2024-12-01 --to <kemarin> --entity purchase_line [--force]
+python -m efn_esb snapshot --brand pb --entity stock_opening --date <cutover>      # --date WAJIB
+```
+| Entitas | Mode | Endpoint (GET) | Slice | Tabel | Redaksi | Status |
+|---|---|---|---|---|---|---|
+| `purchase_line` | harian + backfill, opt-in `ESB_ENTITIES`/`--entity` (default mati) | `/report/purchase/purchase-recapitulation/purchase?dateFrom=D&dateTo=D` (limit 1000) + `/purchase/purchase-order?dateFrom=D&dateTo=D` (limit 100), join `purchaseNum` | `('*', D)` | `fact_esb_purchase_line` | whitelist `PURCHASE_RECAP_FIELDS`/`PURCHASE_HEADER_FIELDS` (notes, additionalInfo, costCenterName, projectName, createdBy, emailSupplier, printedBy dibuang) | dibangun, belum uji GET nyata via extractor |
+| `stock_opening` | `snapshot`, `--date` = tanggal cutover (wajib) | `/report/stock-movement?startPeriod=D&endPeriod=D&branchCode=<kode>&unitToShow=Base Unit` (limit 100) | `(<branch_id>, D)` per cabang dim_esb_branch | `fact_esb_stock_opening` | whitelist `STOCK_MOVEMENT_FIELDS` | dibangun, belum uji GET nyata via extractor |
+
+- `purchase_line`: cabang/supplier dari header PO (`map_source='header'`, kode supplier lewat kolom baru
+  `dim_esb_supplier.supplier_id`); tanpa header/ID tak dikenal → nama tepat-satu (NFKC, upper, spasi dirapikan;
+  `'name'`); gagal/ambigu → `branch_id=0`, `supplier_code=''` (`'none'`, baris tetap disimpan). `map_source` = pemetaan
+  terlemah di antara cabang dan supplier. `line_no` stabil per `purchaseNum` (pola L-113). Semua status disimpan;
+  daftar izin status = tugas export (W-B). `supplier_id` kosong di store → `master` dipaksa sekali per proses.
+- SEC-G65-01: baris recap/header dengan `purchaseDate` ≠ hari slice (atau kosong) → slice error tanpa checkpoint.
+- `stock_opening`: hanya `transactionType="Beginning"` dan `qtyBalance != 0`; setiap baris wajib `branchID` = cabang
+  diminta, atau tanpa `branchID` → `branchCode` = kode diminta (selain itu slice error); cabang AKTIF tanpa satu pun
+  baris `Beginning` (respons kosong) → slice error tanpa checkpoint (SEC-G65-02); kunci ganda dijumlah; angka `Decimal(str(x))`. raw = baris tersimpan + ringkasan
+  `{pages, rows_total, rows_beginning, rows_kept}`.
+- `stock_opening` G65b (gladi 24 Nov 2026): parameter tetap `unitToShow=Base Unit` (konstanta
+  `extract_g65.STOCK_MOVEMENT_UNIT`; nilai persis dengan spasi — `Stock Unit`/`baseUnit` → HTTP 400). Tanpa itu ESB
+  mengembalikan satuan campur per baris (BOX/PACK/EA…); dengan itu semua baris dalam satuan dasar produk ESB (BOX→GR,
+  PACK→PCS), total `amountBalance` identik. Export memakai satuan baris ini bila `dim_esb_product.uom` kosong (semua
+  produk PB). Snapshot `stock_opening` yang diambil sebelum perubahan ini wajib diambil ulang.
+- Cek kualitas: view terpisah `efn_dwh.v_esb_g65_quality` (`purchase_unmapped`, `stock_opening_missing_branch`), bukan
+  tambahan `v_esb_data_quality` — view itu INVOKER dan dibaca Metabase/Insight yang sengaja tidak punya hak tabel G65.
+
 **Brand `auth_suspended` (SEC-186).** Login ESB ditolak 2 siklus berturut-turut → brand tidak login lagi (melindungi akun
 ESB yang juga dipakai kasir dari lockout). Siklus berikutnya hanya menulis `extract_run.status='auth_suspended'`
 (muncul di `v_esb_data_quality` `last_run_not_ok`). Pemulihan: perbaiki secret `esb_core_password_<brand>` (atau keluarkan
@@ -143,7 +172,7 @@ brand dari `ESB_BRANDS`) lalu **restart** `esb-extract`; penangguhan tidak disim
 | `ESB_INTERVAL_SECONDS` | `3600` | |
 | `ESB_SALES_READY_HOUR_WIB` / `ESB_CORRECTION_DAYS` / `ESB_GAP_FILL_DAYS` | `3` / `1,7` / `7` | |
 | `ESB_BACKFILL_WINDOW` / `ESB_BACKFILL_INCLUDE_INACTIVE` | `22:00-05:00` / `true` | toko nonaktif ikut backfill (riwayat toko tutup) |
-| `ESB_ENTITIES` | `branch,master,sales,fin_sold,payment,production,delivery,transfer` | `stock` opsional |
+| `ESB_ENTITIES` | `branch,master,sales,fin_sold,payment,production,delivery,transfer` | `stock`, `purchase_line` (G65) opsional |
 | `ESB_HTTP_TIMEOUT_SECONDS` / `ESB_MAX_PAGES` | `60` / `500` | |
 | `ESB_MAX_RESPONSE_BYTES` | `33554432` (32 MiB) | rentang `1048576`..`134217728` (1–128 MiB); body lebih besar → slice error, tanpa retry (SEC-187) |
 | `ESB_ALLOW_IGNORE_WINDOW` | `false` | production: izinkan `backfill --ignore-window` hanya untuk rentang 1 hari, dengan persetujuan (SEC-185) |

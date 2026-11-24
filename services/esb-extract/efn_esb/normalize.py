@@ -119,6 +119,23 @@ AP_FIELDS = (
     "supplierCode", "purchaseInvoiceNum", "supplierInvoiceNum", "invoiceDate", "dueDate", "currencyName",
     "payableTotal", "paymentTotal",
 )  # fmt: skip
+# G65 (docs/04 §27.13.1, L-110): whitelist SEBELUM disimpan. Dibuang: notes, additionalInfo, costCenterName,
+# projectName, createdBy/editedBy/authorizer*/creator*, emailSupplier, printedBy, dan kunci lain di luar daftar.
+PURCHASE_RECAP_FIELDS = (
+    "purchaseNum", "purchaseDate", "requiredDate", "branchName", "supplierName", "productCode", "categoryName",
+    "subCategoryName", "productName", "uomName", "qty", "receiptQty", "pricelistPrice", "price", "discount",
+    "vatValue", "total", "statusName",
+)  # fmt: skip
+PURCHASE_HEADER_FIELDS = (
+    "purchaseNum", "purchaseDate", "branchID", "branchName", "supplierID", "supplierName", "currencyID", "currencySign",
+    "purchaseTotal", "statusID", "statusName",
+)  # fmt: skip
+# `/report/stock-movement` (kartu stok): tanpa kolom orang; whitelist tetap dipakai agar kunci baru tidak tersimpan.
+STOCK_MOVEMENT_FIELDS = (
+    "branchID", "branchCode", "branchName", "location", "documentDate", "transactionType", "documentCode",
+    "referenceNumber", "productID", "productDetailID", "productCode", "productName", "UOM", "valuePerUnit", "qtyIn",
+    "amountIn", "qtyOut", "amountOut", "qtyBalance", "amountBalance",
+)  # fmt: skip
 
 
 def is_pii_key(key: str) -> bool:
@@ -165,6 +182,12 @@ def alias_norm(name: Any) -> str:
     for pattern, replacement in ALIAS_RULES:
         value = pattern.sub(replacement, value)
     return value
+
+
+def name_norm(name: Any) -> str:
+    """Kunci pencocokan nama (G65 fallback cabang/supplier): NFKC, upper, trim, spasi ganda dirapikan. Tanpa
+    `ALIAS_RULES` (aturan ejaan produk tidak berlaku untuk nama cabang/supplier)."""
+    return _SPACES.sub(" ", unicodedata.normalize("NFKC", text(name)).upper()).strip()
 
 
 def is_fin(code: Any, name: Any) -> bool:

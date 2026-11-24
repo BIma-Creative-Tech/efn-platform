@@ -72,6 +72,35 @@ company_code `v_esb_movement_daily` = PT cabang asal (alternatif dua baris asal/
 - 21 Nov 2026 — konsolidasi worktree; review Insight 11 poin (`fix/insight-review`).
 - 20–21 Nov 2026 — adopsi Claude Standard Kit (#120), gitleaks main hijau (#129).
 
+### G65 — migrasi ESB → Odoo PB: pembelian, harga beli supplier, HPP cutover, stok awal (24 Nov 2026)
+- Keputusan user 24 Nov: semua yang mungkin termasuk histori pembelian; PB saja; gladi efn-prod; cutover uji
+  2026-12-01; saldo awal = stok awal saja (TB & AR/AP tetap NOT_BUILT, Q-ESB21).
+- Probe GET prod PB: pricelist & cogs-history kosong, inventory-valuation 401; sumber stok/HPP = baris `Beginning`
+  `/report/stock-movement` (limit 100, filter branchCode); pembelian = purchase-recapitulation (limit 1000) + header PO
+  (join purchaseNum); `currencyID` 1 = IDR → disimpan `currencySign`.
+- Alur: fit-gap G65 (functional) + ADR-042 §0b & docs/04 §27.13 (architect) → W-A esb-extract, W-B scripts/migration,
+  W-C Odoo (paralel) → QA (2 bug P2 satuan harga diperbaiki) + security (0 C/H/M, 4 Low ditutup) → putaran perbaikan.
+- Verifikasi lead: ruff check/format 3 paket, pytest esb-extract & scripts/migration hijau, DDL ClickHouse 24.8 2×
+  tanpa error, 39/39 test Odoo efn_legacy_history, check-odoo-deps 0 terlarang. check-encryption.sh belum (butuh
+  docker compose di skrip; CI). Commit a2212b2, 6e37d19, 4d14116 di `feat/esb-migration-purchase-stock` (worktree
+  efn-platform-esbmig), belum push/PR.
+- Berikutnya (butuh OK user): deploy ke efn-prod (merge lokal smd, image esb-extract & Odoo, DDL 23-g65, -u
+  efn_legacy_history), backfill purchase_line 24 bln (jendela 22:00–05:00 WIB), snapshot stock_opening tanggal hari
+  ini untuk dry-run; impor nyata stok + geser cutover 17 Nov → 1 Des pada 1–2 Des.
+- Terbuka: Q-ESB25..29, Q-G65-1..7, SEC-G65-04 (DPO), ADR-042 §0b Proposed.
+
+#### G65 gladi efn-prod (24 Nov 2026, lanjutan)
+- Keputusan user: tarik data ESB di luar jendela malam (izin beban Q-ESB7 untuk gladi ini); cutover gladi digeser
+  17 Nov → 1 Des (override eksplisit `--allow-cutover-shift`, 5ac0ddc); cabang PB 39/40 (Makassar) tanpa kartu stok
+  ESB → `--stock-empty-branch` (81aa4dc).
+- Termuat nyata di efn-prod: 723 hari purchase_line, 884 `product.supplierinfo`, 11 HPP, histori pembelian 24 bulan
+  (70.128 baris; reconcile 5e 1.695 irisan ok, 0 pemblokir). Perbaikan dari gladi: kode produk opsional di arsip
+  (222 baris PO aset tetap/seragam tanpa kode, 4d27700).
+- Latihan stok 17 Nov (dry-run) ditolak validator karena data: 5 gudang damage tanpa location_map (Q-ESB25), 534 baris
+  satuan stok ESB ≠ UoM produk Odoo (EA 229, BOX 188, PACK 57, GR 55; butuh konversi per produk), 709 item cost
+  `stock_opening` dengan uom kosong (perlu dicek), 1.235 saldo negatif (default tidak dimigrasi, Q-ESB27).
+- Temuan lama (G43): `dim_esb_product.uom` kosong untuk semua produk PB → ekspor master penuh gagal PRODUCT_UOM;
+  G65 diekspor per langkah (supplierinfo, cost, legacy_purchase_line) karena master PB sudah ada sejak 22 Nov.
 ## G66 — Production planning di atas ESB (24 Nov 2026, branch `feat/production-planning`)
 
 **Lingkup:** ADR-051 (Proposed) + docs/04 §30; service baru `services/prodplan` (baca ESB, rencana di PostgreSQL, tulis

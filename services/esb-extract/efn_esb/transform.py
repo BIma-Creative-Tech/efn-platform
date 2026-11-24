@@ -34,7 +34,8 @@ DIM_MENU_COLUMNS = (
     "_version",
 )  # fmt: skip
 DIM_ALIAS_COLUMNS = ("brand", "company_code", "alias_norm", "product_code", "_version")
-DIM_SUPPLIER_COLUMNS = ("brand", "company_code", "supplier_code", "supplier_name", "active", "_version")
+# supplier_id: G65 (docs/04 §27.13.2, ALTER di 23-g65-esb-purchase-stock.sql) -> join header PO `supplierID` -> kode.
+DIM_SUPPLIER_COLUMNS = ("brand", "company_code", "supplier_code", "supplier_name", "active", "supplier_id", "_version")
 FACT_SALES_COLUMNS = (
     "brand", "company_code", "branch_id", "sales_date", "sales_num", "line_no", "menu_code", "menu_name", "qty",
     "price", "total", "discount", "cogs", "row_type", "is_takeaway", "_version",
@@ -217,13 +218,15 @@ def transform_sales_menus(
 def transform_suppliers(
     rows: Iterable[Mapping[str, Any]], brand: str, company_code: str, version: datetime
 ) -> list[list[Any]]:
-    """Hanya kode, nama perusahaan, status (L-110). Baris tanpa kode dibuang."""
+    """Hanya kode, nama perusahaan, status, ID teknis (L-110). Baris tanpa kode dibuang. `supplierID` tidak ada /
+    tidak valid -> 0 (nama field di `/supplier` belum diverifikasi, docs/04 §27.13.1 [B])."""
     out: dict[str, list[Any]] = {}
     for row in rows:
         code = text(row.get("supplierCode"), 64)
         if code:
             name = text(row.get("supplierName"))
-            out[code] = [brand, company_code, code, name, flag(row.get("flagActive"), 1), version]
+            supplier_id = max(0, to_int(row.get("supplierID")))
+            out[code] = [brand, company_code, code, name, flag(row.get("flagActive"), 1), supplier_id, version]
     return list(out.values())
 
 

@@ -59,6 +59,10 @@ GRANT SELECT, INSERT ON efn_dwh.dim_esb_coa TO esb_writer;
 GRANT SELECT, INSERT ON efn_dwh.fact_esb_stock_opname TO esb_writer;
 GRANT SELECT, INSERT ON efn_dwh.fact_esb_ap_open TO esb_writer;
 GRANT SELECT, INSERT ON efn_dwh.fact_esb_ar_open TO esb_writer;
+-- G65 (23-g65-esb-purchase-stock.sql, docs/04 §27.13.3, L-258). Hanya esb_writer + mig_rw (mig-access.sql); tidak ke
+-- metabase_reader / Insight / forecast. Kolom baru dim_esb_supplier.supplier_id tidak butuh grant baru.
+GRANT SELECT, INSERT ON efn_dwh.fact_esb_purchase_line TO esb_writer;
+GRANT SELECT, INSERT ON efn_dwh.fact_esb_stock_opening TO esb_writer;
 
 -- Tabel agregat Insight (init/20-esb-aggregates.sql). Sumber refresh = 3 view (INVOKER: tabel dasarnya sudah di-grant
 -- SELECT di atas). aggregate_refresh = catatan kesegaran; aggregate_refresh_lock = kunci refresh (SEC-AG-02).
