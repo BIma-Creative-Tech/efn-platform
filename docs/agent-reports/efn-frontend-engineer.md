@@ -1,3 +1,15 @@
+# Laporan efn-frontend-engineer
+
+## Update 25 Nov 2026 — insight-web `/margin-bahan` (G67, docs/04 §31)
+
+- Halaman `services/insight-web/app/(app)/margin-bahan/page.tsx`; logika murni `lib/margin-bahan.ts`; tiga query katalog `mb_group_monthly`, `mb_price_monthly`, `mb_menu_monthly` di `lib/queries.ts` (hanya parameter `pt`, view wrapper `efn_insight.v_esb_*_monthly`).
+- Akses exec saja: `EXEC_ONLY_PATHS` di `lib/fnb-personas.ts` (proxy + halaman via `fnbRangePage('exec')`); menu hanya untuk exec (`fnbExecOnlyNavItems` di `navGroups`). Filter hanya Brand / PT (`lib/page-filters.ts`).
+- Tes: `tests/margin-bahan.test.ts` (data sintetis); `tests/fnb-routing.test.ts` disesuaikan (dua ekspektasi menu exec kini memuat `/margin-bahan`).
+- Bergantung pada: DDL `24-margin-bahan.sql`, wrapper + row policy + grant `efn_insight` (agent data). Tanpa itu halaman menampilkan kartu galat per blok.
+- Belum diverifikasi: lint/typecheck/test/build (agent ini tidak punya akses shell; belum dijalankan), render browser, query nyata ke ClickHouse (tipe Decimal/Nullable di JSON, alias, ukuran muatan hingga 40.000 baris harga), tanggal refresh (`aggregate_refresh` tidak di-grant ke insight, ditampilkan bulan terakhir data).
+
+---
+
 # Laporan efn-frontend-engineer — Fondasi Super-App (Fase 0)
 
 Tanggal: 2026-10-05. Lingkup: `services/superapp-web/` saja. Tidak ada Node lokal: **tidak ada yang di-build/di-run**; validasi menunggu CI (`next build`, `next lint`).

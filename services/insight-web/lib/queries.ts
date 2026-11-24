@@ -1088,6 +1088,36 @@ GROUP BY menu_name
 ORDER BY gross_paid_cur + pkg_gross_cur DESC
 LIMIT 3000`,
   },
+
+  // ---------- Margin bahan (/margin-bahan, G67, docs/04 §31; init/24-margin-bahan.sql) ----------
+  // Wrapper `efn_insight.v_esb_*_monthly` = kolom mart tanpa _version, versi terakhir per brand, row policy kelas PT.
+  // Hanya parameter `pt` (jendela bulan ditentukan job refresh, bukan filter tanggal halaman).
+  mb_group_monthly: {
+    params: ['pt'],
+    // Tanpa alias bernama sama dengan kolom (alias siklik di ClickHouse); Date keluar sebagai 'YYYY-MM-DD', angka dikonversi di halaman.
+    sql: `SELECT brand, company_code, month, ing_group, basket_value, base_value
+FROM efn_insight.v_esb_ing_group_monthly
+WHERE ${PT}
+ORDER BY month, ing_group
+LIMIT 5000`,
+  },
+  mb_price_monthly: {
+    // Kolom dipangkas ke yang dipakai halaman (tanpa receipt_qty/value/price/price_4m) agar muatan kecil.
+    params: ['pt'],
+    sql: `SELECT brand, company_code, month, product_code, product_name, ing_group, uom, idx, usage_value
+FROM efn_insight.v_esb_ing_price_monthly
+WHERE ${PT}
+ORDER BY brand, product_code, month
+LIMIT 40000`,
+  },
+  mb_menu_monthly: {
+    params: ['pt'],
+    sql: `SELECT brand, company_code, month, menu_name, menu_category, qty, net, cogs, bom_matched, cost_idx, leaf_coverage
+FROM efn_insight.v_esb_menu_cost_monthly
+WHERE ${PT}
+ORDER BY brand, menu_name, month
+LIMIT 30000`,
+  },
 } as const satisfies Record<string, QueryDef>;
 
 export type QueryName = keyof typeof QUERIES;

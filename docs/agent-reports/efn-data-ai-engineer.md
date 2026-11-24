@@ -5,6 +5,82 @@ ADR terkait (semua `Proposed`): ADR-003, ADR-006, ADR-007, ADR-008, ADR-010, ADR
 
 **Tidak ada yang dijalankan.** Mesin penulis tidak punya Python; semua kode, test, dan SQL belum pernah dieksekusi. Validasi pertama terjadi di CI / oleh QA.
 
+## Gelombang 67 — "Margin bahan", sisi data (25 Nov 2026)
+
+Branch `feat/insight-margin-bahan` (tanpa commit). Kontrak `docs/04` §31 (+ §25.7, pola PR #164). Tanpa ADR baru
+(turunan baca ADR-040/041, Proposed). Frontend `/margin-bahan` bukan bagian paket ini.
+
+**Status verifikasi: BELUM ADA YANG DIJALANKAN.** Sesi ini tidak punya akses shell (hanya baca/tulis file), jadi
+perintah wajib `ruff check` + `ruff format --check` + `pytest` di container `python:3.12-slim` dan uji DDL di
+ClickHouse 24.8 **belum** dijalankan. Kode ditulis mengikuti gaya ruff/black secara manual (≤ 120 kolom, trailing
+comma), tetapi lead wajib menjalankan perintah verifikasi sebelum merge.
+
+### File
+| File | Isi |
+|---|---|
+| `infra/clickhouse/init/24-margin-bahan.sql` (baru) | 3 tabel `efn_dwh.mart_esb_ing_price_monthly` / `mart_esb_menu_cost_monthly` / `mart_esb_ing_group_monthly` (MergeTree, `ORDER BY (brand, company_code, _version, month, …)`, `TTL toDateTime(_loaded_at) + INTERVAL 60 DAY`, `storage_policy = 'encrypted'`) + 3 view `efn_dwh.v_esb_*` versi terakhir per brand |
+| `infra/clickhouse/access/esb-access.sql` | esb_writer `SELECT, INSERT` pada 3 tabel (sumber sudah ter-grant: dim_esb_bom(_line), fact_esb_purchase_line, dim_esb_branch, agg_esb_sales_daily, extract_checkpoint, aggregate_refresh(_lock)) |
+| `infra/clickhouse/access/insight-access.sql` | definer `SELECT` 3 view + 3 tabel; 3 wrapper `efn_insight.*` DEFINER (kolom = tabel tanpa `_version`). Grant YoY/G52/G53 tidak disentuh |
+| `infra/clickhouse/access/insight-esb-policy.sh` | +3 view kelas PT |
+| `infra/clickhouse/clickhouse-init.sh` | `ESB_POLICY_EXPECTED=20`; pagar fail-closed MergeTree+encrypted mencakup 3 tabel margin (`MARGIN_TABLES`) |
+| `infra/compose/docker-compose.esb.yml` | env `ESB_MARGIN_*` diteruskan (default kosong = mati); dibutuhkan `test_contract.py` |
+| `services/esb-extract/efn_esb/margin.py` (baru) | algoritme §31.2 langkah 1–6 (logika murni) + I/O (`refresh_margin`, kunci `RefreshLock` agregat, catatan `aggregate_refresh` `margin_<brand>`) |
+| `services/esb-extract/efn_esb/config.py` | `MarginSettings` (`ESB_MARGIN_BRANDS/MONTHS/WEEKDAY/HOUR_WIB`, validasi rentang + brand dikenal) + `validate_margin` (brand wajib di `ESB_BRANDS`, `purchase_line` wajib di `ESB_ENTITIES`) |
+| `services/esb-extract/efn_esb/runner.py` | `MarginSchedule` (jadwal mingguan: snapshot `bom_detail` → hitung; satu percobaan per brand per hari WIB; tidak pernah melempar) |
+| `services/esb-extract/efn_esb/__main__.py` | subcommand `refresh-margin [--brand B]` (tanpa ESB); loop `run` memanggil jadwal setelah `refresh-aggregates`; fail-fast konfigurasi margin saat start |
+| `services/esb-extract/tests/test_margin.py` (baru) | algoritme (sintetis: harga berbobot, bergulir 4 bulan, indeks dasar, satuan dominan, kelompok fallback, BOM rekursif + siklus + batas kedalaman, kanonisasi ` T`/`KIOSK - `, Laspeyres + skala COGS), refresh palsu (versi, parameter, busy, error per prasyarat, galat CH tanpa pesan, lock_lost), jadwal, CLI, config, DDL/grant/policy/pagar init |
+| `tests/test_insight_access.py`, `tests/test_insight_fnb_access.py`, `tests/test_ddl.py` | +3 view, jumlah policy 20, DDL 24 ikut sumber badan view, grant esb_writer termasuk tabel 24 |
+| `services/esb-extract/README.md`, `docs/runbooks/esb-extract.md` §6b | env, jadwal, refresh manual, arti error, verifikasi, pemulihan |
+
+### Asumsi skema / data
+- `dim_esb_bom(_line)` = snapshot: versi terakhir per brand = `_version = max(_version)` (pola `efn_mig.source.dim`).
+- `fact_esb_purchase_line` dibaca `FINAL` + `(brand, purchase_date, _version) IN checkpoint purchase_line '*'` (pola §25.4).
+  Batal = `status_name` mengandung `cancel`/`batal`/`void` (tanpa beda huruf) — **nama status ESB untuk batal belum
+  diverifikasi**. IDR = `currency` ∈ {'', IDR, Rp} (pola `efn_mig.mapping.IDR_CODES`). Baris tanpa `product_code` dibuang.
+- Nama PO: kurung berisi `product_code` dibuang untuk tampilan (`Nama (KODE)` → `Nama`).
+- Menu: BOM `bom_type_name` = `Menu` (tanpa beda huruf) dicocokkan lewat **nama BOM dan nama produk hasil** setelah
+  kanonisasi; nama ganda → `bom_id` terbesar. Kecocokan `bom_name` ↔ `menu_name` penjualan belum dicek di data nyata
+  (runbook §6b punya query cakupan COGS + menu terlaris tanpa BOM).
+- Sub-BOM: `product_code` komponen = `product_code` BOM non-Menu **aktif** (ganda → `bom_id` terbesar).
+
+### Keputusan desain yang menyimpang / menafsirkan kontrak (perlu konfirmasi lead)
+1. **`company_code` = satu PT per brand** (PT dengan cabang aktif terbanyak di `dim_esb_branch`, seri kode terkecil).
+   Kontrak hanya menulis "PT brand (dim_esb_branch)". Menduplikasi baris per PT (pola `v_esb_product_list`) akan
+   menggandakan angka untuk pengguna yang melihat beberapa PT. Konsekuensi: brand multi-PT (Bacha BCF/BCR) hanya
+   terlihat oleh PT mayoritas. PB (L-259) satu PT → tidak berpengaruh.
+2. **Jendela = N bulan kalender penuh terakhir** (bulan berjalan tidak ikut); bulan pertama = bulan dasar. PO dimuat
+   mulai 3 bulan sebelum jendela agar `price_4m` bulan dasar penuh 4 bulan.
+3. Baris `ing_price_monthly` hanya untuk bulan yang punya `price_4m`; bulan tanpa penerimaan → `receipt_qty`/`value`/
+   `price` = 0 (kolom kontrak tidak Nullable), `price_4m`/`idx` tetap terisi. Bahan tanpa harga 4 bulan di jendela tidak
+   punya baris (= daun tanpa harga PO).
+4. Daun tanpa harga PO masuk kelompok **`Tanpa harga PO`** di `ing_group_monthly` (idx 1 → kontribusi 0) agar Σ
+   kelompok = nilai keranjang total; frontend boleh menyembunyikannya.
+5. Baris BOM bernilai ≤ 0 (`qty × last_hpp`) diabaikan; menu dengan total bobot 0 = tanpa BOM (`bom_matched 0`).
+   "Kedalaman maks 8" = maksimum 8 BOM dalam satu rantai (menu + 7 sub-BOM).
+6. Skala Laspeyres = rata-rata COGS bulanan menu cocok / nilai keranjang bulan dasar; bila salah satunya ≤ 0 → skala 1
+   (Rupiah HPP ESB). COGS hanya dari menu cocok dengan total qty jendela > 0.
+7. Jadwal: hari WIB = weekday **dan jam ≥ `ESB_MARGIN_HOUR_WIB` (sepanjang sisa hari itu)**, bukan jam tepat (interval
+   loop bisa > 1 jam); maksimum satu percobaan per brand per hari. Snapshot `bom_detail` tidak `ok` → **tidak dihitung**
+   (`error=snapshot_<status>`), bukan hitung dengan resep lama. Refresh pertama setelah deploy = manual (runbook).
+8. CLI `refresh-margin` **tidak** melakukan snapshot (hanya ClickHouse, jalan dengan `ESB_ENABLED=false`, pola
+   `refresh-aggregates`); snapshot manual = `snapshot --entity bom_detail`.
+9. `ESB_MARGIN_MONTHS` minimum 2 (kontrak hanya menyebut maks 24).
+10. Kunci = kunci heartbeat agregat yang sama: refresh margin dan `refresh-aggregates` saling menunggu (`busy`).
+11. Pagar fail-closed `clickhouse-init.sh` diperluas ke 3 tabel margin (tidak diminta eksplisit; pola SEC-AG-01).
+
+### Belum terverifikasi / tindak lanjut
+- **Semua perintah verifikasi** (ruff, format, pytest) dan uji DDL 24 di ClickHouse 24.8 — tidak bisa dijalankan sesi ini.
+- SQL ClickHouse yang belum pernah dieksekusi: `argMaxIf`, `multiSearchAnyCaseInsensitive` dengan parameter
+  `Array(String)`, `has(param, upper(toString(currency)))`, `toDecimal128(...) * toDecimal128(...)`, TTL
+  `toDateTime(_loaded_at)` pada MergeTree encrypted, view `(t.brand, t._version) IN (SELECT brand, max(_version) …)`.
+- Data nyata efn-prod: cakupan BOM↔menu, rasio biaya/unit vs COGS ESB (median 1,00 di analisis lokal), volume baris.
+- **Tanggal refresh terakhir untuk halaman** (§31.5 "aggregate_refresh"): `efn_esb.aggregate_refresh` tidak terbaca
+  insight_reader dan kontrak view tidak memuat `_version`/`_loaded_at`. Perlu keputusan lead: (a) tambah kolom
+  `refreshed_at` di view/wrapper (ubah kontrak §31.3), atau (b) wrapper kecil baru `efn_insight.v_esb_margin_refresh`
+  (brand, company_code, refreshed_at) kelas PT (policy 21). Belum dibangun.
+- Harness perilaku row policy (`tests/clickhouse/g52_row_policy_harness.sh`) belum diperluas ke 3 view baru (predikat
+  PT sama persis dengan view PT lain; diuji statis).
+
 ## Gelombang 65 paket W-A — esb-extract: `purchase_line` + `stock_opening` (24 Nov 2026)
 
 Branch `feat/esb-migration-purchase-stock` (worktree `efn-platform-esbmig`). Kontrak `docs/04` §27.13.1–27.13.3,

@@ -475,11 +475,11 @@ esac
 [ "${#INSIGHT_KEY}" -ge 64 ] || { echo "clickhouse-init: insight_scope_key terlalu pendek (min 64 hex)" >&2; exit 1; }
 [ "$INSIGHT_KEY" != "$SCOPE_KEY" ] || { echo "clickhouse-init: insight_scope_key tidak boleh sama dengan text2sql_scope_key" >&2; exit 1; }
 unset SCOPE_KEY
-# G52 (§28.15.7) + G53 + YoY 24 Nov 2026: 17 policy ESB (12 kelas PT + 5 kelas BR). Daftar view + predikat = access/insight-esb-policy.sh (satu
+# G52 (§28.15.7) + G53 + YoY 24 Nov 2026 + G67 margin bahan: 20 policy ESB (15 kelas PT + 5 kelas BR). Daftar view + predikat = access/insight-esb-policy.sh (satu
 # sumber, juga dimuat harness E1-E9); jumlah dikunci di sini dan di test_insight_access.py (diubah bersama). Semua view
 # efn_insight diverifikasi punya policy ke system.row_policies di bawah.
 # shellcheck disable=SC2034  # dibaca file yang di-source di bawah
-ESB_POLICY_EXPECTED=17
+ESB_POLICY_EXPECTED=20
 # shellcheck source=/dev/null  # file di-mount saat runtime (/init/access)
 . /init/access/insight-esb-policy.sh
 unset ESB_POLICY_EXPECTED
@@ -502,12 +502,15 @@ fi
 # SEC-AG-01: 6 tabel agregat Insight (agg + build) WAJIB ada, engine MergeTree, storage_policy 'encrypted' (ADR-022).
 # esb_writer tidak punya CREATE/DROP TABLE, jadi penyimpangan = salah konfigurasi/manipulasi admin -> hak tulis esb_writer
 # pada tabel itu dicabut dan init gagal (tindakan manual: DROP tabel, jalankan ulang clickhouse-init, refresh-aggregates).
-AGG_BAD="$($CH --query "SELECT n FROM (SELECT arrayJoin([${AGG_ALL}]) AS n) WHERE n NOT IN
+# G67 (docs/04 §31.3): 3 tabel mart margin bahan (init/24-margin-bahan.sql) ikut pagar yang sama (tindakan manual: DROP
+# tabel, clickhouse-init, `refresh-margin`).
+MARGIN_TABLES="'mart_esb_ing_price_monthly','mart_esb_menu_cost_monthly','mart_esb_ing_group_monthly'"
+AGG_BAD="$($CH --query "SELECT n FROM (SELECT arrayJoin([${AGG_ALL},${MARGIN_TABLES}]) AS n) WHERE n NOT IN
   (SELECT name FROM system.tables WHERE database = 'efn_dwh' AND engine = 'MergeTree' AND storage_policy = 'encrypted')
   ORDER BY n FORMAT TSV")"
 if [ -n "$AGG_BAD" ]; then
   for t in $AGG_BAD; do
-    case "$t" in agg_esb_*) ;; *) echo "clickhouse-init: nama tabel agregat tak terduga: ${t}" >&2; exit 1 ;; esac
+    case "$t" in agg_esb_*|mart_esb_*) ;; *) echo "clickhouse-init: nama tabel agregat tak terduga: ${t}" >&2; exit 1 ;; esac
     $CH --query "REVOKE ALL ON efn_dwh.${t} FROM esb_writer" < /dev/null
   done
   echo "clickhouse-init: tabel agregat Insight hilang / bukan MergeTree+encrypted (hak esb_writer dicabut, SEC-AG-01):" >&2

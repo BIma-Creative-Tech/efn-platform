@@ -6761,3 +6761,93 @@ Hasil QA, security review (SEC-225..233) dan uji E2E nyata ke ESB staging. Butir
 
 **Pertanyaan tambahan:** **Q-PP13** siapa yang meng-authorize simple-transfer buatan aplikasi di ESB dan berapa lama
 (fase produksi menunggu status 3); **Q-PP14** apakah pemakaian ulang nomor dokumen juga berlaku di ESB production.
+
+## 31. Insight "Margin bahan" — indeks harga bahan & atribusi margin (G67)
+
+Status: **kontrak, belum dibangun** (25 Nov 2026). Tidak ada ADR baru: turunan baca di atas ADR-040 (ESB → datamart) dan
+ADR-041 (Insight), keduanya Proposed. Latar: analisis margin 23–24 Nov 2026 (laporan lokal, tidak di repo karena data
+klien) — biaya resep = BOM menu ESB × harga terima PO; COGS ESB terbukti mengikuti harga PO.
+Pemilik: `services/esb-extract` + `infra/clickhouse` (data-AI engineer), `services/insight-web` halaman `/margin-bahan`
+(frontend). Tanpa perubahan Odoo dan tanpa perubahan token `eit1`.
+
+### 31.1 Sumber (sudah ada, tidak ada endpoint ESB baru)
+
+| Data | Tabel | Penyegaran |
+|---|---|---|
+| Resep (BOM menu + sub-BOM) | `efn_dwh.dim_esb_bom`, `dim_esb_bom_line` (G43) | **mingguan** (§31.2): `snapshot --entity bom_detail` per brand di `ESB_MARGIN_BRANDS` |
+| Harga beli | `efn_dwh.fact_esb_purchase_line` (G65) | harian; entitas `purchase_line` wajib aktif untuk brand di `ESB_MARGIN_BRANDS` |
+| Penjualan & COGS ESB | `efn_dwh.agg_esb_sales_daily` (§25.7, PR #164) | harian (ada) |
+
+### 31.2 Job `python -m efn_esb refresh-margin [--brand B]` (esb-extract)
+
+- Env: `ESB_MARGIN_BRANDS` (CSV, default kosong = **fitur mati**), `ESB_MARGIN_MONTHS` (default 13, maks 24),
+  `ESB_MARGIN_WEEKDAY` (default 0 = Senin), `ESB_MARGIN_HOUR_WIB` (default 2).
+- Jadwal di loop `run`: bila brand ada di `ESB_MARGIN_BRANDS`, hari/jam WIB sesuai, dan refresh `ok` terakhir untuk brand
+  itu > 6 hari → (1) snapshot `bom_detail` brand itu, (2) hitung, (3) tulis. Gagal = dicatat, **tidak** menghentikan
+  ekstraksi harian (pola agregat §25.7). CLI manual untuk backfill/uji.
+- Kunci: kunci heartbeat yang sama dengan agregat (`efn_esb.aggregate_refresh_lock`), atau kunci per nama — tidak boleh
+  dua refresh margin brand yang sama berjalan bersamaan.
+- Catatan kesegaran: baris di `efn_esb.aggregate_refresh` dengan `name = 'margin_<brand>'`.
+
+**Algoritme (wajib sama dengan laporan v2):**
+1. **Harga bahan bulanan** per `(brand, product_code, uom)`: baris PO bukan batal, `receipt_qty > 0`, harga = rata-rata
+   `price` berbobot `receipt_qty` dalam satuan beli. `price_4m` = rata-rata berbobot 4 bulan bergulir (bulan ini + 3
+   sebelumnya). Satuan beli dominan per bahan (nilai terbesar); baris satuan lain diabaikan. Mata uang bagian dari
+   satuan (PO non-IDR → mis. `BOX (USD)`); indeks dalam mata uang itu → **efek kurs tidak tertangkap** (catatan di halaman).
+2. **Indeks bahan** `idx(m) = price_4m(m) / price_4m(bulan dasar)`; bulan dasar = bulan pertama jendela yang punya
+   harga, selain itu NULL. Tanpa konversi satuan (rasio dalam satuan beli yang sama).
+3. **Kelompok bahan** = `sub_category_name` PO ESB (kosong → `category_name` → `Lainnya`); bahan berbeda di sub-kategori
+   yang sama dipisahkan lewat tabel bahan. **Tidak ada nama
+   supplier/produk klien yang di-hardcode di repo.**
+4. **Uraian resep:** BOM `bom_type_name = 'Menu'` dicocokkan ke `menu_name` penjualan setelah normalisasi (huruf besar,
+   spasi tunggal), lalu kanonisasi (buang akhiran ` T` takeaway dan awalan `KIOSK - `). Sub-BOM lewat `product_code`
+   komponen = `product_code` BOM non-Menu aktif; bobot daun = `qty × last_hpp` diurai proporsional nilai (tanpa rasio
+   batch); pengaman siklus, kedalaman maks 8. Menu tanpa BOM → `bom_matched = 0`, tidak ikut indeks.
+5. **Indeks biaya menu** `cost_idx(m) = Σ w·idx(m) / Σ w` (daun tanpa harga PO: idx = 1; `leaf_coverage` = porsi nilai
+   daun yang punya harga PO).
+6. **Atribusi kelompok** (Laspeyres, keranjang tetap): qty menu = total jendela; `basket_value(g, m) = Σ_menu qty/bulan
+   × Σ_daun∈g w·idx(m)`, diskalakan ke rata-rata COGS ESB bulanan menu yang cocok. Kontribusi = `basket_value(m) −
+   basket_value(dasar)`.
+
+### 31.3 ClickHouse (`infra/clickhouse/init/24-margin-bahan.sql`, admin, `storage_policy = 'encrypted'`)
+
+Tiga tabel `MergeTree` `ORDER BY (brand, company_code, _version, …)`, `TTL _loaded_at + INTERVAL 60 DAY`. Setiap refresh
+**INSERT versi baru** (`_version` = mulai run, UTC); view mengambil versi terakhir per brand. esb_writer hanya
+`SELECT, INSERT` (tanpa CREATE/DROP/ALTER/TRUNCATE — pola SEC-AG-01). `company_code` = PT brand (dim_esb_branch).
+
+| Tabel | Kolom (urutan = kontrak view) |
+|---|---|
+| `efn_dwh.mart_esb_ing_price_monthly` | brand, company_code, month (Date, tgl 1), product_code, product_name, ing_group, uom, receipt_qty Decimal(18,3), value Decimal(18,2), price Decimal(18,4), price_4m Decimal(18,4), idx Nullable(Float64), usage_value Float64 (Rp/bulan nilai pakai di resep, keranjang tetap — bobot dampak per bahan, juga untuk PO USD), _version |
+| `efn_dwh.mart_esb_menu_cost_monthly` | brand, company_code, month, menu_name, menu_category, qty Decimal(18,3), net Decimal(18,2), cogs Decimal(18,2), bom_matched UInt8, cost_idx Nullable(Float64), leaf_coverage Float64, _version |
+| `efn_dwh.mart_esb_ing_group_monthly` | brand, company_code, month, ing_group, basket_value Float64, base_value Float64, _version |
+
+- Tanpa nama supplier (supplier perorangan = PII, §27.13; tidak dibutuhkan untuk analisis kelompok).
+- View `efn_dwh.v_esb_ing_price_monthly`, `v_esb_menu_cost_monthly`, `v_esb_ing_group_monthly` = kolom tabel tanpa
+  `_version`, hanya `_version = max(_version)` per brand.
+
+### 31.4 `efn_insight` (`access/insight-access.sql`, `insight-esb-policy.sh`)
+
+- Wrapper DEFINER `efn_insight.v_esb_ing_price_monthly` (tanpa harga absolut `receipt_qty`, `value`, `price`, `price_4m`;
+  SEC-MB-03), `v_esb_menu_cost_monthly`, `v_esb_ing_group_monthly`, row policy
+  `efn_insight_scope` **kelas PT** (`ESB_POLICY_VIEWS`, `ESB_POLICY_EXPECTED` +3). Definer: `SELECT` pada 3 view + 3 tabel.
+- Tidak ada grant ke text2sql/Metabase/forecast/mig/segment.
+
+### 31.5 insight-web `/margin-bahan`
+
+- Akses: persona **`exec`** (F&B, `FNB_PERSONAS`) saja, dicek di server; selain itu `/tidak-berwenang`. Tanpa peran baru
+  (peran Finance khusus = gelombang berikutnya bila diminta; butuh perubahan `eit1`).
+- Isi: kartu KPI (indeks biaya bahan bulan terakhir vs dasar, margin kotor ESB bulan terakhir vs dasar, cakupan COGS
+  menu ber-BOM); grafik garis indeks per kelompok (5 kelompok kontribusi terbesar + total); tabel kontribusi kelompok
+  (Rp/bulan); tabel 20 bahan dengan dampak terbesar (`Δidx × nilai pakai`); tabel menu dengan kenaikan `cost_idx`
+  terbesar + margin kotor. Catatan metode + tanggal refresh terakhir (`aggregate_refresh`). Filter global brand/PT berlaku.
+- Pola komponen = halaman `/yoy` (ChartCard, DataTable, KpiRow, palet dataviz yang ada).
+
+### 31.6 Keputusan (L-259..L-264, pemilik proyek 25 Nov 2026 lewat default lead)
+
+- **L-259** Cakupan awal PB (`ESB_MARGIN_BRANDS=pb` di efn-prod); brand lain cukup konfigurasi. Brand multi-PT (Bacha
+  BCF/BCR) ditolak job (`multi_company`, SEC-MB-01) sampai perhitungan per PT dibangun.
+- **L-260** Akses hanya persona `exec` (manajemen); harga beli & biaya resep = data komersial sensitif.
+- **L-261** Penyegaran mingguan (Senin 02:00 WIB); harga PO harian sudah ada dari G65.
+- **L-262** Kelompok bahan dari sub-kategori ESB, bukan aturan nama di kode (repo publik, data klien).
+- **L-263** Versi-insert + view versi terakhir, bukan REPLACE PARTITION (tabel kecil; esb_writer cukup SELECT/INSERT).
+- **L-264** Laporan analisis asli tetap lokal (`E:\Projects\efn-reports\…`), tidak dipublikasikan.

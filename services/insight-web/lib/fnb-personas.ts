@@ -57,7 +57,24 @@ export function fnbPersonaOfPath(pathname: string): FnbPersona | null {
   return null;
 }
 
-export const isBranchScoped = (s: { brs?: readonly string[] }): boolean => (s.brs?.length ?? 0) > 0;
+/**
+ * Halaman non-persona yang hanya untuk persona Eksekutif (data komersial sensitif; G67, docs/04 §31.5, L-260). Gerbangnya
+ * sama dengan `/fnb/exec` (flag F&B, sesi >= eis3, kode ESB, peran exec, bukan sesi ber-cabang).
+ */
+export const EXEC_ONLY_PATHS: readonly string[] = ['/margin-bahan'];
+
+export const isExecOnlyPath = (pathname: string): boolean => EXEC_ONLY_PATHS.some((p) => pathname === p || pathname.startsWith(`${p}/`));
+
+/** Item menu halaman khusus Eksekutif yang dimiliki sesi (kosong bila bukan exec ber-kode ESB). */
+export const FNB_EXEC_ONLY_NAV: readonly NavItem[] = [{ href: '/margin-bahan', label: 'Margin bahan', icon: 'trend' }];
+
+export function fnbExecOnlyNavItems(s: { codes: readonly string[]; roles: readonly string[]; v?: number }): NavItem[] {
+  if (esbCodesOf(s.codes).length === 0 || !s.roles.includes('exec')) return [];
+  if (s.v !== undefined && s.v < 3) return [];
+  return [...FNB_EXEC_ONLY_NAV];
+}
+
+export const isBranchScoped =(s: { brs?: readonly string[] }): boolean => (s.brs?.length ?? 0) > 0;
 
 /**
  * Keputusan akses (null = boleh). Urutan untuk rute persona: flag F&B -> sesi < eis3 (minta buka ulang dari Odoo) -> kode ESB
@@ -65,7 +82,7 @@ export const isBranchScoped = (s: { brs?: readonly string[] }): boolean => (s.br
  * (`tidak-berwenang`) walau flag mati (fail closed); selain itu tidak dibatasi di sini.
  */
 export function fnbRouteDenial(pathname: string, session: FnbSessionLike, fnbEnabled: boolean): FnbDenial | null {
-  const persona = fnbPersonaOfPath(pathname);
+  const persona = fnbPersonaOfPath(pathname) ?? (isExecOnlyPath(pathname) ? 'exec' : null);
   if (persona === null) {
     if (isBranchScoped(session) && BRANCH_BLOCKED_PATHS.some((p) => pathname === p || pathname.startsWith(`${p}/`))) {
       return 'tidak-berwenang';

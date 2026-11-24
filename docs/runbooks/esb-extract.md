@@ -249,6 +249,67 @@ Selisih kecil boleh terjadi bila ekstraksi menulis slice baru di antara refresh 
 
 **Perubahan skema/sumber.** Kolom view sumber berubah (CREATE OR REPLACE VIEW di init) → `clickhouse-init` membandingkan kolom (urutan, nama, tipe) agg/build dengan view, menghapus keduanya dan membuat ulang kosong dengan kolom baru (admin, bukan esb-extract) → jalankan `refresh-aggregates`. Wrapper `efn_insight.*` di `insight-access.sql` hanya ikut berubah bila kolom keluarannya berubah. Mengubah ORDER BY/partisi: ubah `efn_esb/aggregates.py` `table_definition` **dan** `20-esb-aggregates.sql` bersamaan (diuji sama persis); tabel lama tidak berubah oleh CREATE IF NOT EXISTS → hapus agg + build manual (admin) sebelum `clickhouse-init`, lalu refresh.
 
+## 6b. Margin bahan (`refresh-margin`, G67, docs/04 §31)
+
+Halaman Insight `/margin-bahan` (persona `exec`) membaca `efn_insight.v_esb_ing_price_monthly`, `v_esb_menu_cost_monthly`, `v_esb_ing_group_monthly` (DEFINER, row policy kelas PT) di atas view `efn_dwh.v_esb_*` = **versi refresh terakhir per brand** dari tabel `efn_dwh.mart_esb_*` (`infra/clickhouse/init/24-margin-bahan.sql`; MergeTree, `storage_policy = 'encrypted'`, TTL 60 hari). Penulis tunggal: esb-extract (`efn_esb/margin.py`), role esb_writer `SELECT, INSERT` saja. Algoritme: README esb-extract + docstring `margin.py` (§31.2 langkah 1–6). Harga beli & biaya resep = data komersial sensitif (L-260): tidak di-grant ke Metabase/text2sql/forecast/mig/segment.
+
+**Env** (overlay `docker-compose.esb.yml`, nilai di `.env`):
+
+| Env | Default | Catatan |
+|---|---|---|
+| `ESB_MARGIN_BRANDS` | kosong = **fitur mati** | efn-prod: `pb` (L-259). Brand wajib ada di `ESB_BRANDS`; `ESB_ENTITIES` wajib memuat `purchase_line` (harga PO harian, §5a) — jika tidak, `run` gagal start dengan pesan jelas |
+| `ESB_MARGIN_MONTHS` | `13` | jendela = N bulan kalender **penuh** terakhir (2..24); PO dimuat 3 bulan lebih awal untuk rata-rata bergulir |
+| `ESB_MARGIN_WEEKDAY` / `ESB_MARGIN_HOUR_WIB` | `0` (Senin) / `2` | jadwal mingguan (L-261) |
+
+**Jadwal (otomatis, loop `run`).** Di akhir setiap siklus, untuk setiap brand margin: bila hari WIB = `ESB_MARGIN_WEEKDAY`, jam WIB ≥ `ESB_MARGIN_HOUR_WIB`, dan refresh `ok` terakhir > 6 hari → (1) `snapshot --entity bom_detail` brand itu (±1 GET per BOM aktif; PB ±1.700 GET ≈ 15 menit pada 2 req/dtk, anggaran `ESB_BACKFILL_MAX_CALLS`), (2) hitung, (3) INSERT versi baru. Paling banyak satu percobaan per brand per hari WIB (gagal → minggu depan atau manual). Snapshot tidak `ok` → catatan `error=snapshot_<status>` dan **tidak** dihitung (resep basi tidak dipakai diam-diam). Brand `auth_suspended` dilewati. Apa pun yang gagal hanya dicatat; ekstraksi harian tidak terpengaruh.
+
+**Refresh manual** (hanya ClickHouse, tidak memanggil ESB, jalan juga dengan `ESB_ENABLED=false`; memakai resep snapshot terakhir yang ada):
+
+```bash
+# Refresh pertama setelah deploy skema 24 (tabel awalnya KOSONG -> halaman kosong). Resep dulu bila belum pernah:
+$DC run --rm esb-extract python -m efn_esb snapshot --brand pb --entity bom_detail
+$DC run --rm --no-deps esb-extract python -m efn_esb refresh-margin --brand pb     # satu brand
+$DC run --rm --no-deps esb-extract python -m efn_esb refresh-margin                # semua ESB_MARGIN_BRANDS
+```
+
+Exit 0 = semua `ok`; 1 = ada `error`/`busy`; 2 = env tidak sah. Log: `margin=margin_<brand> status=ok|busy|error rows=<n> months=<n> seconds=<n>` (tanpa isi data). Arti `error`:
+
+| `error` | Penyebab | Tindakan |
+|---|---|---|
+| `no_company` | brand tanpa cabang aktif ber-PT di `dim_esb_branch` | cek entitas `branch` / `ESB_BRANDS` |
+| `no_bom` | belum ada snapshot `bom_detail` brand itu | `snapshot --brand <b> --entity bom_detail`, lalu ulangi |
+| `no_purchase` | tidak ada baris PO ber-checkpoint di jendela | aktifkan `purchase_line` + backfill (§5a) |
+| `no_sales` | tidak ada penjualan menu di jendela | cek `agg_esb_sales_daily` / `refresh-aggregates` (§6a) |
+| `snapshot_<status>` | snapshot mingguan gagal (`partial`, `auth_failed`, `limit`, `error`) | lihat §7; lalu snapshot + `refresh-margin` manual |
+| `busy` | refresh lain (margin / `refresh-aggregates`) memegang kunci | tunggu (maks 15 menit bila proses itu mati), ulangi |
+| `lock_lost` / `<Kelas> code=<n>` | kunci diambil alih / galat ClickHouse (159 timeout, 241 memori, 497 hak) | ulangi; 497 → cek grant `esb-access.sql` |
+
+**Kesegaran & verifikasi** (admin):
+
+```bash
+chq <<'SQL'
+SELECT name, status, finished_at, rows, error FROM efn_esb.aggregate_refresh
+WHERE startsWith(name, 'margin_') ORDER BY finished_at DESC LIMIT 10;
+-- Versi yang tampil di Insight per brand + jumlah baris per tabel
+SELECT brand, max(_version) AS v, count() FROM efn_dwh.mart_esb_menu_cost_monthly GROUP BY brand;
+SELECT 'price', count() FROM efn_dwh.v_esb_ing_price_monthly UNION ALL
+SELECT 'menu', count() FROM efn_dwh.v_esb_menu_cost_monthly UNION ALL
+SELECT 'group', count() FROM efn_dwh.v_esb_ing_group_monthly;
+-- Cakupan: porsi COGS ESB dari menu ber-BOM per bulan (target tinggi; rendah = nama BOM Menu tidak cocok menu jual)
+SELECT month, sumIf(cogs, bom_matched = 1) / sum(cogs) AS cogs_cov, avgIf(leaf_coverage, bom_matched = 1) AS leaf_cov
+FROM efn_dwh.v_esb_menu_cost_monthly WHERE brand = 'pb' GROUP BY month ORDER BY month;
+-- Menu terlaris tanpa BOM (cek normalisasi nama ' T' / 'KIOSK - ')
+SELECT menu_name, sum(qty) AS q FROM efn_dwh.v_esb_menu_cost_monthly
+WHERE brand = 'pb' AND bom_matched = 0 GROUP BY menu_name ORDER BY q DESC LIMIT 20;
+SQL
+```
+
+**Pemulihan.**
+- Tabel `mart_esb_*` hilang / bukan MergeTree+encrypted → `clickhouse-init` GAGAL (`tabel agregat Insight hilang / bukan MergeTree+encrypted`, hak esb_writer pada tabel itu dicabut): admin `DROP TABLE IF EXISTS efn_dwh.<tabel> SYNC` → `$DC up -d --force-recreate clickhouse-init` → `refresh-margin`.
+- Angka salah setelah koreksi data sumber (PO/BOM dibetulkan di ESB): backfill/snapshot ulang sumbernya, lalu `refresh-margin` (versi baru menggantikan tampilan; versi lama terbuang sendiri setelah 60 hari). Tidak ada `ALTER DELETE`/`TRUNCATE` dari esb-extract; penghapusan versi tertentu (mis. versi salah yang terlanjur tampil dan tidak bisa segera diganti) = admin: `ALTER TABLE efn_dwh.mart_esb_<t> DELETE WHERE brand = 'pb' AND _version = '<v>'` pada ketiga tabel.
+- Refresh gagal di tengah INSERT (jarang; satu INSERT per tabel): versi terakhir ketiga tabel bisa berbeda sampai refresh `ok` berikutnya — jalankan `refresh-margin` manual.
+- Tidak ada refresh `ok` > 60 hari → TTL membuang semua versi, halaman kosong (sengaja, bukan data basi): jalankan `refresh-margin`.
+
 ## 7. ESB menolak permintaan
 
 | Respons | Perilaku klien (kontrak §25) | Tindakan operator |
