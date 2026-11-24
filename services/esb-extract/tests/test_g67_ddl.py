@@ -240,7 +240,7 @@ def test_fill_rate_line_join_and_flags() -> None:
     counted = flat(line.split("AS is_mature,", 1)[1].split("AS is_counted", 1)[0])
     assert f"({mature})" in counted
     # GTR_COUNTED_STATUS [B]; QA P2#4: product_code '' tidak dihitung.
-    for cond in ("r.status_id IN (3, 6)", "r.bypass_gd = 0", "r.request_qty > 0", "r.product_code != ''"):
+    for cond in ("r.status_id IN (3, 6, 8)", "r.bypass_gd = 0", "r.request_qty > 0", "r.product_code != ''"):
         assert cond in counted, cond
     assert "r.request_qty AS request_qty" in line  # diminta = requestQty (Q-ESB31), bukan qty
 
@@ -285,7 +285,7 @@ def test_quality_checks_present() -> None:
                   "gtr_bypass_gd", "gtr_product_unmapped"):  # fmt: skip
         assert f"'{check}'" in quality, check
     assert "source_lines > 1" in quality and "startsWith(reference_num, 'TF')" in quality
-    assert "status_id NOT IN (3, 6)" in quality and "is_counted = 0" in quality
+    assert "status_id NOT IN (3, 6, 8)" in quality and "is_counted = 0" in quality
 
 
 def test_coverage_extended_with_g67_daily_entities() -> None:

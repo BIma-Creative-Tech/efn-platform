@@ -247,7 +247,7 @@ FROM
 --   first_delivery_date = kiriman pertama bersatuan sama dengan qty_sent > 0 (GD qty 0 diabaikan); NULL bila tidak
 --     ada atau bila kiriman pertama itu bertanggal SEBELUM tanggal permintaan (data tidak wajar, QA P3);
 --   is_mature = finished = 1 ATAU transfer_date <= hari ini WIB - FILL_RATE_MATURE_DAYS (7);
---   is_counted = matang DAN status_id IN GTR_COUNTED_STATUS (3, 6) [B] DAN bypass_gd = 0 DAN request_qty > 0 DAN
+--   is_counted = matang DAN status_id IN GTR_COUNTED_STATUS (3, 6, 8: 8 = Finished, data PB 25 Nov) [B] DAN bypass_gd = 0 DAN request_qty > 0 DAN
 --     product_code != '' (kode tak terpetakan tidak bisa dicocokkan ke GD; dihitung gtr_product_unmapped, QA P2#4).
 CREATE OR REPLACE VIEW efn_dwh.v_esb_fill_rate_line AS
 SELECT
@@ -259,7 +259,7 @@ SELECT
     if(s.pos_hit = 1 AND s.first_d >= r.transfer_date, s.first_d, NULL) AS first_delivery_date,
     toUInt8(r.finished = 1 OR r.transfer_date <= toDate(now(), 'Asia/Jakarta') - 7) AS is_mature,
     toUInt8((r.finished = 1 OR r.transfer_date <= toDate(now(), 'Asia/Jakarta') - 7)
-            AND r.status_id IN (3, 6) AND r.bypass_gd = 0 AND r.request_qty > 0 AND r.product_code != '') AS is_counted
+            AND r.status_id IN (3, 6, 8) AND r.bypass_gd = 0 AND r.request_qty > 0 AND r.product_code != '') AS is_counted
 FROM
 (
     SELECT transfer_date, brand, company_code, requester_branch_id, supplier_branch_id, transfer_num, product_code,
@@ -467,7 +467,7 @@ FROM
     SELECT brand, CAST(company_code, 'String') AS c_code, status_id, CAST(status_name, 'String') AS status_name,
            count() AS n, max(transfer_date) AS last_d
     FROM efn_dwh.fact_esb_transfer_request_line FINAL
-    WHERE status_id NOT IN (3, 6) AND transfer_date >= today() - 90
+    WHERE status_id NOT IN (3, 6, 8) AND transfer_date >= today() - 90
       AND (brand, transfer_date, _version) IN
           (SELECT brand, day, finished_at FROM efn_esb.extract_checkpoint FINAL
            WHERE entity = 'transfer_request' AND scope_key = '*')
