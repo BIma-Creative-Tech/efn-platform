@@ -4,19 +4,21 @@ Error = memblokir impor; warning = dilaporkan. Pelanggaran integritas segmen (ta
 luar company/bulan segmen, `sales_line_months` di luar 0..24, xmlid tidak sama dengan hasil hitung ulang) ->
 `IntegrityError` (exit 3). Pemeriksaan yang butuh Odoo target (company sudah ada, pajak produk lintas PT) dilakukan
 importer (efn-odoo-engineer); bundel ESB tidak membawa pajak.
+G65 (§27.13.5): supplierinfo, cost (sumber/as_of), quant (stok awal), legacy_purchase_line (hanya part 1).
 """
 
 import re
 from collections import defaultdict
 from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import asdict, dataclass
-from datetime import date
+from datetime import date, timedelta
+from decimal import Decimal
 from typing import Any
 
 from efn_mig import mapping as m
 from efn_mig.bundle import Bundle, IntegrityError, Keys, sign_validation
 from efn_mig.segments import MAX_LEGACY_DAYS, MAX_SALES_LINE_MONTHS, add_months, parse_month
-from efn_mig.xmlid import xmlid
+from efn_mig.xmlid import MODULE, xmlid
 
 ENVELOPE = frozenset({"entity", "company_code", "esb_key", "xmlid", "data"})
 # Pola kunci identitas orang -- ditolak di mana pun (data, baris bom, histori), fail closed (§27.3 PDP).
@@ -153,9 +155,12 @@ def check_segment_set(manifests: Iterable[Mapping[str, Any]]) -> list[dict[str, 
     return summary
 
 
-def validate_bundle(bundle: Bundle, siblings: Iterable[Mapping[str, Any]] | None = None) -> Report:
+def validate_bundle(
+    bundle: Bundle, siblings: Iterable[Mapping[str, Any]] | None = None, production: bool = False
+) -> Report:
     """`siblings` = manifest SEMUA bundel segmen yang divalidasi bersama (termasuk bundel ini). Segmen dengan
-    parts > 1 tanpa semua part -> error PARTS_INCOMPLETE (validasi wajib per set part, SEC-197)."""
+    parts > 1 tanpa semua part -> error PARTS_INCOMPLETE (validasi wajib per set part, SEC-197). `production`
+    (APP_ENV production) menaikkan lokasi stok berpola damage/expired tanpa location_map menjadi error (Q-ESB25)."""
     man = bundle.manifest
     out = _Collector()
     segment_set: dict[str, Any] | None = None
@@ -185,19 +190,22 @@ def validate_bundle(bundle: Bundle, siblings: Iterable[Mapping[str, Any]] | None
         raise IntegrityError("sales_line_months di luar 0..24")
     history_files = [e for e in man.get("files", []) if e.get("entity") in m.HISTORY_KEYS]
     if history_files:
-        _validate_history(bundle, history_files, out)
+        _validate_history(bundle, history_files, out, brand)
     master = _validate_master(bundle, brand, companies, out)
+    options = read_export_options(man)
+    _check_g65(bundle, master, brand, out, production, options)
     for branch in man.get("unmapped_branches") or []:
         if branch.get("active"):
             out.error("BRANCH_UNMAPPED", "branch", branch.get("branch_id"), "cabang aktif tanpa baris branch_map.csv")
-    options = read_export_options(man)
     _check_branches(master.get("branch", []), out)
     _check_products_menus(master, out, options)
     _check_boms(master, out, options)
     _check_skipped(man, options, out)
-    return Report(
-        str(man["run_id"]), bundle.manifest_sha256, out.items, bundle.blob_sha256, segment_set, options.to_manifest()
-    )
+    shown = options.to_manifest()
+    declared = man.get("stock_empty_branches_declared") or []
+    if declared:  # SEC-G65b-01: deklarasi operator ikut banner pengecualian laporan bertanda tangan
+        shown["stock_empty_branches"] = ",".join(str(b) for b in declared)
+    return Report(str(man["run_id"]), bundle.manifest_sha256, out.items, bundle.blob_sha256, segment_set, shown)
 
 
 def read_export_options(man: Mapping[str, Any]) -> m.ExportOptions:
@@ -244,6 +252,7 @@ def _validate_master(
     bundle: Bundle, brand: str, companies: list[str], out: _Collector
 ) -> dict[str, list[dict[str, Any]]]:
     records: dict[str, list[dict[str, Any]]] = {}
+    xmlids: dict[str, str] = {}  # xmlid -> entitas (QA G65 P3: tabrakan xmlid = error)
     for entry in bundle.manifest.get("files", []):
         entity = str(entry.get("entity"))
         if entity in m.HISTORY_KEYS:
@@ -271,6 +280,10 @@ def _validate_master(
             expected = _expected_xmlid(brand, entity, row)
             if expected is not None and row["xmlid"] != expected:
                 raise IntegrityError(f"xmlid {entity} {key!s:.40} tidak sama dengan hasil hitung ulang (§27.4)")
+            if row["xmlid"] is not None:
+                if row["xmlid"] in xmlids:
+                    out.error("DUPLICATE_XMLID", entity, key, f"xmlid sama dengan baris {xmlids[row['xmlid']]} lain")
+                xmlids.setdefault(row["xmlid"], entity)
     return records
 
 
@@ -279,9 +292,15 @@ def _expected_xmlid(brand: str, entity: str, row: Mapping[str, Any]) -> str | No
     if entity == "branch":
         kind = "branch_loc" if (row.get("data") or {}).get("type") == "location" else "branch_wh"
         return xmlid(brand, company, kind, row["esb_key"])
+    if entity == "supplierinfo":
+        data = row.get("data") or {}
+        supplier, code = str(data.get("supplier_code") or ""), str(data.get("product_code") or "")
+        if row["esb_key"] != f"{supplier}|{code}" or not supplier or not code:
+            raise IntegrityError("supplierinfo: esb_key wajib <supplier_code>|<product_code> (§27.13.4)")
+        return m.supplierinfo_xmlid(brand, company, supplier, code)
     if entity in XMLID_ENTITY:
         return xmlid(brand, company, XMLID_ENTITY[entity], row["esb_key"])
-    return None  # cost: tanpa xmlid
+    return None  # cost, quant: tanpa xmlid
 
 
 def _check_branches(rows: list[dict[str, Any]], out: _Collector) -> None:
@@ -380,7 +399,225 @@ def _cycles(graph: Mapping[tuple[str, str], set[str]]) -> set[tuple[str, str]]:
     return found
 
 
-def _validate_history(bundle: Bundle, entries: list[dict[str, Any]], out: _Collector) -> None:
+def _dec(value: Any) -> Decimal | None:
+    """Angka JSON -> Decimal; bukan angka (termasuk bool) -> None."""
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        return None
+    out = Decimal(str(value))
+    return out if out.is_finite() else None
+
+
+def _count(skipped: Mapping[str, Any], key: str) -> int:
+    value = skipped.get(key)
+    return int(value.get("count") or 0) if isinstance(value, dict) else 0
+
+
+def _check_g65(
+    bundle: Bundle, records: Mapping[str, list[dict[str, Any]]], brand: str, out: _Collector, production: bool,
+    options: m.ExportOptions,
+) -> None:  # fmt: skip
+    """§27.13.5: supplierinfo, cost (sumber/as_of), quant (stok awal) + temuan export di manifest."""
+    man = bundle.manifest
+    if isinstance(man.get("segment"), dict):
+        return  # bundel histori: pembelian divalidasi `_validate_purchase`
+    cutover = str(man.get("cutover_date") or "")
+    skipped = man.get("skipped") if isinstance(man.get("skipped"), dict) else {}
+    _check_supplierinfo(records.get("supplierinfo", []), brand, out)
+    zero_listed = {str(z) for z in man.get("zero_cost_products") or []}
+    for row in records.get("cost", []):
+        data, key = row["data"], row["esb_key"]
+        if data.get("source") not in m.COST_SOURCES:
+            out.error("COST_SOURCE", "cost", key, f"source wajib salah satu {', '.join(m.COST_SOURCES)}")
+        elif data.get("source") == "stock_opening" and data.get("as_of") != cutover:
+            out.error("COST_AS_OF", "cost", key, "source=stock_opening wajib as_of = cutover_date")
+        price = _dec(data.get("standard_price"))
+        zero_ok = options.allow_zero_cost and f"{row['company_code']}|{data.get('product_code')}" in zero_listed
+        if price is not None and price < 0:  # SEC-G65b-02: harga negatif tidak pernah sah
+            out.error("COST_NEGATIVE", "cost", key, "standard_price negatif")
+        elif (price is None or price == 0) and not zero_ok:  # G65b: cost 0 hanya lewat --allow-zero-cost tercatat
+            out.error("COST_ZERO_WITHOUT_OPTION", "cost", key, "standard_price <= 0 tanpa --allow-zero-cost")
+    for item in sorted(zero_listed):
+        if options.allow_zero_cost:
+            out.warn("QUANT_ZERO_COST", "cost", item,
+                     "ber-stok tanpa sumber HPP, nilai saldo awal 0 -> cost 0 (--allow-zero-cost)")  # fmt: skip
+        else:
+            out.error("COST_ZERO_WITHOUT_OPTION", "cost", item, "zero_cost_products tanpa export_options")
+    has_quant = bundle.entity_file("quant") is not None
+    if has_quant:
+        _check_quants(records.get("quant", []), brand, cutover, out)
+        meta = ((man.get("source") or {}).get("snapshot") or {}).get("fact_esb_stock_opening") or {}
+        if not cutover or meta.get("opening_date") != cutover:
+            out.error("STOCK_OPENING_DATE", "quant", meta.get("opening_date"),
+                      "fact_esb_stock_opening.opening_date ≠ cutover_date manifest")  # fmt: skip
+        for branch_id in man.get("stock_empty_branches_declared") or []:
+            out.warn("STOCK_EMPTY_DECLARED", "quant", branch_id,
+                     "cabang dideklarasikan tanpa kartu stok ESB (--stock-empty-branch) -> stok awal 0")  # fmt: skip
+        for branch_id in man.get("stock_opening_missing_branches") or []:
+            out.error("STOCK_CHECKPOINT_MISSING", "quant", branch_id,
+                      "cabang non-skip tanpa checkpoint stock_opening pada cutover")  # fmt: skip
+        for item in man.get("stock_without_cost") or []:
+            out.error("QUANT_NO_COST", "quant", item, "produk ber-stok tanpa sumber HPP (cost)")
+        unconvertible = _count(skipped, "uom_unconvertible")
+        if unconvertible and options.skip_unconvertible_stock:  # G65b --skip-unconvertible-stock
+            out.warn("STOCK_UOM_SKIPPED", "quant", unconvertible,
+                     "satuan tanpa faktor ke UoM produk: baris TIDAK dimuat (--skip-unconvertible-stock)")  # fmt: skip
+        elif unconvertible:
+            out.error("STOCK_UOM_UNCONVERTIBLE", "quant", unconvertible,
+                      "satuan ESB tanpa faktor ke UoM produk (uom_map/ea_factor) -> baris tidak dimuat")  # fmt: skip
+        for item in (skipped.get("uom_conflict") or {}).get("items") or []:
+            msg = f"produk tanpa satuan ESB, >1 satuan di saldo awal {item.get('uoms')} -> tidak dimuat (G65b)"
+            out.error("STOCK_UOM_CONFLICT", "quant", item.get("product_code"), msg)
+        if _count(skipped, "negative_stock"):
+            out.warn("STOCK_NEGATIVE", "quant", _count(skipped, "negative_stock"),
+                     "saldo negatif ESB tidak dimigrasi (Q-ESB27; daftar di skipped.negative_stock)")  # fmt: skip
+        if _count(skipped, "location_unmapped"):
+            out.warn("LOCATION_UNMAPPED", "quant", _count(skipped, "location_unmapped"),
+                     "lokasi ESB tanpa location_map.csv -> lokasi stok gudang")  # fmt: skip
+        for item in (skipped.get("location_suspect") or {}).get("items") or []:
+            key = f"{item.get('branch_id')}|{item.get('location_name')}"
+            msg = "lokasi berpola damage/expired/temporary tanpa location_map.csv (Q-ESB25)"
+            (out.error if production else out.warn)("LOCATION_SUSPECT", "quant", key, msg)
+    _check_location_map(bundle, brand, out)  # G65b: action quarantine didukung (quant `branch_quarantine`)
+    if _count(skipped, "cost_uom_unconvertible"):
+        out.warn("COST_UOM_UNCONVERTIBLE", "cost", _count(skipped, "cost_uom_unconvertible"),
+                 "sumber HPP satuan tanpa faktor ke UoM produk dilewati (pakai sumber berikutnya)")  # fmt: skip
+    if _count(skipped, "supplierinfo_unmapped"):
+        out.warn("SUPPLIERINFO_UNMAPPED", "supplierinfo", _count(skipped, "supplierinfo_unmapped"),
+                 "supplier/produk/satuan beli tidak terpetakan -> tidak menjadi harga beli")  # fmt: skip
+    if _count(skipped, "currency"):
+        out.warn("PURCHASE_CURRENCY", "supplierinfo", _count(skipped, "currency"), "baris PO mata uang ≠ IDR dilewati")
+
+
+def _check_location_map(bundle: Bundle, brand: str, out: _Collector) -> None:
+    data = bundle.files.get("maps/location_map.csv")
+    if data is None:
+        return
+    try:
+        m.parse_location_map(data.decode("utf-8-sig"), brand)
+    except (m.MapError, UnicodeDecodeError) as exc:
+        out.error("LOCATION_MAP_INVALID", "quant", "location_map.csv", str(exc)[:200])
+
+
+def _check_supplierinfo(rows: list[dict[str, Any]], brand: str, out: _Collector) -> None:
+    seen: set[tuple[str, str, str]] = set()
+    sequences: dict[tuple[str, str], list[Any]] = defaultdict(list)
+    for row in rows:
+        data, key, company = row["data"], row["esb_key"], str(row["company_code"])
+        supplier, code = str(data.get("supplier_code")), str(data.get("product_code"))
+        partner_ok = data.get("partner_key") == xmlid(brand, company, "supplier", supplier)
+        if not partner_ok or data.get("product_key") != xmlid(brand, company, "product", code):
+            raise IntegrityError(f"supplierinfo {key!s:.40}: partner_key/product_key tidak sama dengan hitung ulang")
+        price, discount = _dec(data.get("price")), _dec(data.get("discount"))
+        if price is None or price <= 0:
+            out.error("SUPPLIERINFO_PRICE", "supplierinfo", key, "price wajib > 0")
+        if data.get("currency") != "IDR":
+            out.error("SUPPLIERINFO_CURRENCY", "supplierinfo", key, "currency wajib IDR")
+        if discount is None or not 0 <= discount <= 100:
+            out.error("SUPPLIERINFO_DISCOUNT", "supplierinfo", key, "discount (%) wajib 0..100 (Q-G65-2)")
+        if (company, supplier, code) in seen:
+            out.error("SUPPLIERINFO_DUP", "supplierinfo", key, "duplikat (company, supplier, produk)")
+        seen.add((company, supplier, code))
+        sequences[(company, code)].append(data.get("sequence"))
+    for (_, code), values in sorted(sequences.items()):
+        if sorted(v for v in values if isinstance(v, int)) != list(range(1, len(values) + 1)):
+            out.error("SUPPLIERINFO_SEQUENCE", "supplierinfo", code, "sequence per company × produk wajib 1..n")
+
+
+def _check_quants(rows: list[dict[str, Any]], brand: str, cutover: str, out: _Collector) -> None:
+    expected_date = (date.fromisoformat(cutover) - timedelta(days=1)).isoformat() if cutover else None
+    seen: set[tuple[str, Any, Any]] = set()
+    for row in rows:
+        data, key, company = row["data"], row["esb_key"], str(row["company_code"])
+        if row.get("xmlid") is not None:
+            raise IntegrityError("quant: xmlid wajib null")
+        loc = str(data.get("location_key") or "")
+        prefix = f"{MODULE}.{brand}_{company.lower()}_branch_"
+        if not loc.startswith((prefix + "wh_", prefix + "loc_", prefix + "quarantine_")):
+            out.error("QUANT_LOCATION", "quant", key, "location_key bukan gudang/lokasi milik PT baris ini")
+        # G65b: lokasi karantina wajib `quarantine_of` = gudang PT yang sama; baris lain tidak boleh membawanya.
+        parent = data.get("quarantine_of")
+        if loc.startswith(prefix + "quarantine_"):
+            if loc != xmlid(brand, company, "branch_quarantine", data.get("esb_branch_id") or 0):
+                out.error("QUANT_LOCATION", "quant", key, "lokasi karantina bukan milik esb_branch_id baris")
+            if not str(parent or "").startswith(prefix + "wh_"):
+                out.error("QUANT_QUARANTINE_OF", "quant", key, "quarantine_of wajib xmlid branch_wh PT baris")
+        elif parent is not None:
+            out.error("QUANT_QUARANTINE_OF", "quant", key, "quarantine_of hanya untuk lokasi karantina")
+        if data.get("product_key") != xmlid(brand, company, "product", data.get("product_code")):
+            raise IntegrityError(f"quant {key!s:.40}: product_key tidak sama dengan hitung ulang")
+        qty = _dec(data.get("quantity"))
+        if qty is None or qty <= 0:
+            out.error("QUANT_QTY", "quant", key, "quantity wajib > 0")
+        if not data.get("uom_xmlid"):
+            out.error("QUANT_UOM", "quant", key, f"satuan {data.get('uom_esb')} tidak ada di uom_map.csv")
+        if data.get("accounting_date") != expected_date:
+            out.error("QUANT_ACCOUNTING_DATE", "quant", key, "accounting_date wajib cutover − 1")
+        ident = (company, loc, data.get("product_key"))
+        if ident in seen:
+            out.error("QUANT_DUP", "quant", key, "duplikat company × lokasi × produk")
+        seen.add(ident)
+
+
+def _validate_purchase(
+    bundle: Bundle, entry: Mapping[str, Any], brand: str, month: date, month_end: date, cutover: date | None,
+    company_whs: set[str], out: _Collector,
+) -> None:  # fmt: skip
+    """`legacy_purchase_line` (§27.13.4/§27.13.5): hanya part 1, irisan company × bulan, `*_key` boleh null tetapi
+    wajib milik PT segmen; duplikat (purchase_num, line_no) / tanggal di luar rentang berkas = error."""
+    man = bundle.manifest
+    segment = man["segment"]
+    entity = "legacy_purchase_line"
+    if int(segment.get("part") or 0) != 1:
+        raise IntegrityError("legacy_purchase_line hanya boleh di part 1 (irisan company × bulan, §27.13.4)")
+    rng = entry.get("range")
+    if not isinstance(rng, list) or len(rng) != 2:
+        raise IntegrityError("legacy_purchase_line tanpa files[].range")
+    lo, hi = date.fromisoformat(str(rng[0])), date.fromisoformat(str(rng[1]))
+    company = str(segment.get("company_code"))
+    prefixes = {k: f"{MODULE}.{brand}_{company.lower()}_{k}_" for k in ("supplier", "product")}
+    required = set(m.HISTORY_KEYS[entity])
+    allowed = required | m.HISTORY_OPTIONAL_KEYS[entity]
+    seen: set[tuple[Any, Any]] = set()
+    by_source: dict[str, int] = defaultdict(int)
+    for row in bundle.rows(str(entry["name"])):
+        if not required <= set(row) <= allowed:
+            extra = sorted(set(row) - allowed) + [f"-{k}" for k in sorted(required - set(row))]
+            out.error("HISTORY_KEYS", entity, row.get("date"), f"kunci di luar whitelist / hilang: {extra}")
+            continue
+        try:
+            day = date.fromisoformat(str(row["date"]))
+        except ValueError:
+            raise IntegrityError(f"{entity}: tanggal tidak valid") from None
+        if not month <= day < month_end:
+            raise IntegrityError(f"{entity}: baris di luar segment.month {segment.get('month')}")
+        if not lo <= day < hi:
+            out.error("PURCHASE_RANGE", entity, row["purchase_num"], "tanggal di luar files[].range")
+        if cutover is not None and day >= cutover:
+            out.error("HISTORY_AFTER_CUTOVER", entity, row["date"], "hari histori >= cutover_date")
+        if row["branch_key"] is not None and row["branch_key"] not in company_whs:
+            raise IntegrityError(f"{entity}: branch_key bukan gudang PT segmen")
+        for ref in ("supplier", "product"):
+            value = row[f"{ref}_key"]
+            if value is not None and not (isinstance(value, str) and value.startswith(prefixes[ref])):
+                raise IntegrityError(f"{entity}: {ref}_key bukan xmlid milik {brand}/{company}")
+        ident = (row["purchase_num"], row["line_no"])
+        if ident in seen:
+            out.error("PURCHASE_LINE_DUP", entity, row["purchase_num"], "duplikat (purchase_num, line_no) per segmen")
+        seen.add(ident)
+        source = str(row["map_source"])
+        if source not in ("header", "name", "none"):
+            out.error("PURCHASE_MAP_SOURCE", entity, row["purchase_num"], "map_source wajib header|name|none")
+        by_source[source] += 1
+    if by_source.get("name"):
+        out.warn("PURCHASE_MAPPED_BY_NAME", entity, by_source["name"], "baris dipetakan lewat nama (bukan header PO)")
+    if by_source.get("none"):
+        out.warn("PURCHASE_UNMAPPED", entity, by_source["none"], "baris tanpa cabang/supplier terpetakan (arsip)")
+    dropped = (man.get("stats") or {}).get(entity, {}).get("rows_skipped_currency", 0)
+    if dropped:
+        out.warn("PURCHASE_CURRENCY", entity, dropped, "baris mata uang ≠ IDR tidak diekspor")
+
+
+def _validate_history(bundle: Bundle, entries: list[dict[str, Any]], out: _Collector, brand: str) -> None:
     man = bundle.manifest
     segment = man.get("segment")
     if not isinstance(segment, dict) or not man.get("parent_run_id"):
@@ -403,6 +640,9 @@ def _validate_history(bundle: Bundle, entries: list[dict[str, Any]], out: _Colle
     target_set = set(targets)
     for entry in entries:
         entity = str(entry["entity"])
+        if entity == "legacy_purchase_line":
+            _validate_purchase(bundle, entry, brand, month, month_end, cutover, set(company_whs), out)
+            continue
         required = set(m.HISTORY_KEYS[entity])
         allowed = required | m.HISTORY_OPTIONAL_KEYS[entity]
         day_key = "date" if entity == "legacy_sales_line" else "day"

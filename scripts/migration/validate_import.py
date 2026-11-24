@@ -34,11 +34,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 2
     try:
         keys = bundle_keys()
-        out_dir = args.out or MigSettings.from_env().out_dir
+        settings = MigSettings.from_env()
+        out_dir = args.out or settings.out_dir
         bundles = [read_bundle(path, keys, expect_kind="bundle") for path in args.paths]
         manifests = [b.manifest for b in bundles]
         check_segment_set(manifests)  # tumpang tindih gudang antar-part -> IntegrityError
-        reports = [validate_bundle(b, manifests) for b in bundles]
+        # G65 Q-ESB25: lokasi stok berpola damage/expired tanpa location_map = error di production.
+        reports = [validate_bundle(b, manifests, production=settings.production) for b in bundles]
     except IntegrityError as exc:
         print(f"integritas: {exc}", file=sys.stderr)
         return 3

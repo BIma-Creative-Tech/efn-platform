@@ -17,4 +17,10 @@
               action="efn_legacy_sales_daily_action" sequence="10"/>
     <menuitem id="menu_efn_legacy_pos_sales_line" name="Baris penjualan" parent="menu_efn_legacy_pos_root"
               action="efn_legacy_sales_line_action" sequence="20"/>
+
+    <!-- Purchase > Histori ESB (arsip) (G65, docs/04 §27.13.6): purchase.purchase_report_main hanya untuk manager,
+         jadi menu sendiri di root Purchase untuk group_purchase_user (grup ACL baca). Entri Inventaris hanya bila
+         Q-G65-4 meminta. -->
+    <menuitem id="menu_efn_legacy_purchase_line" name="Histori ESB (arsip)" parent="purchase.menu_purchase_root"
+              action="efn_legacy_purchase_line_action" sequence="98" groups="purchase.group_purchase_user"/>
 </odoo>

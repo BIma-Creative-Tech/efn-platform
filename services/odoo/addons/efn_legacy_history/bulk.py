@@ -111,19 +111,23 @@ def get_sales_line_months(env):
     return min(value, MAX_SALES_LINE_MONTHS)
 
 
-def sales_line_window(env, company, anchor=None, months=None):
+def sales_line_window(env, company, anchor=None, months=None, shift_cutover=False):
     """``(hari_pertama, batas_eksklusif)`` baris penjualan yang boleh dimuat untuk company, atau None bila nonaktif.
 
     docs/04 §27.8: ``[awal bulan(cutover) − N bulan, cutover − 1]``. ``batas`` = cutover company, jika tidak ada
     ``anchor`` (mis. cutover di manifest), jika tidak ada hari ini. ``months`` (nilai manifest) → efektif
-    ``min(parameter, months)``.
+    ``min(parameter, months)``. ``shift_cutover`` (G65, docs/04 §27.13.8; hanya non-production, diputuskan importer)
+    → batas = ``anchor`` (cutover baru di manifest) walau parameter masih cutover lama.
     """
     n = get_sales_line_months(env)
     if months is not None:
         n = min(n, max(int(months), 0))
     if not n:
         return None
-    end = get_cutover_date(env, company) or anchor or fields.Date.context_today(env["res.company"])
+    if shift_cutover and anchor:
+        end = anchor
+    else:
+        end = get_cutover_date(env, company) or anchor or fields.Date.context_today(env["res.company"])
     return end.replace(day=1) - relativedelta(months=n), end
 
 
@@ -157,6 +161,8 @@ def _normalize_value(index, field, kind, required, value):
     empty = value is None or value is False or value == ""
     if kind == "date":
         if empty:
+            if not required:  # G65: date_required pembelian opsional
+                return None
             raise _err(index, field, "wajib")
         try:
             return _parse_iso_date(value)
@@ -230,11 +236,13 @@ def _clean_company_ids(company_ids):
 
 
 # ---------------------------------------------------------------------------------------------- validasi batch
-def _check_references(env, model, batch, company_ids, max_day):
-    """Pengganti check_company ORM (dilewati SQL langsung): company ∈ target, gudang & produk milik company baris,
-    tanggal < cutover company (parameter) dan < ``max_day``."""
+def _check_references(env, model, batch, company_ids, max_day, shift_cutover=False):
+    """Pengganti check_company ORM (dilewati SQL langsung): company ∈ target, gudang, produk & supplier milik company
+    baris, tanggal < cutover company (parameter) dan < ``max_day``. ``shift_cutover`` (G65 §27.13.8, diputuskan
+    importer hanya untuk non-production): batas = ``max_day`` (cutover baru di manifest) walau parameter masih lama."""
     cr = env.cr
     date_field = model._efn_date_field
+    wh_required = getattr(model, "_efn_slice_by_warehouse", True)
     for index, vals in batch:
         if vals["company_id"] not in company_ids:
             raise _err(index, "company_id", "company di luar target migrasi")
@@ -242,13 +250,22 @@ def _check_references(env, model, batch, company_ids, max_day):
     upper = {}
     for company in env["res.company"].browse(used).exists():
         bound = get_cutover_date(env, company)
-        if max_day and (bound is None or max_day < bound):
+        if max_day and (bound is None or max_day < bound or shift_cutover):
             bound = max_day
         upper[company.id] = bound
 
-    wh_ids = sorted({v["warehouse_id"] for _i, v in batch})
-    cr.execute(SQL("SELECT id, company_id FROM stock_warehouse WHERE id = ANY(%s)", wh_ids))
-    wh_company = dict(cr.fetchall())
+    wh_ids = sorted({v["warehouse_id"] for _i, v in batch if v.get("warehouse_id")})
+    wh_company = {}
+    if wh_ids:
+        cr.execute(SQL("SELECT id, company_id FROM stock_warehouse WHERE id = ANY(%s)", wh_ids))
+        wh_company = dict(cr.fetchall())
+
+    partner_company = {}
+    if "supplier_id" in model._fields:
+        partner_ids = sorted({v["supplier_id"] for _i, v in batch if v.get("supplier_id")})
+        if partner_ids:
+            cr.execute(SQL("SELECT id, company_id FROM res_partner WHERE id = ANY(%s)", partner_ids))
+            partner_company = dict(cr.fetchall())
 
     prod_ids = sorted({v["product_id"] for _i, v in batch if v.get("product_id")})
     prod_company = {}
@@ -274,8 +291,15 @@ def _check_references(env, model, batch, company_ids, max_day):
         company_id = vals["company_id"]
         if company_id not in upper:
             raise _err(index, "company_id", "company tidak ada")
-        if wh_company.get(vals["warehouse_id"], -1) != company_id:
+        wh_id = vals.get("warehouse_id")
+        if (wh_required or wh_id) and wh_company.get(wh_id, -1) != company_id:
             raise _err(index, "warehouse_id", "gudang tidak ada atau bukan milik company baris")
+        supplier_id = vals.get("supplier_id")
+        if supplier_id:
+            if supplier_id not in partner_company:
+                raise _err(index, "supplier_id", "supplier tidak ada")
+            if partner_company[supplier_id] not in (None, company_id):
+                raise _err(index, "supplier_id", "supplier milik company lain")
         product_id = vals.get("product_id")
         if product_id:
             if product_id not in prod_company:
@@ -365,7 +389,7 @@ def _start(model, run_id, batch_size, run_id_required):
 
 
 # ---------------------------------------------------------------------------------------------- API importer
-def bulk_upsert(model, rows, run_id, *, company_ids, batch_size=DEFAULT_BATCH, max_day=None):
+def bulk_upsert(model, rows, run_id, *, company_ids, batch_size=DEFAULT_BATCH, max_day=None, shift_cutover=False):
     """Upsert bulk baris histori ke model berkunci grain (``efn.legacy.flow.daily`` / ``efn.legacy.sales.daily``).
 
     :param model: recordset kosong model dengan ``env.su`` dan konteks ``efn_legacy_import=True``.
@@ -385,6 +409,8 @@ def bulk_upsert(model, rows, run_id, *, company_ids, batch_size=DEFAULT_BATCH, m
     company_ids = _clean_company_ids(company_ids)
     if isinstance(max_day, str):
         max_day = _parse_iso_date(max_day)
+    if shift_cutover and not max_day:
+        raise UserError("efn_legacy_history:shift_cutover — wajib max_day (cutover baru di manifest).")
     stats = {"rows": 0, "inserted": 0, "updated": 0, "unchanged": 0}
     model.flush_model()
     batch = []
@@ -392,11 +418,11 @@ def bulk_upsert(model, rows, run_id, *, company_ids, batch_size=DEFAULT_BATCH, m
         batch.append((index, _normalize_row(model, index, row, run_id)))
         stats["rows"] += 1
         if len(batch) >= batch_size:
-            _check_references(env, model, batch, company_ids, max_day)
+            _check_references(env, model, batch, company_ids, max_day, shift_cutover)
             _execute_upsert(env, model, batch, stats)
             batch = []
     if batch:
-        _check_references(env, model, batch, company_ids, max_day)
+        _check_references(env, model, batch, company_ids, max_day, shift_cutover)
         _execute_upsert(env, model, batch, stats)
     env.invalidate_all()
     _logger.info(
@@ -423,6 +449,7 @@ def bulk_replace_slice(
     batch_size=DEFAULT_BATCH,
     max_day=None,
     sales_line_months=None,
+    shift_cutover=False,
 ):
     """Ganti irisan company × gudang × ``[date_from, date_to)`` (docs/04 §27.8a): validasi → DELETE → INSERT.
 
@@ -431,15 +458,24 @@ def bulk_replace_slice(
     rentang ``sales_line_window`` (``sales_line_months`` = nilai manifest; efektif ``min(parameter, manifest)``;
     0 → ``UserError``). Idempoten: memuat irisan yang sama 2× = jumlah baris sama. Commit per irisan = tugas importer.
 
+    Varian irisan **tanpa gudang** (G65, ``efn.legacy.purchase.line``, ``_efn_slice_by_warehouse = False``):
+    ``warehouse_id`` WAJIB ``None`` = irisan company × rentang (``warehouse_id`` baris boleh kosong atau gudang milik
+    company). Model beririsan gudang menolak ``None`` dan sebaliknya (SEC-197: DELETE tidak pernah melebar diam-diam).
+
     :param rows: iterable ``dict`` (lihat :func:`bulk_upsert`); ``company_id``/``warehouse_id`` baris boleh diisi
         (wajib sama dengan irisan) atau dihilangkan (diisi dari argumen).
+    :param shift_cutover: lihat :func:`_check_references` (wajib ``max_day``).
     :return: ``{"rows_deleted", "rows_inserted"}``.
     """
     env = model.env
     run_id = _start(model, run_id, batch_size, run_id_required="run_id" in model._fields)
-    for name, value in (("company_id", company_id), ("warehouse_id", warehouse_id)):
+    by_warehouse = getattr(model, "_efn_slice_by_warehouse", True)
+    checks = [("company_id", company_id)] + ([("warehouse_id", warehouse_id)] if by_warehouse else [])
+    for name, value in checks:
         if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
             raise UserError(f"efn_legacy_history:slice — {name} wajib id int.")
+    if not by_warehouse and warehouse_id is not None:
+        raise UserError(f"efn_legacy_history:slice — {model._name} diiris per company × bulan (warehouse_id=None).")
     try:
         date_from, date_to = _parse_iso_date(date_from), _parse_iso_date(date_to)
         if isinstance(max_day, str):
@@ -448,9 +484,17 @@ def bulk_replace_slice(
         raise UserError("efn_legacy_history:slice — tanggal irisan wajib YYYY-MM-DD.") from exc
     if date_from >= date_to:
         raise UserError("efn_legacy_history:slice — date_from harus < date_to (batas akhir eksklusif).")
+    if shift_cutover and not max_day:
+        raise UserError("efn_legacy_history:shift_cutover — wajib max_day (cutover baru di manifest).")
     date_field = model._efn_date_field
     if model._efn_months_window:
-        window = sales_line_window(env, env["res.company"].browse(company_id), anchor=max_day, months=sales_line_months)
+        window = sales_line_window(
+            env,
+            env["res.company"].browse(company_id),
+            anchor=max_day,
+            months=sales_line_months,
+            shift_cutover=shift_cutover,
+        )
         if window is None:
             raise UserError(
                 "efn_legacy_history:sales_line_disabled — baris penjualan legacy nonaktif "
@@ -464,29 +508,33 @@ def bulk_replace_slice(
         if isinstance(row, dict):
             row = dict(row)
             row.setdefault("company_id", company_id)
-            row.setdefault("warehouse_id", warehouse_id)
+            if by_warehouse:
+                row.setdefault("warehouse_id", warehouse_id)
         vals = _normalize_row(model, index, row, run_id)
-        if vals["company_id"] != company_id or vals["warehouse_id"] != warehouse_id:
+        if vals["company_id"] != company_id or (by_warehouse and vals["warehouse_id"] != warehouse_id):
             raise _err(index, "company_id/warehouse_id", "di luar irisan")
         if not date_from <= vals[date_field] < date_to:
             raise _err(index, date_field, "di luar irisan tanggal")
         batch.append((index, vals))
     if batch:
-        _check_references(env, model, batch, {company_id}, max_day)
-    else:
+        _check_references(env, model, batch, {company_id}, max_day, shift_cutover)
+    elif by_warehouse:
         # Irisan kosong tetap divalidasi (gudang milik company) agar DELETE tidak mengenai irisan PT lain.
         env.cr.execute(SQL("SELECT company_id FROM stock_warehouse WHERE id = %s", warehouse_id))
         found = env.cr.fetchone()
         if not found or found[0] != company_id:
             raise UserError("efn_legacy_history:slice — gudang tidak ada atau bukan milik company irisan.")
+    elif not env["res.company"].browse(company_id).exists():
+        raise UserError("efn_legacy_history:slice — company irisan tidak ada.")
 
     model.flush_model()
+    wh_cond = SQL("AND warehouse_id = %s", warehouse_id) if by_warehouse else SQL()
     env.cr.execute(
         SQL(
-            "DELETE FROM %s WHERE company_id = %s AND warehouse_id = %s AND %s >= %s AND %s < %s",
+            "DELETE FROM %s WHERE company_id = %s %s AND %s >= %s AND %s < %s",
             SQL.identifier(model._table),
             company_id,
-            warehouse_id,
+            wh_cond,
             SQL.identifier(date_field),
             date_from,
             SQL.identifier(date_field),

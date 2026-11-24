@@ -125,6 +125,11 @@ def test_window_entities_ranges(tmp_path: Path) -> None:
     assert parse_entities("sales, stock,sales") == ("sales", "stock")
     with pytest.raises(RuntimeError):
         parse_entities("sales,customer")
+    # G65: purchase_line opt-in (diterima ESB_ENTITIES), bukan default; stock_opening hanya lewat `snapshot`.
+    assert parse_entities("branch,purchase_line") == ("branch", "purchase_line")
+    assert "purchase_line" not in EsbSettings.from_env(env_with(tmp_path)).entities
+    with pytest.raises(RuntimeError):
+        parse_entities("stock_opening")
     with pytest.raises(RuntimeError):
         EsbSettings.from_env(env_with(tmp_path, ESB_RATE_PER_SEC="50"))
     with pytest.raises(RuntimeError):

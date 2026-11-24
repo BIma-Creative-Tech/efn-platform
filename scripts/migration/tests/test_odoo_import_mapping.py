@@ -338,6 +338,131 @@ def test_ranges_and_segment_gate():
         m.parse_range({"name": "x"})
 
 
+def test_parse_cutover_shift():
+    # docs/04 §27.13.8: izin geser cutover production = string persis <CODE>:<lama>:<baru>, hanya maju.
+    assert m.parse_cutover_shift("PB:2026-11-17:2026-12-01") == ("PB", date(2026, 11, 17), date(2026, 12, 1))
+    for bad in (None, "", 1, "pb:2026-11-17:2026-12-01", "PB:2026-12-01:2026-11-17", "PB:2026-11-17:2026-11-17",
+                "PB:2026-11-31:2026-12-01", "PB:2026-11-17:2026-12-01 ", "PB:2026-11-17", "PB 2026-11-17 2026-12-01",
+                "PB:2026-11-17:2026-12-01\n"):  # fmt: skip
+        assert m.parse_cutover_shift(bad) is None, bad
+
+
+# ------------------------------------------------------------------------------------------------ G65 (§27.13)
+def _si_row(sup="SUP-1", prod="RM001", **data):
+    values = {"partner_key": X("supplier", sup), "product_key": X("product", prod), "supplier_code": sup}
+    values.update(product_code=prod, price=12000, discount=2.5, currency="IDR", min_qty=0, sequence=2)
+    values.update(date_start="2026-11-20", uom_esb="KG", uom_xmlid=None, source_purchase_num="PO-1")
+    values.update(data)
+    return {"entity": "supplierinfo", "company_code": "PB", "esb_key": f"{sup}|{prod}",
+            "xmlid": X("supplierinfo", f"{sup}|{prod}"), "data": values}  # fmt: skip
+
+
+def test_g65_supplierinfo_row_check_and_plan():
+    row = _si_row()
+    m.check_master_row(BRAND, "supplierinfo", row, ["PB"])
+    for mutate in (
+        lambda r: r.update(esb_key="SUP-1_RM001"),  # esb_key wajib supplier|produk
+        lambda r: r.update(xmlid=X("supplierinfo", "SUP-1_RM001")),
+        lambda r: r["data"].update(partner_key=X("customer", "SUP-1")),
+        lambda r: r["data"].update(product_key=X("product", "RM002")),
+    ):
+        bad = _si_row()
+        mutate(bad)
+        with pytest.raises(vendored_bundle.IntegrityError):
+            m.check_master_row(BRAND, "supplierinfo", bad, ["PB"])
+    product = X("product", "RM001")
+    resolver = FakeResolver(ids={X("supplier", "SUP-1"): 5, product: 11}, uoms={product: 3})
+    plan = m.supplierinfo_plan(row["data"], 7, resolver, 99)
+    assert plan.model == "product.supplierinfo" and not plan.missing
+    assert plan.owned == {"price": 12000.0, "discount": 2.5, "date_start": date(2026, 11, 20), "product_uom_id": 3,
+                          "sequence": 2, "min_qty": 0.0, "currency_id": 99}  # fmt: skip
+    assert plan.create_only == {"partner_id": 5, "product_tmpl_id": 11, "company_id": 7}
+    same = m.supplierinfo_plan({**row["data"], "uom_xmlid": "uom.product_uom_kgm"}, 7, resolver, 99)
+    assert not same.missing and same.owned["product_uom_id"] == 3
+    # Kontrak final W-B: harga selalu per UoM produk -> uom_xmlid beda = baris ditolak (bukan dimuat).
+    unit = m.supplierinfo_plan({**row["data"], "uom_xmlid": "uom.product_uom_unit"}, 7, resolver, 99)
+    assert any("UoM produk" in x for x in unit.missing)
+    broken = m.supplierinfo_plan({**row["data"], "price": 0, "discount": 120}, 7, FakeResolver(), None)
+    assert {"price > 0", "discount 0..100", "currency (hanya IDR)", "UoM produk"} <= set(broken.missing)
+    assert any(x.startswith("partner_key") for x in broken.missing)
+
+
+def test_suspect_location_matches_export():
+    """SEC-G65-03: salinan pola importer = pola validator/export (efn_mig.mapping.SUSPECT_LOCATION)."""
+    assert m.SUSPECT_LOCATION.pattern == export_mapping.SUSPECT_LOCATION.pattern
+    assert m.SUSPECT_LOCATION.flags == export_mapping.SUSPECT_LOCATION.flags
+    assert m.location_key_name("  gudang   Damage ") == export_mapping.location_name_key("  gudang   Damage ")
+    rows = [
+        {"data": {"esb_branch_id": 11, "esb_locations": ["Utama", "Gudang  Damage"]}},
+        {"data": {"esb_branch_id": 12, "esb_locations": ["EXPIRED"]}},
+    ]
+    assert m.suspect_locations(BRAND, rows, None) == ["11|Gudang  Damage", "12|EXPIRED"]
+    csv_text = "brand,branch_id,esb_location_name,action\npb,11,gudang damage,stock\nwtz,12,EXPIRED,skip\n"
+    assert m.suspect_locations(BRAND, rows, csv_text) == ["12|EXPIRED"], "entri map brand lain tidak berlaku"
+
+
+def _quant_row(**data):
+    values = {"location_key": X("branch_wh", 11), "product_key": X("product", "RM001"), "product_code": "RM001"}
+    values.update(quantity=12.5, uom_esb=None, uom_xmlid=None, esb_branch_id=11, esb_locations=["Utama"])
+    values.update(amount=150000, accounting_date="2026-11-30")
+    values.update(data)
+    return {"entity": "quant", "company_code": "PB", "esb_key": "11|RM001", "xmlid": None, "data": values}
+
+
+def test_g65_quant_row_checks():
+    m.check_master_row(BRAND, "quant", _quant_row(), ["PB"])
+    m.check_master_row(BRAND, "quant", _quant_row(location_key=X("branch_loc", 30)), ["PB"])
+    assert m.row_xmlid_entity("quant", {}) is None
+    for bad in (
+        _quant_row(location_key=export_mapping.xmlid(BRAND, "WTZ", "branch_wh", 11)),  # lokasi PT lain
+        _quant_row(location_key=X("product", "RM001")),
+        _quant_row(quantity=0),
+        _quant_row(quantity=-3),
+        _quant_row(quantity="abc"),
+        _quant_row(esb_branch_id=12),  # esb_key tidak cocok
+        _quant_row(product_key=X("product", "RM002")),
+        {**_quant_row(), "xmlid": X("product", "RM001")},
+    ):
+        with pytest.raises(vendored_bundle.IntegrityError):
+            m.check_master_row(BRAND, "quant", bad, ["PB"])
+    extra = _quant_row()
+    extra["data"]["created_by"] = "x"
+    with pytest.raises(vendored_bundle.IntegrityError, match="kunci data"):
+        m.check_master_row(BRAND, "quant", extra, ["PB"])
+    with pytest.raises(vendored_bundle.IntegrityError, match="source"):
+        cost = {"entity": "cost", "company_code": "PB", "esb_key": "RM001", "xmlid": None,
+                "data": {"product_key": X("product", "RM001"), "product_code": "RM001", "standard_price": 1,
+                         "source_uom": None, "source": "guess", "as_of": "2026-12-01"}}  # fmt: skip
+        m.check_master_row(BRAND, "cost", cost, ["PB"])
+
+
+def test_g65_purchase_history_row_and_vals():
+    row = {k: None for k in m.HISTORY_KEYS["legacy_purchase_line"]}
+    row.update(
+        purchase_num="PO-1",
+        line_no=1,
+        date="2026-10-03",
+        branch_name="B" * 80,
+        supplier_name="PT X",
+        esb_product_code="RM001",
+        uom_name="KG",
+        qty=10,
+        total=133200,
+        status="Finished",
+        map_source="",
+    )
+    m.check_history_row("legacy_purchase_line", row)
+    m.check_history_row("legacy_purchase_line", {**row, "product_name": "Tepung", "category_name": "Bahan"})
+    with pytest.raises(vendored_bundle.IntegrityError):
+        m.check_history_row("legacy_purchase_line", {**row, "notes": "catatan bebas"})  # PDP L-110: fail closed
+    vals = m.purchase_line_vals({**row, "product_name": "T" * 200}, warehouse_id=None, supplier_id=5, product_id=None)
+    assert len(vals["branch_name"]) == 64 and len(vals["product_name"]) == 128
+    assert vals["map_source"] is None and vals["date_required"] is None and vals["supplier_id"] == 5
+    assert not {"esb_branch_id", "esb_supplier_code", "company_id"} & set(vals)
+    assert "legacy_purchase_line" not in m.WAREHOUSE_SLICED
+    assert m.MASTER_ORDER.index("supplierinfo") == m.MASTER_ORDER.index("cost") - 1
+
+
 # ------------------------------------------------------------------------------------------------ kontrak end-to-end
 def test_export_bundles_pass_importer_row_checks(tmp_path, source, maps, keys):
     """Baris yang benar-benar dihasilkan export W1 (FakeSource) lolos validasi importer + semua plan bisa dibangun."""

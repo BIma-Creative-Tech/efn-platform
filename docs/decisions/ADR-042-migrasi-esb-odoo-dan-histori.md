@@ -3,7 +3,10 @@
 - **Status:** **Accepted** — disetujui user (pemilik proyek) **18 Nov 2026**, **dengan amendemen A1–A3** (§0). Fase 2 G43
   boleh dibangun (modul `efn_legacy_history`, mesin migrasi `scripts/migration/esb_to_odoo.py`, validator, dry-run PB).
   Pertanyaan klien yang masih terbuka (§6) tidak membatalkan keputusan ini; jawabannya mengisi parameter/pemetaan.
-- **Tanggal:** 2026-11-18 (Gelombang 43 fase 1: Proposed) · **2026-11-18 (fase 2: Accepted + amendemen)**
+  **Amandemen G65 (24 Nov 2026, §0b):** cakupan dan lingkup PB diputuskan user; pilihan sumber data teknis di §0b
+  adalah rekomendasi architect (**Proposed**) sampai diterima user/Finance.
+- **Tanggal:** 2026-11-18 (Gelombang 43 fase 1: Proposed) · **2026-11-18 (fase 2: Accepted + amendemen)** ·
+  **2026-11-24 (amandemen G65)**
 - **Pemutus:** pemilik proyek (lingkup histori, urutan brand — **sudah diputuskan**), Finance (cutover, saldo awal, akun
   kliring, metode biaya), Ops per brand (pemetaan cabang, paket menu, stock opname), Legal/DPO (bundel data, partner B2B)
 - **Referensi review:** R-O02 (migrasi sistem lama), R-O01 (master data), R-L01 (PDP), R-L03 (pajak), R-T01 (salah
@@ -34,6 +37,134 @@
 
 Yang **tidak** berubah: (b) "histori sebagai transaksi Odoo" tetap ditolak; ClickHouse tetap **sumber kebenaran angka
 histori** (arsip Odoo = salinan untuk dibaca di Odoo dan input forecast); `efn.legacy.flow.daily` (forecast) tetap.
+
+## 0b. Amandemen G65, 24 Nov 2026 — histori pembelian, harga beli supplier, HPP cutover, stok awal (PB)
+
+> **Ringkasan untuk manajemen.** Untuk Paris Baguette, migrasi kini juga membawa **stok awal** (jumlah dan nilai per
+> gudang/lokasi), **HPP** per produk, **harga beli terakhir per supplier**, dan **arsip histori pembelian 24 bulan**
+> (baca-saja, bukan PO Odoo). Neraca pembukaan dan utang/piutang tetap ditunda. Gladi di efn-prod lokal dengan cutover
+> uji **1 Des 2026**. Biaya ±13–16 hari-engineer (±1,5–2 minggu kalender bila 3 engineer paralel), Rp0 lisensi;
+> target 1 Des **ketat**: bila dry-run belum hijau, cutover uji digeser, bukan gerbangnya dilonggarkan.
+
+### 0b.1 Keputusan user (24 Nov 2026) — final
+| # | Keputusan | Dampak ke ADR ini |
+|---|---|---|
+| G65-1 | Cakupan: semua yang memungkinkan, **termasuk histori pembelian** | Model arsip baru `efn.legacy.purchase.line` (pola §3.1 butir 2) |
+| G65-2 | Brand: **PB saja** (pilot A2) | Brand lain mengikuti setelah berita acara PB |
+| G65-3 | Target: **efn-prod lokal (gladi)**, cutover uji **2026-12-01** | Parameter `efn_mig_esb.cutover_date.PB` digeser dari 2026-11-17 ke 2026-12-01; segmen histori penjualan & aliran November (17–30 Nov) **diekspor ulang** (ganti-per-irisan, §3.1 butir 3) |
+| G65-4 | Saldo awal: **stok awal saja**; neraca pembukaan (TB) dan AR/AP terbuka **tidak** dikerjakan | Langkah `opening` tetap `NOT_BUILT` (Q-ESB21 tetap terbuka); langkah `stock` dibangun |
+
+### 0b.2 Konteks — hasil probe GET production PB (24 Nov 2026) yang bertentangan dengan §3.3 / `docs/04` §27.6
+| Bunyi asli | Fakta probe | Akibat |
+|---|---|---|
+| §3.3 "Stok awal … dari **stock opname cutover** (E6 atau `03_stok_awal.csv`)" | Opname ESB PB hanya 67 dokumen (Okt–23 Nov), tidak serentak per cabang/produk | Opname tidak bisa jadi sumber tunggal saldo per tanggal |
+| `docs/04` §27.6 "`fact_esb_stock_snapshot` **tidak** dipakai" (stock-list) | `/inventory/stock-list` tidak terbukti (0 baris G41); `/inventory/stock-period/browse` 400 | Tetap tidak dipakai |
+| §3.3 "`standard_price` wajib terisi" (sumber `lastHpp` BOM, `docs/04` §27.11 E11–E13) | `/stock/product-cogs-history` 0 baris; `/stock/product/{id}/last-hpp` 500; `/report/inventory-valuation/*` 401 | HPP harus diturunkan dari sumber lain |
+| §3.3 "supplierinfo" (sumber E11–E13 [B]) | `/pricelist`, `/customer-pricelist` kosong untuk PB | Harga beli = histori pembelian |
+| — | `/report/stock-movement?startPeriod=D&endPeriod=D` memberi baris `transactionType="Beginning"` = saldo awal hari D per cabang × lokasi × produk, **dengan nilai** (`qtyBalance`, `amountBalance`, `valuePerUnit`); ±47,7 rb baris/tanggal (mayoritas qty 0), `limit` maks 100, filter `branchCode` berfungsi | Sumber stok **dan** nilai yang konsisten satu tanggal |
+| — | `/report/purchase/purchase-recapitulation/purchase` = baris PO × produk (±2,3–2,7 rb/bln PB), **tanpa** `branchID`/`supplierID`; filter cabang diabaikan server; `/purchase/purchase-order` (header) punya `branchID`, `supplierID` | Join per `purchaseNum` ke header |
+
+### 0b.3 Opsi yang dipertimbangkan
+**Sumber stok awal**
+| Kriteria | **S-A** stock opname ESB (E6) | **S-B** `/inventory/stock-list` | **S-C (dipilih)** `stock-movement` baris Beginning pada D = cutover | **S-D** CSV Ops `03_stok_awal.csv` |
+|---|---|---|---|---|
+| Cakupan satu tanggal | Tidak (opname tidak serentak) | Tidak terbukti | **Ya**, semua cabang × lokasi × produk | Ya, bila Ops lengkap |
+| Nilai (Rp) | `hpp` per baris opname | Tidak | **Ya** (`amountBalance`) | Manual |
+| Beban API | Kecil | ? | ±480–520 GET/tanggal (±4–8 menit) | 0 |
+| Akurasi fisik | Fisik (bila dihitung) | Buku | **Buku ESB** (fisik hanya bila Ops opname di ESB sebelum freeze) | Tergantung Ops |
+| Biaya bangun | sudah ada, tapi tidak memadai | ±2 hari + risiko gagal | **±1–1,5 hari** (extract + DDL) | ±1 hari + kerja Ops tiap dry-run |
+
+**HPP cutover** — urutan sumber (dipilih): (1) Σ`amountBalance` / Σ`qtyBalance` (qty > 0) per company × produk pada
+tanggal yang sama dengan stok (rata-rata tertimbang; konsisten dengan nilai stok sehingga Σ nilai quant ≈ nilai buku
+ESB); (2) `lastHpp` komponen BOM (step `cost` lama); (3) harga beli terakhir 12 bulan. Ditolak: endpoint COGS/last-hpp
+(kosong/500) dan valuasi (401). Biaya tambahan ±0,5 hari.
+
+**Harga beli supplier** — (P-1, dipilih) histori `purchase-recapitulation` + header PO: ±2–3 GET/hari, 24 bulan ≈
+±1,5–2,2 rb GET (±15–20 menit). (P-2) detail faktur pembelian `/purchase/purchase-invoices/{num}`: ±20 rb GET untuk 24
+bulan (1 GET/dokumen), memberi `lastPrice`/`poPrice` faktual — ditolak untuk G65 (beban 10×), boleh jadi opsi
+rekonsiliasi kelak. (P-3) pricelist — kosong.
+
+**Bentuk histori pembelian** — (H-a, dipilih) arsip read-only `efn.legacy.purchase.line` (±60 rb baris PB, < 20 MB);
+(H-b) `purchase.order` dibuat ulang — **ditolak** dengan alasan sama §3.1 butir 5 (penerimaan → `stock.move`/valuasi
+ganda, tagihan/jurnal, sequence PO); (H-c) ClickHouse/Insight saja — tidak memenuhi G65-1. Biaya H-a ±3–4 hari
+(model + view + ACL + loader bulk + test).
+
+### 0b.4 Keputusan (rekomendasi architect, **Proposed** sampai diterima)
+1. **Stok awal** = baris `Beginning` `/report/stock-movement` dengan `startPeriod = endPeriod = cutover` (saldo awal
+   hari cutover = saldo akhir `cutover − 1`), ditarik **per cabang** (`branchCode`), hanya `qtyBalance ≠ 0` disimpan,
+   ke `efn_dwh.fact_esb_stock_opening`. Stock opname (E6) dan stock-list **tidak** dipakai sebagai sumber qty;
+   rekomendasi operasional: Ops melakukan opname **di ESB** sebelum freeze agar saldo buku = fisik.
+2. **HPP cutover** = urutan sumber 0b.3; `standard_price` ditulis langkah `cost` **sebelum** `stock` (dengan
+   `--cutover-date`), sumber tercatat per produk.
+3. **Harga beli supplier** (`product.supplierinfo`) = harga satuan baris PO terakhir per company × supplier × produk dalam
+   12 bulan sebelum cutover, status PO yang dihitung saja; banyak supplier → beberapa baris, `sequence` = supplier
+   terbaru dulu.
+4. **Histori pembelian** = model arsip read-only `efn.legacy.purchase.line` di `efn_legacy_history` (aturan bersama
+   §3.1 butir 2: read-only, rule multi-company, tanpa relasi ke `purchase.order`/`stock.move`/`account.move`),
+   24 bulan penuh sebelum cutover, dimuat bulk per company × bulan (gudang boleh kosong untuk HO/cabang tak
+   terpetakan; fit-gap G65 §1.2), dibaca `purchase.group_purchase_user` (modul `purchase` terpasang di efn-prod).
+   Stok awal di-apply dengan `accounting_date` dan tanggal move = `cutover − 1`; PB berkategori valuasi **periodik**
+   (efn-prod 24 Nov) sehingga apply tidak membuat jurnal — nilai diakui lewat closing valuasi **draft**
+   (`action_close_stock_valuation(auto_post=False)`, runbook, Finance memosting).
+5. **Pemetaan cabang/supplier pembelian** lewat ID dari header PO (`branchID`, `supplierID`) per `purchaseNum`; nama
+   hanya fallback berlabel. `dim_esb_supplier` mendapat kolom `supplier_id`.
+6. **TB & AR/AP tetap ditunda** (`opening` = `NOT_BUILT`, Q-ESB21). Akibatnya pada gladi, nilai persediaan dari quant
+   berlawanan dengan akun kliring yang **tidak** akan nol (tidak ada jurnal pembukaan) — diterima untuk gladi, **tidak**
+   untuk cutover production (butir rekonsiliasi 4 tetap pemblokir production).
+7. Kontrak rinci: `docs/04` **§27.13** (v21.4).
+
+```mermaid
+flowchart LR
+  SM["ESB /report/stock-movement<br/>start=end=cutover, per cabang"] --> FO[("fact_esb_stock_opening<br/>Beginning, qty≠0")]
+  PR["ESB purchase-recapitulation<br/>(baris PO x produk)"] --> FP[("fact_esb_purchase_line")]
+  PH["ESB /purchase/purchase-order<br/>(header: branchID, supplierID)"] -- "join purchaseNum" --> FP
+  FO --> COST["step cost<br/>(HPP rata-rata; fallback BOM, PO)"]
+  FO --> STK["step stock<br/>stock.quant mode inventaris"]
+  FP --> SI["step supplierinfo<br/>(harga terakhir 12 bln)"]
+  FP --> LP["step legacy_purchase_line<br/>(segmen company x bulan)"]
+  COST --> STK
+  LP --> ODOO[("efn.legacy.purchase.line<br/>arsip read-only")]
+```
+
+### 0b.5 Konsekuensi
+- **Positif:** stok dan nilai awal berasal dari satu tanggal dan satu sumber (Σ nilai quant dapat direkonsiliasi ke buku
+  ESB); purchasing Odoo langsung punya supplier + harga terakhir; histori pembelian terbaca di Odoo; tidak ada
+  dokumen stok/jurnal palsu.
+- **Negatif / diterima:** (i) stok = **buku** ESB, bukan fisik, kecuali Ops opname di ESB sebelum freeze; (ii) HPP
+  rata-rata per company menghapus perbedaan nilai antar-lokasi (Odoo CE menyimpan `standard_price` per company, bukan per
+  lokasi); (iii) stok negatif ESB tidak dimigrasi (dilaporkan ke Ops); (iv) ekstraksi stock-movement **harus** dijalankan
+  pada/setelah hari cutover, setelah freeze — tidak bisa disiapkan jauh hari (dry-run memakai tanggal uji lebih awal);
+  (v) satuan baris stock-movement/pembelian bisa berbeda dari satuan produk → baris yang tak bisa dikonversi menjadi error
+  validator (fail closed); (vi) tanpa jurnal pembukaan, kliring tidak nol di gladi.
+- **Beban API:** stock-movement ±477 GET (limit 100) + ±1 GET per cabang per tanggal ≈ **±4–8 menit**; pembelian
+  24 bulan ≈ ±1,5–2,2 rb GET (≈ 15–20 menit pada 2 req/dtk) sekali backfill, lalu ±2–3 GET/hari. Masih di bawah budget
+  L-111; tetap jendela 22:00–05:00 untuk backfill (Q-ESB7).
+- **Biaya / waktu (perkiraan architect, hari-engineer):** esb-extract `purchase_line` + `stock_opening` + DDL + grant +
+  test 3–4 (efn-data-ai-engineer); export `supplierinfo`/`cost`/`stock`/`legacy_purchase_line` + validator + rekonsiliasi
+  4–5 (efn-data-ai-engineer / efn-odoo-engineer); model `efn.legacy.purchase.line` + importer handler + test 4–5
+  (efn-odoo-engineer); QA + 2 dry-run PB 2 (efn-qa-engineer). **Total ±13–16**.
+
+### 0b.6 Risiko terkait
+| ID | Ringkas | Mitigasi |
+|---|---|---|
+| R-O12 | Saldo stok/nilai salah atau ganda | Satu sumber satu tanggal; gerbang "tidak ada `stock.move` done non-inventaris di lokasi target ≥ cutover"; rekonsiliasi butir 2 qty pemblokir; nilai = laporan Finance |
+| R-O10 | Beban API ESB | Per cabang, limit 100, token bucket; hanya simpan Beginning non-nol |
+| R-O09 | Perilaku API berubah (arti `Beginning`, satuan, pembulatan nilai) | Parser gagal eksplisit, test fixture sintetis, rekonsiliasi Σ qty × nilai per lokasi |
+| R-O13 | Histori pembelian terpetakan salah (cabang/supplier via nama) | ID dari header PO; fallback nama berlabel `map_source`; baris tak terpetakan dilaporkan, tidak ditebak |
+| **R-O15 (usulan, belum di `docs/01`)** | **Pemetaan nama cabang/supplier/lokasi ESB salah** (nama ganda, ejaan berubah, supplier perorangan) → harga beli/histori ke partner salah, stok ke lokasi salah | Utamakan ID; nama hanya fallback dengan normalisasi + label; lokasi Damage/Expired wajib dipetakan eksplisit (fail closed); daftar supplier perorangan ke DPO (ADR-036 mengenkripsi partner di Odoo) |
+
+### 0b.7 Pertanyaan terbuka (G65; rinci `docs/04` §27.13.9)
+Q-ESB25 lokasi Damage/Expired/Temporary di saldo awal (memperinci Q-ESB13) · Q-ESB26 HPP rata-rata per company dan
+harga supplierinfo sebelum diskon/tanpa PPN diterima Finance · Q-ESB27 stok negatif ESB saat cutover · Q-ESB28 status PO
+yang dihitung untuk harga beli · Q-ESB29 data transaksi demo PB di efn-prod 17–30 Nov (reset sebelum gladi?) ·
+tetap: Q-ESB16 (metode biaya, valuasi, akun kliring), Q-ESB21 (TB, AR/AP).
+
+### 0b.8 Kapan ditinjau ulang
+- Dry-run PB pertama: Σ nilai quant vs Σ `amountBalance` berselisih > 1 % per company, atau > 5 % baris stok gagal
+  konversi satuan → tinjau sumber HPP/satuan.
+- ESB menyediakan endpoint valuasi/COGS yang dapat diakses (401/500 berubah) → pertimbangkan ganti sumber HPP.
+- Q-ESB21 terjawab → langkah `opening` dibangun (amandemen berikutnya).
+- Setelah gladi 1 Des: sebelum cutover production PB.
 
 ## 1. Konteks
 

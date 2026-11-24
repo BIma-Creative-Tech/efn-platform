@@ -10,7 +10,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, time, timedelta, timezone
 
-from efn_esb.config import BRANCH_SCOPED
+from efn_esb.config import BRANCH_SCOPED, SNAPSHOT_BRANCH_SCOPED
 
 # Indonesia tanpa DST: offset tetap (tidak bergantung paket tzdata di image slim).
 WIB = timezone(timedelta(hours=7), "WIB")
@@ -161,6 +161,18 @@ def incremental_tasks(
             for day in incremental_days(now, finished, correction_days, gap_days, ready_hour):
                 tasks.append(SliceTask(day, entity, scope))
     return sorted(tasks, key=lambda t: (t.day, t.entity, t.scope), reverse=True)
+
+
+def snapshot_tasks(entities: Iterable[str], day: date, branch_ids: Sequence[int]) -> list[SliceTask]:
+    """Slice `snapshot`: per brand ('*') kecuali `SNAPSHOT_BRANCH_SCOPED` (G65 `stock_opening`: satu slice + checkpoint
+    per cabang -> cabang gagal tidak membatalkan cabang lain, dan bisa diulang sendiri)."""
+    tasks: list[SliceTask] = []
+    for entity in entities:
+        if entity in SNAPSHOT_BRANCH_SCOPED:
+            tasks.extend(SliceTask(day, entity, str(branch)) for branch in sorted(set(branch_ids)) if branch > 0)
+        else:
+            tasks.append(SliceTask(day, entity, BRAND_SCOPE))
+    return tasks
 
 
 def snapshot_due(entity: str, checkpoints: Checkpoints, today: date) -> bool:

@@ -3,6 +3,7 @@
 - flow.daily: `[cutover - legacy_days, cutover - 1]` (legacy_days 1..730).
 - sales.daily: `[awal bulan(cutover) - 24 bulan, cutover - 1]`.
 - sales.line: `[awal bulan(cutover) - N bulan, cutover - 1]`, N = sales_line_months (0..24; 0 = tidak ada).
+- purchase.line (G65): sama dengan sales.daily, satu berkas per company x bulan (selalu di part 1).
 Segmen = company x bulan kalender; bila baris > max_rows -> dipecah per cabang (gudang), satu cabang tidak terbelah.
 """
 
@@ -59,6 +60,7 @@ class HistoryRanges:
             "legacy_flow_daily": clip(self.flow),
             "legacy_sales_daily": clip(self.sales_daily),
             "legacy_sales_line": clip(self.sales_line),
+            "legacy_purchase_line": clip(self.sales_daily),  # G65 §27.13.4: rentang sama dengan sales.daily
         }
 
 

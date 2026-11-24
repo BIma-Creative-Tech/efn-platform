@@ -7,7 +7,8 @@
 - SEC-186: di `run`, brand yang `auth_failed` 2 siklus berturut-turut ditangguhkan (`auth_suspended`) sampai restart.
 - `snapshot --brand B --entity E [--entity E ...] [--date D] [--allow-unverified]` (G43, docs/04 §27.11): entitas
   migrasi (bom_detail, menu_price, customer, location; P2 stock_opname/ap_open/ar_open/coa hanya dengan
-  `--allow-unverified`). Bukan bagian loop `run`.
+  `--allow-unverified`). Bukan bagian loop `run`. G65 (docs/04 §27.13.1): `--entity stock_opening --date <cutover>`
+  (satu slice per cabang; `--date` WAJIB, tanpa `--allow-unverified`). `purchase_line` = entitas harian (`backfill`).
 - `probe --brand B`: login + /branch/list/user, cetak JUMLAH cabang saja.
 - `health`: exit 0 bila file heartbeat masih segar (opsional; compose memakai cek PID).
 CLI selain `run` dengan `ESB_ENABLED=false` -> exit 0 dengan pesan "ESB dinonaktifkan".
@@ -25,6 +26,7 @@ from typing import Any
 
 from efn_esb.config import DAILY_ENTITIES, ENTITIES, BrandConfig, ClickHouseSettings, EsbSettings, esb_enabled
 from efn_esb.extract import BRANCH_LIMIT, BrandRuntime
+from efn_esb.extract_g65 import G65_SNAPSHOT_ENTITIES
 from efn_esb.extract_mig import P2_ENTITIES, SNAPSHOT_ENTITIES
 from efn_esb.heartbeat import is_fresh, touch
 from efn_esb.http import EsbClient, TokenBucket, UrllibTransport
@@ -52,12 +54,14 @@ def _parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
     )
     snapshot = sub.add_parser("snapshot", help="G43: tarik entitas migrasi satu brand (bukan bagian loop run)")
     snapshot.add_argument("--brand", required=True)
-    snapshot.add_argument("--entity", action="append", required=True, choices=list(SNAPSHOT_ENTITIES))
+    snapshot.add_argument(
+        "--entity", action="append", required=True, choices=[*SNAPSHOT_ENTITIES, *G65_SNAPSHOT_ENTITIES]
+    )
     snapshot.add_argument(
         "--date",
         dest="day",
         type=date.fromisoformat,
-        help="hari snapshot (P2: tanggal saldo = cutover - 1); default hari ini WIB",
+        help="hari snapshot (P2: cutover - 1; stock_opening: tanggal cutover, wajib); default hari ini WIB",
     )
     snapshot.add_argument(
         "--allow-unverified",
@@ -177,8 +181,13 @@ def _cmd_backfill(settings: EsbSettings, args: argparse.Namespace, stop: threadi
     return 0 if run.status in ("ok", "window_closed", "limit") else 1
 
 
-def validate_snapshot_args(entities: Sequence[str], allow_unverified: bool, opname_window: int) -> None:
-    """G43: entitas P2 default MATI (belum diverifikasi) -> wajib `--allow-unverified`."""
+def validate_snapshot_args(
+    entities: Sequence[str], allow_unverified: bool, opname_window: int, day: date | None = None
+) -> None:
+    """G43: entitas P2 default MATI (belum diverifikasi) -> wajib `--allow-unverified`.
+    G65 (L-251): `stock_opening` wajib `--date` eksplisit (tanggal cutover; tidak ada default hari ini)."""
+    if any(e in G65_SNAPSHOT_ENTITIES for e in entities) and day is None:
+        raise ValueError("stock_opening wajib --date eksplisit (= tanggal cutover, setelah freeze ESB)")
     blocked = [e for e in entities if e in P2_ENTITIES]
     if blocked and not allow_unverified:
         raise ValueError(
@@ -197,7 +206,7 @@ def _cmd_snapshot(settings: EsbSettings, args: argparse.Namespace, stop: threadi
     today = wib_today(datetime.now(UTC))
     day = args.day or today
     try:
-        validate_snapshot_args(entities, args.allow_unverified, args.opname_window)
+        validate_snapshot_args(entities, args.allow_unverified, args.opname_window, args.day)
         if day > today:
             raise ValueError("--date tidak boleh di masa depan")
     except ValueError as exc:
