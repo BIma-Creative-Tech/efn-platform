@@ -57,3 +57,10 @@ tanpa flag; `brs` ditandatangani (HMAC + sig3); kelas PT/BR benar; tidak ada jal
 - **SEC-G65-04 (Low, PDP):** inventaris PDP belum mencakup `supplier_name` G65 (ClickHouse, raw_doc, `efn.legacy.purchase.line`, supplierinfo).
 - Info: fallback PT default `company_for` untuk brand multi-PT; `snapshot` di luar jendela backfill; cakupan `zero_missing`; whitelist stock-movement.
 - Belum terverifikasi: test tidak dijalankan; `git diff` tidak dijalankan (file dibaca dari tree worktree); perilaku server ESB untuk filter tanggal/`branchCode`.
+
+## 2026-11-24 — Addendum G65b (delta 4d14116..81bca63)
+0 Critical / 0 High / 0 Medium / 1 Low / 3 Info. Verdict: boleh merge. Low SEC-G65b-01 (PLAUSIBLE): `--stock-empty-branch`
+tanpa verifikasi + tidak tampil di banner pengecualian — **ditutup lead** (banner `stock_empty_branches=...`, deklarasi
+untuk cabang ber-snapshot ditolak). Info: SEC-G65b-02 `zero_ok` menerima harga negatif — **ditutup lead**
+(`COST_NEGATIVE`); invariant karantina yang sudah ada (bukan child_of lot_stock_id) hanya dicek saat dibuat; fakta
+operasional PB (branch_id 39/40) di docs publik, bukan PII. Laporan: docs/reviews/SECURITY_REVIEW_2026-11-24_g65-esb-purchase-stock.md (Addendum G65b).

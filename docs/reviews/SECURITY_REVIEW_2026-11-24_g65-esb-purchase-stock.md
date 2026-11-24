@@ -154,3 +154,97 @@ tambahkan peringatan di runbook.
 - `git diff` tidak dijalankan. File dibaca dari tree worktree.
 - Perilaku server ESB untuk `dateFrom/dateTo` header PO dan kecocokan `branchCode` (asal SEC-G65-01/02) belum dibuktikan.
 - `clickhouse-init.sh` (pengikatan role/urutan file 23) tidak dibaca ulang.
+
+---
+
+## Addendum G65b (2026-11-24) — delta sejak 4d14116
+
+Cakupan: 5ac0ddc (`--allow-cutover-shift`), 4d27700 (kode produk opsional di arsip pembelian), 81aa4dc
+(`--stock-empty-branch`), f5bce79 (`unitToShow=Base Unit`, satuan dari snapshot, lokasi karantina dibuat importer),
+d4131d6 + 8ed8426 (`--allow-zero-cost`, `--skip-unconvertible-stock`), 81bca63 (importer melewati `uom_incompatible`).
+Review read-only atas tree worktree (git diff tidak dijalankan; reviewer tidak punya shell).
+
+### Ringkasan
+
+- **0 Critical / 0 High / 0 Medium / 1 Low / 3 Info.** **Verdict: boleh merge.** Kelima fokus terpenuhi. Override
+  cutover cocok persis dan fail closed. Opsi pelonggar hanya berlaku dari manifest yang terikat laporan validator
+  bertanda tangan. Lokasi karantina terkunci ke PT dan cabang baris. Tidak ada PII di test/docs. Beban API ESB tidak
+  berubah.
+- Satu Low: deklarasi `--stock-empty-branch` tidak diverifikasi terhadap data ESB, dan banner laporan validator tetap
+  menulis "ketat". Sebaiknya ditutup sebelum cutover production. Untuk gladi efn-prod cukup ditangani lewat berita acara.
+
+| ID | Severity | Lokasi | Ringkas | Risiko |
+|---|---|---|---|---|
+| SEC-G65b-01 | Low (PLAUSIBLE) | `scripts/migration/efn_mig/export.py:462-466`, `validate.py:48-53, 448-450`, `esb_to_odoo.py:95-101` | `--stock-empty-branch` = deklarasi operator tanpa bukti; tidak masuk `export_options`/banner pengecualian | ADR-042 §0b, R-S10 (bersama SEC-G65-02) |
+| SEC-G65b-02 | Info | `scripts/migration/efn_mig/validate.py:431-434` | `zero_ok` menerima `standard_price < 0` untuk produk terdaftar; importer `_do_cost` tidak cek ulang | integritas HPP |
+| SEC-G65b-03 | Info | `esb_import/importer.py:1406-1421` | Lokasi karantina yang sudah ada (xmlid terikat) tidak dicek "bukan child_of `lot_stock_id`"; cek hanya saat create | Q-ESB25 |
+| SEC-G65b-04 | Info | `docs/runbooks/migrasi-esb-odoo.md:339-345`, `docs/agent-reports/efn-lead.md:94-95` | Repo publik memuat fakta operasional PB (branch_id 39/40, kota, jumlah baris gladi) | R-L01 (bukan PII) |
+
+### SEC-G65b-01 — Low (PLAUSIBLE): `--stock-empty-branch` tanpa verifikasi, tidak tampil di banner pengecualian
+**Lokasi.** `export.py:463-466` mengeluarkan cabang tanpa checkpoint `stock_opening` dari `missing` hanya karena ada
+argumen `--stock-empty-branch`. Validator (`validate.py:448-450`) cukup memberi peringatan `STOCK_EMPTY_DECLARED`.
+`ExportOptions.to_manifest()` (`mapping.py:454-462`) tidak memuat daftar ini, sehingga `Report.exceptions`/`to_markdown`
+(`validate.py:50-53, 88-92`) tetap menulis "export_options: ketat (tanpa pengecualian)".
+**Skenario.** Snapshot cabang aktif gagal atau di-skip (mis. `branchCode` tidak cocok, timeout). Operator menambahkan
+`--stock-empty-branch <id>` agar export lolos. Bundel ditandatangani, `errors=0`, dan importer memuatnya. Stok awal
+outlet itu = 0 di Odoo, dan rekonsiliasi tidak menangkapnya karena Σ fakta dan Σ quant sama-sama 0. Pembaca laporan
+validator yang hanya melihat banner mengira export ketat. Ini kesalahan operasional atau insider (R-S10), bukan bypass
+kriptografis: manifest tetap terikat HMAC.
+**Rekomendasi.**
+- Masukkan `stock_empty_branches` ke `export_options` (atau ke `Report.exceptions`) agar banner menampilkan
+  "DRY-RUN DENGAN PENGECUALIAN".
+- Export menolak deklarasi untuk cabang yang punya baris `fact_esb_stock_opening`/stock-movement di versi mana pun
+  (bukti "tanpa kartu stok sama sekali").
+- `import_report` ikut menyalin `export_options` + `stock_empty_branches_declared` sebagai lampiran berita acara.
+
+### SEC-G65b-02 — Info: harga negatif lolos jalur `--allow-zero-cost`
+Kondisi `(price is None or price <= 0) and not zero_ok` membuat produk di `zero_cost_products` juga lolos dengan harga
+negatif. Export hanya menghasilkan 0, dan manifest terikat HMAC, jadi tidak bisa dieksploitasi tanpa kunci bundel.
+Saran: `zero_ok` hanya berlaku bila `price == 0`. Sebagai lapis kedua, `_do_cost` menolak `value < 0`.
+
+### SEC-G65b-03 — Info: invariant lokasi karantina yang sudah ada
+Saat dibuat (`_ensure_quarantine`, `importer.py:1543-1547`), lokasi ditempatkan di bawah `view_location_id` gudang
+dengan `replenish_location=False`. Ini sudah benar. Untuk lokasi yang sudah ada, `prepass_stock` hanya memeriksa
+`warehouse_id == quarantine_of`, `company_id`, `usage=internal`, dan `replenish_location`. Lokasi itu tidak diperiksa
+terhadap `child_of lot_stock_id`. Xmlid `branch_quarantine` hanya bisa dibuat importer (`_bind`), jadi risikonya kecil.
+Saran: tambahkan cek `location.parent_path` tidak berawalan `wh.lot_stock_id.parent_path` agar stok karantina tidak
+pernah bisa di-reserve.
+
+### SEC-G65b-04 — Info: fakta operasional di repo publik
+Runbook dan laporan lead menyebut branch_id PB 39/40, kotanya, serta jumlah temuan gladi ("17 QUANT_NO_COST", "35 baris
+WIP"). Tidak ada nama orang, nilai rupiah, atau data supplier. Ini dapat diterima, tetapi sebaiknya angka hasil gladi
+disimpan di catatan gladi privat, bukan di repo.
+
+### Kontrol G65b yang sudah benar (diverifikasi di kode)
+
+- **Override cutover (fokus 1):** `parse_cutover_shift` memakai `fullmatch`, tanggal valid, dan wajib maju; selain itu
+  `None` (`mapping.py:72-82`). `check_cutover_shift` di production menuntut tuple **persis** `(CODE, lama di DB, baru di
+  manifest)` per company (`importer.py:422-427`). Geser mundur tetap `GateError` dengan izin apa pun. `APP_ENV` kosong
+  dianggap production. Nilai ditolak lebih awal di `odoo_import_esb.py:182-184`, dan regex `run-import.sh:51` mencegah
+  injeksi JSON ke argv. Override tercatat di `import_report.cutover_shift_override`. Izin yang cocok tetap ditolak bila
+  irisan histori [lama, baru) belum dimuat. Test mencakup nilai salah, PT lain, spasi di ujung, garbage, dan mundur
+  (`test_esb_import_g65.py:494-520`).
+- **Opsi pelonggar (fokus 2):** `allow_zero_cost` dan `skip_unconvertible_stock` hanya ada di argumen **export**
+  (`esb_to_odoo.py:67-76`) lalu masuk `manifest.export_options`. Validator membaca opsi dari manifest dengan kunci dan
+  tipe whitelist (`validate.py:209-225`), bukan dari flag sendiri. Importer tidak punya argumen untuk opsi ini:
+  `_skip_unconvertible_stock` membaca `self.man.export_options` (`importer.py:1517-1519`), dan manifest itu terikat
+  `manifest_sha256` di laporan validator bertanda tangan (`importer.py:273-285`). Laporan validator menampilkan
+  pengecualian (banner + `export_options` di JSON). Import report mencatat `stock_skipped.uom_incompatible(_keys)`.
+  Cost 0 hanya untuk produk di `zero_cost_products`.
+- **Lokasi karantina (fokus 3):** `check_quant_data` mewajibkan `location_key` = xmlid `branch_quarantine` hasil hitung
+  ulang dari brand×company×`esb_branch_id`, dan `quarantine_of` = xmlid `branch_wh` milik brand×company yang sama
+  (`mapping.py:253-267`). Xmlid lain tidak bisa disisipkan. `prepass_stock` menolak gudang induk dari PT lain dan lokasi
+  yang ada di bawah gudang lain (`importer.py:1406-1421`). Gudang induk yang tidak ada membuat baris gagal tanpa jatuh ke
+  Stock. Create dijalankan per company (`_cenv`) di dalam savepoint, dan dry-run ikut di-rollback. Tidak ada `sudo()`
+  baru di luar env `su` importer yang sudah ada. Validator memeriksa invariant yang sama (`validate.py:531-541`).
+- **Arsip pembelian tanpa kode produk:** `esb_product_code` menjadi opsional di `efn.legacy.purchase.line` (tanpa kunci
+  unik, hanya `bulk_replace_slice` per company×bulan). Tidak ada dampak ke idempotensi maupun multi-company.
+- **Data klien di test (fokus 4):** fixture tetap sintetis (`ZFIN`, `ZRM`, `RM001`, `SUP1`, lokasi "Damage/Rusak").
+- **Beban API ESB (fokus 5):** `extract_stock_opening` hanya menambah parameter `unitToShow=Base Unit`
+  (`extract_g65.py:95`). Endpoint, `limit` 100, `max_pages`, dan jumlah panggilan per cabang tidak berubah. Tetap
+  GET-only.
+
+### Belum terverifikasi (addendum)
+
+- Test pytest/Odoo tidak dijalankan reviewer. Isi diff per commit tidak dibandingkan. File dibaca dari tree worktree.
+- Perilaku ESB `unitToShow=Base Unit` (satuan benar-benar seragam per produk) belum dibuktikan oleh reviewer.

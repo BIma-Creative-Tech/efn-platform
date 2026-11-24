@@ -201,9 +201,11 @@ def validate_bundle(
     _check_products_menus(master, out, options)
     _check_boms(master, out, options)
     _check_skipped(man, options, out)
-    return Report(
-        str(man["run_id"]), bundle.manifest_sha256, out.items, bundle.blob_sha256, segment_set, options.to_manifest()
-    )
+    shown = options.to_manifest()
+    declared = man.get("stock_empty_branches_declared") or []
+    if declared:  # SEC-G65b-01: deklarasi operator ikut banner pengecualian laporan bertanda tangan
+        shown["stock_empty_branches"] = ",".join(str(b) for b in declared)
+    return Report(str(man["run_id"]), bundle.manifest_sha256, out.items, bundle.blob_sha256, segment_set, shown)
 
 
 def read_export_options(man: Mapping[str, Any]) -> m.ExportOptions:
@@ -430,7 +432,9 @@ def _check_g65(
             out.error("COST_AS_OF", "cost", key, "source=stock_opening wajib as_of = cutover_date")
         price = _dec(data.get("standard_price"))
         zero_ok = options.allow_zero_cost and f"{row['company_code']}|{data.get('product_code')}" in zero_listed
-        if (price is None or price <= 0) and not zero_ok:  # G65b: cost 0 hanya lewat --allow-zero-cost tercatat
+        if price is not None and price < 0:  # SEC-G65b-02: harga negatif tidak pernah sah
+            out.error("COST_NEGATIVE", "cost", key, "standard_price negatif")
+        elif (price is None or price == 0) and not zero_ok:  # G65b: cost 0 hanya lewat --allow-zero-cost tercatat
             out.error("COST_ZERO_WITHOUT_OPTION", "cost", key, "standard_price <= 0 tanpa --allow-zero-cost")
     for item in sorted(zero_listed):
         if options.allow_zero_cost:

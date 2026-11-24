@@ -228,8 +228,16 @@ def _item2_stock(report: ReconReport, pairs: list[tuple[Bundle, Bundle]]) -> boo
         found = True
         src_qty: dict[tuple[str, ...], float] = defaultdict(float)
         src_amount: dict[tuple[str, ...], float] = defaultdict(float)
+        # QA G65b: baris yang SENGAJA dilewati importer (--skip-unconvertible-stock, satuan ≠ UoM produk Odoo) tidak
+        # punya quant -> qty Odoo 0; bukan selisih pemblokir (dilaporkan info; kunci = esb_key `<cabang>|<produk>`).
+        skipped_keys = set((json_member(result, "import_report.json").get("stock_skipped") or {})
+                           .get("uom_incompatible_keys") or [])  # fmt: skip
+        skipped_qty = 0.0
         for row in bundle.rows(name):
             data = row["data"]
+            if row["esb_key"] in skipped_keys:
+                skipped_qty += float(data["quantity"])
+                continue
             src_qty[(row["company_code"], data["location_key"], data["product_key"])] += float(data["quantity"])
             src_amount[(row["company_code"], data["location_key"])] += float(data["amount"])
         odoo_qty: dict[tuple[str, ...], float] = defaultdict(float)
@@ -237,6 +245,9 @@ def _item2_stock(report: ReconReport, pairs: list[tuple[Bundle, Bundle]]) -> boo
         for row in json_member(result, "odoo_totals.json").get("quant") or []:
             odoo_qty[(row["company_code"], row["location_key"], row["product_key"])] += float(row["quantity"])
             odoo_value[(row["company_code"], row["location_key"])] += float(row.get("value") or 0)
+        if skipped_keys:
+            report.lines.append(Line("2_stok_dilewati_importer", f"{len(skipped_keys)} kunci", round(skipped_qty, 3), 0,
+                                     round(skipped_qty, 3), "info"))  # fmt: skip
         for key in sorted(set(src_qty) | set(odoo_qty)):
             _cmp(report, "2_stok_qty", "|".join(key), src_qty.get(key, 0.0), odoo_qty.get(key, 0.0), QTY_TOL)
         for branch, stat in sorted((bundle.manifest.get("stock_by_branch") or {}).items()):

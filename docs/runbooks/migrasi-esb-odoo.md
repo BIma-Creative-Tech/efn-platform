@@ -297,7 +297,12 @@ Neraca pembukaan & AR/AP **tidak** dikerjakan (`opening` NOT_BUILT, Q-ESB21). Pr
 - `location_map.csv` (opsional, di `--maps`): `brand,branch_id,esb_location_name,action` (`stock|skip|quarantine`;
   G65b: `quarantine` = quant terpisah ke lokasi karantina cabang, xmlid `branch_quarantine`, dibuat importer di bawah
   gudang `quarantine_of`; jumlah baris di `manifest.quarantine_rows`). Lokasi berpola Damage/Expired/Temporary tanpa
-  entri = peringatan di dev/efn-prod gladi, **error** di production (Q-ESB25) — putuskan bersama Ops sebelum run nyata.
+  entri = peringatan di dev, **error** di production (Q-ESB25) — putuskan bersama Ops sebelum run nyata.
+  **efn-prod berjalan `APP_ENV=production`** (lihat di bawah): importer memeriksa ulang (SEC-G65-03) dan menolak (exit 4)
+  bundel `stock` bila ada lokasi berpola tsb tanpa entri `location_map.csv` -> pastikan `--maps` memuat semuanya.
+  Baris yang dilewati importer (`--skip-unconvertible-stock`, satuan ≠ UoM produk Odoo) tercatat di
+  `import_report.stock_skipped.uom_incompatible(_keys)` (bukan di validator) dan muncul sebagai info
+  `2_stok_dilewati_importer` di reconcile — kirim daftarnya ke Ops/Finance bersama `skipped.uom_unconvertible`.
 - G65b (gladi 24 Nov 2026): snapshot `stock_opening` WAJIB diambil dengan esb-extract versi yang mengirim
   `unitToShow=Base Unit` (satuan dasar produk). Snapshot latihan 17 Nov / 20 Nov / 24 Nov yang diambil sebelumnya
   bersatuan campur → **ambil ulang** (langkah 2) sebelum export `cost`/`stock`. Produk PB tanpa satuan ESB memakai

@@ -459,7 +459,11 @@ def export_master(
         skipped.update(result.stock.to_manifest())
         meta = inputs.opening_meta or {"opening_date": None, "max_version": "", "branches_checkpointed": []}
         manifest["source"]["snapshot"]["fact_esb_stock_opening"] = meta
-        missing = missing_opening_branches(maps.branch, data.branches, meta.get("branches_checkpointed") or [])
+        checkpointed = {int(b) for b in meta.get("branches_checkpointed") or []}
+        has_data = sorted(params.stock_empty_branches & checkpointed)
+        if has_data:  # SEC-G65b-01: deklarasi "tanpa kartu stok" tidak boleh menimpa cabang yang punya snapshot
+            raise StepError(f"--stock-empty-branch untuk cabang yang punya snapshot stock_opening: {has_data}")
+        missing = missing_opening_branches(maps.branch, data.branches, checkpointed)
         declared = sorted(b for b in params.stock_empty_branches if b in missing)
         missing = [b for b in missing if b not in params.stock_empty_branches]
         manifest["stock_opening_missing_branches"] = missing

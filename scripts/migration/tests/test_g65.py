@@ -336,9 +336,12 @@ def test_stock_gates(tmp_path: Path, keys: b.Keys, source: FakeSource) -> None:
     report = validate_bundle(declared)
     assert "STOCK_CHECKPOINT_MISSING" not in codes(report)
     assert "STOCK_EMPTY_DECLARED" in codes(report, "warning")
+    assert "stock_empty_branches=12,30" in report.to_markdown()  # SEC-G65b-01: tampil di banner pengecualian
     (tmp_path / "partial").mkdir()
     with pytest.raises(StockGateError, match="1 cabang"):
         _stock_bundle(tmp_path / "partial", keys, source, stock_empty_branches=frozenset({12}))
+    with pytest.raises(StepError, match="punya snapshot"):  # cabang 11 punya checkpoint -> deklarasi ditolak
+        _stock_bundle(tmp_path / "partial", keys, source, stock_empty_branches=frozenset({11}))
 
 
 def test_stock_product_without_cost_and_mixed_uom(tmp_path: Path, keys: b.Keys, source: FakeSource) -> None:
@@ -724,6 +727,27 @@ def test_reconcile_stock_item2(tmp_path: Path, keys: b.Keys, source: FakeSource)
     assert reconcile([(bundle, _result(keys, bundle, report_json, {"quant": totals}))]).blocking == 1
 
 
+def test_reconcile_stock_importer_skipped_is_info(tmp_path: Path, keys: b.Keys, source: FakeSource) -> None:
+    """QA G65b: baris yang dilewati importer (--skip-unconvertible-stock; qty Odoo 0) = info, bukan selisih
+    pemblokir; baris lain tetap dibandingkan, dan 0 untuk kunci yang TIDAK dilaporkan dilewati tetap selisih."""
+    stock_fixture(source)
+    bundle = _stock_bundle(tmp_path, keys, source)
+    quants = list(bundle.rows("quant.jsonl"))
+    totals = [{"company_code": q["company_code"], "location_key": q["data"]["location_key"],
+               "product_key": q["data"]["product_key"], "quantity": q["data"]["quantity"],
+               "value": q["data"]["amount"]} for q in quants]  # fmt: skip
+    totals[0]["quantity"], totals[0]["value"] = 0.0, 0.0  # importer melewati baris ini
+    report_json = {"dry_run": False, "entities": {"quant": {"created": len(quants) - 1, "skipped": 1}},
+                   "stock_skipped": {"non_storable": 0, "uom_incompatible": 1,
+                                     "uom_incompatible_keys": [quants[0]["esb_key"]]}}  # fmt: skip
+    ok = reconcile([(bundle, _result(keys, bundle, report_json, {"quant": totals}))])
+    assert not any(ln.item == "2_stok_qty" and ln.status == "selisih" for ln in ok.lines)
+    assert any(ln.item == "2_stok_dilewati_importer" and ln.status == "info" for ln in ok.lines)
+    undeclared = {"dry_run": False, "entities": {"quant": {"created": len(quants) - 1, "skipped": 1}}}
+    bad = reconcile([(bundle, _result(keys, bundle, undeclared, {"quant": totals}))])
+    assert any(ln.item == "2_stok_qty" and ln.status == "selisih" for ln in bad.lines)
+
+
 # ================================================================== G65b --allow-zero-cost, --skip-unconvertible-stock
 def zero_cost_fixture(source: FakeSource) -> None:
     source.dims["dim_esb_product"] += [product("ZC1", "Nol", "Local - Dry", "KG", 0, None),
@@ -797,6 +821,10 @@ def test_validator_zero_cost_requires_option(keys: b.Keys) -> None:
         keys, {"cost": zero}, export_options={"allow_zero_cost": True}
     )  # opsi aktif, produk tak tercatat
     assert "COST_ZERO_WITHOUT_OPTION" in codes(validate_bundle(unlisted))
+    # SEC-G65b-02: harga negatif selalu error, walau tercatat + opsi aktif.
+    negative = _bundle(keys, {"cost": [cost("A", standard_price=-5)]}, zero_cost_products=["PB|A"],
+                       export_options={"allow_zero_cost": True})  # fmt: skip
+    assert "COST_NEGATIVE" in codes(validate_bundle(negative))
 
 
 def unconvertible_fixture(source: FakeSource) -> None:
