@@ -121,6 +121,8 @@ class Options:
     allow_older: bool = False
     # G65 §27.13.7: quant Odoo di lokasi internal PT yang TIDAK ada di snapshot -> set 0 (hanya non-production).
     zero_missing: bool = False
+    # G65 §27.13.8 (keputusan user 24 Nov 2026): izin geser cutover MAJU di production, persis `<CODE>:<lama>:<baru>`.
+    allow_cutover_shift: str | None = None
 
 
 @dataclass
@@ -401,8 +403,10 @@ def check_cutover_shift(env, companies, cutover, opts: Options, cutover_param: b
     """docs/04 §27.13.8: manifest `cutover_date` vs parameter `efn_mig_esb.cutover_date.<CODE>` yang sudah ada.
 
     - sama / parameter kosong -> normal (False);
-    - manifest LEBIH BARU (geser maju): production -> GateError (di luar kontrak, berita acara); non-production ->
-      True = histori `[cutover lama, cutover baru)` boleh dimuat (batas helper = manifest, `shift_cutover`);
+    - manifest LEBIH BARU (geser maju): production -> GateError (di luar kontrak, berita acara) KECUALI
+      `opts.allow_cutover_shift` cocok PERSIS `<CODE>:<lama di DB>:<baru di manifest>` (keputusan user 24 Nov 2026);
+      non-production / production berizin -> True = histori `[cutover lama, cutover baru)` boleh dimuat (batas helper
+      = manifest, `shift_cutover`); syarat irisan histori di `write_cutover_param` tetap berlaku;
     - manifest LEBIH LAMA: `cutover-param` -> GateError (geser mundur; hapus irisan dulu, runbook); histori saja ->
       tetap dibatasi parameter (perilaku lama, baris >= parameter ditolak helper)."""
     if cutover is None:
@@ -413,7 +417,7 @@ def check_cutover_shift(env, companies, cutover, opts: Options, cutover_param: b
         if not old or old == cutover:
             continue
         if cutover > old:
-            if is_production(opts.app_env):
+            if is_production(opts.app_env) and m.parse_cutover_shift(opts.allow_cutover_shift) != (code, old, cutover):
                 raise GateError(
                     f"cutover {code} {old} -> {cutover}: menggeser parameter cutover di production di luar kontrak "
                     "(§27.13.8; berita acara + keputusan user)"
@@ -1926,7 +1930,10 @@ def run_import(env, bundle: Bundle, opts: Options, commit=None) -> ImportResult:
     run.shift_cutover = shift
     for note in notes:
         run._note(note)
-    if shift:
+    if shift and is_production(opts.app_env):
+        run.report["cutover_shift_override"] = opts.allow_cutover_shift
+        run._note("cutover digeser maju di production atas izin eksplisit allow_cutover_shift (§27.13.8)")
+    elif shift:
         run._note("cutover digeser maju (non-production, §27.13.8): histori dibatasi cutover manifest")
     run.report["created_at"] = created_at.isoformat()
     if older:

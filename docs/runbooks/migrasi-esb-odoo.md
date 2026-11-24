@@ -290,7 +290,10 @@ Neraca pembukaan & AR/AP **tidak** dikerjakan (`opening` NOT_BUILT, Q-ESB21). Pr
   ([efn-prod-odoo-reset.md](efn-prod-odoo-reset.md)). Importer menolak (exit 4) bila ada `stock.move` done non-inventaris
   PB bertanggal ≥ cutover atau sesi POS PB terbuka.
 - Parameter `efn_mig_esb.cutover_date.PB` digeser 2026-11-17 → 2026-12-01 lewat `cutover-param` (§27.13.8): histori
-  17–30 Nov **wajib** sudah dimuat (langkah 4) sebelum parameter digeser, selain itu importer exit 4.
+  17–30 Nov **wajib** sudah dimuat (langkah 4) sebelum parameter digeser, selain itu importer exit 4. efn-prod berjalan
+  `APP_ENV=production`: setiap impor bundel ber-cutover 2026-12-01 (histori Nov, cost, stock, cutover-param) **wajib**
+  `--allow-cutover-shift PB:2026-11-17:2026-12-01` (keputusan user 24 Nov 2026; tanpa opsi / tidak cocok = exit 4).
+  Nilainya tercatat di `import_report.cutover_shift_override` → lampirkan ke catatan gladi.
 - `location_map.csv` (opsional, di `--maps`): `brand,branch_id,esb_location_name,action` (`stock|skip`; `quarantine`
   belum didukung = error). Lokasi berpola Damage/Expired/Temporary tanpa entri = peringatan di dev/efn-prod gladi,
   **error** di production (Q-ESB25) — putuskan bersama Ops sebelum run nyata.
@@ -315,6 +318,29 @@ $MIG python esb_to_odoo.py export --brand pb --step legacy_purchase_line --cutov
 $MIG python esb_to_odoo.py export --brand pb --step stock --cutover-date 2026-12-01 --maps /maps --out /out
 # (6) Parameter cutover
 $MIG python esb_to_odoo.py export --brand pb --step cutover-param --cutover-date 2026-12-01 --maps /maps --out /out
+```
+
+**Langkah 1 Des 2026 (efn-prod gladi; histori PB Des 2024–16 Nov sudah dimuat dengan cutover 2026-11-17).** Setelah
+freeze ESB pada/setelah 1 Des, Q-ESB29 terpenuhi (tidak ada transaksi PB di efn-prod ≥ 1 Des / sesi POS PB tertutup):
+```bash
+# a) Extract 21–30 Nov (backfill harian sebelumnya sampai 20 Nov) + koreksi status PO + saldo awal hari cutover
+$DC run --rm esb-extract python -m efn_esb backfill --brand pb --from 2026-11-21 --to 2026-11-30 \
+  --entity sales --entity fin_sold --entity payment --entity production --entity delivery --entity transfer
+$DC run --rm esb-extract python -m efn_esb backfill --brand pb --entity purchase_line --from 2026-11-01 --to 2026-11-30 --force
+$DC run --rm esb-extract python -m efn_esb snapshot --brand pb --entity stock_opening --date 2026-12-01
+# b) Export: histori SEMUA langkah bulan 2026-11 (flow, sales.daily, sales.line, purchase) dengan cutover baru,
+#    lalu cost (master), stock, cutover-param
+$MIG python esb_to_odoo.py export --brand pb --step history --cutover-date 2026-12-01 --maps /maps --out /out --months 2026-11
+$MIG python esb_to_odoo.py export --brand pb --step cost --cutover-date 2026-12-01 --maps /maps --out /out
+$MIG python esb_to_odoo.py export --brand pb --step stock --cutover-date 2026-12-01 --maps /maps --out /out
+$MIG python esb_to_odoo.py export --brand pb --step cutover-param --cutover-date 2026-12-01 --maps /maps --out /out
+# c) Impor berurutan: segmen Nov -> cost -> stock -> cutover-param. Tiap bundel: validate_import.py -> dry-run -> nyata
+SHIFT="--allow-cutover-shift PB:2026-11-17:2026-12-01"
+$RI <bundel>.efnmig --validation validation_<run_id>.json $SHIFT                         # dry-run
+$RI <bundel>.efnmig --validation validation_<run_id>.json --apply --confirm-brand pb $SHIFT
+#   cutover-param ditolak (exit 4, "histori belum dimuat") bila irisan 17–30 Nov belum ada untuk setiap model histori
+#   yang pernah dimuat PB; setelah sukses: efn_mig_esb.cutover_date.PB = 2026-12-01 dan opsi tidak dipakai lagi
+# d) Rekonsiliasi: reconcile per segmen Nov + stock (butir di bawah), totals + reconcile --final (§4.3) untuk parent Nov
 ```
 Catatan:
 - Langkah `cost` **wajib** dijalankan ulang (dengan `--cutover-date`) sebelum `stock`; importer menolak `stock` bila

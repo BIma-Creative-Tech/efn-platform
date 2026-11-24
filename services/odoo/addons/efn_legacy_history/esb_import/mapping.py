@@ -63,6 +63,21 @@ COST_SOURCES = frozenset({"stock_opening", "bom_last_hpp", "purchase_last"})
 # `test_suspect_location_matches_export`). Importer production memeriksa ulang `esb_locations` quant.
 SUSPECT_LOCATION = re.compile(r"damage|rusak|expired|kadaluar?sa|temporary|sementara|reject", re.I)
 LOCATION_MAP_MEMBER = "maps/location_map.csv"
+# docs/04 §27.13.8: izin eksplisit geser cutover di production, string persis `<CODE>:<lama>:<baru>`.
+CUTOVER_SHIFT = re.compile(r"([A-Z0-9]{2,8}):([0-9]{4}-[0-9]{2}-[0-9]{2}):([0-9]{4}-[0-9]{2}-[0-9]{2})")
+
+
+def parse_cutover_shift(value: Any) -> tuple[str, date, date] | None:
+    """`PB:2026-11-17:2026-12-01` -> ("PB", date lama, date baru). Format/tanggal salah atau tidak MAJU -> None
+    (fail closed: pemanggil memperlakukan None = tanpa izin)."""
+    match = CUTOVER_SHIFT.fullmatch(value) if isinstance(value, str) else None
+    if not match:
+        return None
+    try:
+        old, new = date.fromisoformat(match[2]), date.fromisoformat(match[3])
+    except ValueError:
+        return None
+    return (match[1], old, new) if new > old else None
 
 
 def mapped_locations(csv_text: str, brand: str) -> set[tuple[int, str]]:

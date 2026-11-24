@@ -338,6 +338,15 @@ def test_ranges_and_segment_gate():
         m.parse_range({"name": "x"})
 
 
+def test_parse_cutover_shift():
+    # docs/04 §27.13.8: izin geser cutover production = string persis <CODE>:<lama>:<baru>, hanya maju.
+    assert m.parse_cutover_shift("PB:2026-11-17:2026-12-01") == ("PB", date(2026, 11, 17), date(2026, 12, 1))
+    for bad in (None, "", 1, "pb:2026-11-17:2026-12-01", "PB:2026-12-01:2026-11-17", "PB:2026-11-17:2026-11-17",
+                "PB:2026-11-31:2026-12-01", "PB:2026-11-17:2026-12-01 ", "PB:2026-11-17", "PB 2026-11-17 2026-12-01",
+                "PB:2026-11-17:2026-12-01\n"):  # fmt: skip
+        assert m.parse_cutover_shift(bad) is None, bad
+
+
 # ------------------------------------------------------------------------------------------------ G65 (§27.13)
 def _si_row(sup="SUP-1", prod="RM001", **data):
     values = {"partner_key": X("supplier", sup), "product_key": X("product", prod), "supplier_code": sup}

@@ -3848,6 +3848,12 @@ Filter `at_date` terhadap `stock.move.date` **[B]**.
   (importer memeriksa `import_report` tersimpan / jumlah baris per bulan; kurang → exit 4). Menggeser **mundur** → exit 4
   (baris histori ≥ cutover baru melanggar §27.5 (5)); hapus irisan dulu (runbook).
 - Production: perubahan parameter setelah cutover nyata = di luar kontrak (berita acara + keputusan user).
+  **Override eksplisit** (keputusan user 24 Nov 2026, dasar untuk gladi `efn-prod` lokal PB 2026-11-17 → 2026-12-01):
+  opsi importer `allow_cutover_shift` = string persis `<CODE>:<lama>:<baru>` (`run-import.sh --allow-cutover-shift
+  PB:2026-11-17:2026-12-01`, wajib di setiap run yang bundelnya ber-cutover baru sampai `cutover-param` tertulis).
+  Diterima hanya bila cocok persis dengan PT, parameter lama di DB, dan `cutover_date` manifest; hanya maju; syarat
+  irisan histori di atas tetap berlaku. Tanpa opsi / tidak cocok → exit 4 (format salah → exit 2). Nilai dicatat di
+  `import_report.cutover_shift_override`. Production nyata tetap butuh berita acara di samping opsi ini.
 - Efek forecast: batas hook `_efn_legacy_outflow` ikut 2026-12-01; `stock.move` PB < 2026-12-01 (data demo) tidak
   dibaca forecast.
 - Parameter baru `efn_mig_esb.cost_as_of.<CODE>` (§27.13.4/§27.13.7) — diisi importer, gerbang `stock`.

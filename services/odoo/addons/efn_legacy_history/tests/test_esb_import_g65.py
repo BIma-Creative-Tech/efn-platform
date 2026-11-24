@@ -381,3 +381,44 @@ class TestEsbImportG65(TransactionCase):
         backward = self._bundle({}, cutover_date="2026-11-17")
         with self.assertRaisesRegex(imp.GateError, "MUNDUR"):
             self._run(backward, steps=("cutover-param",))
+
+    def test_cutover_shift_override_production(self):
+        # Keputusan user 24 Nov 2026 (§27.13.8): production hanya dengan izin PERSIS <CODE>:<lama>:<baru>.
+        key = bulk.PARAM_CUTOVER_PREFIX + CODE
+        self.ICP.set_param(key, "2026-11-17")
+        october = self._po_bundle("2026-10", [self._po_row("2026-10-03")], ("2026-10-01", "2026-11-01"))
+        self.assertEqual(self._run(october).exit_code, imp.EXIT_OK)  # histori PT < cutover lama sudah ada
+        prod = {"app_env": "production", "confirm_brand": BRAND}
+        november = self._po_bundle(
+            "2026-11", [self._po_row("2026-11-05"), self._po_row("2026-11-20", num="ZPO-2")],
+            ("2026-11-01", "2026-12-01"),
+        )  # fmt: skip
+        steps = ("legacy_purchase_line", "cutover-param")
+        message = "menggeser parameter cutover di production di luar kontrak"
+        wrong = (
+            None,
+            f"{CODE}:2026-11-16:{CUTOVER}",  # cutover lama salah
+            f"{CODE}:2026-11-17:2026-12-02",  # cutover baru salah
+            "PB:2026-11-17:2026-12-01",  # PT lain
+            f"{CODE}:2026-11-17:{CUTOVER} ",  # tidak persis
+            "garbage",
+        )
+        for allow in wrong:
+            with self.assertRaisesRegex(imp.GateError, message):
+                self._run(november, steps=steps, allow_cutover_shift=allow, **prod)
+        self.assertEqual(self.ICP.get_param(key), "2026-11-17")
+        allow = f"{CODE}:2026-11-17:{CUTOVER}"
+        # Izin cocok tetapi irisan histori [lama, baru) belum dimuat -> tetap ditolak.
+        with self.assertRaisesRegex(imp.GateError, "histori belum dimuat"):
+            self._run(self._bundle({}), steps=("cutover-param",), allow_cutover_shift=allow, **prod)
+        self.assertEqual(self.ICP.get_param(key), "2026-11-17")
+        result = self._run(november, steps=steps, allow_cutover_shift=allow, **prod)
+        self.assertEqual(result.exit_code, imp.EXIT_OK, (result.report["errors"], result.report["slices"]))
+        self.assertEqual(result.report["cutover_shift_override"], allow)
+        self.assertEqual(self.ICP.get_param(key), CUTOVER)
+        # Mundur tetap ditolak, izin apa pun.
+        backward = self._bundle({}, cutover_date="2026-11-17")
+        for allow_back in (None, f"{CODE}:{CUTOVER}:2026-11-17", f"{CODE}:2026-11-17:{CUTOVER}"):
+            with self.assertRaisesRegex(imp.GateError, "MUNDUR"):
+                self._run(backward, steps=("cutover-param",), allow_cutover_shift=allow_back, **prod)
+        self.assertEqual(self.ICP.get_param(key), CUTOVER)
