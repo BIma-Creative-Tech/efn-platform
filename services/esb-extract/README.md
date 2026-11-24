@@ -62,7 +62,36 @@ python -m efn_esb backfill --brand pb --from 2024-11-17 --to 2026-11-16 [--entit
 python -m efn_esb snapshot --brand pb --entity bom_detail [...]   # G43, lihat di bawah
 python -m efn_esb probe --brand pb                       # login + jumlah cabang saja
 python -m efn_esb health                                 # file heartbeat segar? (opsional)
+python -m efn_esb refresh-aggregates                     # bangun ulang tabel agregat Insight (tanpa ESB)
 ```
+
+**Tabel agregat Insight (`efn_esb/aggregates.py`, keputusan pemilik proyek 22 Nov 2026; ADR-040/041 Proposed).**
+Wrapper `efn_insight.v_esb_sales_branch_daily`, `v_esb_sales_daily`, `v_esb_flow_daily` membaca `efn_dwh.agg_esb_*`
+(MergeTree, kolom = view `efn_dwh.v_esb_*` dengan nama sama, `infra/clickhouse/init/20-esb-aggregates.sql`), bukan view
+yang menghitung FINAL + checkpoint + uniqExact setiap query (galat 159/241 Insight setelah data 1 tahun).
+`efn_insight.v_esb_menu_mix` membaca `efn_dwh.v_esb_menu_mix_agg` (badan = `v_esb_menu_mix`, di atas agg).
+Agg **dan** build permanen `<agg>_build` dibuat admin (`clickhouse-init`, MergeTree, `storage_policy = 'encrypted'`);
+esb-extract tidak pernah membuat/menghapus tabel (review keamanan SEC-AG-01). Refresh per bulan kalender (rentang dari
+`extract_checkpoint`): cek kunci → `TRUNCATE` build → `INSERT` bulan itu dari view → pagar penyusutan → cek kunci →
+`ALTER TABLE agg REPLACE PARTITION ID '<yyyymm>' FROM build` → heartbeat; lalu `DROP PARTITION` untuk bulan agg yang
+hilang dari sumber. **Atomik per bulan, tidak atomik lintas bulan** (selama refresh sebagian bulan sudah baru, sebagian
+masih lama; refresh gagal di tengah = bulan yang sudah diganti tetap baru).
+- Pagar penyusutan (SEC-AG-03): bulan dengan hasil 0 baris padahal agg berisi, turun > 50%, atau bulan agg yang tidak
+  ada lagi di sumber → dilewati, agregat `error` (`shrink <yyyymm,...>`); reset disengaja: `refresh-aggregates
+  --allow-shrink` (manual saja, tidak pernah dari loop).
+- Kunci (SEC-AG-02): `efn_esb.aggregate_refresh_lock`; waktu baris diisi server; pemegang = run belum dilepas dengan
+  heartbeat < 15 menit, urut (mulai, run_id); dicek ulang sebelum setiap TRUNCATE/REPLACE/DROP PARTITION; heartbeat tiap
+  bulan; selesai/gagal → baris `released`. Bukan pemegang → semua agregat `busy` tanpa menyentuh tabel.
+- Dipanggil otomatis di akhir siklus `run`/`backfill` yang menulis slice `sales/fin_sold/production/delivery/transfer/
+  master`; gagal hanya dicatat (log tanpa pesan galat/isi data), tidak menggagalkan ekstraksi. Subcommand: exit 1 bila ada
+  agregat `error`/`busy`. Kesegaran: `efn_esb.aggregate_refresh`.
+- Hak `esb_writer`: build `SELECT, INSERT, TRUNCATE`; agg `SELECT, INSERT, ALTER DELETE` (REPLACE/DROP PARTITION); tanpa
+  CREATE/DROP TABLE (dicabut eksplisit). `allow_ddl = 1` tetap (TRUNCATE/ALTER termasuk DDL); batas = grant per tabel.
+- Kolom view sumber berubah → `clickhouse-init` mendeteksi kolom agg/build != view, menghapus dan membuat ulang keduanya
+  kosong; lalu `refresh-aggregates`. `clickhouse-init` GAGAL bila salah satu dari 6 tabel bukan MergeTree/encrypted.
+- Bukan refreshable MV (eksperimental di 24.8) dan bukan MV-on-insert (fakta di-dedup lewat `_version` + checkpoint).
+Prosedur (refresh pertama setelah deploy, setelah salin data DR, pemulihan, verifikasi): runbook
+`docs/runbooks/esb-extract.md` §6a.
 `run`: tiap `ESB_INTERVAL_SECONDS`, brand satu per satu: cabang (setiap siklus) → master (sekali/hari WIB) → H-1 dan
 koreksi H-7 (sekali/hari setelah `ESB_SALES_READY_HOUR_WIB`=03:00) + gap fill `ESB_GAP_FILL_DAYS` hari tanpa checkpoint.
 `backfill`: satu brand per proses (L-111), hari terbaru dulu, slice `done` dilewati (resumable); di luar
@@ -184,6 +213,14 @@ disalin karena tidak ada paket bersama antar-service Python.
   `v_esb_stock_cover` ditunda.
 - Retensi mart: tabel ESB belum masuk loop TTL 10 tahun `clickhouse-init.sh` (tanpa PII, tidak mendesak).
 - Tidak ada lock global "satu backfill per brand"; disiplin operasional (runbook).
+- Agregat Insight (22 Nov 2026): desain awal (EXCHANGE) terverifikasi di efn-prod (total per bulan view = agg, 15
+  bulan). Desain REPLACE PARTITION + kunci heartbeat (SEC-AG-01/02/03): grant diuji 25 Nov 2026 di ClickHouse
+  24.8.14 sekali pakai — `SELECT, INSERT, TRUNCATE` build + `SELECT, INSERT, ALTER DELETE` agg cukup untuk TRUNCATE
+  build, REPLACE PARTITION, DROP PARTITION; CREATE TABLE, DROP TABLE, TRUNCATE agg ditolak (ACCESS_DENIED). User
+  tanpa hak `system.parts` → daftar partisi lewat kolom virtual `_partition_id`. Belum: `clickhouse-init.sh` penuh
+  (pagar skema/engine/policy) dan refresh nyata di efn-stg/efn-prod.
+  Kunci: celah kecil bila dua proses menulis baris kunci hampir bersamaan dan baris yang lebih awal terlihat setelah jeda
+  2 dtk; cek ulang sebelum setiap REPLACE membatasi dampaknya.
 - G43 `snapshot`: semua entitas (P1 dan P2) dibangun dari spec publik tanpa uji GET nyata. Arti kolom P2 **[B]**:
   `qty` vs `stockQty` opname, `receivableTotal`/`payableTotal` = sisa atau nilai faktur, apakah invoice-aging hanya faktur
   terbuka, status opname yang final. `customer_name` bisa nama orang (pelanggan perorangan) → data pribadi (inventaris

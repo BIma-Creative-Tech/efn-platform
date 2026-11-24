@@ -1,4 +1,4 @@
-"""CLI: `python -m efn_esb {run,backfill,probe,health}` (docs/04 §25.4).
+"""CLI: `python -m efn_esb {run,backfill,snapshot,probe,health,refresh-aggregates}` (docs/04 §25.4).
 
 - `run`: loop incremental semua brand di `ESB_BRANDS` (satu per satu) tiap `ESB_INTERVAL_SECONDS`.
   `ESB_ENABLED=false` -> proses TIDUR (tidak exit, `restart: unless-stopped`), tanpa login/panggilan/tulis apa pun.
@@ -11,7 +11,12 @@
   (satu slice per cabang; `--date` WAJIB, tanpa `--allow-unverified`). `purchase_line` = entitas harian (`backfill`).
 - `probe --brand B`: login + /branch/list/user, cetak JUMLAH cabang saja.
 - `health`: exit 0 bila file heartbeat masih segar (opsional; compose memakai cek PID).
-CLI selain `run` dengan `ESB_ENABLED=false` -> exit 0 dengan pesan "ESB dinonaktifkan".
+- `refresh-aggregates`: bangun ulang tabel agregat Insight `efn_dwh.agg_esb_*` (efn_esb/aggregates.py) dari view
+  sumber. Hanya ClickHouse (tanpa ESB), jadi tetap jalan dengan `ESB_ENABLED=false` (mis. setelah salin data dari DR).
+  Exit 0 bila semua agregat `ok`, 1 bila ada yang `error`/`busy`. Juga otomatis di akhir siklus `run`/`backfill` yang
+  menulis slice entitas pengisi (gagal di sana hanya dicatat, tidak menggagalkan ekstraksi). `--allow-shrink` (manual
+  saja): izinkan bulan yang hasilnya kosong/turun > 50% dan hapus bulan yang hilang dari sumber (SEC-AG-03).
+CLI selain `run`/`refresh-aggregates` dengan `ESB_ENABLED=false` -> exit 0 dengan pesan "ESB dinonaktifkan".
 """
 
 import argparse
@@ -71,6 +76,14 @@ def _parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
     snapshot.add_argument("--opname-window", type=int, default=3, help="stock_opname: hari ke belakang (0..31)")
     probe = sub.add_parser("probe", help="login + hitung cabang")
     probe.add_argument("--brand", required=True)
+    refresh = sub.add_parser(
+        "refresh-aggregates", help="bangun ulang tabel agregat Insight efn_dwh.agg_esb_* (tanpa ESB)"
+    )
+    refresh.add_argument(
+        "--allow-shrink",
+        action="store_true",
+        help="izinkan bulan kosong/turun > 50%% dan hapus bulan yang tidak ada lagi di sumber (reset disengaja)",
+    )
     health = sub.add_parser("health", help="cek file heartbeat")
     health.add_argument("--max-age", type=int, default=int(os.getenv("ESB_HEALTH_MAX_AGE_SECONDS", "7800")))
     return parser.parse_args(argv)
@@ -116,10 +129,11 @@ def _store(env: Any) -> Any:
 
 
 def _cmd_run(settings: EsbSettings, stop: threading.Event) -> int:
-    from efn_esb.runner import AuthBreaker, guarded_cycle
+    from efn_esb.runner import AuthBreaker, RefreshTrigger, guarded_cycle
 
     store = _store(os.environ)
     breaker = AuthBreaker()  # SEC-186: di memori; restart proses = cabut penangguhan
+    trigger = RefreshTrigger()
     runtimes = {
         cfg.key: (
             BrandRuntime(cfg, max_pages=settings.max_pages, include_inactive=False),
@@ -134,14 +148,17 @@ def _cmd_run(settings: EsbSettings, stop: threading.Event) -> int:
         settings.interval_seconds,
     )
 
-    def beat(_result: Any) -> None:
+    def beat(result: Any) -> None:
         touch(settings.heartbeat_file)
+        trigger.note(result)
 
     while not stop.is_set():
         for rt, client in runtimes.values():
             if stop.is_set():
                 break
             guarded_cycle(settings, rt, client, store, breaker, datetime.now(UTC), stop, on_written=beat)
+        if not stop.is_set():
+            trigger.maybe_refresh(store)  # semua brand selesai -> satu refresh per siklus, hanya bila ada data baru
         touch(settings.heartbeat_file)
         if settings.run_once:
             break
@@ -151,7 +168,7 @@ def _cmd_run(settings: EsbSettings, stop: threading.Event) -> int:
 
 
 def _cmd_backfill(settings: EsbSettings, args: argparse.Namespace, stop: threading.Event) -> int:
-    from efn_esb.runner import run_backfill
+    from efn_esb.runner import RefreshTrigger, run_backfill
 
     cfg = settings.brand(args.brand.strip().lower())
     try:
@@ -164,6 +181,12 @@ def _cmd_backfill(settings: EsbSettings, args: argparse.Namespace, stop: threadi
     entities = args.entity or [e for e in settings.entities if e in DAILY_ENTITIES]
     store = _store(os.environ)
     rt = BrandRuntime(cfg, max_pages=settings.max_pages, include_inactive=settings.backfill_include_inactive)
+    trigger = RefreshTrigger()
+
+    def written(result: Any) -> None:
+        touch(settings.heartbeat_file)
+        trigger.note(result)
+
     run = run_backfill(
         settings,
         rt,
@@ -175,9 +198,13 @@ def _cmd_backfill(settings: EsbSettings, args: argparse.Namespace, stop: threadi
         stop,
         force=args.force,
         ignore_window=args.ignore_window,
-        on_written=lambda _r: touch(settings.heartbeat_file),
+        on_written=written,
     )
     print(f"backfill brand={cfg.key} status={run.status} slices={run.slices} calls={run.calls} errors={run.errors}")
+    # Exit code tetap milik backfill: refresh gagal hanya dicatat (jalankan `refresh-aggregates` manual).
+    refreshed = None if stop.is_set() else trigger.maybe_refresh(store)
+    if refreshed is not None:
+        print(f"refresh-aggregates status={'ok' if refreshed else 'gagal'}")
     return 0 if run.status in ("ok", "window_closed", "limit") else 1
 
 
@@ -233,6 +260,19 @@ def _cmd_snapshot(settings: EsbSettings, args: argparse.Namespace, stop: threadi
     return 0 if run.status == "ok" else 1
 
 
+def _cmd_refresh_aggregates(allow_shrink: bool = False) -> int:
+    from efn_esb.runner import refresh_aggregates
+
+    try:
+        store = _store(os.environ)
+    except Exception as exc:  # konfigurasi/koneksi ClickHouse; tanpa detail (bisa memuat path secret)
+        log.error("refresh-aggregates: klien ClickHouse gagal dibuat error=%s", type(exc).__name__)
+        return 1
+    ok = refresh_aggregates(store, allow_shrink=allow_shrink)
+    print(f"refresh-aggregates status={'ok' if ok else 'gagal'}")
+    return 0 if ok else 1
+
+
 def _cmd_probe(settings: EsbSettings, args: argparse.Namespace) -> int:
     cfg = settings.brand(args.brand.strip().lower())
     client = _client(settings, cfg, 200)
@@ -250,6 +290,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = _parse_args(argv)
     if args.cmd == "health":
         return 0 if is_fresh(os.getenv("ESB_HEARTBEAT_FILE", "/tmp/efn-esb.heartbeat"), args.max_age) else 1  # noqa: S108
+    if args.cmd == "refresh-aggregates":
+        return _cmd_refresh_aggregates(args.allow_shrink)
     stop = _stop_event()
     if not esb_enabled():
         if args.cmd == "run":

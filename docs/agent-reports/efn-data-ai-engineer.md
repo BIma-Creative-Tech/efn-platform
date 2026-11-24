@@ -94,6 +94,98 @@ L-243/L-244); ADR-040, ADR-041 §3.6 (Proposed). **Tidak ada yang dijalankan** (
   `v_esb_store_receipt_daily` di atas `v_esb_movement_daily` (pushdown `kind = 'delivery'` belum diukur).
 - Path filter CI job Python tidak mencakup `infra/clickhouse/**`: perubahan hanya di infra tidak memicu test ini.
 
+## Tabel agregat harian Insight — revisi keamanan SEC-AG-01..05 (22 Nov 2026)
+
+Review `docs/reviews/SECURITY_REVIEW_2026-11-22_esb-aggregates.md` + keputusan desain lead (SEC-AG-01 dibuktikan lead di
+24.8.14: esb_writer bisa `CREATE ... SETTINGS storage_policy='default'`, `ENGINE=Memory/Log`). Desain EXCHANGE di bawah
+**diganti**. Tanpa shell: tidak ada yang dijalankan.
+
+- **SEC-AG-01:** esb_writer tanpa CREATE/DROP TABLE (REVOKE eksplisit pada 6 nama, karena grant lama tidak hilang
+  sendiri). Agg (CTAS `WHERE 0` dari view, `SETTINGS storage_policy = 'encrypted'`) dan build permanen
+  (`CREATE TABLE IF NOT EXISTS <agg>_build AS <agg>`, struktur identik = syarat REPLACE PARTITION) dibuat admin di
+  `20-esb-aggregates.sql`. Grant final: build `SELECT, INSERT, TRUNCATE`; agg `SELECT, INSERT, ALTER DELETE`
+  (REPLACE PARTITION = SELECT sumber + ALTER DELETE|INSERT tujuan; DROP PARTITION = ALTER DELETE —
+  `InterpreterAlterQuery::getRequiredAccessForCommand`, dari ingatan kode sumber, belum dicek live). `allow_ddl = 1`
+  tetap (TRUNCATE/ALTER termasuk kelompok DDL di `ContextAccess`). `clickhouse-init.sh`: (a) setelah init/*.sql, agg/build
+  yang kolomnya (posisi, nama, tipe) != view, atau build bukan MergeTree/encrypted → DROP + jalankan ulang 20; (b) di akhir,
+  6 tabel wajib ada + MergeTree + encrypted, jika tidak `REVOKE ALL` esb_writer pada tabel itu dan exit 1.
+- **SEC-AG-02:** kunci `efn_esb.aggregate_refresh_lock` (run_id, started_at/heartbeat_at DEFAULT now64 server, released).
+  Acquire = tulis baris → jeda 2 dtk → pemegang = run belum dilepas dengan heartbeat < 15 menit, urut (min started_at,
+  run_id). Cek ulang sebelum setiap TRUNCATE/REPLACE/DROP PARTITION; heartbeat tiap bulan; release di `finally`. Satu
+  kunci untuk ketiga agregat; bukan pemegang → semua `busy` tanpa query ke tabel; kunci hilang → `lock_lost`, sisanya
+  `busy`. Sisa risiko: baris proses lain yang lebih awal (jam server) tetapi baru terlihat setelah jeda 2 dtk.
+- **SEC-AG-03:** per bulan: build 0 padahal agg bulan itu > 0, atau < 50% → bulan dilewati; partisi agg yang tidak ada
+  di rentang sumber juga dilewati (bukan DROP); agregat `error` `shrink <yyyymm,...>`. `--allow-shrink` hanya CLI manual.
+  Rentang sumber kosong tidak lagi mengosongkan agg.
+- **SEC-AG-04:** `CH_DATABASE`/`CH_RAW_DATABASE` divalidasi `^[a-z_][a-z0-9_]{0,63}$` (config.py, test negatif).
+- **SEC-AG-05:** runbook §6a "Pemulihan bila tabel agg hilang / kosong / rusak".
+- **menu_mix:** `efn_dwh.v_esb_menu_mix_agg` (badan identik dengan `v_esb_menu_mix`, sumber `agg_esb_sales_daily`; diuji
+  kesamaan badan) → wrapper `efn_insight.v_esb_menu_mix` membacanya; keluaran sama. Definer kehilangan grant yang tidak
+  lagi dirujuk: `v_esb_sales_daily`, `v_esb_menu_mix`, `dim_esb_menu`, `fact_esb_sales_line` (+ `v_esb_sales_branch_daily`).
+
+File revisi: `efn_esb/{aggregates,runner,__main__,store,config}.py`, `tests/{test_aggregates,test_ddl,
+test_insight_access,test_config}.py`, `infra/clickhouse/init/20-esb-aggregates.sql`,
+`infra/clickhouse/access/{esb-access,insight-access}.sql`, `infra/clickhouse/clickhouse-init.sh`, README, runbook §6a,
+docs/04 §25.7/§26.7.
+
+Belum diverifikasi live: hak tepat REPLACE/DROP PARTITION dan TRUNCATE dengan grant tabel; esb_writer melihat
+`system.parts`; `CREATE TABLE ... SETTINGS storage_policy ... AS SELECT ... WHERE 0` dan `CREATE TABLE b AS a` lolos di
+24.8; query perbandingan kolom `system.columns` di init (tipe view vs tabel identik untuk agg yang sudah ada di prod —
+bila tidak, init akan membuat ulang agg kosong sekali, lalu refresh); tabel build sisa uji lead (policy default/Memory/Log)
+dihapus otomatis oleh langkah (a).
+
+## Tabel agregat harian Insight (22 Nov 2026) — desain awal (EXCHANGE, diganti revisi di atas)
+
+Branch `feat/esb-daily-aggregates`. Keputusan pemilik proyek 22 Nov (`docs/design/insight-web.md`): perbaikan akar galat
+159/241 Insight setelah data ESB 1 tahun = tabel agregat harian. ADR-040/041 (Proposed), K25-02. Tanpa shell:
+**tidak ada yang dijalankan** (pytest/ruff/ClickHouse dijalankan lead di container).
+
+**Desain (rekomendasi lead diterima, dengan dua penyesuaian):**
+- `efn_dwh.agg_esb_sales_branch_daily`, `agg_esb_sales_daily`, `agg_esb_flow_daily`: MergeTree, PARTITION BY bulan,
+  ORDER BY `(company_code, brand, <tanggal>, branch_id[, menu_code|product_code])` (company_code dulu = kunci row policy
+  + filter PT, sama dengan urutan tabel fakta). Kolom nama + tipe **diambil dari view** lewat
+  `CREATE TABLE ... AS SELECT <kolom> FROM <view> WHERE 0` (bukan tipe ditulis tangan, jadi tidak bisa menyimpang).
+- Penyesuaian 1: build dibuat dari **definisi view** (`table_definition()`), bukan `CREATE TABLE build AS <agg>`. Alasan:
+  perubahan kolom view ikut otomatis lewat EXCHANGE (tanpa ALTER/DROP manual), dan tidak perlu hak `SHOW COLUMNS` pada
+  tabel agg untuk `CREATE ... AS <tabel>`. Teks definisi di init diuji sama persis dengan renderer Python.
+- Penyesuaian 2: nama build TETAP (`<agg>_build`) dipakai juga sebagai **lock**: build ada + umur < 2 jam = refresh lain
+  berjalan (`busy`, tidak menyentuh apa pun); > 2 jam = sisa proses mati, dihapus. `CREATE` tanpa IF NOT EXISTS sehingga
+  balapan dimenangkan satu proses.
+- Urutan refresh: rentang hari dari `extract_checkpoint` (status done, entitas view) → cek umur build → CREATE build →
+  INSERT per bulan kalender (parameter `{start:Date}`/`{end:Date}`, `max_execution_time` 280 < timeout klien 300) →
+  `count()` → `EXCHANGE TABLES` → `DROP ... SYNC`. Gagal sebelum/saat EXCHANGE: build milik proses ini dihapus, tabel
+  lama tetap dibaca Insight. Hasil per agregat → `efn_esb.aggregate_refresh` (ok/busy/error, error = kelas exception +
+  kode ClickHouse saja).
+- Pemicu otomatis: akhir siklus `run` (satu refresh setelah semua brand) dan akhir `backfill` bila ada slice
+  `sales/fin_sold/production/delivery/transfer/master` ditulis; gagal = log, ditandai ulang untuk siklus berikutnya;
+  exit code ekstraksi tidak berubah. `refresh-aggregates` jalan tanpa ESB (juga `ESB_ENABLED=false`, untuk data DR).
+- Row policy: policy saat ini **berbasis view `efn_insight.*`** (loop `clickhouse-init.sh` + pagar fail-closed
+  `system.row_policies`), bukan tabel. Wrapper tetap view `efn_insight` dengan nama sama → policy dan pagar berlaku tanpa
+  perubahan. Tidak memasang policy di tabel agg: `insight_reader` tidak punya hak `efn_dwh` (REVOKE ALL), dan policy di
+  tabel akan memengaruhi user lain (esb_writer membaca untuk count/EXCHANGE). Definer: `SELECT` 3 tabel agg; `SELECT`
+  `v_esb_sales_branch_daily` dicabut (tidak dirujuk lagi).
+- Least privilege `esb_writer`: `SELECT, INSERT, CREATE TABLE, DROP TABLE` hanya pada 3 agg + 3 build (nama eksplisit),
+  `SELECT` 3 view sumber, `SELECT, INSERT` `aggregate_refresh`. Konsekuensi: `allow_ddl = 1 CONST` di
+  `esb_writer_profile` (allow_ddl=0 menolak semua DDL termasuk yang di-grant). Tanpa ALTER/TRUNCATE/OPTIMIZE/wildcard.
+
+**File:**
+- baru `services/esb-extract/efn_esb/aggregates.py`, `services/esb-extract/tests/test_aggregates.py`,
+  `infra/clickhouse/init/20-esb-aggregates.sql`
+- ubah `services/esb-extract/efn_esb/{runner.py,__main__.py,store.py}`, `infra/clickhouse/access/esb-access.sql`,
+  `infra/clickhouse/access/insight-access.sql`, `services/esb-extract/tests/{test_ddl.py,test_insight_access.py}`,
+  `services/esb-extract/README.md`, `docs/runbooks/esb-extract.md` (§6a), `docs/04_SERVICE_CONTRACTS.md` (§25.7, §26.7)
+
+**Asumsi skema:** view sumber tidak menghasilkan kolom Nullable pada kunci ORDER BY (LEFT JOIN dengan
+`join_use_nulls=0` default); database `efn_dwh` Atomic (EXCHANGE sudah dipakai `clickhouse-init.sh` untuk
+loyalty_events); view `efn_dwh.v_esb_*` SQL SECURITY INVOKER (default 24.8), jadi `esb_writer` butuh SELECT tabel
+dasarnya (sudah ada).
+
+**Belum diverifikasi (ClickHouse 24.8 nyata):** grant tingkat tabel cukup untuk `CREATE ... AS SELECT` dan
+`EXCHANGE TABLES` (InterpreterRename: SELECT+DROP TABLE dan CREATE TABLE+INSERT pada kedua tabel), grant pada nama
+tabel yang belum ada diterima, `table_engines_require_grant` = false (default), `esb_writer` melihat build di
+`system.tables`; filter tanggal per bulan terdorong ke partisi fakta di balik FINAL (EXPLAIN di runbook §6a); durasi &
+memori per bulan untuk PB 1 tahun; `efn_insight.v_esb_menu_mix` masih di atas view lambat (tidak dalam lingkup).
+
 ## Review Insight — rekonsiliasi alur CK & cakupan data (21 Nov 2026)
 
 Branch `fix/insight-review`. ADR-040 & ADR-041 (Proposed), K25-02. Tidak ada Bash: **tidak ada yang dijalankan**

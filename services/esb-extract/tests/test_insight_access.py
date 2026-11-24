@@ -8,6 +8,8 @@ policy (scope PB tidak melihat WTZ, sig salah -> 0 baris, tanpa setting -> error
 import re
 from pathlib import Path
 
+from efn_esb.aggregates import AGGREGATES
+
 ROOT = Path(__file__).resolve().parents[3]
 CH = ROOT / "infra" / "clickhouse"
 DDL12 = (CH / "init" / "12-g41-esb.sql").read_text(encoding="utf-8")
@@ -16,6 +18,7 @@ DDL19 = (CH / "init" / "19-insight-review.sql").read_text(encoding="utf-8")
 DDL21 = (CH / "init" / "21-g52-insight-fnb.sql").read_text(encoding="utf-8")
 DDL22 = (CH / "init" / "22-g53-insight-fnb-forecast.sql").read_text(encoding="utf-8")
 DDL23 = (CH / "init" / "23-insight-yoy.sql").read_text(encoding="utf-8")
+DDL20 = (CH / "init" / "20-esb-aggregates.sql").read_text(encoding="utf-8")
 ACCESS = (CH / "access" / "insight-access.sql").read_text(encoding="utf-8")
 INIT_SH = (CH / "clickhouse-init.sh").read_text(encoding="utf-8")
 ESB_POLICY_SH = (CH / "access" / "insight-esb-policy.sh").read_text(encoding="utf-8")
@@ -56,6 +59,8 @@ MENU_ECON_COLUMNS = (
     "sales_date brand company_code branch_id menu_name menu_category qty_paid gross_paid disc_paid cogs_paid "
     "qty_free cogs_free qty_pkg cogs_pkg pkg_qty pkg_gross pkg_disc"
 ).split()
+# Tabel agregat harian (22 Nov 2026, init/20-esb-aggregates.sql): nama tabel -> spesifikasi (view sumber, kolom).
+AGG_BY_NAME = {agg.name: agg for agg in AGGREGATES}
 # Kontrak kolom (frontend menulis query paralel terhadap daftar ini; urutan = urutan SELECT).
 MOVEMENT_COLUMNS = [
     "day",
@@ -84,9 +89,9 @@ def strip_comments(sql: str) -> str:
 
 
 def dwh_view_body(name: str) -> str:
-    """Badan view efn_dwh.<name> (tanpa komentar) dari 12/13/19/21/22/23."""
+    """Badan view efn_dwh.<name> (tanpa komentar) dari 12/13/19/20/21/22/23."""
     header = f"CREATE OR REPLACE VIEW efn_dwh.{name} AS"
-    for ddl in (DDL23, DDL22, DDL21, DDL19, DDL13, DDL12):
+    for ddl in (DDL23, DDL22, DDL21, DDL20, DDL19, DDL13, DDL12):
         if header in ddl:
             return strip_comments(ddl.split(header, 1)[1].split(";", 1)[0])
     raise AssertionError(f"view efn_dwh.{name} tidak ditemukan")
@@ -127,8 +132,59 @@ def test_insight_views_set_and_explicit_columns() -> None:
         assert "*" not in cols, name
         assert "company_code" in cols, name  # target row policy
         assert len(cols) == len(set(cols)), name
-        src_cols = output_columns(source.split(".", 1)[1])
+        src = source.split(".", 1)[1]
+        src_cols = list(AGG_BY_NAME[src].columns) if src in AGG_BY_NAME else output_columns(src)
         assert set(cols) <= set(src_cols), (name, set(cols) - set(src_cols))
+
+
+def test_aggregate_wrappers_read_agg_tables_with_same_columns_and_row_policy() -> None:
+    """3 wrapper lambat membaca tabel agregat; kolom keluaran (urutan sama) = view efn_dwh sumber = tabel agregat,
+    jadi lib/queries.ts insight-web tidak berubah.
+    Row policy tetap di view efn_insight (loop init + pagar fail-closed)."""
+    views = insight_views()
+    assert {agg.source for agg in AGGREGATES} == {
+        "v_esb_sales_branch_daily",
+        "v_esb_sales_daily",
+        "v_esb_flow_daily",
+    }
+    for agg in AGGREGATES:
+        cols, source = views[agg.source]  # nama wrapper efn_insight = nama view efn_dwh sumber
+        assert source == f"efn_dwh.{agg.name}", agg.name
+        assert cols == list(agg.columns) == output_columns(agg.source), agg.name
+        assert "company_code" in agg.columns and agg.order_by[0] == "company_code"
+        assert f"GRANT SELECT ON efn_dwh.{agg.name} TO efn_insight_definer;" in ACCESS
+    # View lain tetap membaca view efn_dwh (payment & movement tidak disentuh).
+    for name in ("v_esb_payment_daily", "v_esb_movement_daily"):
+        assert views[name][1] == f"efn_dwh.{name}", name
+    # Tidak ada sumber selain efn_dwh.v_* / efn_dwh.agg_esb_* (mis. build setengah jadi).
+    for name, (_cols, source) in views.items():
+        assert "_build" not in source, name
+        assert re.fullmatch(r"efn_dwh\.(v_esb_\w+|agg_esb_\w+)", source), name
+    # Wrapper agregat ada di daftar row policy kelas PT (insight-esb-policy.sh; test lain memeriksa predikatnya).
+    block = ESB_POLICY_SH.split('ESB_POLICY_VIEWS="\n', 1)[1].split('\n"\n', 1)[0]
+    policy = dict(line.split() for line in block.splitlines() if line.strip())
+    assert all(policy.get(agg.source) == "PT" for agg in AGGREGATES)
+    # insight_reader tidak pernah mendapat hak langsung pada tabel agregat (hanya lewat view + policy).
+    assert not re.search(r"agg_esb_\w+ TO insight_reader", ACCESS)
+    # Objek yang tidak lagi dirujuk wrapper dicabut eksplisit (grant deploy lama tidak hilang sendiri).
+    # dim_esb_menu + fact_esb_sales_line tetap: dibaca v_esb_menu_econ_daily (YoY, init/23).
+    revoked = ("v_esb_sales_branch_daily", "v_esb_sales_daily", "v_esb_menu_mix")
+    for obj in revoked:
+        assert f"REVOKE SELECT ON efn_dwh.{obj} FROM efn_insight_definer;" in ACCESS, obj
+        assert f"GRANT SELECT ON efn_dwh.{obj} TO efn_insight_definer;" not in ACCESS, obj
+
+
+def test_menu_mix_wrapper_reads_aggregate_with_identical_body() -> None:
+    """Bauran menu = badan efn_dwh.v_esb_menu_mix persis, hanya sumbernya agg_esb_sales_daily (kolom + tipe identik
+    dengan v_esb_sales_daily) -> keluaran wrapper tidak berubah; v_esb_menu_mix asli tetap untuk Metabase."""
+    views = insight_views()
+    assert views["v_esb_menu_mix"][1] == "efn_dwh.v_esb_menu_mix_agg"
+    original = re.sub(r"\s+", " ", dwh_view_body("v_esb_menu_mix")).strip()
+    agg = re.sub(r"\s+", " ", dwh_view_body("v_esb_menu_mix_agg")).strip()
+    assert "FROM efn_dwh.v_esb_sales_daily AS v" in original
+    assert agg == original.replace("FROM efn_dwh.v_esb_sales_daily AS v", "FROM efn_dwh.agg_esb_sales_daily AS v")
+    assert output_columns("v_esb_menu_mix_agg") == output_columns("v_esb_menu_mix") == views["v_esb_menu_mix"][0]
+    assert "CREATE OR REPLACE VIEW efn_dwh.v_esb_menu_mix AS" in DDL12  # asli tidak dihapus
 
 
 def test_data_quality_uses_pt_mapped_source() -> None:
@@ -280,7 +336,8 @@ def test_definer_grants_exactly_referenced_objects() -> None:
     needed: set[str] = set()
     for _, source in insight_views().values():
         name = source.split(".", 1)[1]
-        needed |= {source} | referenced_objects(name)
+        # Tabel agregat = tabel biasa (tidak merujuk objek lain saat dibaca).
+        needed |= {source} | (set() if name in AGG_BY_NAME else referenced_objects(name))
     assert granted == needed, (needed - granted, granted - needed)
     assert "efn_esb.raw_doc" not in granted and "efn_esb.bom_ratio" not in granted
     assert "ON efn_dwh.* TO efn_insight_definer" not in ACCESS

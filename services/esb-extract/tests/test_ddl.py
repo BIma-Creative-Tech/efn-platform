@@ -3,6 +3,7 @@
 import re
 from pathlib import Path
 
+from efn_esb.aggregates import AGGREGATES, LOCK_TABLE, REFRESH_COLUMNS, REFRESH_TABLE, table_definition
 from efn_esb.records import CONTROL_TABLES
 from efn_esb.transform import MART_TABLES
 
@@ -12,7 +13,9 @@ DDL_G43 = (ROOT / "infra" / "clickhouse" / "init" / "14-g43-migration.sql").read
 DDL_G65 = (ROOT / "infra" / "clickhouse" / "init" / "23-g65-esb-purchase-stock.sql").read_text(encoding="utf-8")
 # Kolom mart G41 yang ditambahkan belakangan lewat ALTER idempoten (G65: dim_esb_supplier.supplier_id).
 ALTER_ADDED = set(re.findall(r"ALTER TABLE efn_dwh\.(\w+) ADD COLUMN IF NOT EXISTS (\w+) ", DDL_G65))
+DDL_AGG = (ROOT / "infra" / "clickhouse" / "init" / "20-esb-aggregates.sql").read_text(encoding="utf-8")
 ACCESS = (ROOT / "infra" / "clickhouse" / "access" / "esb-access.sql").read_text(encoding="utf-8")
+ACCESS_CODE = re.sub(r"--[^\n]*", "", ACCESS)
 INIT_SH = (ROOT / "infra" / "clickhouse" / "clickhouse-init.sh").read_text(encoding="utf-8")
 VIEWS = ("v_esb_sales_daily", "v_esb_payment_daily", "v_esb_flow_daily", "v_esb_menu_mix", "v_esb_data_quality")
 
@@ -106,12 +109,116 @@ def test_esb_writer_grants_match_tables_exactly() -> None:
     # SEC-188 / L-130: map_esb_odoo tidak pernah ditulis esb-extract (penulis tunggal efn_mig).
     g43 = set(re.findall(r"CREATE TABLE IF NOT EXISTS (efn_\w+\.\w+)", DDL_G43))
     g65 = set(re.findall(r"CREATE TABLE IF NOT EXISTS (efn_\w+\.\w+)", DDL_G65))
-    assert granted("esb_writer", "SELECT, INSERT") == (ddl_tables() | g43 | g65) - {"efn_dwh.map_esb_odoo"}
+    control20 = {f"efn_esb.{REFRESH_TABLE}", f"efn_esb.{LOCK_TABLE}"}
+    expected = (ddl_tables() | g43 | g65 | control20) - {"efn_dwh.map_esb_odoo"}
+    assert granted("esb_writer", "SELECT, INSERT") == expected
     assert "REVOKE ALL ON efn_dwh.map_esb_odoo FROM esb_writer;" in ACCESS
     writer_lines = [line for line in ACCESS.splitlines() if "TO esb_writer" in line]
-    assert all(line.startswith("GRANT SELECT, INSERT ON ") for line in writer_lines)
-    assert "allow_ddl = 0 CONST" in ACCESS
+    # Selain SELECT+INSERT: hanya grant tabel agregat Insight (diuji persis di test_esb_writer_aggregate_grants_exact).
+    plain = [line for line in writer_lines if "agg_esb_" not in line and not line.startswith("GRANT SELECT ON ")]
+    assert all(line.startswith("GRANT SELECT, INSERT ON ") for line in plain)
     assert not re.search(r"GRANT (ALL|ALTER|DROP|TRUNCATE|CREATE|OPTIMIZE)", ACCESS)
+    # ALTER/TRUNCATE hanya pada tabel agregat Insight; OPTIMIZE tidak pernah.
+    for line in ACCESS_CODE.splitlines():
+        if re.search(r"\b(ALTER|TRUNCATE)\b", line) and "TO esb_writer" in line:
+            assert "efn_dwh.agg_esb_" in line, line
+    assert not re.search(r"\bOPTIMIZE\b[^;]*TO esb_writer", ACCESS_CODE)
+
+
+# ------------------------------------------------------------------ tabel agregat Insight (init/20-esb-aggregates.sql)
+def test_aggregate_ddl_idempotent_and_matches_definition() -> None:
+    code = re.sub(r"--[^\n]*", "", DDL_AGG)
+    # Hanya CREATE ... IF NOT EXISTS / CREATE OR REPLACE VIEW (dijalankan ulang setiap deploy); tidak pernah
+    # menghapus/mengubah/mengisi.
+    assert not re.search(r"\b(DROP|TRUNCATE|ALTER|INSERT|EXCHANGE|RENAME|OPTIMIZE)\b", code)
+    created = re.findall(r"CREATE TABLE (IF NOT EXISTS )?(efn_\w+\.\w+)", code)
+    assert all(ine for ine, _ in created)
+    assert {t for _, t in created} == (
+        {f"efn_dwh.{a.name}" for a in AGGREGATES}
+        | {f"efn_dwh.{a.build}" for a in AGGREGATES}
+        | {f"efn_esb.{REFRESH_TABLE}", f"efn_esb.{LOCK_TABLE}"}
+    )
+    assert set(re.findall(r"CREATE OR REPLACE VIEW (efn_\w+\.\w+) AS", code)) == {"efn_dwh.v_esb_menu_mix_agg"}
+    for agg in AGGREGATES:
+        # Teks init = table_definition() (kolom/tipe dari view sumber, MergeTree, partisi bulan, policy terenkripsi).
+        definition = table_definition(agg, "efn_dwh")
+        assert f"CREATE TABLE IF NOT EXISTS efn_dwh.{agg.name}\n{definition};" in DDL_AGG
+        assert "ENGINE = MergeTree\n" in definition and "SETTINGS storage_policy = 'encrypted'\n" in definition
+        assert f"PARTITION BY toYYYYMM({agg.date_column})\n" in definition
+        assert agg.date_column == agg.columns[0] and agg.date_column in agg.order_by
+        assert f"FROM efn_dwh.{agg.source}\nWHERE 0" in definition
+        # Build permanen dibuat admin dengan struktur identik (syarat REPLACE PARTITION), SETELAH agg-nya.
+        build = f"CREATE TABLE IF NOT EXISTS efn_dwh.{agg.build} AS efn_dwh.{agg.name};"
+        assert build in DDL_AGG
+        assert DDL_AGG.index(build) > DDL_AGG.index(f"CREATE TABLE IF NOT EXISTS efn_dwh.{agg.name}\n")
+
+
+def test_aggregate_lock_table() -> None:
+    block = DDL_AGG.split(f"CREATE TABLE IF NOT EXISTS efn_esb.{LOCK_TABLE}", 1)[1].split(";", 1)[0]
+    # Waktu diisi server (urutan pemegang tidak bergantung jam container); retensi pendek.
+    assert "started_at    DateTime64(3, 'UTC') DEFAULT now64(3)" in block
+    assert "heartbeat_at  DateTime64(3, 'UTC') DEFAULT now64(3)" in block
+    assert "released      UInt8 DEFAULT 0" in block and "run_id        UUID" in block
+    assert "TTL toDateTime(heartbeat_at) + INTERVAL 1 DAY" in block
+
+
+def test_aggregate_refresh_table_columns() -> None:
+    body = DDL_AGG.split(f"CREATE TABLE IF NOT EXISTS efn_esb.{REFRESH_TABLE}\n", 1)[1].split("ENGINE", 1)[0]
+    assert re.findall(r"^\s{4}(\w+)\s", body, re.MULTILINE) == list(REFRESH_COLUMNS)
+    block = DDL_AGG.split(f"CREATE TABLE IF NOT EXISTS efn_esb.{REFRESH_TABLE}", 1)[1].split(";", 1)[0]
+    assert "ENGINE = MergeTree" in block and "TTL toDateTime(finished_at) + INTERVAL 400 DAY" in block
+
+
+def test_esb_writer_aggregate_grants_exact() -> None:
+    # SEC-AG-01: tanpa CREATE/DROP TABLE (engine & storage policy hanya ditetapkan admin).
+    aggs = {f"efn_dwh.{a.name}" for a in AGGREGATES}
+    builds = {f"efn_dwh.{a.build}" for a in AGGREGATES}
+    assert set(re.findall(r"GRANT SELECT, INSERT, ALTER DELETE ON (efn_\w+\.\w+) TO esb_writer;", ACCESS_CODE)) == aggs
+    assert set(re.findall(r"GRANT SELECT, INSERT, TRUNCATE ON (efn_\w+\.\w+) TO esb_writer;", ACCESS_CODE)) == builds
+    grant_lines = [line for line in ACCESS_CODE.splitlines() if line.startswith("GRANT ") and "TO esb_writer" in line]
+    assert not [line for line in grant_lines if re.search(r"\b(CREATE|DROP)\b", line)]
+    # Grant CREATE/DROP TABLE dari deploy sebelumnya dicabut eksplisit pada keenam tabel.
+    revoked = set(re.findall(r"REVOKE CREATE TABLE, DROP TABLE ON (efn_\w+\.\w+) FROM esb_writer;", ACCESS_CODE))
+    assert revoked == aggs | builds
+    assert not re.search(r"ON efn_\w+\.\*[^;]*TO esb_writer", ACCESS_CODE)
+    assert not re.search(r"\b(CREATE|DROP) (DATABASE|VIEW|DICTIONARY)\b", ACCESS_CODE)
+    # Sumber refresh: SELECT 3 view (INVOKER -> tabel dasarnya sudah SELECT, diuji di bawah).
+    assert set(re.findall(r"GRANT SELECT ON (efn_dwh\.v_\w+) TO esb_writer;", ACCESS_CODE)) == {
+        f"efn_dwh.{a.source}" for a in AGGREGATES
+    }
+    readable = granted("esb_writer", "SELECT, INSERT")
+    view = DDL + (ROOT / "infra" / "clickhouse" / "init" / "13-g42-insight.sql").read_text(encoding="utf-8")
+    for agg in AGGREGATES:
+        body = view.split(f"CREATE OR REPLACE VIEW efn_dwh.{agg.source} AS", 1)[1].split(";", 1)[0]
+        base = set(re.findall(r"\b(efn_(?:dwh|esb)\.\w+)", re.sub(r"--[^\n]*", "", body)))
+        assert base <= readable, (agg.source, base - readable)
+
+
+def test_esb_writer_profile_allows_ddl_only_via_grants() -> None:
+    # allow_ddl=0 menolak SEMUA DDL termasuk TRUNCATE/ALTER yang di-grant -> 1 CONST; batas = grant per tabel.
+    for stmt in (
+        "CREATE SETTINGS PROFILE IF NOT EXISTS esb_writer_profile",
+        "ALTER SETTINGS PROFILE esb_writer_profile",
+    ):
+        body = ACCESS.split(stmt, 1)[1].split(";", 1)[0]
+        assert "allow_ddl = 1 CONST" in body and "readonly = 0 CONST" in body, stmt
+        assert "allow_introspection_functions = 0 CONST" in body, stmt
+    assert "allow_ddl = 0" not in ACCESS
+
+
+def test_init_script_aggregate_guards() -> None:
+    # SEC-AG-01: 6 tabel wajib MergeTree + encrypted (fail-closed, cabut hak esb_writer); kolom != view -> dibuat ulang
+    # admin SEBELUM access/*.sql (wrapper efn_insight membaca agg).
+    for agg in AGGREGATES:
+        assert f"'{agg.name}'" in INIT_SH and f"'{agg.build}'" in INIT_SH and f"'{agg.source}'" in INIT_SH
+    guard = INIT_SH.index('AGG_BAD="$($CH --query')
+    assert "engine = 'MergeTree' AND storage_policy = 'encrypted'" in INIT_SH[guard:]
+    assert 'REVOKE ALL ON efn_dwh.${t} FROM esb_writer" < /dev/null' in INIT_SH[guard:]
+    assert INIT_SH.index("system.row_policies WHERE database = 'efn_insight'") < guard < INIT_SH.index('rm -f "$CFG"')
+    rebuild = INIT_SH.index('AGG_STALE="$($CH --query')
+    assert INIT_SH.index("for f in /init/schema/*.sql") < rebuild < INIT_SH.index("for f in /init/access/*.sql")
+    assert "$CH --multiquery < /init/schema/20-esb-aggregates.sql" in INIT_SH
+    assert "arraySort(groupArray((position, name, type)))" in INIT_SH  # nama + tipe + urutan kolom
 
 
 def test_metabase_reader_views_without_raw() -> None:

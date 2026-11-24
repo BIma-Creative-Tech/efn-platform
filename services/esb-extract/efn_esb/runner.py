@@ -22,6 +22,7 @@ from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from typing import Any, Protocol
 
+from efn_esb.aggregates import TRIGGER_ENTITIES, RefreshStore, error_label, refresh_all
 from efn_esb.config import DAILY_ENTITIES, EsbSettings
 from efn_esb.extract import BrandRuntime, SliceResult, run_slice
 from efn_esb.heartbeat import heartbeat_line
@@ -384,6 +385,38 @@ def guarded_cycle(
             brand,
         )
     return run
+
+
+def refresh_aggregates(store: RefreshStore, allow_shrink: bool = False) -> bool:
+    """Bangun ulang tabel agregat Insight (efn_esb/aggregates.py). Tidak pernah melempar: gagal = log error + False,
+    data ekstraksi yang sudah tersimpan tidak terpengaruh. `allow_shrink` hanya dari CLI manual (SEC-AG-03)."""
+    try:
+        results = refresh_all(store, allow_shrink=allow_shrink)
+    except Exception as exc:
+        log.error("refresh agregat gagal error=%s", error_label(exc))
+        return False
+    return all(r.status == "ok" for r in results)
+
+
+class RefreshTrigger:
+    """Tandai perlu refresh bila slice entitas pengisi agregat (TRIGGER_ENTITIES) ditulis; refresh di akhir siklus.
+    Gagal/busy -> tetap ditandai, dicoba lagi di akhir siklus berikutnya."""
+
+    def __init__(self) -> None:
+        self.dirty = False
+
+    def note(self, result: SliceResult) -> None:
+        if result.task.entity in TRIGGER_ENTITIES:
+            self.dirty = True
+
+    def maybe_refresh(self, store: RefreshStore) -> bool | None:
+        """None = tidak ada data baru (tidak ada query); True/False = hasil refresh."""
+        if not self.dirty:
+            return None
+        if refresh_aggregates(store):
+            self.dirty = False
+            return True
+        return False
 
 
 def run_backfill(
