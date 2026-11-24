@@ -1816,6 +1816,41 @@ body[data-busy] main {
   padding-left: 16px;
 }
 
+/* G67: kelompok kotak centang di formulir filter halaman (Kelas pemakaian, Pemasok). */
+.g67-checks {
+  position: relative;
+}
+.g67-checks > summary {
+  display: inline-flex;
+  align-items: center;
+  min-height: 40px;
+  padding: 4px 12px;
+  border: 1px solid var(--text-muted);
+  border-radius: var(--radius);
+  background: var(--surface);
+  cursor: pointer;
+}
+.g67-checks fieldset {
+  margin: 4px 0 0;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  max-height: 280px;
+  overflow: auto;
+}
+.g67-checks ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.g67-checks li label {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  min-height: 32px;
+}
+
 /* Ponsel: toolbar tidak lagi menempel agar tidak memakan layar; kontrol memenuhi lebar. */
 @media (max-width: 767px) {
   .topbar {

@@ -32,6 +32,11 @@ export interface InsightConfig {
    * http://127.0.0.1:7443 = fitur nonaktif, fail closed). Default false -> halaman /produksi "belum aktif".
    */
   ppEnabled: boolean;
+  /**
+   * INSIGHT_G67_ENABLED (docs/04 §31.8, G67): aktif hanya string persis "true"; default false. `false` -> /pnl, /waste, /fill-rate
+   * dialihkan (rewrite) ke halaman "Segera" dan item menu disembunyikan. Production tetap false sampai QA + security review lulus.
+   */
+  g67Enabled: boolean;
   /** Origin sidecar prodplan (selalu `http://127.0.0.1:7443` bila valid), null bila PRODPLAN_URL tidak sah. */
   ppUrl: string | null;
   ppAssertKeyFile: string;
@@ -109,6 +114,7 @@ export function parseConfig(env: Env): InsightConfig {
     enabled: env.INSIGHT_ENABLED === 'true',
     ppEnabled: env.INSIGHT_PRODPLAN_ENABLED === 'true' && ppUrl !== null,
     ppUrl,
+    g67Enabled: env.INSIGHT_G67_ENABLED === 'true',
     ppAssertKeyFile: (env.PRODPLAN_ASSERT_KEY_FILE || '/run/secrets/prodplan_assert_key').trim(),
     smEnabled: env.INSIGHT_SM_ENABLED === 'true',
     acceptEit1: env.INSIGHT_ACCEPT_EIT1 === undefined || env.INSIGHT_ACCEPT_EIT1.trim() === '' ? true : env.INSIGHT_ACCEPT_EIT1 === 'true',

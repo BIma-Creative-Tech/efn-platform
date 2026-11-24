@@ -53,6 +53,13 @@ GRANT SELECT, INSERT ON efn_dwh.fact_esb_ar_open TO esb_writer;
 -- metabase_reader / Insight / forecast. Kolom baru dim_esb_supplier.supplier_id tidak butuh grant baru.
 GRANT SELECT, INSERT ON efn_dwh.fact_esb_purchase_line TO esb_writer;
 GRANT SELECT, INSERT ON efn_dwh.fact_esb_stock_opening TO esb_writer;
+-- G67 (24-g67-esb-pl-waste-fillrate.sql, docs/04 §31.7, L-267). Pembaca hanya efn_insight_definer (insight-access.sql);
+-- TIDAK ke metabase_reader / text2sql / forecast / mig. Mode retransform membaca efn_esb.raw_doc (SELECT di atas).
+GRANT SELECT, INSERT ON efn_dwh.fact_esb_profit_loss TO esb_writer;
+GRANT SELECT, INSERT ON efn_dwh.fact_esb_item_journal_line TO esb_writer;
+GRANT SELECT, INSERT ON efn_dwh.fact_esb_transfer_request_line TO esb_writer;
+GRANT SELECT, INSERT ON efn_dwh.fact_esb_delivery_ref_line TO esb_writer;
+GRANT SELECT, INSERT ON efn_dwh.dim_esb_product_id TO esb_writer;
 
 -- Analis (opsional, §25.7): view v_esb_* + tabel dasarnya (view INVOKER; v_esb_data_quality membaca extract_run).
 -- Tanpa raw_doc (payload mentah) dan bom_ratio.

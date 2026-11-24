@@ -60,6 +60,7 @@ baris yang dihapus/void di ESB, dan slice yang gagal di tengah tidak terlihat. T
 python -m efn_esb run                                    # loop (compose command)
 python -m efn_esb backfill --brand pb --from 2024-11-17 --to 2026-11-16 [--entity sales ...] [--force] [--ignore-window]
 python -m efn_esb snapshot --brand pb --entity bom_detail [...]   # G43, lihat di bawah
+python -m efn_esb retransform --brand pb --entity delivery_ref --from D --to D   # G67: dari raw_doc, tanpa ESB
 python -m efn_esb probe --brand pb                       # login + jumlah cabang saja
 python -m efn_esb health                                 # file heartbeat segar? (opsional)
 ```
@@ -121,6 +122,45 @@ python -m efn_esb snapshot --brand pb --entity stock_opening --date <cutover>   
 - Cek kualitas: view terpisah `efn_dwh.v_esb_g65_quality` (`purchase_unmapped`, `stock_opening_missing_branch`), bukan
   tambahan `v_esb_data_quality` — view itu INVOKER dan dibaca Metabase/Insight yang sengaja tidak punya hak tabel G65.
 
+### G67 — laba rugi outlet, waste & pemakaian internal, fill rate (docs/04 §31, ADR-040 amandemen G67, ADR-041)
+Kode: `extract_g67.py`, `transform_g67.py` (murni), `planning.pl_*`, `runner.run_retransform`. DDL
+`infra/clickhouse/init/24-g67-esb-pl-waste-fillrate.sql`. Semua entitas opt-in (default `ESB_ENTITIES` tidak berubah);
+GET saja, tanpa tulis ESB, tanpa `services/prodplan`.
+
+| Entitas | Mode | Endpoint (GET) | Slice | Tabel | Redaksi |
+|---|---|---|---|---|---|
+| `profit_loss` | `run` sekali/hari setelah `ESB_SALES_READY_HOUR_WIB` (tahun yang memuat `ESB_PL_REFRESH_MONTHS` bulan terakhir) + `backfill` (tahun yang beririsan) | `/report/profit-loss/month-to-month?year=Y&month=M[&branchIDs=<id>]` (M = bulan ini WIB untuk tahun berjalan, 12 untuk tahun lampau; `branchIDs[]` tidak pernah dipakai) | `(<branch_id>\|'*', Y-01-01)` semua tipe cabang + total brand | `fact_esb_profit_loss` | whitelist rekursif `PL_FIELDS` |
+| `item_journal` | harian + backfill | `/inventory/item-journal?dateFrom=D&dateTo=D` + `/inventory/item-journal/{num}` | `('*', D)` | `fact_esb_item_journal_line` | whitelist `ITEM_JOURNAL_*` |
+| `transfer_request` | harian + backfill | `/inventory/goods-transfer-request?dateFrom=D&dateTo=D` + `/{transferNum}` | `('*', D)` | `fact_esb_transfer_request_line`, `dim_esb_product_id` | whitelist `GTR_*` (additionalInfo `pp:` G66 dibuang) |
+| `delivery_ref` | turunan slice `delivery` (tanpa GET, checkpoint sendiri SETELAH `delivery`) + `retransform` dari `raw_doc` | — | `('*', D)` | `fact_esb_delivery_ref_line` | payload G41 ter-redaksi |
+
+- P&L (L-261): baris per (cabang, seksi, akun, bulan) + baris `summary` per pos ESB (`section` = nama pos camelCase:
+  `netSales`, `grossProfit`, `earningBeforeInterestTaxDepreciationAmortization`, `netProfitLoss`, …). Bulan < M dari
+  `periods[].key` (`"<branchID>-January 2026"`, bulan Inggris), bulan M dari `area.value`. Fail closed (slice error):
+  label tak terbaca, prefix ≠ cabang, `area.id` ≠ cabang, tahun ≠ Y, bulan > M, `periods` bulan M ≠ `area.value`. Akun
+  ganda dijumlah (`source_lines` > 1 → `dup_account`). Summary tanpa `details` berstruktur → `total` untuk bulan M saja.
+  Tanda angka apa adanya. raw_doc P&L tanpa `description` (nama akun) karena `redact()` lapis kedua; mart memuatnya.
+- Jurnal item: `detail_id` = `ID` detail (line_no 0); ada ID kosong/0/ganda → seluruh dokumen `detail_id 0`, `line_no`
+  stabil. `value = qty × hpp` (Decimal 2 desimal, ROUND_HALF_UP). Semua status disimpan; view menghitung
+  `ITEM_JOURNAL_COUNTED_STATUS` (sementara `authorized/finished/closed`). `product_code` di-resolve saat query lewat
+  `dim_esb_product_id` (`ID:<product_id>` bila tak terpetakan).
+- GTR: requester = `destinationBranchID`, supplier = `originBranchID` (konstanta `GTR_ORIGIN_IS_SUPPLIER` [B]);
+  `company_code` = PT peminta; baris ganda per (dokumen, kode, satuan) dijumlah; kode kosong → `dim_esb_product_id` →
+  alias nama → `''`.
+- `delivery_ref`: qty kirim (`deliveryQty`) dan terima (`receiptQty`) terpisah; `referenceNumber` per baris bila ada,
+  jika tidak dari header. Tabel baru, `fact_esb_delivery` tidak diubah (L-262).
+- `retransform --entity delivery_ref` (tanpa login ESB, boleh di luar jendela): per hari baca list raw + detail raw
+  (`doc_date` wajib = hari) → slice versi baru. Detail hilang / nomor dipakai ulang → hari itu **tidak** ditulis
+  (`reason=raw_missing`), dicetak untuk `backfill --entity delivery --entity delivery_ref --force`. Hasil identik dengan
+  jalur `delivery` (diuji); menjalankan ulang hanya mengganti versi (idempoten).
+- View (§31.6): `v_esb_pl_monthly`, `v_esb_item_usage_daily`, `v_esb_item_usage_product_monthly`,
+  `v_esb_fill_rate_daily`, `v_esb_fill_rate_product_monthly` (dibungkus `efn_insight.*`, row policy kelas PT);
+  internal `v_esb_item_journal_line`, `v_esb_fill_rate_line`; cek `v_esb_g67_quality` (admin saja). Tanpa grant ke
+  Metabase/text2sql/forecast/mig (L-267). Rumus fill rate (L-263) di komentar DDL.
+- Uji: `tests/test_g67.py` (transform/extract/retransform/planning/CLI), `tests/test_g67_ddl.py` (DDL/view/akses
+  statis), `tests/clickhouse/g67_views_harness.sh` (perilaku view + row policy, ClickHouse 24.8, dijalankan lead).
+- Runbook backfill 24 bulan (jendela malam): `docs/runbooks/esb-extract.md` §5b.
+
 **Brand `auth_suspended` (SEC-186).** Login ESB ditolak 2 siklus berturut-turut → brand tidak login lagi (melindungi akun
 ESB yang juga dipakai kasir dari lockout). Siklus berikutnya hanya menulis `extract_run.status='auth_suspended'`
 (muncul di `v_esb_data_quality` `last_run_not_ok`). Pemulihan: perbaiki secret `esb_core_password_<brand>` (atau keluarkan
@@ -143,7 +183,8 @@ brand dari `ESB_BRANDS`) lalu **restart** `esb-extract`; penangguhan tidak disim
 | `ESB_INTERVAL_SECONDS` | `3600` | |
 | `ESB_SALES_READY_HOUR_WIB` / `ESB_CORRECTION_DAYS` / `ESB_GAP_FILL_DAYS` | `3` / `1,7` / `7` | |
 | `ESB_BACKFILL_WINDOW` / `ESB_BACKFILL_INCLUDE_INACTIVE` | `22:00-05:00` / `true` | toko nonaktif ikut backfill (riwayat toko tutup) |
-| `ESB_ENTITIES` | `branch,master,sales,fin_sold,payment,production,delivery,transfer` | `stock`, `purchase_line` (G65) opsional |
+| `ESB_ENTITIES` | `branch,master,sales,fin_sold,payment,production,delivery,transfer` | `stock`, `purchase_line` (G65), `profit_loss`, `item_journal`, `transfer_request`, `delivery_ref` (G67) opsional |
+| `ESB_PL_REFRESH_MONTHS` | `2` | G67: jendela refresh harian P&L (1..12; di luar → 2) |
 | `ESB_HTTP_TIMEOUT_SECONDS` / `ESB_MAX_PAGES` | `60` / `500` | |
 | `ESB_MAX_RESPONSE_BYTES` | `33554432` (32 MiB) | rentang `1048576`..`134217728` (1–128 MiB); body lebih besar → slice error, tanpa retry (SEC-187) |
 | `ESB_ALLOW_IGNORE_WINDOW` | `false` | production: izinkan `backfill --ignore-window` hanya untuk rentang 1 hari, dengan persetujuan (SEC-185) |
@@ -188,3 +229,9 @@ disalin karena tidak ada paket bersama antar-service Python.
   `qty` vs `stockQty` opname, `receivableTotal`/`payableTotal` = sisa atau nilai faktur, apakah invoice-aging hanya faktur
   terbuka, status opname yang final. `customer_name` bisa nama orang (pelanggan perorangan) → data pribadi (inventaris
   PDP). `bomTypeID/Name` arti [B] (Q-ESB17); header BOM ESB tanpa qty hasil (rasio dari `bom_ratio`).
+- G67 **[B]** (docs/04 §31.13; dibangun dari fakta probe 25 Nov 2026, belum uji extractor terhadap ESB nyata):
+  struktur `summaries.details`, kelengkapan `periods` Januari..M−1 dan bentuk respons total brand (tanpa `branchIDs`),
+  konvensi tanda beban, filter tanggal list item-journal/GTR, stabilitas `ID` detail jurnal, arti `hpp` dan `qty` GTR,
+  arah origin/destination GTR, daftar status (`ITEM_JOURNAL_COUNTED_STATUS`, `GTR_COUNTED_STATUS` = 3, 6), arti
+  `bypassGoodsDelivery`, `referenceNumber` header vs baris, performa view fill rate pada volume PB. Entitas `master`
+  belum mengisi `dim_esb_product_id` (`productID` di `/product` belum diverifikasi; opsional).

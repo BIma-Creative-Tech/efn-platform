@@ -1848,6 +1848,8 @@ services:
       INSIGHT_SM_ENABLED: ${INSIGHT_SM_ENABLED:-false}
       # G52 (docs/04 §28.15.10): halaman /fnb/*; hanya "true" persis, default false (satu saklar dengan Odoo).
       INSIGHT_FNB_PERSONA_ENABLED: ${INSIGHT_FNB_PERSONA_ENABLED:-false}
+      # G67 (docs/04 §31): halaman /pnl, /waste, /fill-rate; hanya "true" persis, default false.
+      INSIGHT_G67_ENABLED: ${INSIGHT_G67_ENABLED:-false}
       # Forecast F&B: kode gudang pusat (agregat outlet; samakan dengan FORECAST_DC_CODES) dikeluarkan dari total; dipisah koma, default kosong.
       INSIGHT_FNB_DC_CODES: ${INSIGHT_FNB_DC_CODES:-}
       # ClickHouse HTTPS terverifikasi CA internal (NODE_EXTRA_CA_CERTS); APP_ENV=production menolak non-https.

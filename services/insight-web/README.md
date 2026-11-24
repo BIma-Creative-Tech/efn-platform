@@ -66,6 +66,26 @@ Tiga halaman F&B dari data ESB di grup sidebar Food & Beverage (item teratas), a
 - YoY: "n/a" + catatan bila `first_day` penjualan PT > awal rentang tahun lalu (`fexec_yoy_coverage`, `lib/fnb-vm.ts yoyStatus`); gagal memuat cakupan juga "n/a".
 - Halaman penolakan baru `/fnb-belum-aktif`; `smRouteDenial` kini juga menolak sesi tanpa kode SM (kepala toko F&B tidak boleh membuka `/store` supermarket).
 
+## Laba Rugi Outlet, Waste & Pemakaian Internal, Fill Rate Outlet ke CK (G67, docs/04 §31; ADR-040 amandemen G67, ADR-041, Proposed)
+Tiga halaman di grup sidebar Food & Beverage (disisipkan sebelum Forecast), aktif hanya bila **`INSIGHT_G67_ENABLED=true`** (default `false`).
+Data = view `efn_insight.v_esb_*` yang dibangun paket W-A (§31.6/§31.7; kelas PT, row policy `efn_insight_scope`); SQL belum dijalankan terhadap ClickHouse.
+
+| Rute | Siapa | Query (`lib/queries.ts`) | Filter |
+|---|---|---|---|
+| `/pnl` | persona `exec` saja (`fnbRouteDenial` memetakan `/pnl` ke exec; flag F&B ikut berlaku), tanpa `brs` | `pnl_kpi`, `pnl_trend_monthly`, `pnl_statement`, `pnl_branch_rank`, `pnl_accounts` | `pt`, `branch`, **`mfrom`/`mto`** (`YYYY-MM`, maks 24 bulan, bawaan 12 bulan s.d. bulan ini, `lib/pnl.ts parseMonthRange`) |
+| `/waste` | pengguna F&B ber-cakupan PT (tanpa `brs`) | `waste_kpi`, `waste_trend`, `waste_by_purpose`, `waste_branch_rank`, `waste_top_products` | `pt`, `branch`, `from`/`to`, **`uclass`** (bawaan waste + internal_use) |
+| `/fill-rate` | idem | `fr_kpi`, `fr_trend_weekly`, `fr_by_outlet`, `fr_by_supplier`, `fr_top_short_products`, `fr_suppliers` (opsi filter) | `pt`, `branch` (outlet peminta), `from`/`to` (tanggal permintaan), **`supplier`** (`brand:branch_id`, maks 10) |
+
+- Gerbang: `lib/g67-access.ts` (proxy.ts lapis 1, `lib/g67-page.ts` lapis 2, row policy lapis 3). Sesi ber-cabang ditolak (`BRANCH_BLOCKED_PATHS` + `/pnl` lewat persona exec). SMD tidak ditawarkan
+  dan `pt=SMD` ditolak (halaman ESB-saja).
+- P&L: baris `summary` ESB dipetakan ke lima kunci tetap lewat nama pos (`lib/pnl.ts PL_SYNONYMS`, dipakai SQL dan TS); nama pos sebenarnya belum terverifikasi [B]. Pos tak dikenal tetap tampil di tabel.
+  Persen (laba kotor, EBITDA, laba bersih terhadap penjualan bersih) dihitung di TS, bukan SQL. Baris "Tidak teralokasi ke outlet" = total brand - jumlah cabang (hanya bila filter cabang kosong).
+- Fill rate: rasio dihitung dari kolom aditif view (`line_ratio_sum / lines`, dst.), bukan rata-rata rasio; tanpa ambang warna (target belum ditetapkan, Q-ESB31).
+- Parameter baru katalog: `m_to` (`Date`), `uclass` dan `supplier` (`Array(String)`). Alias keluaran diberi sufiks (`*_sum`, `*_label`) agar tidak sama dengan kolom view.
+- Glosarium: entri baru laba kotor, EBITDA, laba bersih, tidak teralokasi, waste, pemakaian internal, `fill-rate-line` ("Fill rate outlet (baris)"), % permintaan penuh, waktu kirim, permintaan matang.
+  Entri `fill-rate` (SMD) tidak diubah definisinya; pola deteksinya kini mengecualikan "Fill rate outlet".
+- Belum dibangun: ekspor CSV untuk tiga halaman (kontrak: `/pnl` hanya exec; lainnya mengikuti C3). Halaman info publik baru `/g67-belum-aktif`.
+
 ## Filter (URL, divalidasi server; tidak valid -> bawaan + pemberitahuan)
 **Perilaku (21 Nov 2026): filter langsung berlaku**, tanpa tombol Terapkan. Chip brand ("Semua" eksplisit) dan preset tanggal memakai `router.push` seketika;
 tanggal kustom (setelah kedua tanggal sah) dan pilihan ganda cabang/kategori/produk di-debounce 400-500 ms. Rentang tanggal yang dipilih ditulis eksplisit ke URL dan
@@ -89,6 +109,7 @@ Halaman Penjualan juga memakai `sort` (`net|qty|margin`) dan `rank` (`top|bottom
 | `EFN_ALLOW_PLAINTEXT` | hanya dev non-production (http ke ClickHouse/Odoo) |
 | `INSIGHT_FNB_PERSONA_ENABLED` | `false`; aktif hanya string persis `true` (G52, §28.15.10). Production `false` sampai pemetaan cabang dimuat + QA/security G52 lulus |
 | `INSIGHT_ACCEPT_EIT2` | `true` (rollout G52); bila diset hanya `true` persis yang menerima `eit2`/`eis2`. Set `false` setelah Odoo 19.0.3.0.0 di semua env |
+| `INSIGHT_G67_ENABLED` | `false`; aktif hanya string persis `true` (G67, §31.8). Mati -> `/pnl`, `/waste`, `/fill-rate` rewrite ke `/g67-belum-aktif` dan item menu tersembunyi. Production `false` sampai QA + security review G67 lulus dan backfill PB selesai |
 | `INSIGHT_PRODPLAN_ENABLED` | `false`; aktif hanya string persis `true` (G66, §30.3). Mati -> `/produksi*` rewrite ke `/pp-belum-aktif` |
 | `PRODPLAN_URL` | `http://127.0.0.1:7443` (sidecar `insight-web-pp-tls`); nilai lain -> modul nonaktif (fail closed) |
 | `PRODPLAN_ASSERT_KEY_FILE` | `/run/secrets/prodplan_assert_key` (hex >= 64, beda dari tiga kunci lain; penanda tangan `ppa1`) |

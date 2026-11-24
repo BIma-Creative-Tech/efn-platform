@@ -99,6 +99,8 @@ services:
       ESB_BACKFILL_INCLUDE_INACTIVE: ${ESB_BACKFILL_INCLUDE_INACTIVE:-true}
       ESB_HTTP_TIMEOUT_SECONDS: ${ESB_HTTP_TIMEOUT_SECONDS:-60}
       ESB_MAX_PAGES: ${ESB_MAX_PAGES:-500}
+      # G67 (docs/04 §31.2): jendela refresh harian laba rugi (bulan; 1..12, di luar -> 2).
+      ESB_PL_REFRESH_MONTHS: ${ESB_PL_REFRESH_MONTHS:-2}
       ESB_COMPANY_BACHA: ${ESB_COMPANY_BACHA:-BCF}
       # ClickHouse HTTPS 8443, CA internal, user efn_esb (role esb_writer: SELECT/INSERT efn_esb.* + efn_dwh.*esb*).
       CH_HOST: clickhouse

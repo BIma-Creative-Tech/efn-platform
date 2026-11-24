@@ -85,7 +85,7 @@ describe('sesi ber-cabang (store-only F&B)', () => {
       expect(fnbRouteDenial(p, branched, true), p).toBe(TW);
       expect(fnbRouteDenial(`${p}/x`, branched, true), p).toBe(TW);
     }
-    expect(BRANCH_BLOCKED_PATHS).toEqual(['/sales', '/payments', '/yoy', '/flow', '/distribution', '/forecast', '/data-quality']);
+    expect(BRANCH_BLOCKED_PATHS).toEqual(['/sales', '/payments', '/yoy', '/flow', '/distribution', '/forecast', '/data-quality', '/waste', '/fill-rate']);
     expect(fnbRouteDenial('/', branched, true)).toBeNull(); // dialihkan ke /fnb/store oleh pageCtx
     expect(fnbRouteDenial('/glosarium', branched, true)).toBeNull();
   });

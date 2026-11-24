@@ -6,6 +6,7 @@ from pathlib import Path
 from efn_esb.runner import ALL_TABLES
 from efn_esb.transform import MART_TABLES
 from efn_esb.transform_g65 import G65_TABLES
+from efn_esb.transform_g67 import G67_TABLES
 from efn_esb.transform_mig import MIG_TABLES
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -37,7 +38,7 @@ def test_tables_exact_idempotent_and_no_destructive_ddl() -> None:
     assert all("esb" in t.split(".")[1] for t in tables)
     assert not re.search(r"\bDROP\b|\bTRUNCATE\b|\bALTER\b", DDL)
     assert not set(MIG_TABLES) & set(MART_TABLES)
-    assert set(ALL_TABLES) == set(MIG_TABLES) | set(MART_TABLES) | set(G65_TABLES)
+    assert set(ALL_TABLES) == set(MIG_TABLES) | set(MART_TABLES) | set(G65_TABLES) | set(G67_TABLES)
 
 
 def test_map_esb_odoo_new_key_only_in_g43() -> None:

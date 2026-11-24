@@ -9,6 +9,9 @@
   migrasi (bom_detail, menu_price, customer, location; P2 stock_opname/ap_open/ar_open/coa hanya dengan
   `--allow-unverified`). Bukan bagian loop `run`. G65 (docs/04 §27.13.1): `--entity stock_opening --date <cutover>`
   (satu slice per cabang; `--date` WAJIB, tanpa `--allow-unverified`). `purchase_line` = entitas harian (`backfill`).
+- G67 (docs/04 §31.3): `backfill --entity profit_loss|item_journal|transfer_request|delivery_ref` (delivery_ref hanya
+  bersama `delivery`); `retransform --brand B --entity delivery_ref --from D --to D` = isi ulang dari raw_doc TANPA
+  login/panggilan ESB (boleh di luar jendela; entitas lain -> exit 2).
 - `probe --brand B`: login + /branch/list/user, cetak JUMLAH cabang saja.
 - `health`: exit 0 bila file heartbeat masih segar (opsional; compose memakai cek PID).
 CLI selain `run` dengan `ESB_ENABLED=false` -> exit 0 dengan pesan "ESB dinonaktifkan".
@@ -24,7 +27,15 @@ from collections.abc import Sequence
 from datetime import UTC, date, datetime
 from typing import Any
 
-from efn_esb.config import DAILY_ENTITIES, ENTITIES, BrandConfig, ClickHouseSettings, EsbSettings, esb_enabled
+from efn_esb.config import (
+    BACKFILL_ENTITIES,
+    DELIVERY_REF_ENTITY,
+    RETRANSFORM_ENTITIES,
+    BrandConfig,
+    ClickHouseSettings,
+    EsbSettings,
+    esb_enabled,
+)
 from efn_esb.extract import BRANCH_LIMIT, BrandRuntime
 from efn_esb.extract_g65 import G65_SNAPSHOT_ENTITIES
 from efn_esb.extract_mig import P2_ENTITIES, SNAPSHOT_ENTITIES
@@ -45,7 +56,7 @@ def _parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
     backfill.add_argument("--brand", required=True)
     backfill.add_argument("--from", dest="start", required=True, type=date.fromisoformat)
     backfill.add_argument("--to", dest="end", required=True, type=date.fromisoformat)
-    backfill.add_argument("--entity", action="append", choices=[e for e in ENTITIES if e in DAILY_ENTITIES])
+    backfill.add_argument("--entity", action="append", choices=list(BACKFILL_ENTITIES))
     backfill.add_argument("--force", action="store_true", help="tarik ulang slice yang sudah done")
     backfill.add_argument(
         "--ignore-window",
@@ -69,6 +80,11 @@ def _parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
         help=f"izinkan entitas P2 yang belum diverifikasi ({', '.join(P2_ENTITIES)})",
     )
     snapshot.add_argument("--opname-window", type=int, default=3, help="stock_opname: hari ke belakang (0..31)")
+    retransform = sub.add_parser("retransform", help="G67: isi ulang entitas turunan dari raw_doc (tanpa ESB)")
+    retransform.add_argument("--brand", required=True)
+    retransform.add_argument("--entity", required=True, help=f"didukung: {', '.join(RETRANSFORM_ENTITIES)}")
+    retransform.add_argument("--from", dest="start", required=True, type=date.fromisoformat)
+    retransform.add_argument("--to", dest="end", required=True, type=date.fromisoformat)
     probe = sub.add_parser("probe", help="login + hitung cabang")
     probe.add_argument("--brand", required=True)
     health = sub.add_parser("health", help="cek file heartbeat")
@@ -154,14 +170,15 @@ def _cmd_backfill(settings: EsbSettings, args: argparse.Namespace, stop: threadi
     from efn_esb.runner import run_backfill
 
     cfg = settings.brand(args.brand.strip().lower())
+    entities = args.entity or [e for e in settings.entities if e in BACKFILL_ENTITIES]
     try:
         validate_backfill_range(args.start, args.end, wib_today(datetime.now(UTC)))
         if args.ignore_window:  # SEC-185: dicek sebelum koneksi ClickHouse/ESB dibuka
             validate_ignore_window(args.start, args.end, settings.production, settings.allow_ignore_window)
+        validate_backfill_entities(entities)
     except ValueError as exc:
         print(f"backfill ditolak: {exc}", file=sys.stderr)
         return 2
-    entities = args.entity or [e for e in settings.entities if e in DAILY_ENTITIES]
     store = _store(os.environ)
     rt = BrandRuntime(cfg, max_pages=settings.max_pages, include_inactive=settings.backfill_include_inactive)
     run = run_backfill(
@@ -179,6 +196,42 @@ def _cmd_backfill(settings: EsbSettings, args: argparse.Namespace, stop: threadi
     )
     print(f"backfill brand={cfg.key} status={run.status} slices={run.slices} calls={run.calls} errors={run.errors}")
     return 0 if run.status in ("ok", "window_closed", "limit") else 1
+
+
+def validate_backfill_entities(entities: Sequence[str]) -> None:
+    """G67 §31.1.4: `delivery_ref` = turunan `delivery` (tanpa GET sendiri) -> wajib bersama `delivery`; tanpa itu
+    pakai `retransform` (dari raw_doc, tanpa ESB)."""
+    if DELIVERY_REF_ENTITY in entities and "delivery" not in entities:
+        raise ValueError(
+            "delivery_ref hanya bersama --entity delivery (turunan, tanpa GET tambahan); untuk mengisi dari raw_doc "
+            "tanpa ESB pakai: retransform --entity delivery_ref"
+        )
+
+
+def validate_retransform_args(entity: str, start: date, end: date, today: date) -> None:
+    """§31.3: hanya `RETRANSFORM_ENTITIES` (delivery_ref); rentang sama dengan backfill (`--to` < hari ini WIB)."""
+    if entity not in RETRANSFORM_ENTITIES:
+        supported = ", ".join(RETRANSFORM_ENTITIES)
+        raise ValueError(f"entitas {entity!r} tidak didukung retransform (didukung: {supported})")
+    validate_backfill_range(start, end, today)
+
+
+def _cmd_retransform(settings: EsbSettings, args: argparse.Namespace, stop: threading.Event) -> int:
+    from efn_esb.runner import run_retransform
+
+    cfg = settings.brand(args.brand.strip().lower())
+    try:
+        validate_retransform_args(args.entity.strip().lower(), args.start, args.end, wib_today(datetime.now(UTC)))
+    except ValueError as exc:
+        print(f"retransform ditolak: {exc}", file=sys.stderr)
+        return 2
+    run, missing = run_retransform(BrandRuntime(cfg), _store(os.environ), args.start, args.end, stop)
+    print(f"retransform brand={cfg.key} status={run.status} slices={run.slices} rows={run.rows} errors={run.errors}")
+    if missing:
+        days = ",".join(day.isoformat() for day in missing)
+        print(f"raw_missing hari={days} -> tarik ulang di jendela malam: backfill --brand {cfg.key} "
+              "--entity delivery --entity delivery_ref --force --from <hari> --to <hari>")  # fmt: skip
+    return 0 if run.status == "ok" else 1
 
 
 def validate_snapshot_args(
@@ -263,6 +316,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _cmd_backfill(settings, args, stop)
     if args.cmd == "snapshot":
         return _cmd_snapshot(settings, args, stop)
+    if args.cmd == "retransform":
+        return _cmd_retransform(settings, args, stop)
     return _cmd_probe(settings, args)
 
 

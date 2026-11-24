@@ -46,10 +46,25 @@ export interface FnbSessionLike {
 }
 
 /** Halaman F&B non-persona yang ditutup untuk sesi ber-cabang (`/` ditangani pageCtx: dialihkan ke /fnb/store). */
-export const BRANCH_BLOCKED_PATHS: readonly string[] = ['/sales', '/payments', '/yoy', '/flow', '/distribution', '/forecast', '/data-quality'];
+export const BRANCH_BLOCKED_PATHS: readonly string[] = [
+  '/sales',
+  '/payments',
+  '/yoy',
+  '/flow',
+  '/distribution',
+  '/forecast',
+  '/data-quality',
+  // G67 (§31.8): Waste dan Fill Rate = kelas PT; `/pnl` ditolak lewat persona exec di bawah.
+  '/waste',
+  '/fill-rate',
+];
 
-/** Persona F&B untuk path `/fnb/<persona>` (persis atau awalan segmen), selain itu null. */
+/** G67 (§31.8): Laba Rugi Outlet diperlakukan sebagai halaman persona Eksekutif (flag F&B, peran exec, tanpa cabang). */
+export const PNL_PATH = '/pnl';
+
+/** Persona F&B untuk path `/fnb/<persona>` atau `/pnl` (exec; persis atau awalan segmen), selain itu null. */
 export function fnbPersonaOfPath(pathname: string): FnbPersona | null {
+  if (pathname === PNL_PATH || pathname.startsWith(`${PNL_PATH}/`)) return 'exec';
   for (const p of FNB_ORDER) {
     const r = FNB_ROUTES[p];
     if (pathname === r || pathname.startsWith(`${r}/`)) return p;
