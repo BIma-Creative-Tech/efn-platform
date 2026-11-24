@@ -194,10 +194,13 @@ def test_item_journal_status_and_purpose_class() -> None:
     group = flat(body.split("multiIf(", 1)[1].split("AS usage_class", 1)[0]).strip()
     order = [group.index(f"'{c}'") for c in ("waste", "internal_use", "rnd", "other", "unclassified")]
     assert order == sorted(order)
-    assert group.startswith("j.pn = 'WASTE', 'waste',")
-    for purpose in ("PRODUCTION SUPPLIES", "PACKAGING CONSUMPTION", "SELLING SUPPLIES", "CONSUMABLES SUPPLIES",
+    # Q-ESB30 (keputusan user 25 Nov 2026): PRODUCTION SUPPLIES dihitung waste.
+    assert group.startswith("j.pn IN ('WASTE', 'PRODUCTION SUPPLIES'), 'waste',")
+    internal = group.split("'waste',", 1)[1].split("'internal_use'", 1)[0]
+    assert "'PRODUCTION SUPPLIES'" not in internal
+    for purpose in ("PACKAGING CONSUMPTION", "SELLING SUPPLIES", "CONSUMABLES SUPPLIES",
                     "CLEANING SUPPLIES", "SAFETY SUPPLIES", "STATIONARY SUPPLIES", "UNIFORM"):  # fmt: skip
-        assert f"'{purpose}'" in group.split("'internal_use'", 1)[0], purpose
+        assert f"'{purpose}'" in internal, purpose
     assert "j.pn = 'RESEARCH & DEVELOPMENT', 'rnd'" in group and "j.pn = 'OTHER RECEIVABLE', 'other'" in group
     assert group.rstrip().endswith("'unclassified')")
 

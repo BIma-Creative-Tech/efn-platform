@@ -171,17 +171,17 @@ LEFT JOIN (SELECT brand, branch_id, branch_name FROM efn_dwh.dim_esb_branch FINA
 -- Internal (tidak dibungkus efn_insight): baris jurnal item versi slice terakhir + kelas purpose + status dihitung.
 -- ITEM_JOURNAL_COUNTED_STATUS = ('authorized', 'finished', 'closed') (nama status, lower/trim) -- default sementara
 -- [B]; diganti dari distribusi status hasil backfill (laporan W-A). Kelas purpose (L-275, ubah lewat PR):
---   WASTE -> waste; PRODUCTION/PACKAGING/SELLING/CONSUMABLES/CLEANING/SAFETY/STATIONARY SUPPLIES + UNIFORM ->
---   internal_use (PRODUCTION SUPPLIES menunggu Q-ESB30); RESEARCH & DEVELOPMENT -> rnd; OTHER RECEIVABLE -> other;
---   lainnya -> unclassified.
+--   WASTE + PRODUCTION SUPPLIES -> waste (PRODUCTION SUPPLIES: keputusan user 25 Nov 2026, Q-ESB30);
+--   PACKAGING/SELLING/CONSUMABLES/CLEANING/SAFETY/STATIONARY SUPPLIES + UNIFORM -> internal_use;
+--   RESEARCH & DEVELOPMENT -> rnd; OTHER RECEIVABLE -> other; lainnya -> unclassified.
 CREATE OR REPLACE VIEW efn_dwh.v_esb_item_journal_line AS
 SELECT
     j.journal_date AS journal_date, j.brand AS brand, CAST(j.company_code, 'String') AS company_code,
     j.branch_id AS branch_id, j.journal_num AS journal_num, CAST(j.status_name, 'String') AS status_name,
     toUInt8(lower(trimBoth(CAST(j.status_name, 'String'))) IN ('authorized', 'finished', 'closed')) AS is_counted,
     multiIf(
-        j.pn = 'WASTE', 'waste',
-        j.pn IN ('PRODUCTION SUPPLIES', 'PACKAGING CONSUMPTION', 'SELLING SUPPLIES', 'CONSUMABLES SUPPLIES',
+        j.pn IN ('WASTE', 'PRODUCTION SUPPLIES'), 'waste',
+        j.pn IN ('PACKAGING CONSUMPTION', 'SELLING SUPPLIES', 'CONSUMABLES SUPPLIES',
                  'CLEANING SUPPLIES', 'SAFETY SUPPLIES', 'STATIONARY SUPPLIES', 'UNIFORM'), 'internal_use',
         j.pn = 'RESEARCH & DEVELOPMENT', 'rnd',
         j.pn = 'OTHER RECEIVABLE', 'other',

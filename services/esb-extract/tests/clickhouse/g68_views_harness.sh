@@ -223,12 +223,17 @@ U="${DB}.v_esb_item_usage_daily"
 expect "waste: status Draft tidak dihitung, ' Waste ' dinormalkan (100 + 10)" \
   "$(a "SELECT concat(toString(toFloat64(value_net)), '|', toString(toFloat64(value_out)), '|',
         toString(toFloat64(value_in)), '|', toString(docs), '|', toString(lines)) FROM ${U}
-        WHERE brand = 'pb' AND usage_class = 'waste'")" "110|110|0|1|2"
-expect "waste: PRODUCTION SUPPLIES -> internal_use" \
-  "$(a "SELECT toFloat64(value_net) FROM ${U} WHERE brand = 'pb' AND usage_class = 'internal_use'")" 30
+        WHERE brand = 'pb' AND usage_class = 'waste' AND purpose_name = 'WASTE'")" "110|110|0|1|2"
+# Q-ESB30 (keputusan user 25 Nov 2026): PRODUCTION SUPPLIES dihitung waste, tidak ada lagi di internal_use.
+expect "waste: PRODUCTION SUPPLIES -> waste (Q-ESB30)" \
+  "$(a "SELECT concat(usage_class, '|', toString(toFloat64(value_net))) FROM ${U}
+        WHERE brand = 'pb' AND purpose_name = 'PRODUCTION SUPPLIES'")" "waste|30"
+expect "waste: internal_use tanpa PRODUCTION SUPPLIES" \
+  "$(a "SELECT count() FROM ${U} WHERE brand = 'pb' AND usage_class = 'internal_use'")" 0
 expect "waste: kode produk via dim_esb_product_id / ID:<product_id>" \
   "$(a "SELECT arrayStringConcat(arraySort(groupArray(product_code)), ',')
-        FROM ${DB}.v_esb_item_usage_product_monthly WHERE brand = 'pb' AND usage_class = 'waste'")" "ID:502,RM501"
+        FROM ${DB}.v_esb_item_usage_product_monthly WHERE brand = 'pb' AND usage_class = 'waste'
+          AND purpose_name = 'WASTE'")" "ID:502,RM501"
 
 # ---------------------------------------------------------------- P&L
 P="${DB}.v_esb_pl_monthly"

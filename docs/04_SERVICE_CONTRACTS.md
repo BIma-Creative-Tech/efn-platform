@@ -7101,8 +7101,8 @@ DateTime64(3,'UTC')` (= versi slice), `_loaded_at DateTime64(3,'UTC') DEFAULT no
 **Kelas purpose (`usage_class`, konstanta `multiIf` di view, diubah lewat PR — L-275):**
 | `purpose_name` (upper, trim) | `usage_class` |
 |---|---|
-| `WASTE` | `waste` |
-| `PRODUCTION SUPPLIES`, `PACKAGING CONSUMPTION`, `SELLING SUPPLIES`, `CONSUMABLES SUPPLIES`, `CLEANING SUPPLIES`, `SAFETY SUPPLIES`, `STATIONARY SUPPLIES`, `UNIFORM` | `internal_use` (default sementara; `PRODUCTION SUPPLIES` → Q-ESB30) |
+| `WASTE`, `PRODUCTION SUPPLIES` | `waste` (`PRODUCTION SUPPLIES` = perlengkapan produksi habis pakai — minyak, baking paper, plastik, gas, dsb.; keputusan user 25 Nov 2026, Q-ESB30 dijawab) |
+| `PACKAGING CONSUMPTION`, `SELLING SUPPLIES`, `CONSUMABLES SUPPLIES`, `CLEANING SUPPLIES`, `SAFETY SUPPLIES`, `STATIONARY SUPPLIES`, `UNIFORM` | `internal_use` |
 | `RESEARCH & DEVELOPMENT` | `rnd` |
 | `OTHER RECEIVABLE` | `other` (bukan biaya outlet; Q-ESB30) |
 | lainnya | `unclassified` (tampil, dicatat di quality) |
@@ -7234,7 +7234,7 @@ L-270..L-278 saat merge #165 (25 Nov 2026; L-26x lama = L-27x baru, selisih +10)
 | L-272 | Referensi goods delivery → transfer request disimpan di tabel baru `fact_esb_delivery_ref_line` (bukan ALTER `fact_esb_delivery`), diisi ulang dari `raw_doc` lewat `retransform` tanpa API. |
 | L-273 | Fill rate = rasio baris dibatasi 1, join `reference_num = transfer_num` + produk + satuan, kohort tanggal permintaan, matang 7 hari; fill rate qty hanya per produk-satuan. |
 | L-274 | Refresh P&L harian = tahun yang memuat `ESB_PL_REFRESH_MONTHS` (default 2) bulan terakhir; perubahan di luar itu lewat `--force` bulanan. |
-| L-275 | Klasifikasi purpose jurnal item = konstanta view (PR untuk mengubah); `PRODUCTION SUPPLIES` = pemakaian internal sampai Q-ESB30. |
+| L-275 | Klasifikasi purpose jurnal item = konstanta view (PR untuk mengubah); `PRODUCTION SUPPLIES` = **waste** (keputusan user 25 Nov 2026, Q-ESB30). |
 | L-276 | `company_code` GTR = PT outlet peminta; delivery_ref = PT asal (sama G41). |
 | L-277 | Lima view baru kelas PT; tanpa akses Metabase/text2sql/forecast/mig; `/pnl` hanya persona exec. |
 | L-278 | `product_code` jurnal item di-resolve saat query lewat `dim_esb_product_id` (dipelajari dari GTR/master); tak terpetakan → `ID:<product_id>`. |
@@ -7242,7 +7242,7 @@ L-270..L-278 saat merge #165 (25 Nov 2026; L-26x lama = L-27x baru, selisih +10)
 ### 32.12 Pertanyaan klien (default sudah diterapkan)
 | ID | Pertanyaan | Default sementara |
 |---|---|---|
-| **Q-ESB30** (Ops/Finance PB) | Arti setiap `purpose` jurnal item: apakah `PRODUCTION SUPPLIES` (bahan untuk produksi di toko) termasuk waste, pemakaian internal, atau bukan keduanya (sudah masuk HPP)? `OTHER RECEIVABLE` = apa? | Tabel §32.6 |
+| **Q-ESB30** (Ops/Finance PB) — **sebagian dijawab 25 Nov 2026: `PRODUCTION SUPPLIES` = waste (user)** | Arti setiap `purpose` jurnal item: apakah `PRODUCTION SUPPLIES` (bahan untuk produksi di toko) termasuk waste, pemakaian internal, atau bukan keduanya (sudah masuk HPP)? `OTHER RECEIVABLE` = apa? | Tabel §32.6 |
 | **Q-ESB31** (Ops) | Fill rate resmi diukur terhadap **qty diminta outlet** (`requestQty`) atau **qty disetujui CK** (`qty`)? Kirim lebih dihitung 100 % atau dilaporkan terpisah? Target fill rate? | `requestQty`, dibatasi 100 %, tanpa target |
 | **Q-ESB32** (Ops) | Status transfer request yang dianggap sah/batal; arti `bypassGoodsDelivery`; apakah ada permintaan yang dipenuhi lewat simple-transfer (bukan goods delivery)? | Status final saja; bypass dikeluarkan dari rasio |
 | **Q-ESB33** (Finance) | Akun P&L yang tidak ber-cabang (alokasi HO, sewa pusat, payroll pusat): dialokasikan ke outlet atau tetap "tidak teralokasi"? Kebijakan penutupan buku (tanggal bulan dianggap final)? | Tetap "tidak teralokasi"; refresh `--force` hari kerja ke-10 |

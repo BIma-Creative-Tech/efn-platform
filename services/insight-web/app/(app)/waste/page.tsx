@@ -148,8 +148,8 @@ export default async function WastePage({ searchParams }: { searchParams: G68Sea
       </G68Form>
 
       <p className="muted small">
-        Nilai = HPP pada jurnal item (positif = biaya keluar). Kelas dipetakan dari purpose jurnal ESB (sementara, menunggu konfirmasi Ops/Finance): purpose
-        &quot;PRODUCTION SUPPLIES&quot; dihitung sebagai pemakaian internal; &quot;OTHER RECEIVABLE&quot; bukan biaya outlet.
+        Nilai = HPP pada jurnal item (positif = biaya keluar). Kelas dipetakan dari purpose jurnal ESB: purpose &quot;WASTE&quot; dan
+        &quot;PRODUCTION SUPPLIES&quot; dihitung sebagai waste; &quot;OTHER RECEIVABLE&quot; bukan biaya outlet.
       </p>
 
       {!kpiR.ok ? (
