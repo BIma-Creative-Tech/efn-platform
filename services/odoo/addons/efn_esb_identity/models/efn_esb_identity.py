@@ -37,9 +37,7 @@ from odoo.addons.efn_insight.models.efn_insight_esb_branch import ESB_BRAND_SELE
 _logger = logging.getLogger(__name__)
 
 GROUP_PROVISIONER = "efn_esb_identity.group_esb_provisioner"
-PAYLOAD_KEYS = frozenset(
-    {"esb_account", "username", "full_name", "company_code", "role_id", "pp_roles", "branch_ids"}
-)
+PAYLOAD_KEYS = frozenset({"esb_account", "username", "full_name", "company_code", "role_id", "pp_roles", "branch_ids"})
 MAX_PAYLOAD_BYTES = 16 * 1024  # sama dengan batas body haproxy (docs/04 §30.17.11)
 MAX_BRANCHES = 200
 MAX_FULL_NAME = 128
