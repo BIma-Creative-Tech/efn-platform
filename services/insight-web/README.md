@@ -161,6 +161,15 @@ Tujuan: perbandingan tahunan yang sah (temuan analisis 24 Nov: tabel bulanan lam
 - Belum: COGS ESB tidak memuat roti tidak terjual, komisi ojol, MDR; apakah ESB menghitung ulang COGS transaksi lama belum
   diverifikasi terhadap laporan ESB arsip Finance.
 
+## Margin bahan (`/margin-bahan`, G67; docs/04 §31, ADR-040/041 Proposed)
+
+- Akses: hanya persona `exec` (gerbang sama dengan `/fnb/exec`: `lib/fnb-personas.ts` `EXEC_ONLY_PATHS`, dicek di `proxy.ts` dan
+  di halaman lewat `fnbRangePage('exec')`); menu hanya untuk exec (`fnbExecOnlyNavItems`). Filter: hanya Brand / PT.
+- Data: `efn_insight.v_esb_ing_price_monthly`, `v_esb_menu_cost_monthly`, `v_esb_ing_group_monthly` (query `mb_*`, hanya `pt`).
+  Logika murni `lib/margin-bahan.ts` (tests/margin-bahan.test.ts). Tanggal refresh (`aggregate_refresh`) belum di-grant ke
+  insight, jadi halaman menampilkan bulan terakhir data.
+- Belum: render di browser dan query terhadap ClickHouse nyata (view menunggu `24-margin-bahan.sql` + grant insight).
+
 ## Production Order (`/produksi`, G66; docs/04 §30, ADR-051 + ADR-041 §3.7, Proposed)
 Modul perencanaan produksi Central Kitchen di atas ESB. **insight-web tetap tanpa akses DB/ESB**: semua data lewat API `prodplan` dari sisi server
 (`lib/prodplan-client.ts`, sidecar loopback `127.0.0.1:7443`, timeout 15 dtk). **Identitas per pengguna ESB (§30.17, amandemen A1 ADR-051)**:

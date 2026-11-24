@@ -4,7 +4,7 @@
  * halaman (lapis kedua), dan layout.
  */
 import { esbCodesOf, isPersona, personasOf, smCodesOf, type Persona } from './claims';
-import { FNB_NAV, fnbNavItems, isBranchScoped } from './fnb-personas';
+import { FNB_NAV, fnbExecOnlyNavItems, fnbNavItems, isBranchScoped } from './fnb-personas';
 import { ppNavItems } from './prodplan-access';
 import { FNB_ITEMS, NAV, SHARED_HREFS, SUMMARY_ITEMS, type NavItem } from './page-filters';
 
@@ -153,8 +153,8 @@ export function navGroups(
 
   if (esb) {
     // G52: item persona F&B (Eksekutif, Toko, Marketing) di urutan teratas grup F&B bila flag aktif dan sesi memilikinya.
-    const persona = fnbEnabled ? fnbNavItems(s) : [];
-    const items = [...persona, ...FNB_ITEMS.map((i): NavItem => (smd && SHARED_HREFS.includes(i.href) ? { ...i, scope: 'esb' } : i))];
+    const persona = fnbEnabled ? [...fnbNavItems(s), ...fnbExecOnlyNavItems(s)] : [];
+    const items = [...persona,...FNB_ITEMS.map((i): NavItem => (smd && SHARED_HREFS.includes(i.href) ? { ...i, scope: 'esb' } : i))];
     groups.push(smd ? { id: 'fnb', title: 'Food & Beverage', items, esbCodes: esbCodesOf(s.codes).sort() } : { id: 'fnb', title: 'Food & Beverage', items });
   } else if (smd) {
     groups.push({ id: 'fnb', title: 'Food & Beverage', items: [{ ...NAV.distribution, label: 'Distribusi CK / DC' }] });

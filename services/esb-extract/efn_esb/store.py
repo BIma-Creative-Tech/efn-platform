@@ -1,7 +1,8 @@
 """Adapter ClickHouse (pola `services/etl/efn_etl/adapters.py`): HTTPS 8443 + CA internal, user `efn_esb`.
 
-Hak `esb_writer` = SELECT + INSERT saja (infra/clickhouse/access/esb-access.sql); tidak ada DDL/ALTER dari service.
-Semua query berparameter.
+Hak `esb_writer` = SELECT + INSERT (infra/clickhouse/access/esb-access.sql). Tanpa CREATE/DROP TABLE (SEC-AG-01);
+pengecualian tabel agregat Insight (efn_esb/aggregates.py): TRUNCATE pada `efn_dwh.agg_esb_*_build`, ALTER DELETE
+(REPLACE/DROP PARTITION) pada `efn_dwh.agg_esb_*`, grant per tabel. Semua nilai lewat parameter.
 """
 
 from collections.abc import Sequence
@@ -44,6 +45,22 @@ class ClickHouseStore:
         self._client = client
         self._mart = mart_db
         self._raw = raw_db
+
+    @property
+    def mart_db(self) -> str:
+        return self._mart
+
+    @property
+    def raw_db(self) -> str:
+        return self._raw
+
+    def command(
+        self, sql: str, parameters: dict[str, Any] | None = None, settings: dict[str, Any] | None = None
+    ) -> None:
+        self._client.command(sql, parameters=parameters, settings=settings)
+
+    def query_rows(self, sql: str, parameters: dict[str, Any] | None = None) -> list[Sequence[Any]]:
+        return list(self._client.query(sql, parameters=parameters).result_rows)
 
     def insert(self, table: str, columns: Sequence[str], rows: list[list[Any]]) -> None:
         if rows:

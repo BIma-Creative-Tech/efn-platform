@@ -8,7 +8,7 @@ Kontrak: `docs/04_SERVICE_CONTRACTS.md` §25 · Keputusan: `docs/decisions/ADR-0
 |---|---|
 | Fungsi | Menarik data POS ESB (penjualan per baris menu, pembayaran harian, produksi CK, pengiriman, transfer, master) dari **ESB Core API produksi** `https://services.esb.co.id/core` ke ClickHouse (`efn_esb.*` raw + checkpoint, `efn_dwh.*esb*` mart). |
 | Arah | **Hanya baca** dari ESB: `GET` saja, kecuali `POST /auth/login`. Klien menolak method lain di level kode. |
-| Kredensial | Satu user API per brand. Username = env `ESB_USER_<BRAND>` yang diisi di `infra/compose/.env` lokal (gitignored) / config rilis, **tidak pernah di repo** (SEC-180); password = Docker secret `esb_core_password_<brand>`. ClickHouse: user `efn_esb` (secret `clickhouse_password_esb`, role `esb_writer`, SELECT/INSERT tabel ESB saja, tanpa DDL). |
+| Kredensial | Satu user API per brand. Username = env `ESB_USER_<BRAND>` yang diisi di `infra/compose/.env` lokal (gitignored) / config rilis, **tidak pernah di repo** (SEC-180); password = Docker secret `esb_core_password_<brand>`. ClickHouse: user `efn_esb` (secret `clickhouse_password_esb`, role `esb_writer`, SELECT/INSERT tabel ESB saja; tanpa CREATE/DROP TABLE; pengecualian tabel agregat Insight: TRUNCATE pada `efn_dwh.agg_esb_*_build`, ALTER DELETE (REPLACE/DROP PARTITION) pada `efn_dwh.agg_esb_*`, §6a). |
 | Jaringan | `esb` (internal: hanya `clickhouse` ↔ `esb-extract`) + `egress-esb` (internet, **khusus** `esb-extract`, `enable_icc=false`, subnet `172.30.8.0/24`; SEC-183). **Tidak** di network `data` (PostgreSQL/RabbitMQ) maupun `egress` bersama (BFF dll.). Allowlist host ESB ditegakkan aplikasi (§9). |
 | Kill switch | `ESB_ENABLED=false` (default) → proses idle, tidak memanggil ESB maupun ClickHouse. |
 | Data pribadi | Tidak menarik customer/member. Supplier hanya kode, nama perusahaan, status. `salesNum` = ID transaksi (bukan PII). Raw JSON di `efn_esb.raw_doc` TTL 36 bulan. |
@@ -171,6 +171,144 @@ Sinyal yang perlu ditindaklanjuti:
 | Umur data penjualan > 1 hari setelah 06:00 WIB | incremental H-1 gagal | §7, lalu ulangi `backfill --from <tgl> --to <tgl>` |
 
 Belum ada alert Prometheus untuk ESB (service tanpa endpoint metrik). Usulan G42: metrik kesegaran per brand dari `v_esb_data_quality` → alert `EfnEsbExtractStale` (warning, > 26 jam) — dicatat di laporan devsecops G41.
+
+## 6a. Tabel agregat Insight (`refresh-aggregates`, 22 Nov 2026)
+
+Halaman Insight `v_esb_sales_branch_daily`, `v_esb_sales_daily`, `v_esb_flow_daily` membaca **tabel** `efn_dwh.agg_esb_sales_branch_daily`, `agg_esb_sales_daily`, `agg_esb_flow_daily` (skema `infra/clickhouse/init/20-esb-aggregates.sql`), bukan lagi view yang dihitung ulang setiap query (galat 159/241 setelah data 1 tahun). View `efn_dwh.v_esb_*` asli tetap ada dan menjadi sumber refresh. Row policy `efn_insight_scope` tetap pada view `efn_insight.*` (tidak berubah).
+
+Bauran menu (`efn_insight.v_esb_menu_mix`) membaca `efn_dwh.v_esb_menu_mix_agg` (badan sama dengan `v_esb_menu_mix`, di atas `agg_esb_sales_daily`).
+
+Agg **dan** build permanen `<agg>_build` dibuat `clickhouse-init` (admin; MergeTree, `storage_policy = 'encrypted'`); esb-extract **tidak** punya CREATE/DROP TABLE (review SEC-AG-01). Refresh per bulan kalender: cek kunci → `TRUNCATE` build → `INSERT` bulan itu dari view → pagar penyusutan → cek kunci → `ALTER TABLE agg REPLACE PARTITION ID '<yyyymm>' FROM build` → heartbeat kunci; lalu `DROP PARTITION` untuk bulan agg yang tidak ada lagi di sumber. **Atomik per bulan, tidak atomik lintas bulan**: selama refresh (±12 dtk untuk 1 tahun PB) sebagian bulan sudah baru dan sebagian masih lama; bila refresh gagal di tengah, bulan yang sudah diganti tetap baru dan sisanya tetap isi lama.
+
+**Pagar penyusutan (SEC-AG-03).** Bulan yang hasil barunya 0 baris padahal agg berisi, turun > 50%, atau bulan agg yang tidak ada lagi di rentang sumber **dilewati**; agregat berstatus `error` dengan `error = shrink <yyyymm,...>` (Insight tetap membaca isi lama bulan itu). Penyebab umum: checkpoint/fakta belum lengkap setelah restore DR, `CH_RAW_DATABASE` salah, data sumber benar-benar dihapus. Bila penyusutan memang disengaja (data sumber dikoreksi/dihapus): `... refresh-aggregates --allow-shrink` (manual saja; loop `run`/`backfill` tidak pernah memakai flag ini).
+
+**Kunci (SEC-AG-02).** `efn_esb.aggregate_refresh_lock`: satu refresh pada satu waktu. Pemegang = run yang belum melepas kunci dan heartbeat terakhirnya < 15 menit (heartbeat tiap bulan selesai). Proses mati → kunci basi sendiri setelah 15 menit lalu boleh diambil alih. Pemegang dicek ulang sebelum setiap TRUNCATE/REPLACE/DROP PARTITION; kehilangan kunci → berhenti tanpa menulis (`error = lock_lost`).
+
+| Kapan | Siapa |
+|---|---|
+| Akhir setiap siklus `run` yang menulis slice `sales`/`fin_sold`/`production`/`delivery`/`transfer`/`master` | otomatis (gagal = log `ERROR aggregate=... status=error`, dicoba lagi siklus berikutnya; ekstraksi tidak terpengaruh) |
+| Akhir `backfill` yang menulis slice | otomatis (exit code backfill tidak berubah; baris `refresh-aggregates status=gagal` → jalankan manual) |
+| **Setelah deploy pertama** skema ini (tabel awalnya KOSONG → halaman Insight kosong) | **manual, wajib** |
+| Setelah menyalin data ESB dari DR / mesin lain (`INSERT ... SELECT` / restore ke tabel fakta) | **manual, wajib** |
+| Setelah `clickhouse-init` membuat ulang agg/build (log `tabel agregat Insight dibuat ulang`: kolom view sumber berubah) | **manual, wajib** |
+| Setelah pemulihan tabel agg (lihat di bawah) | **manual, wajib** |
+
+```bash
+# Manual (hanya ClickHouse, tidak memanggil ESB; jalan juga dengan ESB_ENABLED=false). Exit 0 = semua ok.
+$DC run --rm --no-deps esb-extract python -m efn_esb refresh-aggregates
+# Penyusutan disengaja (data sumber dikoreksi/dihapus) -- lihat pagar penyusutan di atas
+$DC run --rm --no-deps esb-extract python -m efn_esb refresh-aggregates --allow-shrink
+```
+
+Log per agregat: `aggregate=<nama> status=ok|busy|error rows=<n> months=<n> seconds=<n>` (tanpa isi data). `busy` = refresh lain memegang kunci (mis. loop `run`); tunggu (maks 15 menit bila proses itu mati) lalu ulangi. `error=shrink ...` → pagar penyusutan; `error=lock_lost` → proses lain mengambil alih kunci; `error=<Kelas> code=<n>` → galat ClickHouse (mis. 159 timeout, 241 memori, 497 hak akses).
+
+**Pemulihan bila tabel agg hilang / kosong / rusak (SEC-AG-05).** Gejala: halaman Insight galat `UNKNOWN_TABLE` (60) atau kosong, `refresh-aggregates` gagal `code=60`, atau `clickhouse-init` gagal dengan `tabel agregat Insight hilang / bukan MergeTree+encrypted`.
+
+1. Bila init gagal karena engine/policy: hapus tabel yang disebut (admin): `chq <<< "DROP TABLE IF EXISTS efn_dwh.<tabel> SYNC"`; hak tulis esb_writer pada tabel itu sudah dicabut otomatis dan dipasang ulang oleh init berikutnya.
+2. `$DC up -d --force-recreate clickhouse-init` → log berakhir `... diterapkan`, exit 0 (membuat ulang agg/build kosong, MergeTree + encrypted).
+3. `$DC run --rm --no-deps esb-extract python -m efn_esb refresh-aggregates` → exit 0. (Agg kosong bukan penyusutan; `--allow-shrink` tidak perlu.)
+4. Verifikasi di bawah + `SELECT name, engine, storage_policy FROM system.tables WHERE database = 'efn_dwh' AND name LIKE 'agg_esb_%'` (6 baris, `MergeTree`, `encrypted`).
+
+**Kesegaran** (kapan terakhir dibangun):
+
+```bash
+chq <<'SQL'
+SELECT name, max(finished_at) AS last_ok, argMax(rows, finished_at) AS rows
+FROM efn_esb.aggregate_refresh WHERE status = 'ok' GROUP BY name ORDER BY name;
+SELECT name, status, finished_at, error FROM efn_esb.aggregate_refresh ORDER BY finished_at DESC LIMIT 10;
+SQL
+```
+
+**Verifikasi setelah refresh** (angka per bulan view sumber = tabel agregat; jalankan sebagai admin, berat untuk view → satu bulan per baris lewat `WHERE`, mulai dari bulan terbaru):
+
+```bash
+chq <<'SQL'
+-- 1) Jumlah agregat per bulan (cepat)
+SELECT toStartOfMonth(sales_date) AS m, sum(net) AS net, sum(trx_count) AS trx, count() AS rows
+FROM efn_dwh.agg_esb_sales_branch_daily GROUP BY m ORDER BY m;
+-- 2) Bandingkan satu bulan dengan view sumber (ulangi per bulan; selisih harus 0)
+SELECT 'branch' AS t,
+  (SELECT sum(net) FROM efn_dwh.v_esb_sales_branch_daily WHERE sales_date BETWEEN '2026-10-01' AND '2026-10-31')
+- (SELECT sum(net) FROM efn_dwh.agg_esb_sales_branch_daily WHERE sales_date BETWEEN '2026-10-01' AND '2026-10-31') AS d_net,
+  (SELECT sum(trx_count) FROM efn_dwh.v_esb_sales_branch_daily WHERE sales_date BETWEEN '2026-10-01' AND '2026-10-31')
+- (SELECT sum(trx_count) FROM efn_dwh.agg_esb_sales_branch_daily WHERE sales_date BETWEEN '2026-10-01' AND '2026-10-31') AS d_trx;
+SELECT 'sales' AS t,
+  (SELECT sum(net) FROM efn_dwh.v_esb_sales_daily WHERE sales_date BETWEEN '2026-10-01' AND '2026-10-31')
+- (SELECT sum(net) FROM efn_dwh.agg_esb_sales_daily WHERE sales_date BETWEEN '2026-10-01' AND '2026-10-31') AS d_net,
+  (SELECT count() FROM efn_dwh.v_esb_sales_daily WHERE sales_date BETWEEN '2026-10-01' AND '2026-10-31')
+- (SELECT count() FROM efn_dwh.agg_esb_sales_daily WHERE sales_date BETWEEN '2026-10-01' AND '2026-10-31') AS d_rows;
+SELECT 'flow' AS t,
+  (SELECT sum(sold) + sum(ck_prod) + sum(ck_out) FROM efn_dwh.v_esb_flow_daily WHERE day BETWEEN '2026-11-01' AND '2026-11-30')
+- (SELECT sum(sold) + sum(ck_prod) + sum(ck_out) FROM efn_dwh.agg_esb_flow_daily WHERE day BETWEEN '2026-11-01' AND '2026-11-30') AS d_qty;
+-- 3) Filter tanggal terdorong ke fakta (partisi): "Parts" terpilih harus jauh lebih kecil dari total
+EXPLAIN indexes = 1 SELECT count() FROM efn_dwh.v_esb_sales_daily WHERE sales_date BETWEEN '2026-10-01' AND '2026-10-31';
+SQL
+```
+
+Selisih kecil boleh terjadi bila ekstraksi menulis slice baru di antara refresh dan query verifikasi (agregat = potret saat refresh; refresh berikutnya menyusul).
+
+**Perubahan skema/sumber.** Kolom view sumber berubah (CREATE OR REPLACE VIEW di init) → `clickhouse-init` membandingkan kolom (urutan, nama, tipe) agg/build dengan view, menghapus keduanya dan membuat ulang kosong dengan kolom baru (admin, bukan esb-extract) → jalankan `refresh-aggregates`. Wrapper `efn_insight.*` di `insight-access.sql` hanya ikut berubah bila kolom keluarannya berubah. Mengubah ORDER BY/partisi: ubah `efn_esb/aggregates.py` `table_definition` **dan** `20-esb-aggregates.sql` bersamaan (diuji sama persis); tabel lama tidak berubah oleh CREATE IF NOT EXISTS → hapus agg + build manual (admin) sebelum `clickhouse-init`, lalu refresh.
+
+## 6b. Margin bahan (`refresh-margin`, G67, docs/04 §31)
+
+Halaman Insight `/margin-bahan` (persona `exec`) membaca `efn_insight.v_esb_ing_price_monthly`, `v_esb_menu_cost_monthly`, `v_esb_ing_group_monthly` (DEFINER, row policy kelas PT) di atas view `efn_dwh.v_esb_*` = **versi refresh terakhir per brand** dari tabel `efn_dwh.mart_esb_*` (`infra/clickhouse/init/24-margin-bahan.sql`; MergeTree, `storage_policy = 'encrypted'`, TTL 60 hari). Penulis tunggal: esb-extract (`efn_esb/margin.py`), role esb_writer `SELECT, INSERT` saja. Algoritme: README esb-extract + docstring `margin.py` (§31.2 langkah 1–6). Harga beli & biaya resep = data komersial sensitif (L-260): tidak di-grant ke Metabase/text2sql/forecast/mig/segment.
+
+**Env** (overlay `docker-compose.esb.yml`, nilai di `.env`):
+
+| Env | Default | Catatan |
+|---|---|---|
+| `ESB_MARGIN_BRANDS` | kosong = **fitur mati** | efn-prod: `pb` (L-259). Brand wajib ada di `ESB_BRANDS`; `ESB_ENTITIES` wajib memuat `purchase_line` (harga PO harian, §5a) — jika tidak, `run` gagal start dengan pesan jelas |
+| `ESB_MARGIN_MONTHS` | `13` | jendela = N bulan kalender **penuh** terakhir (2..24); PO dimuat 3 bulan lebih awal untuk rata-rata bergulir |
+| `ESB_MARGIN_WEEKDAY` / `ESB_MARGIN_HOUR_WIB` | `0` (Senin) / `2` | jadwal mingguan (L-261) |
+
+**Jadwal (otomatis, loop `run`).** Di akhir setiap siklus, untuk setiap brand margin: bila hari WIB = `ESB_MARGIN_WEEKDAY`, jam WIB ≥ `ESB_MARGIN_HOUR_WIB`, dan refresh `ok` terakhir > 6 hari → (1) `snapshot --entity bom_detail` brand itu (±1 GET per BOM aktif; PB ±1.700 GET ≈ 15 menit pada 2 req/dtk, anggaran `ESB_BACKFILL_MAX_CALLS`), (2) hitung, (3) INSERT versi baru. Paling banyak satu percobaan per brand per hari WIB (gagal → minggu depan atau manual). Snapshot tidak `ok` → catatan `error=snapshot_<status>` dan **tidak** dihitung (resep basi tidak dipakai diam-diam). Brand `auth_suspended` dilewati. Apa pun yang gagal hanya dicatat; ekstraksi harian tidak terpengaruh.
+
+**Refresh manual** (hanya ClickHouse, tidak memanggil ESB, jalan juga dengan `ESB_ENABLED=false`; memakai resep snapshot terakhir yang ada):
+
+```bash
+# Refresh pertama setelah deploy skema 24 (tabel awalnya KOSONG -> halaman kosong). Resep dulu bila belum pernah:
+$DC run --rm esb-extract python -m efn_esb snapshot --brand pb --entity bom_detail
+$DC run --rm --no-deps esb-extract python -m efn_esb refresh-margin --brand pb     # satu brand
+$DC run --rm --no-deps esb-extract python -m efn_esb refresh-margin                # semua ESB_MARGIN_BRANDS
+```
+
+Exit 0 = semua `ok`; 1 = ada `error`/`busy`; 2 = env tidak sah. Log: `margin=margin_<brand> status=ok|busy|error rows=<n> months=<n> seconds=<n>` (tanpa isi data). Arti `error`:
+
+| `error` | Penyebab | Tindakan |
+|---|---|---|
+| `no_company` | brand tanpa cabang aktif ber-PT di `dim_esb_branch` | cek entitas `branch` / `ESB_BRANDS` |
+| `no_bom` | belum ada snapshot `bom_detail` brand itu | `snapshot --brand <b> --entity bom_detail`, lalu ulangi |
+| `no_purchase` | tidak ada baris PO ber-checkpoint di jendela | aktifkan `purchase_line` + backfill (§5a) |
+| `no_sales` | tidak ada penjualan menu di jendela | cek `agg_esb_sales_daily` / `refresh-aggregates` (§6a) |
+| `snapshot_<status>` | snapshot mingguan gagal (`partial`, `auth_failed`, `limit`, `error`) | lihat §7; lalu snapshot + `refresh-margin` manual |
+| `busy` | refresh lain (margin / `refresh-aggregates`) memegang kunci | tunggu (maks 15 menit bila proses itu mati), ulangi |
+| `lock_lost` / `<Kelas> code=<n>` | kunci diambil alih / galat ClickHouse (159 timeout, 241 memori, 497 hak) | ulangi; 497 → cek grant `esb-access.sql` |
+
+**Kesegaran & verifikasi** (admin):
+
+```bash
+chq <<'SQL'
+SELECT name, status, finished_at, rows, error FROM efn_esb.aggregate_refresh
+WHERE startsWith(name, 'margin_') ORDER BY finished_at DESC LIMIT 10;
+-- Versi yang tampil di Insight per brand + jumlah baris per tabel
+SELECT brand, max(_version) AS v, count() FROM efn_dwh.mart_esb_menu_cost_monthly GROUP BY brand;
+SELECT 'price', count() FROM efn_dwh.v_esb_ing_price_monthly UNION ALL
+SELECT 'menu', count() FROM efn_dwh.v_esb_menu_cost_monthly UNION ALL
+SELECT 'group', count() FROM efn_dwh.v_esb_ing_group_monthly;
+-- Cakupan: porsi COGS ESB dari menu ber-BOM per bulan (target tinggi; rendah = nama BOM Menu tidak cocok menu jual)
+SELECT month, sumIf(cogs, bom_matched = 1) / sum(cogs) AS cogs_cov, avgIf(leaf_coverage, bom_matched = 1) AS leaf_cov
+FROM efn_dwh.v_esb_menu_cost_monthly WHERE brand = 'pb' GROUP BY month ORDER BY month;
+-- Menu terlaris tanpa BOM (cek normalisasi nama ' T' / 'KIOSK - ')
+SELECT menu_name, sum(qty) AS q FROM efn_dwh.v_esb_menu_cost_monthly
+WHERE brand = 'pb' AND bom_matched = 0 GROUP BY menu_name ORDER BY q DESC LIMIT 20;
+SQL
+```
+
+**Pemulihan.**
+- Tabel `mart_esb_*` hilang / bukan MergeTree+encrypted → `clickhouse-init` GAGAL (`tabel agregat Insight hilang / bukan MergeTree+encrypted`, hak esb_writer pada tabel itu dicabut): admin `DROP TABLE IF EXISTS efn_dwh.<tabel> SYNC` → `$DC up -d --force-recreate clickhouse-init` → `refresh-margin`.
+- Angka salah setelah koreksi data sumber (PO/BOM dibetulkan di ESB): backfill/snapshot ulang sumbernya, lalu `refresh-margin` (versi baru menggantikan tampilan; versi lama terbuang sendiri setelah 60 hari). Tidak ada `ALTER DELETE`/`TRUNCATE` dari esb-extract; penghapusan versi tertentu (mis. versi salah yang terlanjur tampil dan tidak bisa segera diganti) = admin: `ALTER TABLE efn_dwh.mart_esb_<t> DELETE WHERE brand = 'pb' AND _version = '<v>'` pada ketiga tabel.
+- Refresh gagal di tengah INSERT (jarang; satu INSERT per tabel): versi terakhir ketiga tabel bisa berbeda sampai refresh `ok` berikutnya — jalankan `refresh-margin` manual.
+- Tidak ada refresh `ok` > 60 hari → TTL membuang semua versi, halaman kosong (sengaja, bukan data basi): jalankan `refresh-margin`.
 
 ## 7. ESB menolak permintaan
 

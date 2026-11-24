@@ -38,6 +38,7 @@ SNAPSHOT_BRANCH_SCOPED = frozenset({"stock_opening"})
 DEFAULT_CK_BRANCHES = "pb:4|38,wtz:5|6,imd:2,cup:4|6"
 _BRAND_RE = re.compile(r"^[a-z0-9]{2,16}$")
 _CODE_RE = re.compile(r"^[A-Z0-9]{2,8}$")
+_DB_RE = re.compile(r"^[a-z_][a-z0-9_]{0,63}$")
 # `disabled` = isi secret `host:disabled` dari scripts/secrets.list (belum diisi operator) -> brand gagal start.
 _PLACEHOLDERS = frozenset({"disabled", "changeme", "change-me", "placeholder", "xxx", "todo", "password"})
 
@@ -293,6 +294,43 @@ class EsbSettings:
 
 
 @dataclass(frozen=True)
+class MarginSettings:
+    """G67 "Margin bahan" (docs/04 §31.2, L-259/L-261). Tanpa secret: dipakai juga CLI `refresh-margin` yang hanya
+    membaca/menulis ClickHouse (jalan dengan ESB_ENABLED=false). `brands` kosong = fitur mati (default)."""
+
+    brands: tuple[str, ...] = ()
+    months: int = 13
+    weekday: int = 0  # 0 = Senin (WIB)
+    hour_wib: int = 2
+
+    @classmethod
+    def from_env(cls, env: Mapping[str, str] | None = None) -> Self:
+        e: Mapping[str, str] = os.environ if env is None else env
+        brands = tuple(dict.fromkeys(item.lower() for item in _items(_str(e, "ESB_MARGIN_BRANDS", ""))))
+        if any(brand not in KNOWN_BRANDS for brand in brands):
+            raise RuntimeError(f"ESB_MARGIN_BRANDS: brand tidak dikenal; pilihan {', '.join(KNOWN_BRANDS)}")
+        return cls(
+            brands=brands,
+            months=_int_range(e, "ESB_MARGIN_MONTHS", 13, 2, 24),
+            weekday=_int_range(e, "ESB_MARGIN_WEEKDAY", 0, 0, 6),
+            hour_wib=_int_range(e, "ESB_MARGIN_HOUR_WIB", 2, 0, 23),
+        )
+
+
+def validate_margin(settings: EsbSettings, margin: MarginSettings) -> None:
+    """Loop `run` (fail-fast saat start): brand margin wajib aktif di ESB_BRANDS (snapshot bom_detail butuh login) dan
+    entitas `purchase_line` wajib aktif (harga PO harian, §31.1)."""
+    if not margin.brands:
+        return
+    active = {cfg.key for cfg in settings.brands}
+    missing = [brand for brand in margin.brands if brand not in active]
+    if missing:
+        raise RuntimeError(f"ESB_MARGIN_BRANDS: {', '.join(missing)} tidak ada di ESB_BRANDS")
+    if "purchase_line" not in settings.entities:
+        raise RuntimeError("ESB_MARGIN_BRANDS membutuhkan entitas purchase_line di ESB_ENTITIES")
+
+
+@dataclass(frozen=True)
 class ClickHouseSettings:
     host: str = "clickhouse"
     port: int = 8443
@@ -317,13 +355,19 @@ class ClickHouseSettings:
         password = read_secret("CH_PASSWORD", e)
         if not password:
             raise RuntimeError("CH_PASSWORD_FILE wajib diisi (secret clickhouse_password_esb)")
+        # SEC-AG-04: nama database disisipkan sebagai identifier SQL -> wajib identifier sederhana.
+        database = _str(e, "CH_DATABASE", "efn_dwh")
+        raw_database = _str(e, "CH_RAW_DATABASE", "efn_esb")
+        for name, value in (("CH_DATABASE", database), ("CH_RAW_DATABASE", raw_database)):
+            if not _DB_RE.fullmatch(value):
+                raise RuntimeError(f"{name} wajib identifier ^[a-z_][a-z0-9_]{{0,63}}$")
         return cls(
             host=_str(e, "CH_HOST", "clickhouse"),
             port=_int_range(e, "CH_PORT", 8443 if secure else 8123, 1, 65535),
             user=_str(e, "CH_USER", "efn_esb"),
             password=password,
-            database=_str(e, "CH_DATABASE", "efn_dwh"),
-            raw_database=_str(e, "CH_RAW_DATABASE", "efn_esb"),
+            database=database,
+            raw_database=raw_database,
             secure=secure,
             ca_file=ca,
         )

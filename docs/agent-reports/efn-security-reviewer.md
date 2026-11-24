@@ -92,3 +92,31 @@ jalur token pengguna A dipakai untuk aksi B, shadow user Odoo tidak bisa login.
   cek cabang, memori limiter).
 - Belum diperiksa: `components/pp/*` penuh, sisa `store.py`, `check-encryption.sh`, `gen-secrets.sh`, test; perilaku ESB
   (scoping cabang PR, case-sensitivity username, lockout/IP ESB, cakupan `/auth/logout`); alur dua orang hanya statis.
+## 22 Nov 2026 — review pra-merge `feat/esb-daily-aggregates` (a57c1a1)
+
+Laporan lengkap: `docs/reviews/SECURITY_REVIEW_2026-11-22_esb-aggregates.md`. **Verdict: boleh merge ke dev** (tanpa Critical/High);
+SEC-AG-01 dan SEC-AG-02 wajib ditutup sebelum dipakai di efn-prod/pilot. Multi-company aman: `insight_reader` tanpa hak `efn_dwh`, tiga
+wrapper tetap view DEFINER bernama sama di bawah row policy `efn_insight_scope` + pagar fail-closed; `agg_esb_*` hanya di-grant ke
+`esb_writer` dan `efn_insight_definer`.
+- **SEC-AG-01 (Medium):** `access/esb-access.sql:13,20,64-69` — `CREATE TABLE` per tabel + `allow_ddl=1` tidak membatasi engine/SETTINGS
+  (`table_engines_require_grant` default false): esb_writer bisa membuat agg dengan `storage_policy='default'` (plaintext at rest) atau
+  engine non-MergeTree (Buffer/Distributed = PLAUSIBLE). Saran: `table_engines_require_grant=true` + `GRANT TABLE ENGINE ON MergeTree`,
+  constraint `merge_tree_storage_policy`, pagar init engine/policy; alternatif tanpa CREATE: `REPLACE PARTITION` dari build permanen.
+- **SEC-AG-02 (Medium):** `efn_esb/aggregates.py:30,187-190,264-272` — umur build = `metadata_modification_time` (waktu CREATE); refresh
+  > 2 jam dihapus refresh kedua, proses pertama lanjut INSERT ke build baru -> agregat ganda/campur di-EXCHANGE dengan `status=ok`.
+  Saran: verifikasi UUID build sebelum INSERT/EXCHANGE; deteksi query aktif di `system.processes`.
+- **SEC-AG-03 (Low):** `aggregates.py:285-293` — 0 baris / penyusutan drastis tetap di-EXCHANGE. Saran: pagar penyusutan + `--allow-shrink`.
+- **SEC-AG-04 (Info):** `CH_DATABASE`/`CH_RAW_DATABASE` disisipkan tanpa validasi identifier (pola lama). Saran: regex di config.
+- **SEC-AG-05 (Info):** DROP pada agg = bisa mengosongkan Insight (setara dampak INSERT yang ada); runbook §6a belum memuat langkah pulih.
+- Belum terverifikasi: perilaku grant engine/disk dinamis di ClickHouse 24.8.14; durasi refresh nyata multi-tahun. Tidak ada yang dijalankan.
+
+## 25 Nov 2026 — G67 "Margin bahan" (`feat/insight-margin-bahan`)
+
+Laporan: `docs/reviews/SECURITY_REVIEW_2026-11-25_margin-bahan.md`. **Verdict: boleh merge ke dev** (tanpa Critical/High).
+- **SEC-MB-01 (Medium) — ditutup di PR:** brand multi-PT ditolak job (`multi_company`), tidak lagi dilabel PT mayoritas.
+- **SEC-MB-02 (Low) — sebagian:** hasil harga/kelompok kosong ditolak sebelum tulis. Sisa: INSERT gagal di tengah tetap bisa
+  menampilkan versi campur sampai refresh berikutnya.
+- **SEC-MB-03 (Low) — ditutup:** wrapper harga tanpa `receipt_qty`/`value`/`price`/`price_4m`.
+- **SEC-MB-04 (Low, pra-ada):** persona `exec` dipakai bersama SM/F&B; peran `fnb_exec`/Finance = revisi `eit` (R-S16), terbuka.
+- **SEC-MB-05 (Info):** `ESB_MARGIN_BRANDS` tanpa `purchase_line` menghentikan `run` saat start (disengaja, terdokumentasi).
+- **SEC-MB-06 (Info) — ditutup:** fakta analisis klien dan nama sub-kategori nyata dihapus dari docs/04 §31.

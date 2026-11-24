@@ -47,13 +47,10 @@ REVOKE ALL ON efn_esb.* FROM insight_reader;
 -- text2sql (efn_dwh.*): tanpa mart Odoo/GL/audit, tanpa efn_esb.raw_doc / bom_ratio.
 -- Daftar ini diuji test_insight_access.py terhadap semua tabel yang dirujuk view (rekursif).
 CREATE USER IF NOT EXISTS efn_insight_definer NOT IDENTIFIED HOST NONE;
-GRANT SELECT ON efn_dwh.v_esb_sales_daily TO efn_insight_definer;
 GRANT SELECT ON efn_dwh.v_esb_payment_daily TO efn_insight_definer;
 GRANT SELECT ON efn_dwh.v_esb_flow_daily TO efn_insight_definer;
-GRANT SELECT ON efn_dwh.v_esb_menu_mix TO efn_insight_definer;
 GRANT SELECT ON efn_dwh.v_esb_data_quality TO efn_insight_definer;
 GRANT SELECT ON efn_dwh.v_esb_data_quality_pt TO efn_insight_definer;
-GRANT SELECT ON efn_dwh.v_esb_sales_branch_daily TO efn_insight_definer;
 GRANT SELECT ON efn_dwh.v_esb_branch_list TO efn_insight_definer;
 GRANT SELECT ON efn_dwh.v_esb_product_list TO efn_insight_definer;
 -- Review Insight 21 Nov 2026 (init/19-insight-review.sql): tabel dasarnya sudah ada di daftar ini.
@@ -83,20 +80,43 @@ GRANT SELECT ON efn_dwh.fact_forecast_daily TO efn_insight_definer;
 GRANT SELECT ON efn_dwh.dim_forecast_run TO efn_insight_definer;
 GRANT SELECT ON efn_dwh.dim_fc_warehouse TO efn_insight_definer;
 GRANT SELECT ON efn_dwh.dim_product TO efn_insight_definer;
+-- Tabel agregat harian (22 Nov 2026, init/20-esb-aggregates.sql): sumber 3 wrapper di bawah + v_esb_menu_mix_agg
+-- (bauran menu di atas agg_esb_sales_daily). v_esb_flow_daily tetap di-grant (dibaca v_esb_data_quality). Objek yang
+-- tidak lagi dirujuk wrapper mana pun dicabut (grant per objek = penutupan rujukan, diuji test_insight_access.py):
+-- v_esb_sales_branch_daily, v_esb_sales_daily, v_esb_menu_mix. dim_esb_menu + fact_esb_sales_line tetap (dibaca
+-- v_esb_menu_econ_daily, init/23-insight-yoy.sql).
+GRANT SELECT ON efn_dwh.agg_esb_sales_branch_daily TO efn_insight_definer;
+GRANT SELECT ON efn_dwh.agg_esb_sales_daily TO efn_insight_definer;
+GRANT SELECT ON efn_dwh.agg_esb_flow_daily TO efn_insight_definer;
+GRANT SELECT ON efn_dwh.v_esb_menu_mix_agg TO efn_insight_definer;
+REVOKE SELECT ON efn_dwh.v_esb_sales_branch_daily FROM efn_insight_definer;
+REVOKE SELECT ON efn_dwh.v_esb_sales_daily FROM efn_insight_definer;
+REVOKE SELECT ON efn_dwh.v_esb_menu_mix FROM efn_insight_definer;
+-- G67 "Margin bahan" (init/24-margin-bahan.sql, docs/04 §31.4): 3 view versi terakhir + tabel dasarnya. Data komersial
+-- sensitif (L-260): wrapper kelas PT, insight-web membatasi ke persona exec; tidak di-grant ke role lain.
+GRANT SELECT ON efn_dwh.v_esb_ing_price_monthly TO efn_insight_definer;
+GRANT SELECT ON efn_dwh.v_esb_menu_cost_monthly TO efn_insight_definer;
+GRANT SELECT ON efn_dwh.v_esb_ing_group_monthly TO efn_insight_definer;
+GRANT SELECT ON efn_dwh.mart_esb_ing_price_monthly TO efn_insight_definer;
+GRANT SELECT ON efn_dwh.mart_esb_menu_cost_monthly TO efn_insight_definer;
+GRANT SELECT ON efn_dwh.mart_esb_ing_group_monthly TO efn_insight_definer;
 
 CREATE DATABASE IF NOT EXISTS efn_insight;
 
 -- Semua view punya kolom company_code (target row policy). Kolom = katalog docs/design/insight-web-queries.md.
 -- Tanpa kolom identitas (tidak ada di mart ESB: L-110).
+-- v_esb_sales_daily, v_esb_sales_branch_daily, v_esb_flow_daily membaca TABEL AGREGAT efn_dwh.agg_esb_* (materialisasi
+-- view efn_dwh.v_esb_* dengan nama yang sama, kolom identik; dibangun ulang `python -m efn_esb refresh-aggregates`).
+-- Row policy efn_insight_scope tetap dipasang pada view efn_insight ini (loop clickhouse-init.sh), bukan pada tabel.
 CREATE OR REPLACE VIEW efn_insight.v_esb_sales_daily DEFINER = efn_insight_definer SQL SECURITY DEFINER AS
 SELECT sales_date, brand, company_code, branch_id, branch_name, menu_code, menu_name, menu_category,
        menu_category_detail, is_takeaway, qty, gross, discount, net, cogs, trx_count
-FROM efn_dwh.v_esb_sales_daily;
+FROM efn_dwh.agg_esb_sales_daily;
 
 -- KPI Transaksi / rata-rata per transaksi (trx_count unik per cabang-hari; Q-INS2).
 CREATE OR REPLACE VIEW efn_insight.v_esb_sales_branch_daily DEFINER = efn_insight_definer SQL SECURITY DEFINER AS
 SELECT sales_date, brand, company_code, branch_id, branch_name, trx_count, line_count, qty, gross, discount, net, cogs
-FROM efn_dwh.v_esb_sales_branch_daily;
+FROM efn_dwh.agg_esb_sales_branch_daily;
 
 CREATE OR REPLACE VIEW efn_insight.v_esb_payment_daily DEFINER = efn_insight_definer SQL SECURITY DEFINER AS
 SELECT sales_date, brand, company_code, branch_id, branch_code, branch_name, payment_type, payment_method,
@@ -106,11 +126,12 @@ FROM efn_dwh.v_esb_payment_daily;
 CREATE OR REPLACE VIEW efn_insight.v_esb_flow_daily DEFINER = efn_insight_definer SQL SECURITY DEFINER AS
 SELECT day, brand, company_code, branch_id, branch_name, product_code, product_name, ck_prod, ck_out, in_ck,
        in_other, store_prod, st_in, st_out, sold
-FROM efn_dwh.v_esb_flow_daily;
+FROM efn_dwh.agg_esb_flow_daily;
 
+-- Sumber = v_esb_menu_mix_agg (badan sama dengan efn_dwh.v_esb_menu_mix, di atas agg_esb_sales_daily; keluaran sama).
 CREATE OR REPLACE VIEW efn_insight.v_esb_menu_mix DEFINER = efn_insight_definer SQL SECURITY DEFINER AS
 SELECT month, brand, company_code, branch_id, branch_name, menu_category, is_takeaway, qty, net, share_qty, share_net
-FROM efn_dwh.v_esb_menu_mix;
+FROM efn_dwh.v_esb_menu_mix_agg;
 
 -- Sumber = v_esb_data_quality_pt (company_code terisi di setiap baris; cek per brand dipetakan ke PT brand itu).
 CREATE OR REPLACE VIEW efn_insight.v_esb_data_quality DEFINER = efn_insight_definer SQL SECURITY DEFINER AS
@@ -142,12 +163,12 @@ FROM efn_dwh.v_esb_coverage;
 -- tabel agregat (20-esb-aggregates.sql), view toko WAJIB dialihkan bersama (test_insight_fnb_access.py).
 CREATE OR REPLACE VIEW efn_insight.v_esb_store_sales_daily DEFINER = efn_insight_definer SQL SECURITY DEFINER AS
 SELECT sales_date, brand, company_code, branch_id, branch_name, trx_count, qty, gross, discount, net
-FROM efn_dwh.v_esb_sales_branch_daily;
+FROM efn_dwh.agg_esb_sales_branch_daily;
 
 -- Tanpa trx_count: tidak aditif di grain menu (satu transaksi tiga menu = 3).
 CREATE OR REPLACE VIEW efn_insight.v_esb_store_menu_daily DEFINER = efn_insight_definer SQL SECURITY DEFINER AS
 SELECT sales_date, brand, company_code, branch_id, menu_code, menu_name, menu_category, qty, gross, discount, net
-FROM efn_dwh.v_esb_sales_daily;
+FROM efn_dwh.agg_esb_sales_daily;
 
 -- Baris branch_id = 0 (branchCode tak dikenal) dibuang: tidak pernah milik cabang mana pun (E7).
 CREATE OR REPLACE VIEW efn_insight.v_esb_store_payment_daily DEFINER = efn_insight_definer SQL SECURITY DEFINER AS
@@ -187,3 +208,17 @@ CREATE OR REPLACE VIEW efn_insight.v_esb_forecast_daily DEFINER = efn_insight_de
 SELECT company_code, brand, warehouse_id, warehouse_code, warehouse_name, product_id, product_code, product_name,
        category, forecast_date, yhat, p10, p90, model, generated_at
 FROM efn_dwh.v_esb_forecast_daily;
+
+-- G67 "Margin bahan" (docs/04 §31.4, init/24-margin-bahan.sql): versi refresh terakhir per brand, kolom = tabel mart
+-- tanpa _version. Row policy kelas PT (insight-esb-policy.sh). company_code = PT brand (satu PT per brand).
+CREATE OR REPLACE VIEW efn_insight.v_esb_ing_price_monthly DEFINER = efn_insight_definer SQL SECURITY DEFINER AS
+SELECT brand, company_code, month, product_code, product_name, ing_group, uom, idx, usage_value
+FROM efn_dwh.v_esb_ing_price_monthly;
+
+CREATE OR REPLACE VIEW efn_insight.v_esb_menu_cost_monthly DEFINER = efn_insight_definer SQL SECURITY DEFINER AS
+SELECT brand, company_code, month, menu_name, menu_category, qty, net, cogs, bom_matched, cost_idx, leaf_coverage
+FROM efn_dwh.v_esb_menu_cost_monthly;
+
+CREATE OR REPLACE VIEW efn_insight.v_esb_ing_group_monthly DEFINER = efn_insight_definer SQL SECURITY DEFINER AS
+SELECT brand, company_code, month, ing_group, basket_value, base_value
+FROM efn_dwh.v_esb_ing_group_monthly;
