@@ -1432,3 +1432,16 @@ Worktree `efn-platform-esbmig`, branch `feat/esb-migration-purchase-stock`. Kelu
   saat apply. Kliring lewat `valuation_account_id` lokasi Inventory adjustment + `action_close_stock_valuation(at_date)`.
 - Audit duplikasi: tidak ada; langkah `cost`/`supplierinfo`/`stock` importer memakai API CE standar.
 - Pertanyaan klien baru Q-G65-1..7; daftar [B] untuk engineer di §6 dokumen.
+
+## 24 Nov 2026 — G65b karantina stok awal (dokumen saja)
+
+Keputusan user Q-ESB25/Q-G65-7: 5 gudang damage PB (cabang ESB 3, 13, 23, 25, 37) → lokasi karantina. Tambahan
+§4.6 di `docs/fit-gap/G65_MIGRASI_PEMBELIAN_STOK.md`. Standar CE, tanpa modul/model baru.
+- Lokasi `internal` "Karantina ESB", induk `warehouse.view_location_id` (saudara Stock). Reservasi `_gather` memakai
+  `child_of` lokasi sumber (= `lot_stock_id`) [V] → karantina tidak di-reserve/putaway. xmlid
+  `efn_mig_esb.<brand>_<company>_branch_quarantine_<branch_id>`, dibuat di langkah `branch`; `replenish_location=False`.
+- Koreksi brief: `scrap_location`/`return_location` **tidak ada** di `stock.location` 19.0 [V] → jangan ditulis.
+- Bernilai (internal ber-company) → ikut periodik + kliring §4.5. Catatan: `qty_available` per gudang ikut menghitung
+  karantina (domain `view_location_id`) [V]; orderpoint & reservasi tidak.
+- Ops: transfer internal (→ Stock) atau `stock.scrap` standar. Record rule: tidak perlu tambahan.
+- Kontrak docs/04 §27.13.4 perlu diubah oleh pemilik kontrak: `quarantine` menjadi didukung.

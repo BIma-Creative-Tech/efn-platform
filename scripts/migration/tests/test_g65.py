@@ -268,7 +268,7 @@ def test_build_quants_aggregates_and_skips(source: FakeSource) -> None:
     assert main["esb_key"] == "11|RM001" and main["xmlid"] is None
     assert main["data"]["esb_locations"] == ["Dapur", "Gudang Utama"] and main["data"]["amount"] == 150000
     assert main["data"]["accounting_date"] == "2026-11-30" and main["data"]["uom_xmlid"] == "uom.product_uom_kgm"
-    assert set(main["data"]) == m.DATA_KEYS["quant"]
+    assert set(main["data"]) == m.DATA_KEYS["quant"] - {"quarantine_of"}  # quarantine_of hanya baris karantina
     stock = result.stock
     assert stock.negative_stock == [{"branch_id": 12, "product_code": "FIN-001", "qty": -3}]
     assert (stock.non_storable, stock.product_unmapped, stock.branch_unmapped, stock.location_skip) == (1, 1, 1, 1)
@@ -375,6 +375,88 @@ def test_stock_converts_to_product_uom_with_ea_factor(source: FakeSource) -> Non
     assert m.to_product_qty(D(1), "BOX", "EA", umap) is None  # tidak ada di uom_map
 
 
+# ------------------------------------------------------------------ G65b: satuan produk kosong -> satuan dasar snapshot
+def test_opening_uoms_fills_only_empty_and_flags_conflicts() -> None:
+    rows = [opening(11, "A", "1", "1", uom="GR"), opening(12, "A", "2", "2", uom=" gr "),
+            opening(11, "B", "1", "1", uom="PCS"), opening(11, "B", "1", "1", uom="BOX"),
+            opening(11, "C", "1", "1", uom="EA"), opening(11, "D", "1", "1", uom="")]  # fmt: skip
+    uoms, conflicts = m.opening_uoms({"A": "", "C": "KG"}, rows)
+    assert uoms["A"] == "GR" and uoms["C"] == "KG"  # terisi -> tidak diubah walau snapshot EA
+    assert "B" not in uoms and conflicts == {"B": ["BOX", "PCS"]}
+    assert "D" not in uoms  # baris tanpa satuan tidak mengisi apa pun
+    assert m.opening_uoms(uoms, rows) == (uoms, conflicts)  # idempoten
+
+
+def test_stock_and_cost_use_opening_base_uom_when_product_uom_empty(
+    tmp_path: Path, keys: b.Keys, source: FakeSource
+) -> None:
+    """Gladi 24 Nov: dim_esb_product.uom kosong (semua PB) -> STOCK_UOM_UNCONVERTIBLE massal. Kini satuan dasar baris
+    saldo awal (extract unitToShow=Base Unit) dipakai untuk qty, HPP stock_opening dan uom_xmlid quant."""
+    source.dims["dim_esb_product"] += [product("PAM1", "Air", "Local - Dry", "", 0, None),
+                                       product("PAM2", "Gula", "Local - Dry", "", 0, None)]  # fmt: skip
+    source.opening = [
+        opening(11, "PAM1", "24", "48000", uom="EA"),
+        opening(12, "PAM1", "6", "12000", uom="EA"),
+        opening(11, "PAM2", "1", "100", uom="EA"),
+        opening(11, "PAM2", "2", "300", uom="PACK"),  # >1 satuan di snapshot -> produk ditolak
+        opening(4, "FIN-001", "6", "21000", uom="EA"),  # satuan dari BOM (EA) -> perilaku lama
+    ]
+    inputs = G65Inputs.load(source, "pb", ["stock", "cost"], CUTOVER)
+    rows, result = _master(source, ["stock", "cost"], inputs)
+    by = {(r["data"]["location_key"], r["data"]["product_code"]): r["data"] for r in rows["quant"]}
+    pam1 = by[(WH[11], "PAM1")]
+    assert pam1["quantity"] == 24 and pam1["uom_esb"] == "EA" and pam1["uom_xmlid"] == "uom.product_uom_unit"
+    assert by[(WH[12], "PAM1")]["quantity"] == 6 and by[(WH[4], "FIN-001")]["uom_esb"] == "EA"
+    assert all(code != "PAM2" for _, code in by)
+    assert result.stock.uom_conflict == {"PAM2": ["EA", "PACK"]} and result.stock.uom_unconvertible == set()
+    assert result.stock.by_branch[11]["skipped_qty"] == 3  # neraca: baris konflik dihitung dilewati
+    costs = {r["esb_key"]: r["data"] for r in rows["cost"]}
+    assert costs["PAM1"] == {**costs["PAM1"], "source": "stock_opening", "standard_price": 2000, "source_uom": "EA"}
+    assert "PAM2" not in costs
+    assert ("PB", "PAM2", "stock_opening", "EA,PACK") in result.cost_unconvertible
+    assert all(uom for *_, uom in result.cost_unconvertible)  # item skip tidak lagi ber-uom ''
+    bundle = _stock_bundle(tmp_path, keys, source)
+    assert bundle.manifest["skipped"]["uom_conflict"] == {
+        "count": 1, "items": [{"product_code": "PAM2", "uoms": ["EA", "PACK"]}]
+    }  # fmt: skip
+    assert bundle.manifest["skipped"]["uom_unconvertible"]["count"] == 0
+    found = codes(validate_bundle(bundle))
+    assert "STOCK_UOM_CONFLICT" in found and "STOCK_UOM_UNCONVERTIBLE" not in found
+
+
+# ------------------------------------------------------------------ G65b: location_map quarantine didukung
+QUARANTINE_MAP = LOCATION_MAP + "pb,11,Rusak,quarantine\npb,30,Karantina,quarantine\n"
+
+
+def test_quarantine_rows_become_quarantine_quants(tmp_path: Path, keys: b.Keys, source: FakeSource) -> None:
+    source.opening = [
+        opening(11, "RM001", "10", "100000"),
+        opening(11, "RM001", "2", "30000", location="Rusak"),
+        opening(30, "RM001", "1", "20000", location="Karantina"),  # cabang lokasi -> induk gudang 4
+        opening(11, "RM001", "1", "12000", location="Damage"),  # skip tetap dilewati
+    ]
+    inputs = G65Inputs.load(source, "pb", ["stock", "cost"], CUTOVER)
+    rows, result = _master(source, ["stock", "cost"], inputs, maps=maps_with(QUARANTINE_MAP))
+    by = {r["data"]["location_key"]: r for r in rows["quant"]}
+    q11 = by[xmlid("pb", "PB", "branch_quarantine", 11)]
+    assert q11["esb_key"] == "11|RM001" and q11["xmlid"] is None
+    assert q11["data"]["quantity"] == 2 and q11["data"]["quarantine_of"] == WH[11]
+    assert q11["data"]["esb_locations"] == ["Rusak"] and q11["data"]["uom_xmlid"] == "uom.product_uom_kgm"
+    assert set(q11["data"]) == m.DATA_KEYS["quant"]
+    assert by[xmlid("pb", "PB", "branch_quarantine", 30)]["data"]["quarantine_of"] == WH[4]
+    assert by[WH[11]]["data"]["quantity"] == 10 and "quarantine_of" not in by[WH[11]]["data"]
+    assert result.stock.quarantine_rows == 2 and result.stock.location_skip == 1
+    cost = next(r["data"] for r in rows["cost"] if r["esb_key"] == "RM001")
+    assert cost["source"] == "stock_opening" and cost["standard_price"] == 11538.4615  # 150.000 / 13 (karantina ikut)
+    steps = expand_steps(["stock", "cutover-param"])
+    path = export_master(master_data(source), params(), steps, maps_with(QUARANTINE_MAP), keys, tmp_path, now=NOW,
+                         g65=G65Inputs.load(source, "pb", steps, CUTOVER))  # fmt: skip
+    bundle = b.read_bundle(path, keys, "bundle")
+    assert bundle.manifest["quarantine_rows"] == 2 and "quarantine" not in bundle.manifest["skipped"]
+    report = validate_bundle(bundle)
+    assert report.errors == 0, report.findings
+
+
 # ================================================================== validator master G65 (kasus negatif)
 def _bundle(keys: b.Keys, records: dict[str, list[dict[str, Any]]], files: dict[str, bytes] | None = None,
             **extra: Any) -> b.Bundle:  # fmt: skip
@@ -461,9 +543,23 @@ def test_validator_quant_rules(keys: b.Keys) -> None:
     assert "STOCK_OPENING_DATE" in codes(validate_bundle(_bundle(keys, {"quant": [quant()]}, **wrong_day)))
     with pytest.raises(b.IntegrityError, match="product_key"):
         validate_bundle(_bundle(keys, {"quant": [quant(product_key=xmlid("pb", "PB", "product", "X"))]}, **OPEN_META))
+    # G65b: action quarantine didukung -> location_map dengan quarantine tidak lagi error.
     quarantine = b"brand,branch_id,esb_location_name,action\npb,11,Rusak,quarantine\n"
     report = validate_bundle(_bundle(keys, {"quant": [quant()]}, {"maps/location_map.csv": quarantine}, **OPEN_META))
-    assert "LOCATION_QUARANTINE" in codes(report)
+    assert report.errors == 0, report.findings
+    qloc = xmlid("pb", "PB", "branch_quarantine", 11)
+    assert validate_bundle(_bundle(keys, {"quant": [quant(loc=qloc, quarantine_of=WH[11])]}, **OPEN_META)).errors == 0
+    bad_q = [
+        quant(loc=qloc),  # tanpa quarantine_of
+        quant(loc=xmlid("pb", "PB", "branch_quarantine", 12), quarantine_of=WH[12]),  # karantina cabang lain
+        quant(loc=qloc, quarantine_of=xmlid("pb", "WTZ", "branch_wh", 11)),  # induk PT lain
+        quant(loc=WH[12], quarantine_of=WH[12]),  # quarantine_of di baris non-karantina
+    ]
+    report = validate_bundle(_bundle(keys, {"quant": bad_q}, **OPEN_META))
+    assert {"QUANT_QUARANTINE_OF", "QUANT_LOCATION"} <= codes(report)
+    conflict = {"uom_conflict": {"count": 1, "items": [{"product_code": "RM001", "uoms": ["GR", "PCS"]}]}}
+    report = validate_bundle(_bundle(keys, {"quant": [quant()]}, **OPEN_META, skipped=conflict))
+    assert "STOCK_UOM_CONFLICT" in codes(report)
 
 
 # ================================================================== histori pembelian

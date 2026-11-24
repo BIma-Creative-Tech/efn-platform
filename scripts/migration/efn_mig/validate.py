@@ -444,6 +444,9 @@ def _check_g65(
         if _count(skipped, "uom_unconvertible"):
             out.error("STOCK_UOM_UNCONVERTIBLE", "quant", _count(skipped, "uom_unconvertible"),
                       "satuan ESB tanpa faktor ke UoM produk (uom_map/ea_factor) -> baris tidak dimuat")  # fmt: skip
+        for item in (skipped.get("uom_conflict") or {}).get("items") or []:
+            msg = f"produk tanpa satuan ESB, >1 satuan di saldo awal {item.get('uoms')} -> tidak dimuat (G65b)"
+            out.error("STOCK_UOM_CONFLICT", "quant", item.get("product_code"), msg)
         if _count(skipped, "negative_stock"):
             out.warn("STOCK_NEGATIVE", "quant", _count(skipped, "negative_stock"),
                      "saldo negatif ESB tidak dimigrasi (Q-ESB27; daftar di skipped.negative_stock)")  # fmt: skip
@@ -454,9 +457,7 @@ def _check_g65(
             key = f"{item.get('branch_id')}|{item.get('location_name')}"
             msg = "lokasi berpola damage/expired/temporary tanpa location_map.csv (Q-ESB25)"
             (out.error if production else out.warn)("LOCATION_SUSPECT", "quant", key, msg)
-    if _count(skipped, "quarantine") or "quarantine" in _location_actions(bundle, brand, out):
-        out.error("LOCATION_QUARANTINE", "quant", "location_map.csv",
-                  "action quarantine belum didukung G65 (lokasi karantina belum dibuat)")  # fmt: skip
+    _check_location_map(bundle, brand, out)  # G65b: action quarantine didukung (quant `branch_quarantine`)
     if _count(skipped, "cost_uom_unconvertible"):
         out.warn("COST_UOM_UNCONVERTIBLE", "cost", _count(skipped, "cost_uom_unconvertible"),
                  "sumber HPP satuan tanpa faktor ke UoM produk dilewati (pakai sumber berikutnya)")  # fmt: skip
@@ -467,15 +468,14 @@ def _check_g65(
         out.warn("PURCHASE_CURRENCY", "supplierinfo", _count(skipped, "currency"), "baris PO mata uang ≠ IDR dilewati")
 
 
-def _location_actions(bundle: Bundle, brand: str, out: _Collector) -> set[str]:
+def _check_location_map(bundle: Bundle, brand: str, out: _Collector) -> None:
     data = bundle.files.get("maps/location_map.csv")
     if data is None:
-        return set()
+        return
     try:
-        return set(m.parse_location_map(data.decode("utf-8-sig"), brand).values())
+        m.parse_location_map(data.decode("utf-8-sig"), brand)
     except (m.MapError, UnicodeDecodeError) as exc:
         out.error("LOCATION_MAP_INVALID", "quant", "location_map.csv", str(exc)[:200])
-        return set()
 
 
 def _check_supplierinfo(rows: list[dict[str, Any]], brand: str, out: _Collector) -> None:
@@ -512,8 +512,17 @@ def _check_quants(rows: list[dict[str, Any]], brand: str, cutover: str, out: _Co
             raise IntegrityError("quant: xmlid wajib null")
         loc = str(data.get("location_key") or "")
         prefix = f"{MODULE}.{brand}_{company.lower()}_branch_"
-        if not loc.startswith((prefix + "wh_", prefix + "loc_")):
+        if not loc.startswith((prefix + "wh_", prefix + "loc_", prefix + "quarantine_")):
             out.error("QUANT_LOCATION", "quant", key, "location_key bukan gudang/lokasi milik PT baris ini")
+        # G65b: lokasi karantina wajib `quarantine_of` = gudang PT yang sama; baris lain tidak boleh membawanya.
+        parent = data.get("quarantine_of")
+        if loc.startswith(prefix + "quarantine_"):
+            if loc != xmlid(brand, company, "branch_quarantine", data.get("esb_branch_id") or 0):
+                out.error("QUANT_LOCATION", "quant", key, "lokasi karantina bukan milik esb_branch_id baris")
+            if not str(parent or "").startswith(prefix + "wh_"):
+                out.error("QUANT_QUARANTINE_OF", "quant", key, "quarantine_of wajib xmlid branch_wh PT baris")
+        elif parent is not None:
+            out.error("QUANT_QUARANTINE_OF", "quant", key, "quarantine_of hanya untuk lokasi karantina")
         if data.get("product_key") != xmlid(brand, company, "product", data.get("product_code")):
             raise IntegrityError(f"quant {key!s:.40}: product_key tidak sama dengan hitung ulang")
         qty = _dec(data.get("quantity"))

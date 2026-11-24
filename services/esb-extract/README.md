@@ -101,7 +101,7 @@ python -m efn_esb snapshot --brand pb --entity stock_opening --date <cutover>   
 | Entitas | Mode | Endpoint (GET) | Slice | Tabel | Redaksi | Status |
 |---|---|---|---|---|---|---|
 | `purchase_line` | harian + backfill, opt-in `ESB_ENTITIES`/`--entity` (default mati) | `/report/purchase/purchase-recapitulation/purchase?dateFrom=D&dateTo=D` (limit 1000) + `/purchase/purchase-order?dateFrom=D&dateTo=D` (limit 100), join `purchaseNum` | `('*', D)` | `fact_esb_purchase_line` | whitelist `PURCHASE_RECAP_FIELDS`/`PURCHASE_HEADER_FIELDS` (notes, additionalInfo, costCenterName, projectName, createdBy, emailSupplier, printedBy dibuang) | dibangun, belum uji GET nyata via extractor |
-| `stock_opening` | `snapshot`, `--date` = tanggal cutover (wajib) | `/report/stock-movement?startPeriod=D&endPeriod=D&branchCode=<kode>` (limit 100) | `(<branch_id>, D)` per cabang dim_esb_branch | `fact_esb_stock_opening` | whitelist `STOCK_MOVEMENT_FIELDS` | dibangun, belum uji GET nyata via extractor |
+| `stock_opening` | `snapshot`, `--date` = tanggal cutover (wajib) | `/report/stock-movement?startPeriod=D&endPeriod=D&branchCode=<kode>&unitToShow=Base Unit` (limit 100) | `(<branch_id>, D)` per cabang dim_esb_branch | `fact_esb_stock_opening` | whitelist `STOCK_MOVEMENT_FIELDS` | dibangun, belum uji GET nyata via extractor |
 
 - `purchase_line`: cabang/supplier dari header PO (`map_source='header'`, kode supplier lewat kolom baru
   `dim_esb_supplier.supplier_id`); tanpa header/ID tak dikenal → nama tepat-satu (NFKC, upper, spasi dirapikan;
@@ -113,6 +113,11 @@ python -m efn_esb snapshot --brand pb --entity stock_opening --date <cutover>   
   diminta, atau tanpa `branchID` → `branchCode` = kode diminta (selain itu slice error); cabang AKTIF tanpa satu pun
   baris `Beginning` (respons kosong) → slice error tanpa checkpoint (SEC-G65-02); kunci ganda dijumlah; angka `Decimal(str(x))`. raw = baris tersimpan + ringkasan
   `{pages, rows_total, rows_beginning, rows_kept}`.
+- `stock_opening` G65b (gladi 24 Nov 2026): parameter tetap `unitToShow=Base Unit` (konstanta
+  `extract_g65.STOCK_MOVEMENT_UNIT`; nilai persis dengan spasi — `Stock Unit`/`baseUnit` → HTTP 400). Tanpa itu ESB
+  mengembalikan satuan campur per baris (BOX/PACK/EA…); dengan itu semua baris dalam satuan dasar produk ESB (BOX→GR,
+  PACK→PCS), total `amountBalance` identik. Export memakai satuan baris ini bila `dim_esb_product.uom` kosong (semua
+  produk PB). Snapshot `stock_opening` yang diambil sebelum perubahan ini wajib diambil ulang.
 - Cek kualitas: view terpisah `efn_dwh.v_esb_g65_quality` (`purchase_unmapped`, `stock_opening_missing_branch`), bukan
   tambahan `v_esb_data_quality` — view itu INVOKER dan dibaca Metabase/Insight yang sengaja tidak punya hak tabel G65.
 

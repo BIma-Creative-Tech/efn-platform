@@ -294,9 +294,14 @@ Neraca pembukaan & AR/AP **tidak** dikerjakan (`opening` NOT_BUILT, Q-ESB21). Pr
   `APP_ENV=production`: setiap impor bundel ber-cutover 2026-12-01 (histori Nov, cost, stock, cutover-param) **wajib**
   `--allow-cutover-shift PB:2026-11-17:2026-12-01` (keputusan user 24 Nov 2026; tanpa opsi / tidak cocok = exit 4).
   Nilainya tercatat di `import_report.cutover_shift_override` → lampirkan ke catatan gladi.
-- `location_map.csv` (opsional, di `--maps`): `brand,branch_id,esb_location_name,action` (`stock|skip`; `quarantine`
-  belum didukung = error). Lokasi berpola Damage/Expired/Temporary tanpa entri = peringatan di dev/efn-prod gladi,
-  **error** di production (Q-ESB25) — putuskan bersama Ops sebelum run nyata.
+- `location_map.csv` (opsional, di `--maps`): `brand,branch_id,esb_location_name,action` (`stock|skip|quarantine`;
+  G65b: `quarantine` = quant terpisah ke lokasi karantina cabang, xmlid `branch_quarantine`, dibuat importer di bawah
+  gudang `quarantine_of`; jumlah baris di `manifest.quarantine_rows`). Lokasi berpola Damage/Expired/Temporary tanpa
+  entri = peringatan di dev/efn-prod gladi, **error** di production (Q-ESB25) — putuskan bersama Ops sebelum run nyata.
+- G65b (gladi 24 Nov 2026): snapshot `stock_opening` WAJIB diambil dengan esb-extract versi yang mengirim
+  `unitToShow=Base Unit` (satuan dasar produk). Snapshot latihan 17 Nov / 20 Nov / 24 Nov yang diambil sebelumnya
+  bersatuan campur → **ambil ulang** (langkah 2) sebelum export `cost`/`stock`. Produk PB tanpa satuan ESB memakai
+  satuan dasar ini; produk dengan > 1 satuan di snapshot → error `STOCK_UOM_CONFLICT` (periksa di ESB, jangan ditebak).
 
 Urutan (setiap bundel: `validate_import.py` → dry-run → `--apply`; nama perintah esb-extract = runbook
 [esb-extract.md](esb-extract.md), entitas dibangun W-A):

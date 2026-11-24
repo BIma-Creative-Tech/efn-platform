@@ -6,7 +6,8 @@ hanya lewat `get` (diinjeksi di test).
   `/purchase/purchase-order` (limit 100 [B]) hari yang sama, join `purchaseNum`. Filter cabang recap TIDAK dipakai
   (`branchID[]` diabaikan server, `branchID=` -> 0 baris; probe 24 Nov 2026).
 - `stock_opening` (SNAPSHOT per cabang, `snapshot --entity stock_opening --date <cutover>`): `/report/stock-movement`
-  start=end=D per `branchCode`, limit 100 (maks; 200 -> HTTP 400). Simpan hanya `Beginning` dengan qty != 0.
+  start=end=D per `branchCode`, `unitToShow=Base Unit` (satuan dasar produk; G65b), limit 100 (maks; 200 -> HTTP
+  400). Simpan hanya `Beginning` dengan qty != 0.
 PDP (L-110): whitelist kunci SEBELUM raw/mart (`normalize.PURCHASE_*_FIELDS`, `STOCK_MOVEMENT_FIELDS`); `raw_rows()`
 menjalankan `redact()` lagi sebagai lapisan kedua.
 """
@@ -35,6 +36,10 @@ STOCK_MOVEMENT_PATH = "/report/stock-movement"
 PURCHASE_RECAP_LIMIT = 1000  # probe 24 Nov 2026: 1000 diterima
 PURCHASE_ORDER_LIMIT = 100  # batas maks header PO belum diuji [B]
 STOCK_MOVEMENT_LIMIT = 100  # maks (200/500 -> HTTP 400, probe 24 Nov 2026)
+# G65b (gladi 24 Nov 2026): default endpoint = satuan campur per baris (BOX/PACK/EA...). `unitToShow=Base Unit`
+# (persis, dengan spasi; "Stock Unit"/"baseUnit" -> HTTP 400) = semua baris dalam satuan dasar produk ESB, total
+# amountBalance identik. Wajib: export memakai satuan baris sebagai satuan produk bila dim_esb_product.uom kosong.
+STOCK_MOVEMENT_UNIT = "Base Unit"
 # Entitas `snapshot` G65 (`purchase_line` = entitas harian, terdaftar di config.DAILY_ENTITIES).
 G65_SNAPSHOT_ENTITIES = ("stock_opening",)
 
@@ -87,7 +92,7 @@ def extract_purchase_line(rt: BrandRuntime, task: SliceTask, version: datetime, 
 def extract_stock_opening(rt: BrandRuntime, task: SliceTask, version: datetime, get: Getter) -> SliceResult:
     cfg, day, branch_id = rt.cfg, task.day.isoformat(), task.branch_id
     code = branch_code_for(rt, branch_id)
-    params = {"startPeriod": day, "endPeriod": day, "branchCode": code}
+    params = {"startPeriod": day, "endPeriod": day, "branchCode": code, "unitToShow": STOCK_MOVEMENT_UNIT}
     pages = CountingGetter(get)
     rows = [
         whitelist(row, STOCK_MOVEMENT_FIELDS)

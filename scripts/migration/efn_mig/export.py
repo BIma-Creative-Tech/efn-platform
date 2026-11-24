@@ -336,7 +336,8 @@ def company_costs(
         r for r in inputs.opening
         if str(r.get("company_code")) == company and m.opening_row_loaded(brand, r, index, maps.branch, maps.location)
     ]  # fmt: skip
-    product_uoms = m.product_uoms(data.products, data.bom_headers, data.bom_lines)
+    # G65b: satuan kosong -> satuan dasar snapshot SELURUH brand (sama dengan langkah stock / build_quants).
+    product_uoms, _ = m.opening_uoms(m.product_uoms(data.products, data.bom_headers, data.bom_lines), inputs.opening)
     return m.build_costs(
         brand, company, data.bom_lines, data.product_codes, opening, m.purchase_last_prices(latest, company),
         inputs.as_of, mixed_uom, product_uoms, maps.uom, unconvertible,
@@ -454,6 +455,7 @@ def export_master(
         manifest["stock_empty_branches_declared"] = declared
         manifest["stock_without_cost"] = result.stock_without_cost
         manifest["stock_by_branch"] = result.stock.branch_stats()
+        manifest["quarantine_rows"] = result.stock.quarantine_rows  # G65b: pengganti skipped.quarantine
     manifest.update(files=files, maps=map_entries, unmapped_branches=index.unmapped, skipped=skipped)
     path = out_dir / f"{run_id}.efnmig"
     write_bundle(path, manifest, members, keys, "bundle")

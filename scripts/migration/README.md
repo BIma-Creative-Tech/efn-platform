@@ -109,14 +109,20 @@ entitas `purchase_line` scope `*` / `stock_opening` scope `<branch_id>`).
   satuan produk → apa adanya; beda → hanya bila keduanya di `uom_map.csv` dengan `uom_xmlid` sama (qty × ea_factor
   baris / ea_factor produk, mis. PACK=6 → ×6); selain itu baris ditolak (`skipped.uom_unconvertible`, error validator
   `STOCK_UOM_UNCONVERTIBLE`). `quant.uom_esb`/`uom_xmlid` = UoM produk; `stock_by_branch` tetap dalam satuan ESB baris.
+  **G65b (gladi 24 Nov 2026):** produk tanpa satuan ESB (`dim_esb_product.uom` + fallback BOM kosong; semua produk PB)
+  memakai satuan dasar dari baris `fact_esb_stock_opening` (`mapping.opening_uoms`; extract `unitToShow=Base Unit`) untuk
+  `quant` dan HPP `stock_opening`; >1 satuan di snapshot → produk ditolak (`skipped.uom_conflict`, error validator
+  `STOCK_UOM_CONFLICT`). Produk yang satuannya terisi tidak berubah. Item `cost_uom_unconvertible` sumber
+  `stock_opening` kini membawa satuan baris sebenarnya (dipisah koma), bukan `''`.
 - `legacy_purchase_line`: rentang = sales.daily (24 bulan s.d. cutover − 1), semua status; **hanya di part 1** segmen
   company × bulan (tidak ikut pembagian part per gudang); currency ≠ IDR tidak diekspor (`stats.legacy_purchase_line.
   rows_skipped_currency`, `manifest.skipped.currency`).
 - Manifest tambahan: `purchase_statuses`, `purchase_discount_mode`, `source.snapshot.fact_esb_purchase_line =
   {max_version, last_checkpoint_day}`, `source.snapshot.fact_esb_stock_opening = {opening_date, max_version,
   branches_checkpointed}`, `stock_without_cost` (`<PT>|<kode>`), `stock_by_branch` (`{branch_id: {source_qty,
-  exported_qty, skipped_qty}}`), `skipped.{negative_stock, uom_unconvertible, non_storable, product_unmapped, branch_unmapped,
-  location_skip, quarantine, location_unmapped, location_suspect, supplierinfo_unmapped, currency}` (`{count[, items]}`).
+  exported_qty, skipped_qty}}`), `quarantine_rows` (baris saldo awal yang dimuat ke lokasi karantina), `skipped.{negative_stock,
+  uom_unconvertible, uom_conflict, non_storable, product_unmapped, branch_unmapped, location_skip, location_unmapped,
+  location_suspect, supplierinfo_unmapped, currency}` (`{count[, items]}`).
 
 ## Tabel pemetaan (`--maps`, data klien — di luar repo; ikut bundel `maps/*.csv`, hash di manifest)
 - `branch_map.csv`: `brand,branch_id,type,warehouse_code,display_name,parent_branch_id`; `type` ∈ `store` (gudang +
@@ -127,7 +133,9 @@ entitas `purchase_line` scope `*` / `stock_opening` scope `<branch_id>`).
 - `coa_map.csv`, `payment_map.csv`: opsional, ikut bundel apa adanya (dipakai langkah `opening`, belum dibangun).
 - `location_map.csv` (G65, opsional): `brand,branch_id,esb_location_name,action`, `action` ∈ `stock` (default bila tidak
   ada entri: dijumlahkan ke stok gudang + peringatan `LOCATION_UNMAPPED`), `skip` (tidak dimigrasi), `quarantine`
-  (belum didukung G65 → error validator). Nama dicocokkan huruf besar, spasi dinormalisasi.
+  (G65b, keputusan user 24 Nov 2026: quant terpisah dengan `location_key` = xmlid `branch_quarantine` cabang +
+  `quarantine_of` = xmlid `branch_wh` induk; qty/HPP sama seperti stok biasa, ikut rata-rata HPP `stock_opening`).
+  Nama dicocokkan huruf besar, spasi dinormalisasi.
 - **Lokasi (E5):** gudang/lokasi Odoo berasal dari `branch_map.csv` (`type` + `parent_branch_id`), **bukan** dari
   `efn_dwh.dim_esb_location`. `dim_esb_location` (sub-lokasi ESB per cabang: dapur, gudang kering, …) hanya referensi
   untuk menyusun `branch_map.csv` dan opname (E6); tidak diekspor ke bundel.

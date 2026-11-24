@@ -79,6 +79,9 @@ QUIET_ENTITIES = frozenset({"customer", "supplier"})
 ROW_ERRORS = (ValidationError, UserError, AccessError, ValueError, KeyError, psycopg2.Error)
 HISTORY_ORDER = ("legacy_flow_daily", "legacy_sales_daily", "legacy_sales_line", "legacy_purchase_line")
 XMLID_ENTITIES = {"branch": ("branch_wh", "branch_loc", "branch_pos")}
+# G65b §4.6: `branch_quarantine` sengaja TIDAK di XMLID_ENTITIES["branch"] -> dibuat langkah stock (master PB tidak
+# diekspor ulang), jadi tidak boleh dihitung missing_in_source di langkah branch.
+QUARANTINE_LOCATION_NAME = "Karantina ESB"
 # G65 §27.13.4/§27.13.7: HPP per cutover ditulis langkah `cost` (run nyata) = gerbang (c) langkah `stock`.
 PARAM_COST_AS_OF_PREFIX = "efn_mig_esb.cost_as_of."
 # Asia/Jakarta = UTC+7 tetap (tanpa DST): batas hari WIB -> datetime naif UTC (stock.move.date).
@@ -1394,18 +1397,30 @@ class _Run:
             data = row["data"]
             code, company, _cenv = self._company(row)
             loc_key = data["location_key"]
+            parent_wh = None
             if loc_key.startswith(f"{m.company_prefix(self.brand, code)}branch_wh_"):
                 wh = self.record("stock.warehouse", loc_key)
                 location = wh.lot_stock_id if wh else self.env["stock.location"]
             else:
                 location = self.record("stock.location", loc_key)
+            if m.QUANT_QUARANTINE_KEY in data:
+                # G65b §4.6: gudang induk karantina wajib ada & milik PT (tidak ada -> baris gagal saat impor).
+                parent_wh = self.record("stock.warehouse", data[m.QUANT_QUARANTINE_KEY])
+                if parent_wh and parent_wh.company_id != company:
+                    raise IntegrityError("quant: quarantine_of bukan gudang milik PT baris")
+                if location and parent_wh and location.warehouse_id != parent_wh:
+                    raise IntegrityError("quant: lokasi karantina bukan milik gudang quarantine_of")
             tmpl = self.record("product.template", data["product_key"])
             product = tmpl.product_variant_id if tmpl else self.env["product.product"]
-            item = {"row": row, "code": code, "company": company, "location": location, "product": product}
-            if location and product:
-                if location.company_id != company or location.usage != "internal":
+            item = {"row": row, "code": code, "company": company, "location": location, "product": product,
+                    "quarantine_wh": parent_wh}  # fmt: skip
+            if (location or parent_wh) and product:
+                if location and (location.company_id != company or location.usage != "internal"):
                     raise IntegrityError("quant: lokasi bukan lokasi internal milik PT baris")
-                pair = (location.id, product.id)
+                if parent_wh is not None and location.replenish_location:
+                    raise IntegrityError("quant: lokasi karantina bertanda replenish (bisa dipakai pengisian ulang)")
+                # Karantina yang belum dibuat (dibuat di import_stock) diidentifikasi lewat xmlid-nya.
+                pair = (location.id if location else loc_key, product.id)
                 if pair in seen:
                     raise IntegrityError("quant: (lokasi, produk) ganda dalam bundel (agregasikan di export)")
                 seen.add(pair)
@@ -1457,13 +1472,16 @@ class _Run:
         move_date = datetime(acc_date.year, acc_date.month, acc_date.day, 23, 59, 59) - WIB_OFFSET
         label = f"Saldo awal ESB {acc_date.isoformat()}"
         skipped = self.report.setdefault("stock_skipped", {"non_storable": 0})
+        problems = self._ensure_quarantine()
         by_location = defaultdict(list)
         for item in self.stock_items:
             row, product, location = item["row"], item["product"], item["location"]
             if not location or not product:
                 self._count(m.STOCK_ENTITY, "failed")
                 what = "lokasi" if not location else "produk"
-                self._error(m.STOCK_ENTITY, row["esb_key"], f"prasyarat tidak ada: {what} belum ada di Odoo")
+                problem = problems.get(row["data"]["location_key"]) if not location else None
+                problem = problem or f"prasyarat tidak ada: {what} belum ada di Odoo"
+                self._error(m.STOCK_ENTITY, row["esb_key"], problem)
                 continue
             if not product.is_storable:
                 skipped["non_storable"] += 1
@@ -1488,6 +1506,41 @@ class _Run:
             keep |= {(location_id, product.id) for _i, product, _q in items}
             self._apply_location(Quant, location_id, items, acc_date, move_date)
         self._missing_quants(Quant, keep, acc_date, move_date)
+
+    def _ensure_quarantine(self):
+        """G65b §4.6 (keputusan user 24 Nov): lokasi karantina per gudang dibuat/ditemukan SAAT langkah stock.
+        xmlid `branch_quarantine` belum ada -> `stock.location` internal "Karantina ESB" di bawah
+        `view_location_id` gudang `quarantine_of` (BUKAN di bawah lot_stock_id -> tidak ter-reserve/terpakai), milik
+        PT, `replenish_location=False`, lalu xmlid didaftarkan (idempoten; dry-run ikut rollback). Gudang induk tidak
+        ada -> baris gagal (fail-closed, tidak jatuh ke Stock). -> {location_key: alasan gagal}."""
+        made, problems = {}, {}
+        for item in self.stock_items:
+            wh = item.get("quarantine_wh")
+            if wh is None:
+                continue
+            loc_key = item["row"]["data"]["location_key"]
+            if not wh:  # juga bila lokasi karantina sudah ada: gudang induk wajib ada (fail-closed)
+                item["location"] = self.env["stock.location"]
+                problems[loc_key] = "prasyarat tidak ada: gudang quarantine_of belum ada di Odoo"
+                continue
+            if item["location"] or not item["product"]:
+                continue
+            if loc_key not in made:
+                made[loc_key] = self.env["stock.location"]
+                try:
+                    with self.cr.savepoint():
+                        location = self._cenv(item["company"])["stock.location"].create(
+                            {"name": QUARANTINE_LOCATION_NAME, "usage": "internal",
+                             "location_id": wh.view_location_id.id, "company_id": item["company"].id,
+                             "replenish_location": False}
+                        )  # fmt: skip
+                        self._bind(self._name(loc_key), "stock.location", location.id)
+                    made[loc_key] = location
+                    self.report["stock_quarantine_created"] = self.report.get("stock_quarantine_created", 0) + 1
+                except ROW_ERRORS as exc:
+                    problems[loc_key] = f"lokasi karantina gagal dibuat ({type(exc).__name__})"
+            item["location"] = made[loc_key]
+        return problems
 
     def _apply_location(self, Quant, location_id, items, acc_date, move_date):
         statuses = {}

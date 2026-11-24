@@ -58,6 +58,8 @@ QUANT_DATA_KEYS = frozenset(
         "esb_locations", "amount", "accounting_date",
     }
 )  # fmt: skip
+# G65b §4.6: kunci OPSIONAL hanya pada baris karantina (xmlid `branch_wh` gudang induk lokasi karantina).
+QUANT_QUARANTINE_KEY = "quarantine_of"
 COST_SOURCES = frozenset({"stock_opening", "bom_last_hpp", "purchase_last"})
 # SEC-G65-03: salinan `scripts/migration/efn_mig/mapping.py` SUSPECT_LOCATION (pola sama dijaga test pytest
 # `test_suspect_location_matches_export`). Importer production memeriksa ulang `esb_locations` quant.
@@ -244,15 +246,29 @@ def check_master_row(brand: str, entity: str, row: Mapping[str, Any], companies:
 
 def check_quant_data(brand: str, company: str, esb_key: str, data: Mapping[str, Any]) -> None:
     """Baris `quant.jsonl` (§27.13.4): kunci persis, esb_key `<branch_id>|<product_code>`, lokasi = xmlid gudang
-    (`branch_wh` -> `lot_stock_id`) atau lokasi cabang (`branch_loc`) milik brand × company, qty > 0."""
-    if set(data) != QUANT_DATA_KEYS:
+    (`branch_wh` -> `lot_stock_id`) atau lokasi cabang (`branch_loc`) milik brand × company, qty > 0.
+    G65b §4.6: baris karantina = `quarantine_of` (xmlid `branch_wh` PT sama) + `location_key` = xmlid
+    `branch_quarantine` cabang `esb_branch_id` (esb_key tetap `<branch_id>|<product_code>`); baris lain dilarang
+    membawa `quarantine_of`."""
+    keys = set(data)
+    quarantine = QUANT_QUARANTINE_KEY in keys
+    if keys - {QUANT_QUARANTINE_KEY} != QUANT_DATA_KEYS:
         raise IntegrityError("quant: kunci data tidak sesuai kontrak")
     if esb_key != f"{data.get('esb_branch_id')}|{data.get('product_code')}":
         raise IntegrityError("quant: esb_key tidak sama dengan esb_branch_id|product_code")
     loc = data.get("location_key")
-    prefixes = tuple(f"{company_prefix(brand, company)}{e}_" for e in ("branch_wh", "branch_loc"))
-    if not isinstance(loc, str) or not loc.startswith(prefixes) or any(loc == p for p in prefixes):
-        raise IntegrityError("quant: location_key bukan xmlid branch_wh/branch_loc milik brand × company")
+    if quarantine:
+        _check_ref(brand, company, "branch_wh", data[QUANT_QUARANTINE_KEY] or "", QUANT_QUARANTINE_KEY)
+        try:
+            expected = xmlid(brand, company, "branch_quarantine", data.get("esb_branch_id"))
+        except ValueError:
+            raise IntegrityError("quant: esb_branch_id kosong pada baris karantina") from None
+        if loc != expected:
+            raise IntegrityError("quant: location_key karantina bukan xmlid branch_quarantine cabang baris")
+    else:
+        prefixes = tuple(f"{company_prefix(brand, company)}{e}_" for e in ("branch_wh", "branch_loc"))
+        if not isinstance(loc, str) or not loc.startswith(prefixes) or any(loc == p for p in prefixes):
+            raise IntegrityError("quant: location_key bukan xmlid branch_wh/branch_loc milik brand × company")
     try:
         qty = Decimal(str(data.get("quantity")))
     except ArithmeticError:

@@ -304,6 +304,90 @@ class TestEsbImportG65(TransactionCase):
             self._run(self._stock_bundle(rows))
         self.assertFalse(self._inventory_moves(), "gerbang ditolak sebelum DB ditulis")
 
+    # ------------------------------------------------------------------------------------------ karantina (G65b)
+    def _quarantine(self, branch_id, code, qty, parent=None):
+        row = self._quant(branch_id, X("branch_quarantine", branch_id), code, qty)
+        row["data"]["quarantine_of"] = parent or X("branch_wh", branch_id)
+        row["data"]["esb_locations"] = ["Gudang Damage"]
+        return row
+
+    def _imd_count(self, full):
+        self.env.cr.execute(
+            "SELECT count(*) FROM ir_model_data WHERE module = %s AND name = %s", ("efn_mig_esb", full.split(".", 1)[1])
+        )
+        return self.env.cr.fetchone()[0]
+
+    def test_stock_quarantine_location(self):
+        """Fit-gap G65 §4.6: karantina = lokasi internal baru di bawah view_location gudang (bukan child_of
+        lot_stock_id), idempoten, gudang quarantine_of tak dikenal -> baris gagal, stok tidak bisa di-reserve."""
+        self.ICP.set_param(imp.PARAM_COST_AS_OF_PREFIX + CODE, CUTOVER)
+        q_key = X("branch_quarantine", 1)
+        rows = [self._quant(1, X("branch_wh", 1), "ZFIN", 10), self._quarantine(1, "ZFIN", 4),
+                self._quarantine(1, "ZRM", 1.5)]  # fmt: skip
+        dry = self._run(self._stock_bundle(rows), dry_run=True)
+        self.assertEqual(dry.exit_code, imp.EXIT_OK, dry.report["errors"])
+        self.assertEqual(dry.report["stock_quarantine_created"], 1)
+        self.assertEqual(self._imd_count(q_key), 0, "dry-run: lokasi & xmlid karantina ikut rollback")
+
+        result = self._run(self._stock_bundle(rows))
+        self.assertEqual(result.exit_code, imp.EXIT_OK, result.report["errors"])
+        self.assertEqual(result.report["entities"]["quant"]["created"], 3, result.report["entities"]["quant"])
+        self.assertEqual(result.report["stock_quarantine_created"], 1)
+        imd = self.env["ir.model.data"].search([("module", "=", "efn_mig_esb"), ("name", "=", q_key.split(".", 1)[1])])
+        self.assertEqual(imd.model, "stock.location")
+        location = self.env["stock.location"].browse(imd.res_id)
+        self.assertEqual((location.name, location.usage), ("Karantina ESB", "internal"))
+        self.assertEqual(location.company_id, self.company)
+        self.assertEqual(location.location_id, self.wh1.view_location_id)
+        self.assertEqual(location.warehouse_id, self.wh1)
+        self.assertFalse(location.replenish_location)
+        under_stock = self.env["stock.location"].search([("id", "child_of", self.wh1.lot_stock_id.id)])
+        self.assertNotIn(location, under_stock, "karantina bukan child_of lot_stock_id")
+        Quant = self.env["stock.quant"]
+        fin, rm = self.fin.product_variant_id, self.rm.product_variant_id
+        at_q = [("location_id", "=", location.id)]
+        self.assertAlmostEqual(Quant.search([("product_id", "=", fin.id), *at_q]).quantity, 4)
+        self.assertAlmostEqual(Quant.search([("product_id", "=", rm.id), *at_q]).quantity, 1.5)
+        totals = {(r["location_key"], r["product_key"]): r for r in result.totals["quant"]}
+        self.assertEqual(len(totals), 3)
+        self.assertAlmostEqual(totals[(q_key, X("product", "ZFIN"))]["quantity"], 4)
+        self.assertAlmostEqual(totals[(X("branch_wh", 1), X("product", "ZFIN"))]["quantity"], 10)
+        # Tidak bisa di-reserve: available di Stock gudang hanya stok normal (child_of lot_stock_id).
+        cenv = self.env(context=dict(self.env.context, allowed_company_ids=self.company.ids))
+        self.assertAlmostEqual(cenv["stock.quant"]._get_available_quantity(fin, self.wh1.lot_stock_id), 10)
+        self.assertAlmostEqual(cenv["stock.quant"]._get_available_quantity(rm, self.wh1.lot_stock_id), 0)
+
+        # Ulang data sama: lokasi, xmlid, dan quant tidak ganda; 0 move baru.
+        moves = len(self._inventory_moves())
+        again = self._run(self._stock_bundle(rows))
+        self.assertEqual(again.exit_code, imp.EXIT_OK, again.report["errors"])
+        self.assertEqual(again.report["entities"]["quant"]["skipped"], 3)
+        self.assertNotIn("stock_quarantine_created", again.report)
+        self.assertEqual(self._imd_count(q_key), 1)
+        domain = [("name", "=", "Karantina ESB"), ("location_id", "=", self.wh1.view_location_id.id)]
+        self.assertEqual(self.env["stock.location"].search_count(domain), 1)
+        self.assertEqual(Quant.search_count([("product_id", "=", fin.id), *at_q]), 1)
+        self.assertEqual(len(self._inventory_moves()), moves)
+
+        # quarantine_of tidak dikenal -> baris gagal (fail-closed), tidak dibuat & tidak jatuh ke Stock.
+        unknown = self._quarantine(2, "ZFIN", 3, parent=X("branch_wh", 99))
+        bad = self._run(self._stock_bundle([*rows, unknown]))
+        self.assertEqual(bad.exit_code, imp.EXIT_DATA)
+        self.assertEqual(bad.report["entities"]["quant"]["failed"], 1, bad.report["entities"]["quant"])
+        self.assertIn("quarantine_of", str(bad.report["errors"]))
+        self.assertEqual(self._imd_count(X("branch_quarantine", 2)), 0)
+        self.assertAlmostEqual(cenv["stock.quant"]._get_available_quantity(fin, self.wh2.lot_stock_id), 0)
+
+        # Kontrak: quarantine_of lintas PT / karantina tanpa quarantine_of / quarantine_of di baris biasa = exit 3.
+        foreign = self._quarantine(1, "ZFIN", 1, parent=xmlid(BRAND, "PB", "branch_wh", 1))
+        orphan = self._quarantine(1, "ZFIN", 1)
+        del orphan["data"]["quarantine_of"]
+        stray = self._quant(1, X("branch_wh", 1), "ZFIN", 1)
+        stray["data"]["quarantine_of"] = X("branch_wh", 1)
+        for broken in (foreign, orphan, stray):
+            with self.assertRaises(IntegrityError):
+                self._run(self._stock_bundle([broken]))
+
     # ------------------------------------------------------------------------------------------ histori pembelian
     def _po_row(self, day, num="ZPO-1", line_no=1, mapped=True, **extra):
         row = {"purchase_num": num, "line_no": line_no, "date": day, "date_required": None,

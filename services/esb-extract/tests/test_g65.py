@@ -340,8 +340,11 @@ def test_extract_stock_opening_params_paging_summary_and_pdp() -> None:
     esb = FakeEsb({STOCK_MOVEMENT_PATH: page})
     result = run_slice(runtime(), SliceTask(CUTOVER, "stock_opening", "7"), V, esb.get)
     assert esb.calls[0] == (STOCK_MOVEMENT_PATH, {"startPeriod": "2026-11-25", "endPeriod": "2026-11-25",
-                                                  "branchCode": "T07", "page": 1, "limit": 100})  # fmt: skip
+                                                  "branchCode": "T07", "unitToShow": "Base Unit", "page": 1,
+                                                  "limit": 100})  # fmt: skip
     assert len(esb.calls) == 2 and result.calls == 2
+    # G65b: satuan dasar produk WAJIB di setiap halaman (nilai persis dengan spasi; varian lain -> HTTP 400 di ESB).
+    assert [p.get("unitToShow") for _, p in esb.calls] == ["Base Unit", "Base Unit"]
     facts = result.tables["fact_esb_stock_opening"]
     assert len(facts) == 1 and facts[0][S["branch_code"]] == "T07" and facts[0][S["company_code"]] == "PB"
     raw = raw_rows("pb", result.raw, V)[0]

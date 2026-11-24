@@ -166,6 +166,14 @@ Keputusan teknis G65:
   teknis anggota `stock.group_stock_user`, dan pada mode itu `create` memakai ulang quant + whitelist field. Importer
   mencari quant sendiri lalu write/create sebagai su, sehingga perilaku deterministik (fit-gap G65 §6 [B] #3 tidak
   relevan). `_apply_inventory` sendiri membuat move dengan `inventory_mode=False` + `is_inventory=True` [V 19.0].
+- **Karantina (G65b, keputusan user 24 Nov 2026, fit-gap G65 §4.6):** baris quant ber-`quarantine_of` (xmlid
+  `branch_wh` PT sama; `location_key` = xmlid `branch_quarantine` cabang `esb_branch_id`; kontrak dicek → exit 3) dimuat
+  ke lokasi internal **"Karantina ESB"** yang dibuat/ditemukan SAAT langkah `stock` (master PB tidak diekspor ulang;
+  karena itu `branch_quarantine` sengaja tidak di `XMLID_ENTITIES["branch"]`): induk `view_location_id` gudang (bukan
+  di bawah `lot_stock_id` → tidak ikut `_get_available_quantity`/reservasi Stock), `company_id` PT,
+  `replenish_location=False`, xmlid didaftarkan (idempoten; dry-run ikut rollback). Gudang `quarantine_of` tidak ada
+  → baris gagal (fail-closed, tidak jatuh ke Stock). Quant karantina ikut gerbang, `odoo_totals.quant`, dan
+  `_missing_quants` seperti quant lain. Tindak lanjut Ops = transfer internal / Scrap standar CE.
 - Replay SEC-198 bundel stok = grup `.stock` (terpisah dari `.master`).
 - Varian `bulk_replace_slice` tanpa gudang hanya untuk model `_efn_slice_by_warehouse = False`; model beririsan gudang
   menolak `warehouse_id=None` dan sebaliknya (SEC-197: DELETE tidak melebar diam-diam).

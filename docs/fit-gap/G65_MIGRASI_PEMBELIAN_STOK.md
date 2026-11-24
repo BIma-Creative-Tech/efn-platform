@@ -250,6 +250,45 @@ Urutan wajib (menggantikan G43 §4 langkah 8–10 untuk PB): master (1–7) → 
 - Closing valuasi di gladi: jalankan dengan `auto_post=False` (draft) → Finance memeriksa; jangan aktifkan cron closing
   sebelum akun dikonfirmasi.
 
+### 4.6 Karantina stok awal (keputusan user 24 Nov 2026, Q-ESB25 / Q-G65-7) [standar CE; R]
+Keputusan: stok ESB di 5 gudang damage PB (nama lokasi ESB "Gudang Damage KACS", "GUDANG DAMAGE", "Gudang Damage KACS
+Medan", "Gudang Damage KACS Surabaya", "Damage Warehouse Palem"; cabang ESB 3, 13, 23, 25, 37) dimuat ke **lokasi
+karantina**: tercatat & bernilai, tetapi tidak dijual/dipakai/di-reserve sampai Ops memutuskan. Tidak butuh modul baru.
+
+**Fakta CE 19 [V `stock/models/*.py` 19.0]**
+- Reservasi: `_get_reserve_quantity` → `_gather` → domain `location_id child_of <lokasi sumber move>` (non-strict) [V
+  `stock_quant.py`]. Sumber move standar = `lot_stock_id`: rule pull `ship_only`/`pick_ship` dari `warehouse.lot_stock_id`,
+  `pick_type_id.default_location_src_id = lot_stock_id` [V `stock_warehouse.py`]; POS & MRP memakai tipe operasi gudang
+  yang sumbernya Stock [B baris persis].
+- `lot_stock_id` dibuat dengan `location_id = view_location_id` [V]. Lokasi **saudara** Stock (anak langsung
+  `view_location_id`) tidak pernah masuk `child_of lot_stock_id` → tidak di-reserve, tidak diambil putaway (kandidat putaway
+  = `child_internal_location_ids` lokasi tujuan [V `stock_location.py`]).
+- `warehouse_id` lokasi dihitung dari leluhur `view_location_id` [V] → karantina tetap terbaca milik gudang cabang.
+- Field `scrap_location` / `return_location` **tidak ada lagi** di `stock.location` 19.0 [V]; scrap = `usage='inventory'`.
+  Jangan dikirim di `vals` (akan error field tak dikenal).
+- `replenish_location` (computed stored, dibatasi satu per rantai induk/anak) [V] → harus False untuk karantina.
+- Quant hanya ditolak di lokasi `view` [V `check_location_id`]; lokasi bernilai = `internal`/`transit` ber-company (§4.1).
+- **Catatan:** `qty_available` dengan/ tanpa konteks gudang memakai `view_location_id` + seluruh turunannya [V
+  `product.py _get_domain_locations`] → "On Hand" di form produk/gudang **ikut menghitung karantina**. Orderpoint
+  (`location_id = lot_stock_id`) dan reservasi tidak. Komunikasikan ke Ops; laporan stok jual pakai filter lokasi Stock.
+
+**Rekomendasi**
+| Aspek | Nilai |
+|---|---|
+| Tipe & induk | `usage='internal'`, `location_id = warehouse.view_location_id` gudang cabang (**bukan** anak `lot_stock_id`). Cabang `type=location` di `branch_map` → gudang induk `parent_branch_id`. |
+| Nama | `Karantina ESB` (complete_name `<KODE_WH>/Karantina ESB`); satu per gudang, beberapa lokasi damage ESB di gudang sama → dijumlahkan. |
+| xmlid | `efn_mig_esb.<brand>_<company>_branch_quarantine_<branch_id>` (pola G43 `branch_wh_`/`branch_loc_`; `branch_id` = cabang ESB pemilik gudang). Dibuat di langkah `branch` (upsert idempoten), entitas baru `branch_quarantine` di `XMLID_ENTITIES["branch"]`. |
+| Field lain | `company_id` = PT gudang; `replenish_location=False`; `active=True`; tanpa `removal_strategy_id`/`putaway_rule_ids`/`storage_category_id`. Jangan tulis `scrap_location`/`return_location` (tidak ada di 19.0). |
+| Valuasi | Internal ber-company → **bernilai**, ikut persediaan periodik dan closing `action_close_stock_valuation` dengan kliring §4.5 yang sama (tanpa akun khusus). Tidak memasang `valuation_account_id` pada karantina (field itu untuk lokasi virtual). Bila Finance ingin cadangan penurunan nilai → jurnal manual (Q baru, bukan G65). |
+| Impor quant | `location_map.csv` `action=quarantine` → `location_key` = xmlid karantina; `prepass_stock` mencari `stock.location` lewat xmlid (cabang `else` yang sudah ada [V repo `importer.py:1400-1401`]) dan cek `usage=='internal'` + company tetap berlaku. Lokasi karantina belum ada → error baris (fail-closed), bukan jatuh ke Stock. Pasangan (lokasi, produk) unik: karantina ≠ Stock, jadi produk sama di damage & stok normal = 2 quant sah. |
+| Kontrak | docs/04 §27.13.4: ganti "`quarantine` belum didukung" → didukung; 5 nama di atas dipetakan eksplisit di `location_map.csv` PB (regex damage tetap error di production bila tak terpetakan). Laporan dry-run memisahkan qty/nilai karantina per gudang. |
+| Tindak lanjut Ops | Dijual/dipakai kembali → **transfer internal** standar (Inventory → Operations → Transfers, tipe Internal, Karantina ESB → Stock). Dibuang → **Scrap** standar (`stock.scrap`, sumber = Karantina ESB, tujuan lokasi scrap `usage=inventory`). Tidak ada fitur custom. |
+| Company / record rule | Tidak perlu apa-apa: `stock.location` sudah punya rule multi-company standar; lokasi ber-`company_id` PT. Tidak ada model baru. |
+
+**[B] tambahan:** (a) tipe operasi POS & MRP PB bersumber `lot_stock_id` (bukan `view_location_id`) di efn-prod; (b)
+quant di karantina tidak ter-reserve oleh delivery/POS/MO dalam test; (c) cabang 3/13/23/25/37 di `branch_map.csv` PB
+bertipe gudang atau `location` (menentukan gudang induk); (d) `action_close_stock_valuation` ikut menilai karantina.
+
 ---
 
 ## 5. Pertanyaan klien baru (Q-G65)
@@ -262,7 +301,7 @@ Urutan wajib (menggantikan G43 §4 langkah 8–10 untuk PB): master (1–7) → 
 5. **Q-G65-5** (Ops/QC) Produk PB dengan lot/kedaluwarsa saat cutover: lot dummy saldo awal, atau tracking dimatikan dulu? Default: lot dummy.
 6. **Q-G65-6** (Finance) Akun "Saldo Awal – Kliring" untuk stok awal (kode akun), valuasi tetap periodik untuk PB, dan HPP
    cutover = rata-rata `amountBalance/qtyBalance` ESB per PT? Default: ya untuk ketiganya (placeholder).
-7. **Q-G65-7** (Ops) Lokasi ESB Damage/Expired/Temporary di cabang PB: dimuat ke karantina atau dilewati? Default: dilewati + dilaporkan.
+7. **Q-G65-7** (Ops) Lokasi ESB Damage/Expired/Temporary di cabang PB: dimuat ke karantina atau dilewati? Default: dilewati + dilaporkan. **Dijawab 24 Nov 2026: karantina (5 gudang damage PB) → §4.6.**
 
 ## 6. Daftar [B] untuk engineer (wajib dibuktikan di test/dry-run efn-prod)
 1. `purchase` (dan `purchase_stock`) berstatus `installed` di DB efn-prod.

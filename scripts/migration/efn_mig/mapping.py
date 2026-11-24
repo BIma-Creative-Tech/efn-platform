@@ -97,7 +97,7 @@ DATA_KEYS: dict[str, frozenset[str]] = {
     "quant": frozenset(
         {
             "location_key", "product_key", "product_code", "quantity", "uom_esb", "uom_xmlid", "esb_branch_id",
-            "esb_locations", "amount", "accounting_date",
+            "esb_locations", "amount", "accounting_date", "quarantine_of",  # quarantine_of: hanya baris karantina
         }
     ),
 }  # fmt: skip
@@ -851,12 +851,18 @@ def build_costs(
     `unconvertible` (company, produk, sumber, satuan) -> sumber berikutnya. Tanpa sumber -> tidak ada baris."""
     found: dict[str, tuple[Decimal, str, str]] = {}
     mixed: set[str] = set()
+    opening = list(opening)
     for code, (price, uom) in opening_costs(opening, product_codes, mixed, product_uoms, umap).items():
         found[code] = (price, uom, "stock_opening")
     if mixed_uom is not None:
         mixed_uom |= mixed
     if unconvertible is not None and product_uoms is not None and umap is not None:
-        unconvertible |= {(company, code, "stock_opening", "") for code in mixed}
+        # G65b: satuan baris saldo awal yang sebenarnya (bukan '') agar item manifest bisa ditindaklanjuti.
+        row_uoms: dict[str, set[str]] = defaultdict(set)
+        for row in opening:
+            if str(row["product_code"]) in mixed and dec(row.get("qty_balance")) > 0:
+                row_uoms[str(row["product_code"])].add(norm_uom(row.get("uom")))
+        unconvertible |= {(company, code, "stock_opening", ",".join(sorted(row_uoms[code]))) for code in mixed}
 
     def offer(code: str, price: Decimal, uom: str, source: str) -> None:
         if code in found:
@@ -1064,7 +1070,10 @@ class StockSkips:
     product_unmapped: int = 0
     branch_unmapped: int = 0
     location_skip: int = 0
-    quarantine: int = 0
+    # G65b: produk bersatuan kosong dengan >1 satuan di snapshot saldo awal -> ditolak (produk -> satuan terurut).
+    uom_conflict: dict[str, list[str]] = field(default_factory=dict)
+    # Bukan skip: baris lokasi ESB `quarantine` (location_map) yang dimuat ke lokasi karantina (manifest top-level).
+    quarantine_rows: int = 0
     location_unmapped: set[tuple[int, str]] = field(default_factory=set)
     location_suspect: set[tuple[int, str]] = field(default_factory=set)
     by_branch: dict[int, dict[str, Decimal]] = field(default_factory=dict)
@@ -1090,7 +1099,10 @@ class StockSkips:
             "product_unmapped": {"count": self.product_unmapped},
             "branch_unmapped": {"count": self.branch_unmapped},
             "location_skip": {"count": self.location_skip},
-            "quarantine": {"count": self.quarantine},
+            "uom_conflict": {
+                "count": len(self.uom_conflict),
+                "items": [{"product_code": c, "uoms": u} for c, u in sorted(self.uom_conflict.items())][:1000],
+            },
             "location_unmapped": locs(self.location_unmapped),
             "location_suspect": locs(self.location_suspect),
         }
@@ -1113,6 +1125,29 @@ def location_key(brand: str, branch_id: int, entry: BranchMap | None, index: Bra
     return xmlid(brand, company, "branch_loc", branch_id) if branch_id in index.wh_key else None
 
 
+def opening_uoms(
+    product_uoms: Mapping[str, str], rows: Iterable[Mapping[str, Any]]
+) -> tuple[dict[str, str], dict[str, list[str]]]:
+    """G65b (gladi 24 Nov 2026: dim_esb_product.uom kosong untuk semua produk PB): satuan efektif stok/HPP. Produk
+    tanpa satuan (`product_uoms` kosong = dim_esb_product + fallback BOM) memakai satuan dasar dari baris
+    `fact_esb_stock_opening` (extract `unitToShow=Base Unit` -> satu satuan per produk). >1 satuan di snapshot ->
+    produk tetap tanpa satuan dan masuk `conflicts` (stok ditolak, validator error). Produk yang satuannya sudah
+    terisi TIDAK diubah. Idempoten (aman dipanggil ulang dengan hasilnya)."""
+    seen: dict[str, set[str]] = defaultdict(set)
+    for row in rows:
+        code, uom = str(row["product_code"]), norm_uom(row.get("uom"))
+        if uom and not product_uoms.get(code):
+            seen[code].add(uom)
+    out = dict(product_uoms)
+    conflicts: dict[str, list[str]] = {}
+    for code, uoms in sorted(seen.items()):
+        if len(uoms) == 1:
+            out[code] = next(iter(uoms))
+        else:
+            conflicts[code] = sorted(uoms)
+    return out, conflicts
+
+
 def build_quants(
     brand: str,
     rows: Iterable[Mapping[str, Any]],
@@ -1128,7 +1163,12 @@ def build_quants(
     """`fact_esb_stock_opening` (opening_date = cutover) -> `quant.jsonl`: Σ qty per company × lokasi Odoo × produk
     (lokasi ESB `stock` digabung), dikonversi ke **satuan produk** (`to_product_qty`; `uom_esb`/`uom_xmlid` = UoM
     produk). Satuan tanpa faktor -> `uom_unconvertible` (validator error). Hanya produk storable; hasil < 0 ->
-    `negative_stock`, = 0 -> tidak diekspor. `accounting_date` = cutover − 1."""
+    `negative_stock`, = 0 -> tidak diekspor. `accounting_date` = cutover − 1.
+    G65b: satuan produk kosong -> satuan dasar baris snapshot (`opening_uoms`; konflik -> `uom_conflict`). Lokasi ESB
+    `quarantine` -> quant terpisah di xmlid `branch_quarantine` cabang (esb_key tetap `<cabang>|<produk>`) +
+    `quarantine_of` = xmlid `branch_wh` induk (importer membuat/menemukan lokasi karantina di bawah gudang itu)."""
+    rows = list(rows)
+    uom_by_code, conflicts = opening_uoms(uom_by_code, rows)
     storable = {str(p["product_code"]): product_role(p).is_storable for p in products}
     groups: dict[tuple[str, str, int, str], dict[str, Any]] = {}
     for row in rows:
@@ -1140,6 +1180,7 @@ def build_quants(
         code = str(row["product_code"])
         converted: Decimal | None = None
         reason = ""
+        quarantine_of: str | None = None
         if loc is None:
             skips.branch_unmapped += 1
             reason = "branch"
@@ -1153,15 +1194,18 @@ def build_quants(
             if action == "skip":
                 skips.location_skip += 1
                 reason = "skip"
-            elif action == "quarantine":
-                skips.quarantine += 1
-                reason = "quarantine"
             elif code not in storable:
                 skips.product_unmapped += 1
                 reason = "product"
             elif not storable[code]:
                 skips.non_storable += 1
                 reason = "non_storable"
+            elif code in conflicts:
+                skips.uom_conflict[code] = conflicts[code]
+                reason = "uom_conflict"
+            elif action == "quarantine":
+                quarantine_of = index.wh_key[branch_id]  # location_key != None -> gudang (induk) PT sama ada
+                loc = xmlid(brand, index.company[branch_id], "branch_quarantine", branch_id)
         if not reason:
             row_uom = norm_uom(row.get("uom"))
             converted = to_product_qty(qty, row_uom, uom_by_code.get(code, ""), umap)
@@ -1174,8 +1218,11 @@ def build_quants(
         company = index.company[branch_id]
         group = groups.setdefault(
             (company, str(loc), branch_id, code),
-            {"qty": Decimal(0), "source_qty": Decimal(0), "amount": Decimal(0), "locations": set()},
-        )
+            {"qty": Decimal(0), "source_qty": Decimal(0), "amount": Decimal(0), "locations": set(),
+             "quarantine_of": quarantine_of},
+        )  # fmt: skip
+        if quarantine_of:
+            skips.quarantine_rows += 1
         group["qty"] += converted
         group["source_qty"] += qty
         group["amount"] += dec(row.get("amount_balance"))
@@ -1206,6 +1253,9 @@ def build_quants(
             "amount": num(round(group["amount"], 2)),
             "accounting_date": accounting,
         }
+        if group["quarantine_of"]:
+            data["quarantine_of"] = group["quarantine_of"]
+        # esb_key tetap `<cabang>|<produk>` juga untuk karantina (kontrak importer); identitas = company×lokasi×produk.
         out.append(record("quant", company, f"{branch_id}|{code}", None, data))
         stat["exported_qty"] += source_qty
     return out
@@ -1219,11 +1269,12 @@ def opening_row_loaded(
     lmap: Mapping[tuple[int, str], str],
 ) -> bool:
     """Baris saldo awal dari cabang/lokasi yang dimuat langkah `stock` (cabang non-skip terpetakan, lokasi ESB
-    `stock` di location_map atau tanpa entri) -- dipakai juga HPP `stock_opening` (QA G65 P3)."""
+    `stock`/`quarantine` di location_map atau tanpa entri) -- dipakai juga HPP `stock_opening` (QA G65 P3; G65b:
+    karantina diperlakukan sama dengan stok biasa)."""
     branch_id = int(row["branch_id"])
     if location_key(brand, branch_id, bmap.get(branch_id), index) is None:
         return False
-    return lmap.get((branch_id, location_name_key(row.get("location_name"))), "stock") == "stock"
+    return lmap.get((branch_id, location_name_key(row.get("location_name"))), "stock") in ("stock", "quarantine")
 
 
 def to_product_qty(qty: Decimal, row_uom: str, product_uom: str, umap: Mapping[str, UomMap]) -> Decimal | None:
