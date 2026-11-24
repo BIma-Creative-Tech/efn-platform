@@ -7183,8 +7183,8 @@ Teks di atas dikoreksi agar cocok dengan implementasi yang sudah benar (QA G66b;
   peka huruf besar/kecil di staging; perlu dikonfirmasi untuk production (Q-PP14 diperluas).
 - **Uji staging ulang setelah perbaikan:** login, peran, cabang, SoD, logout, alur web, lockout per sumber (sumber lain
   tidak ikut terkunci); log prodplan tanpa password, token, username, maupun `c`.
-## 31. Insight "Margin bahan" — indeks harga bahan & atribusi margin (G67)
 
+## 31. Insight "Margin bahan" — indeks harga bahan & atribusi margin (G67)
 
 Status: **kontrak, belum dibangun** (25 Nov 2026). Tidak ada ADR baru: turunan baca di atas ADR-040 (ESB → datamart) dan
 ADR-041 (Insight), keduanya Proposed. Latar: analisis margin 23–24 Nov 2026 (laporan lokal, tidak di repo karena data
