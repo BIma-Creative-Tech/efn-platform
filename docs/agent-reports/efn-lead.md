@@ -101,3 +101,26 @@ company_code `v_esb_movement_daily` = PT cabang asal (alternatif dua baris asal/
   `stock_opening` dengan uom kosong (perlu dicek), 1.235 saldo negatif (default tidak dimigrasi, Q-ESB27).
 - Temuan lama (G43): `dim_esb_product.uom` kosong untuk semua produk PB → ekspor master penuh gagal PRODUCT_UOM;
   G65 diekspor per langkah (supplierinfo, cost, legacy_purchase_line) karena master PB sudah ada sejak 22 Nov.
+## G66 — Production planning di atas ESB (24 Nov 2026, branch `feat/production-planning`)
+
+**Lingkup:** ADR-051 (Proposed) + docs/04 §30; service baru `services/prodplan` (baca ESB, rencana di PostgreSQL, tulis
+transfer/produksi ke ESB lewat allowlist + outbox); modul Produksi di insight-web; grup `pp_planner`/`pp_warehouse` di
+`efn_insight`; overlay `docker-compose.prodplan.yml`; runbook `docs/runbooks/prodplan.md`; UAT `docs/qa/G66_UAT.md`.
+
+**Terverifikasi (dijalankan lead):** ruff + pytest prodplan (lulus, 3 integrasi PG di-skip); insight-web lint/typecheck/
+1.052 test/build/audit; Odoo `efn_role`+`efn_insight` 139 test; `check-encryption.sh` OK; stack terisolasi `efn-pp`
+(postgres + prodplan + sidecar + insight-web) boot; E2E nyata ke ESB staging: PR → permintaan, ledakan BOM, kemasan utuh
++ usulan batch, usulan transfer antar lokasi/cabang, SoD, posting transfer & produksi (dokumen muncul di ESB), cancel
+(dokumen terhapus), segarkan stok saat approved, pemulihan baris tersangkut; token `ppa1` TS↔Python; semua halaman
+`/produksi` dirender nyata.
+
+**Belum terverifikasi:** UI di browser sungguhan (klik, polling, a11y); login lewat Odoo SSO untuk peran PP; BOM
+multi-level pada data nyata; mode costing `standard`; fase produksi setelah simple-transfer di-authorize manusia di ESB;
+kirim ulang dokumen yang ditolak ESB (hanya unit test); ESB production (hanya GET); CI GitHub.
+
+**Pelajaran:** ESB memakai ulang nomor dokumen yang dihapus; dokumen produksi via API langsung Authorized; authorize
+simple-transfer via API tidak mengubah status; volume postgres baru di stack terisolasi perlu `chown 999:999`;
+`check-encryption.sh` butuh `jq` (jalankan di container `docker:27-cli` + `gen-secrets.sh` + `.env` dari contoh).
+
+**Menunggu pemilik proyek:** Q-PP1 (akun API non-admin), Q-PP2 (terima produksi tanpa tahap draft di ESB), Q-PP3 (mode
+costing production), Q-PP6 (lokasi sumber transfer), Q-PP13, Q-PP14. Tulis ke ESB production terkunci di kode.

@@ -166,6 +166,44 @@ export const GLOSSARY: readonly GlossaryEntry[] = [
     match: '\\bGMROI\\b',
     caseSensitive: true,
   },
+  // G66 (modul Production Order, docs/04 §30).
+  {
+    id: 'kemasan-utuh',
+    term: 'Kemasan utuh',
+    def: 'Bahan yang hanya bisa diambil per kemasan penuh (mis. susu 1.000 ML). Kebutuhan dibulatkan ke atas ke kelipatan isi kemasan.',
+    read: 'Kebutuhan 1.950 ML dari kemasan 1.000 ML berarti 2 kemasan (kebutuhan efektif 2.000 ML), sisa terbuka 50 ML.',
+    match: 'kemasan utuh',
+  },
+  {
+    id: 'sisa-terbuka',
+    term: 'Sisa terbuka',
+    def: 'Bagian kemasan utuh yang sudah dibuka tetapi tidak terpakai oleh rencana ini (kemasan dikali isi dikurangi kebutuhan).',
+    read: 'Sisa ini hanya bertahan selama umur setelah dibuka; bila cukup untuk sedikitnya satu unit produk, sistem mengusulkan batch tambahan.',
+    match: 'sisa terbuka',
+  },
+  {
+    id: 'usulan-batch',
+    term: 'Usulan batch',
+    full: 'Usulan batch tambahan',
+    def: 'Alternatif jumlah produksi tambahan agar sisa kemasan terbuka terpakai, dihitung dari bahan yang tersisa dibagi pemakaian per unit.',
+    read: 'Usulan bersifat pilihan: planner menerima atau menolak. Menerima satu usulan menggugurkan usulan lain untuk bahan yang sama dan mewajibkan hitung ulang; permintaan asal tidak berkurang.',
+    match: 'usulan batch',
+  },
+  {
+    id: 'outbox',
+    term: 'Outbox',
+    full: 'Antrean dokumen keluar ke ESB',
+    def: 'Daftar dokumen ESB (transfer, produksi) yang dibuat dari rencana. Tiap dokumen dikirim satu per satu dan statusnya dipantau sampai terkonfirmasi.',
+    read: 'Hasil belum pasti berarti ESB tidak menjawab setelah dokumen terkirim: sistem mencocokkan ulang, tidak mengirim ganda. Gagal berarti perlu tindakan manusia.',
+    match: '\\boutbox\\b',
+  },
+  {
+    id: 'posting',
+    term: 'Posting',
+    def: 'Mengirim dokumen transfer dan produksi dari rencana yang sudah disetujui menjadi dokumen sungguhan di ESB.',
+    read: 'Dilakukan dua fase (transfer, lalu produksi). Dokumen produksi langsung mengubah stok ESB, karena itu butuh pratinjau dan konfirmasi eksplisit.',
+    match: '\\bposting\\b',
+  },
 ];
 
 const BY_ID = new Map(GLOSSARY.map((e) => [e.id, e]));

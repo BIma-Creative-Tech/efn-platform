@@ -18,6 +18,10 @@ G52 (docs/04 §28.15.4, ADR-041 §3.6): persona F&B (exec/marketing/store) dari 
 `INSIGHT_FNB_PERSONA_ENABLED` = "true" persis; aturan store lintas domain (L-245) menghasilkan G' untuk hook SM;
 kepala toko F&B store-only hanya mendapat cabang `efn_insight_esb_branch_ids` (klaim `brs`, eit3) dan **kehilangan
 cakupan PT penuh di semua versi token, tanpa bergantung flag** (L-241; eit1/eit2 = bagian ESB kosong, fail closed).
+
+G66 (docs/04 §30.7, ADR-051 Proposed): grup `group_prodplan_planner`/`group_prodplan_warehouse` -> peran
+`pp_planner`/`pp_warehouse` di `roles` **eit3 saja** (eit1/eit2 tidak pernah memuat PP); dibuang bila T9 tidak
+terpenuhi (`apply_pp_roles`). Tanpa flag Odoo: gerbang `/produksi` = `INSIGHT_PRODPLAN_ENABLED` di insight-web.
 """
 
 import logging
@@ -204,6 +208,26 @@ def merge_scope_v3(esb, sm):
     return scope
 
 
+def apply_pp_roles(scope, pp, uid):
+    """docs/04 §30.7 (G66): tambah peran PP (grup -> peran) ke `roles` cakupan eit3 yang sudah digabung.
+
+    T9 dipenuhi di sisi pembuat dengan MEMBUANG peran PP (fail closed, bukan halaman galat):
+    - `brs` tidak kosong (kepala toko ber-cabang) -> log `insight_pp_conflict uid=<id>` (persis kontrak);
+    - tanpa kode ESB (mis. user SMD saja) -> log `insight_pp_no_esb uid=<id>` (tafsiran: kontrak hanya menyebut T9).
+    Tanpa log nama/login. Mengembalikan dict baru; `scope` tidak diubah.
+    """
+    pp = set(pp or ()) & insight_token.PP_ROLES
+    if not pp:
+        return scope
+    if scope["brs"]:
+        _logger.info("insight_pp_conflict uid=%s", uid)
+        return scope
+    if not set(scope["codes"]) & insight_token.ESB_CODES:
+        _logger.info("insight_pp_no_esb uid=%s", uid)
+        return scope
+    return dict(scope, roles=sorted(set(scope["roles"]) | pp))
+
+
 class EfnInsightController(http.Controller):
     @http.route("/efn/insight/open", type="http", auth="user", methods=["GET"], sitemap=False)
     def efn_insight_open(self, **kw):
@@ -286,8 +310,8 @@ class EfnInsightController(http.Controller):
         return token, payload
 
     def _token_v3(self, user, esb, sm, key):
-        """eit3 (docs/04 §28.15.4-§28.15.5). (token, payload) atau (None, halaman info)."""
-        scope = merge_scope_v3(esb, sm)
+        """eit3 (docs/04 §28.15.4-§28.15.5 + §30.7). (token, payload) atau (None, halaman info)."""
+        scope = apply_pp_roles(merge_scope_v3(esb, sm), user._efn_insight_pp_roles(), user.id)
         if not scope["codes"]:
             if esb["no_branch"]:
                 state = "no_branch"

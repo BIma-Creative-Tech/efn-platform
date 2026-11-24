@@ -2032,3 +2032,56 @@ sama → apa adanya; beda → hanya bila keduanya di `uom_map` dengan `uom_xmlid
 produk; selain itu baris ditolak `skipped.uom_unconvertible` + error validator `STOCK_UOM_UNCONVERTIBLE`, menggantikan
 `uom_mixed`/`STOCK_UOM_MIXED`). `quant.uom_esb/uom_xmlid` = UoM produk; `stock_by_branch` tetap satuan ESB. HPP
 `stock_opening` juga dihitung per satuan produk. `odoo_totals.quant.quantity` = UoM produk.
+## Gelombang 66 — service `prodplan` (production planning CK di atas ESB, 24 Nov 2026)
+
+docs/04 §30, ADR-051 (Proposed). Worktree `efn-platform-prodplan`, branch `feat/production-planning`. Ditulis tanpa shell:
+ruff/pytest belum dijalankan oleh agent ini.
+
+### File (semua baru, `services/prodplan/`)
+`efn_prodplan/{__init__,__main__,config,esb,calc,actor,workflow,payloads,store,outbox,jobs,service,api,logs,metrics}.py`,
+`tests/{test_config,test_esb,test_calc,test_actor,test_workflow,test_payloads,test_outbox,test_jobs,test_api,
+test_store_integration}.py`, `Dockerfile`, `.dockerignore`, `requirements.txt` (`psycopg[binary]==3.2.9`,
+`certifi==2026.10.23`), `requirements-dev.txt` (`pytest==9.2.0`), `ruff.toml`, `pytest.ini`, `README.md`.
+
+### Asumsi skema
+Kolom/tabel = `infra/postgres/init/23-prodplan-g66.sql` (devsecops) persis §30.6; aplikasi tidak memegang DDL. Purge
+audit lewat `prodplan.purge_expired_audit_events()`.
+
+### Keputusan implementasi (tafsir kontrak)
+1. API stdlib `ThreadingHTTPServer` (tanpa framework); job + outbox + purge = thread di `serve`. `check-config` tambahan.
+2. `PRODPLAN_ENABLED=false`: `/readyz` 200 `{"status":"disabled"}` tanpa PG.
+3. Allowlist GET ditambah `/product/bom/{bomID}` (header; daftar BOM tanpa productDetailID — info lead), `/product`,
+   `/product/list`, `/product/{productID}`. Nomor dokumen wajib memuat digit (menolak `assembly-actual`/`authorize`
+   sebagai `{num}`).
+4. Indeks BOM Assembly = daftar + header per BOM (cache 15 menit, bersama API+job). Stok lokasi sumber dibaca lewat
+   `GET /product/bom/detail/{bomID}?branchID&locationID` (bukan `branch-stock`, parameternya belum terbukti).
+5. Pembatalan: 409 `invalid_state` bila outbox `sending/sent/unknown/delete_*`; `pending` → `failed` kode `cancelled`.
+   DELETE berhenti bila baris seq lebih tinggi `delete_failed`.
+6. `POST /v1/plans/{id}/calculate` menaikkan `row_version`; hasil job dibuang (`conflict_version`) bila rencana berubah
+   selama job. Job yang terputus restart → `failed` kode `interrupted`. Demand bom tidak aktif → job `bom_not_assembly`.
+7. `GET /v1/plans` tanpa `brand` = semua brand yang boleh (asumsi frontend). `POST /v1/plans` mengembalikan seluruh plan.
+8. `import-pr` default `status_ids=[3,30]`; baris BOM `subtitution` truthy dilewati (belum terverifikasi).
+9. Endpoint baru `GET /v1/boms?brand&q&limit` (keputusan lead) — kontrak §30.8 perlu diperbarui lead.
+
+### Belum terverifikasi
+ruff/pytest; E2E staging ESB; PG nyata (`test_store_integration.py` skip tanpa `PRODPLAN_TEST_DSN`); field list PR
+(`purchaseRequestNum`), `uomName` di `/product`, mode `standard`; jumlah panggilan header BOM awal (R-O10).
+
+### G66 putaran 2 (perbaikan security/QA, 24 Nov 2026)
+- SEC-225: `outbox.find_by_marker` paginasi penuh (limit 100, maks 50 halaman) → `ReconcileResult(number, status_id,
+  complete)`; tanpa kepastian (batas halaman, galat ESB, detail tak terbaca) baris tetap `unknown`
+  (`last_error_code=reconcile_incomplete` setelah grace), tidak pernah `failed`.
+- SEC-226: baris ber-nomor tidak pernah turun ke `unknown/failed` (tetap `sent` + `doc_not_found`/`marker_mismatch`);
+  `store.outbox_update_sql` menegakkan di SQL (`COALESCE` nomor, status lama dipertahankan). `resend` hanya untuk
+  `failed` tanpa nomor dengan kode ∈ {esb_rejected, not_sent, client_error, not_found_after_timeout}; selalu
+  rekonsiliasi dulu → nomor diadopsi (`sent`) atau 409 `reconcile_incomplete`.
+- QA-B: `get_plan.posting_state` ∈ none|in_progress|needs_attention|complete.
+- SEC-227: SoD memakai aktor `audit_event` aksi isi (`workflow.CONTENT_ACTIONS`) — tanpa DDL.
+- QA-A: `calculate` pada `approved` (P/W) = refresh; `job.result.plan_status` + `changed`.
+- QA-D/E; SEC-231 (qty BOM ≤ 0 dilewati + `warnings.invalid_bom_qty`; `payloads.num` menolak qty ≤ 0 → 422
+  `invalid_quantity`); SEC-230 (cancel mengunci outbox `FOR UPDATE` + claim `sending` mensyaratkan rencana belum batal).
+- Nama ESB (`names.py`, `/branch/list/user` ditambah ke allowlist): `branch_name`, `production_location_name`,
+  `location_name`, `origin_branch_name`, `origin_location_name`, `dest_branch_name`, `dest_location_name`.
+- `/v1/boms`: 422 `bad_input`, `q` 2..64 tanpa karakter kontrol. Kode galat job terdaftar di `workflow.JOB_ERROR_CODES`.
+- Test QA yang perilakunya berubah: `test_outbox_edges.test_confirm_*` (kini tetap `sent`), `test_outbox` marker
+  mismatch, `test_jobs` (qty tak terbaca dilewati; `q` lebih longgar). Test baru: `tests/test_round2.py`.

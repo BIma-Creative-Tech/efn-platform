@@ -1463,3 +1463,31 @@ sampai stok dimuat, atau reset); tetap Q-ESB16, Q-ESB21.
 Semua runtime; nama field `supplierID` `/supplier`; limit header PO; `branchCode` = `dim_esb_branch.branch_code`;
 `unitToShow`; pembulatan `amountBalance`; arti `discount`/`total`; RFQ dengan `product_uom_id` beda; filter `at_date`
 closing; efek tanggal mundur pada AVCO. R-O15 belum dimasukkan ke `docs/01` (milik lead).
+---
+
+# G66 — Production planning CK di atas ESB: ADR-051, kontrak §30 v21.4 (2026-11-24)
+
+## Ringkasan (untuk manajemen)
+Planner CK PB mendapat halaman Production Order di Insight: kebutuhan bahan dari resep, kemasan utuh + usulan batch,
+usulan transfer yang disetujui kepala gudang, lalu dokumen transfer/produksi dibuat di ESB oleh service baru `prodplan`.
+Uji staging: dokumen produksi ESB langsung sah (tanpa draft) → persetujuan dua orang dipindah ke aplikasi (perlu
+konfirmasi pemilik proyek). Tulis ke ESB production terkunci di kode. Biaya ±3–4 minggu-engineer (tahap 1) + ±1,5–2 (tahap 2).
+
+## File dibuat / diubah (worktree `efn-platform-prodplan`, tanpa kode)
+- `docs/decisions/ADR-051-production-planning-esb.md` (baru, Proposed)
+- `docs/04_SERVICE_CONTRACTS.md`: §30 baru, baris versi v21.4
+- `docs/decisions/ADR-040-...md` §6a dan `ADR-041-...md` §3.7 (catatan amandemen), `docs/decisions/README.md` (indeks)
+
+## Keputusan yang butuh tanda tangan klien
+Q-PP1 (akun API non-admin), Q-PP2 (penyimpangan "draft di ESB" untuk produksi), Q-PP3 (mode costing PB), Q-PP4..Q-PP12
+(`docs/04` §30.14). Risiko baru usulan: R-S23, R-O15, R-T23 (belum masuk `docs/01`, tugas lead).
+
+## Belum terverifikasi
+- `GET /product/branch-stock` mengembalikan stok per lokasi untuk semua bahan (jumlah panggilan per job).
+- Nama parameter filter `additionalInfo` pada list goods-transfer-request; path detail `GET /production/simple-manufacturing/{num}`
+  memuat `additionalInfo`.
+- Mode `standard` (`…/assembly`) di production PB; desimal qty diterima ESB; batas panjang `additionalInfo`/`notes`.
+- Arti `yieldPercent`; apakah pesanan outlet FIN selalu lewat PR.
+- Perilaku `samenet` pg_hba dengan postgres di dua network (asumsi: mencakup kedua subnet) dan aturan check-encryption yang
+  perlu diubah devsecops.
+- Semua runtime (tidak ada kode yang ditulis).

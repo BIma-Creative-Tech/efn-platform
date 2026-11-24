@@ -1,5 +1,5 @@
-
-# KONTRAK ANTAR-SERVICE (v21.4 — 24 Nov 2026, G65 §27.13 migrasi ESB → Odoo PB tambahan: entitas esb-extract `purchase_line` (harian) + `stock_opening` (snapshot Beginning `/report/stock-movement`), tabel `fact_esb_purchase_line`/`fact_esb_stock_opening` + `dim_esb_supplier.supplier_id`, langkah `supplierinfo`/`cost` (HPP dari saldo nilai)/`stock`/`legacy_purchase_line`, model `efn.legacy.purchase.line`, cutover uji PB 2026-12-01, `opening` tetap NOT_BUILT, L-250..L-258, Q-ESB25..Q-ESB29 — kontrak, belum dibangun; v21.3 — 23 Nov 2026, kanal online SMD (pickup + pre-order, tanpa QR meja/reservasi) + tenant web `supermarket` §12.1/§13.5/§28.8 — dibangun; v21.2 — 23 Nov 2026, G53 §28.16 forecast F&B di insight-web `/forecast`: view `efn_insight.v_esb_forecast_daily` (policy ESB kelas PT, 15 policy), query `fnb_fc_*`, env `INSIGHT_FNB_DC_CODES` — dibangun G53; v21.1 — 22 Nov 2026, G52 §28.15 Insight F&B persona dari data ESB: halaman `/fnb/exec`, `/fnb/store`, `/fnb/marketing` (query `fexec_*`/`fstore_*`/`fmkt_*`), sidebar Ringkasan = Ikhtisar + halaman bersama di grup F&B dan Supermarket, grup persona pindah ke `efn_insight` 19.0.3.0.0 (xmlid tetap), model `efn.insight.esb.branch` + `res.users.efn_insight_esb_branch_ids`, kepala toko F&B dibatasi cabang (klaim `brs` `"<brand>:<id>"`, pencabutan cakupan PT penuh tanpa bergantung flag), token `eit3`/`eis3`, `SQL_efn_brs` + `SQL_efn_sig3`, policy ESB kelas PT/BR (14), 4 view `v_esb_store_*`, flag `INSIGHT_FNB_PERSONA_ENABLED`/`INSIGHT_ACCEPT_EIT2`, L-237..L-249, Q-INS-F1..Q-INS-F4 — kontrak, belum dibangun; v21.0 — 21 Nov 2026, G51 §28.14 SMD end-to-end: SMD sebagai filter halaman F&B Insight untuk persona `exec` (cabang `sm:<id>`, omzet termasuk PPN, basis campuran berlabel), view `v_sm_payment_daily`/`v_sm_product_sales_daily`/`v_sm_forecast_daily`/`v_sm_lot_stock` + `v_sm_product_list.shelf_life_days`, policy SM 33, store hanya bersama exec (SEC-G51-01), rekonstruksi stok `ETL_SM_STOCK_RECONSTRUCT_DAYS` (default 0), histori forecast as-of demo, seed A1–A7 demo saja, deploy `--renew-anon-volumes`, outlet online opsional, L-219..L-236, Q-SM46..Q-SM47 (terjawab 21 Nov) — dibangun G51; v20.5 — 21 Nov 2026, G47 review: L-216 store + marketing/dc, sesi Insight 2 jam L-217, kartu fase 2 L-218; v20.4 — 21 Nov 2026, G47 §28.13: koreksi fit-gap C-1..C-9 diserap dari kode (L-204..L-215), keputusan pemilik proyek 21 Nov: `kpi_admin` tanpa SoD kode, penerimaan outlet SMD dua langkah; v20.3 — 20 Nov 2026, G47 §28.13 Insight supermarket per persona: token `eit2`/`eis2` (`wids`, persona, `cats`), `SQL_efn_sig2`, row policy outlet + persona, mart `fact_replenishment`/`fact_dc_fill_rate`/`fact_dc_purchase_line`/`agg_sm_stock_daily`/`fact_lot_expiry`/`fact_campaign_result`, view `efn_insight.v_sm_*`, pemetaan `outlet_code` (Q-SM37), konfigurasi KPI per PT `efn.insight.sm.kpi` → `dim_sm_kpi_config`, Omzet termasuk PPN, L-186..L-203, Q-SM40..Q-SM45 — kontrak, belum dibangun; v20.2 dipakai PR #117 G50; v20.0 — 18 Nov 2026, Supermarket §28: forecast API worker→Odoo, usulan replenishment DC, assortment, event perilaku `POST /v1/events`, queue `behavior.event`/`promo.campaign.requested`/`notify.restock`/`notify.price_alert`/`notify.email`/`notify.wa_unofficial`, wishlist/notify-me/price alert, flag (ADR-044..048 Proposed, belum dibangun; §27 + L-127..L-143 dicadangkan G43); v18.0 — 18 Nov 2026, G42 §26 Insight web + SSO Odoo (token eit1 HMAC sekali pakai via POST form, cookie eis1, row policy `efn_insight_scope`, ADR-041 Proposed); v17.0 — 17 Nov 2026, G41 §25 ESB Core → datamart ClickHouse (esb-extract GET-only per brand, ADR-040 Proposed); v16.2 — 1 Nov 2026, G39 §24 asisten analisis "Analisis bertahap" (text2sql POST /v1/analyze: rencana ≤3 query → eksekusi per PT → ringkasan AI); v16.1 — 1 Nov 2026, G38 §23 Text-to-SQL "Tanya Data" (Odoo → text2sql → 9router/Ollama → ClickHouse per PT); v16.0 — 1 Nov 2026, G37 §22 gateway LLM 9router + fallback Ollama untuk OCR tahap 2 (K25-01, ADR-037); v15.1 — 31 Okt 2026, G33 §20.11 notifikasi reward MGM + layar referral Super-App; v15.0 — 30 Okt 2026, G32 §21 mart & dashboard waste/yield (K25-08); v14.1 — 30 Okt 2026, G31b §20.10 dasar MGM per baris (`excluded_categ_ids`); v14.0 — 30 Okt 2026, G31 §20 engine MGM: referral, akrual, settle, clawback; v13.0 — 29 Okt 2026, G30 §19 kebijakan MGM per PT (K25-10); v11.0 — 25 Okt 2026, G26 §17 pesanan online wajib lunas: VA, e-wallet, transfer + bukti, kiosk; v10.1 — 24 Okt 2026, G24 §16 entitas WTZ Wetzel's Pretzels; v10.0 — 21 Okt 2026, G23 §15 reservasi meja & pre-order berjadwal; v9.1 — 19 Okt 2026, G22 §14 sinkron r15 K1–K3 + L-82; v9.0 — 19 Okt 2026, G22 §14; v8.0 — G21 §13; v7.0 — G20 §12; v6.0 — G19 §11; v5.1 — 10 Okt 2026, privasi G18 L-21; v5.0 — 9 Okt 2026; §8 v3.x, §9 v4.x Fase 1, §10 v5.0 Fase 3 penjualan online; **§27 G43 v19.1** migrasi ESB → Odoo + arsip histori `efn_legacy_history`, ADR-042 Accepted)
+# KONTRAK ANTAR-SERVICE (v21.5 — 24 Nov 2026, G65 §27.13 migrasi ESB → Odoo PB tambahan: entitas esb-extract `purchase_line` (harian) + `stock_opening` (snapshot Beginning `/report/stock-movement`), tabel `fact_esb_purchase_line`/`fact_esb_stock_opening` + `dim_esb_supplier.supplier_id`, langkah `supplierinfo`/`cost` (HPP dari saldo nilai)/`stock`/`legacy_purchase_line`, model `efn.legacy.purchase.line`, cutover uji PB 2026-12-01, `opening` tetap NOT_BUILT, L-250..L-258, Q-ESB25..Q-ESB29 — kontrak, belum dibangun; v21.3 — 23 Nov 2026, kanal online SMD (pickup + pre-order, tanpa QR meja/reservasi) + tenant web `supermarket` §12.1/§13.5/§28.8 — dibangun; v21.2 — 23 Nov 2026, G53 §28.16 forecast F&B di insight-web `/forecast`: view `efn_insight.v_esb_forecast_daily` (policy ESB kelas PT, 15 policy), query `fnb_fc_*`, env `INSIGHT_FNB_DC_CODES` — dibangun G53; v21.1 — 22 Nov 2026, G52 §28.15 Insight F&B persona dari data ESB: halaman `/fnb/exec`, `/fnb/store`, `/fnb/marketing` (query `fexec_*`/`fstore_*`/`fmkt_*`), sidebar Ringkasan = Ikhtisar + halaman bersama di grup F&B dan Supermarket, grup persona pindah ke `efn_insight` 19.0.3.0.0 (xmlid tetap), model `efn.insight.esb.branch` + `res.users.efn_insight_esb_branch_ids`, kepala toko F&B dibatasi cabang (klaim `brs` `"<brand>:<id>"`, pencabutan cakupan PT penuh tanpa bergantung flag), token `eit3`/`eis3`, `SQL_efn_brs` + `SQL_efn_sig3`, policy ESB kelas PT/BR (14), 4 view `v_esb_store_*`, flag `INSIGHT_FNB_PERSONA_ENABLED`/`INSIGHT_ACCEPT_EIT2`, L-237..L-249, Q-INS-F1..Q-INS-F4 — kontrak, belum dibangun; v21.0 — 21 Nov 2026, G51 §28.14 SMD end-to-end: SMD sebagai filter halaman F&B Insight untuk persona `exec` (cabang `sm:<id>`, omzet termasuk PPN, basis campuran berlabel), view `v_sm_payment_daily`/`v_sm_product_sales_daily`/`v_sm_forecast_daily`/`v_sm_lot_stock` + `v_sm_product_list.shelf_life_days`, policy SM 33, store hanya bersama exec (SEC-G51-01), rekonstruksi stok `ETL_SM_STOCK_RECONSTRUCT_DAYS` (default 0), histori forecast as-of demo, seed A1–A7 demo saja, deploy `--renew-anon-volumes`, outlet online opsional, L-219..L-236, Q-SM46..Q-SM47 (terjawab 21 Nov) — dibangun G51; v20.5 — 21 Nov 2026, G47 review: L-216 store + marketing/dc, sesi Insight 2 jam L-217, kartu fase 2 L-218; v20.4 — 21 Nov 2026, G47 §28.13: koreksi fit-gap C-1..C-9 diserap dari kode (L-204..L-215), keputusan pemilik proyek 21 Nov: `kpi_admin` tanpa SoD kode, penerimaan outlet SMD dua langkah; v20.3 — 20 Nov 2026, G47 §28.13 Insight supermarket per persona: token `eit2`/`eis2` (`wids`, persona, `cats`), `SQL_efn_sig2`, row policy outlet + persona, mart `fact_replenishment`/`fact_dc_fill_rate`/`fact_dc_purchase_line`/`agg_sm_stock_daily`/`fact_lot_expiry`/`fact_campaign_result`, view `efn_insight.v_sm_*`, pemetaan `outlet_code` (Q-SM37), konfigurasi KPI per PT `efn.insight.sm.kpi` → `dim_sm_kpi_config`, Omzet termasuk PPN, L-186..L-203, Q-SM40..Q-SM45 — kontrak, belum dibangun; v20.2 dipakai PR #117 G50; v20.0 — 18 Nov 2026, Supermarket §28: forecast API worker→Odoo, usulan replenishment DC, assortment, event perilaku `POST /v1/events`, queue `behavior.event`/`promo.campaign.requested`/`notify.restock`/`notify.price_alert`/`notify.email`/`notify.wa_unofficial`, wishlist/notify-me/price alert, flag (ADR-044..048 Proposed, belum dibangun; §27 + L-127..L-143 dicadangkan G43); v18.0 — 18 Nov 2026, G42 §26 Insight web + SSO Odoo (token eit1 HMAC sekali pakai via POST form, cookie eis1, row policy `efn_insight_scope`, ADR-041 Proposed); v17.0 — 17 Nov 2026, G41 §25 ESB Core → datamart ClickHouse (esb-extract GET-only per brand, ADR-040 Proposed); v16.2 — 1 Nov 2026, G39 §24 asisten analisis "Analisis bertahap" (text2sql POST /v1/analyze: rencana ≤3 query → eksekusi per PT → ringkasan AI); v16.1 — 1 Nov 2026, G38 §23 Text-to-SQL "Tanya Data" (Odoo → text2sql → 9router/Ollama → ClickHouse per PT); v16.0 — 1 Nov 2026, G37 §22 gateway LLM 9router + fallback Ollama untuk OCR tahap 2 (K25-01, ADR-037); v15.1 — 31 Okt 2026, G33 §20.11 notifikasi reward MGM + layar referral Super-App; v15.0 — 30 Okt 2026, G32 §21 mart & dashboard waste/yield (K25-08); v14.1 — 30 Okt 2026, G31b §20.10 dasar MGM per baris (`excluded_categ_ids`); v14.0 — 30 Okt 2026, G31 §20 engine MGM: referral, akrual, settle, clawback; v13.0 — 29 Okt 2026, G30 §19 kebijakan MGM per PT (K25-10); v11.0 — 25 Okt 2026, G26 §17 pesanan online wajib lunas: VA, e-wallet, transfer + bukti, kiosk; v10.1 — 24 Okt 2026, G24 §16 entitas WTZ Wetzel's Pretzels; v10.0 — 21 Okt 2026, G23 §15 reservasi meja & pre-order berjadwal; v9.1 — 19 Okt 2026, G22 §14 sinkron r15 K1–K3 + L-82; v9.0 — 19 Okt 2026, G22 §14; v8.0 — G21 §13; v7.0 — G20 §12; v6.0 — G19 §11; v5.1 — 10 Okt 2026, privasi G18 L-21; v5.0 — 9 Okt 2026; §8 v3.x, §9 v4.x Fase 1, §10 v5.0 Fase 3 penjualan online; **§27 G43 v19.1** migrasi ESB → Odoo + arsip histori `efn_legacy_history`, ADR-042 Accepted)
+# KONTRAK ANTAR-SERVICE (v21.4 — 24 Nov 2026, G66 §30 production planning CK di atas ESB: service `prodplan` (PostgreSQL `efn_prodplan`, allowlist POST/DELETE transfer + produksi ke ESB, outbox + marker `pp:`), network `prodplan-db`/`insight-plan`/`egress-prodplan`, mTLS `insight-web-pp`→`prodplan-tls` + asersi aktor `ppa1`, peran `pp_planner`/`pp_warehouse` di `eit3`/`eis3` (T9), halaman Insight `/produksi`, L-250..L-257, Q-PP1..Q-PP12 (ADR-051 Proposed) — kontrak, belum dibangun; v21.3 — 23 Nov 2026, kanal online SMD (pickup + pre-order, tanpa QR meja/reservasi) + tenant web `supermarket` §12.1/§13.5/§28.8 — dibangun; v21.2 — 23 Nov 2026, G53 §28.16 forecast F&B di insight-web `/forecast`: view `efn_insight.v_esb_forecast_daily` (policy ESB kelas PT, 15 policy), query `fnb_fc_*`, env `INSIGHT_FNB_DC_CODES` — dibangun G53; v21.1 — 22 Nov 2026, G52 §28.15 Insight F&B persona dari data ESB: halaman `/fnb/exec`, `/fnb/store`, `/fnb/marketing` (query `fexec_*`/`fstore_*`/`fmkt_*`), sidebar Ringkasan = Ikhtisar + halaman bersama di grup F&B dan Supermarket, grup persona pindah ke `efn_insight` 19.0.3.0.0 (xmlid tetap), model `efn.insight.esb.branch` + `res.users.efn_insight_esb_branch_ids`, kepala toko F&B dibatasi cabang (klaim `brs` `"<brand>:<id>"`, pencabutan cakupan PT penuh tanpa bergantung flag), token `eit3`/`eis3`, `SQL_efn_brs` + `SQL_efn_sig3`, policy ESB kelas PT/BR (14), 4 view `v_esb_store_*`, flag `INSIGHT_FNB_PERSONA_ENABLED`/`INSIGHT_ACCEPT_EIT2`, L-237..L-249, Q-INS-F1..Q-INS-F4 — kontrak, belum dibangun; v21.0 — 21 Nov 2026, G51 §28.14 SMD end-to-end: SMD sebagai filter halaman F&B Insight untuk persona `exec` (cabang `sm:<id>`, omzet termasuk PPN, basis campuran berlabel), view `v_sm_payment_daily`/`v_sm_product_sales_daily`/`v_sm_forecast_daily`/`v_sm_lot_stock` + `v_sm_product_list.shelf_life_days`, policy SM 33, store hanya bersama exec (SEC-G51-01), rekonstruksi stok `ETL_SM_STOCK_RECONSTRUCT_DAYS` (default 0), histori forecast as-of demo, seed A1–A7 demo saja, deploy `--renew-anon-volumes`, outlet online opsional, L-219..L-236, Q-SM46..Q-SM47 (terjawab 21 Nov) — dibangun G51; v20.5 — 21 Nov 2026, G47 review: L-216 store + marketing/dc, sesi Insight 2 jam L-217, kartu fase 2 L-218; v20.4 — 21 Nov 2026, G47 §28.13: koreksi fit-gap C-1..C-9 diserap dari kode (L-204..L-215), keputusan pemilik proyek 21 Nov: `kpi_admin` tanpa SoD kode, penerimaan outlet SMD dua langkah; v20.3 — 20 Nov 2026, G47 §28.13 Insight supermarket per persona: token `eit2`/`eis2` (`wids`, persona, `cats`), `SQL_efn_sig2`, row policy outlet + persona, mart `fact_replenishment`/`fact_dc_fill_rate`/`fact_dc_purchase_line`/`agg_sm_stock_daily`/`fact_lot_expiry`/`fact_campaign_result`, view `efn_insight.v_sm_*`, pemetaan `outlet_code` (Q-SM37), konfigurasi KPI per PT `efn.insight.sm.kpi` → `dim_sm_kpi_config`, Omzet termasuk PPN, L-186..L-203, Q-SM40..Q-SM45 — kontrak, belum dibangun; v20.2 dipakai PR #117 G50; v20.0 — 18 Nov 2026, Supermarket §28: forecast API worker→Odoo, usulan replenishment DC, assortment, event perilaku `POST /v1/events`, queue `behavior.event`/`promo.campaign.requested`/`notify.restock`/`notify.price_alert`/`notify.email`/`notify.wa_unofficial`, wishlist/notify-me/price alert, flag (ADR-044..048 Proposed, belum dibangun; §27 + L-127..L-143 dicadangkan G43); v18.0 — 18 Nov 2026, G42 §26 Insight web + SSO Odoo (token eit1 HMAC sekali pakai via POST form, cookie eis1, row policy `efn_insight_scope`, ADR-041 Proposed); v17.0 — 17 Nov 2026, G41 §25 ESB Core → datamart ClickHouse (esb-extract GET-only per brand, ADR-040 Proposed); v16.2 — 1 Nov 2026, G39 §24 asisten analisis "Analisis bertahap" (text2sql POST /v1/analyze: rencana ≤3 query → eksekusi per PT → ringkasan AI); v16.1 — 1 Nov 2026, G38 §23 Text-to-SQL "Tanya Data" (Odoo → text2sql → 9router/Ollama → ClickHouse per PT); v16.0 — 1 Nov 2026, G37 §22 gateway LLM 9router + fallback Ollama untuk OCR tahap 2 (K25-01, ADR-037); v15.1 — 31 Okt 2026, G33 §20.11 notifikasi reward MGM + layar referral Super-App; v15.0 — 30 Okt 2026, G32 §21 mart & dashboard waste/yield (K25-08); v14.1 — 30 Okt 2026, G31b §20.10 dasar MGM per baris (`excluded_categ_ids`); v14.0 — 30 Okt 2026, G31 §20 engine MGM: referral, akrual, settle, clawback; v13.0 — 29 Okt 2026, G30 §19 kebijakan MGM per PT (K25-10); v11.0 — 25 Okt 2026, G26 §17 pesanan online wajib lunas: VA, e-wallet, transfer + bukti, kiosk; v10.1 — 24 Okt 2026, G24 §16 entitas WTZ Wetzel's Pretzels; v10.0 — 21 Okt 2026, G23 §15 reservasi meja & pre-order berjadwal; v9.1 — 19 Okt 2026, G22 §14 sinkron r15 K1–K3 + L-82; v9.0 — 19 Okt 2026, G22 §14; v8.0 — G21 §13; v7.0 — G20 §12; v6.0 — G19 §11; v5.1 — 10 Okt 2026, privasi G18 L-21; v5.0 — 9 Okt 2026; §8 v3.x, §9 v4.x Fase 1, §10 v5.0 Fase 3 penjualan online; **§27 G43 v19.1** migrasi ESB → Odoo + arsip histori `efn_legacy_history`, ADR-042 Accepted)
 
 Status: **Draft untuk Fase 0 / PoC**. Mengikuti rekomendasi ADR yang masih `Proposed`. Semua service (Odoo, BFF, Next.js, worker) wajib memakai nama, path, dan payload di dokumen ini. Perubahan kontrak = ubah dokumen ini dulu.
 
@@ -6200,3 +6200,532 @@ Halaman masuk bermerek EFN: staf memilih tujuan (ERP Odoo / Insight) lalu diarah
   kunci TLS hanya sidecar). Image ikut build/scan/sign (`build-push.yml`) dan rantai rilis bertanda tangan
   (`IMAGE_LOGIN_GATEWAY`: deploy.yml, `efn-deploy`, `deploy.sh`). Staging/prod: terbitkan ulang intermediate PKI dan pasang
   ulang wrapper `efn-deploy` sebelum rilis pertama G62; DNS split `login.` → IP WireGuard; SAN `login.` di `ACME_DOMAINS`.
+
+## 30. Production planning di atas ESB (G66, ADR-051)
+
+Status: **kontrak, belum dibangun**. ADR-051 Proposed. Prototipe PB, CK cabang 4 (`simple-manufacturing`). Tahap 1 = baca +
+rencana (`PRODPLAN_WRITE_ENABLED=false`); tahap 2 = tulis ke **staging ESB**. Tulis ke ESB production terkunci di kode
+(§30.4). Pemilik: `services/prodplan` (engineer Python), `services/insight-web` halaman `/produksi` (frontend), overlay
+compose + PKI + pg role (devsecops), grup Odoo di `efn_insight` (Odoo engineer, kecil). Tidak mengulang ADR-040/041.
+
+### 30.1 Komponen & jaringan
+
+| Komponen | Isi | Network |
+|---|---|---|
+| `prodplan` (baru, Python 3.12, paket `efn_prodplan`, `python -m efn_prodplan serve`) | API HTTP **plaintext `127.0.0.1:8080`** (loopback namespace) + worker job + worker outbox (thread dalam proses yang sama, replika 1) | `prodplan-db`, `insight-plan`, `egress-prodplan` |
+| `prodplan-tls` (ghostunnel server, `network_mode: service:prodplan`) | `--listen=0.0.0.0:8443 --target=127.0.0.1:8080`, leaf `tls_prodplan_*`, `--cacert efn_ca_crt`, `--allow-cn=insight-web-pp`, `--allow-cn=prometheus`, status `127.0.0.1:6078` | (namespace prodplan) |
+| `insight-web-pp-tls` (ghostunnel **client**, `network_mode: service:insight-web`) | `client --listen=127.0.0.1:7443 --target=prodplan:8443 --override-server-name=prodplan --verify-cn=prodplan`, leaf `tls_insight_web_pp_*` (CN `insight-web-pp`, EKU clientAuth), status `127.0.0.1:6079` | (namespace insight-web) |
+| `insight-web` (ada) | tambah network `insight-plan`; memanggil `http://127.0.0.1:7443` (loopback ke sidecar) | + `insight-plan` |
+| `postgres` (ada) | tambah network `prodplan-db`; DB `efn_prodplan` | + `prodplan-db` |
+| `prometheus` (ada) | scrape `https://prodplan:8443/metrics` (mTLS CN `prometheus`) | + `insight-plan` |
+
+- Overlay **`infra/compose/docker-compose.prodplan.yml`**, profil `data` (sama dengan insight-web; K25-02: bila stack data
+  pindah mesin, `prodplan-db` menjadi lintas host lewat WireGuard → tinjau ulang). Tanpa overlay tidak ada perubahan base.
+- Network baru (K25-06, nama `${EFN_STACK}_<key>`, oktet 23–25 dicatat di peta oktet `docker-compose.yml`):
+  `prodplan-db` (internal, `.23.0/24`, anggota **hanya** `postgres` + `prodplan`), `insight-plan` (internal, `.24.0/24`,
+  anggota hanya `insight-web`, `prodplan`, `prometheus`), `egress-prodplan` (bridge, `enable_icc=false`, `.25.0/24`,
+  anggota hanya `prodplan`).
+- `prodplan` **tidak** di `data`, `internal`, `esb`, `insight-data`, `egress`: tidak menjangkau RabbitMQ, ClickHouse,
+  Odoo, MinIO, Loki. Tidak ada router Traefik (tidak terekspos).
+- `pg_hba.conf`: tambah `hostssl efn_prodplan efn_prodplan samenet scram-sha-256` sebelum baris `reject`. Karena postgres
+  kini di dua network, `samenet` mencakup subnet `prodplan-db` untuk semua baris role (L-252, diterima di ADR-051 §4.2);
+  `check-encryption.sh` diubah: postgres boleh tepat `[data, prodplan-db]`, anggota `prodplan-db` tepat {postgres, prodplan}.
+- Hardening `prodplan`: non-root `65534:65534`, `read_only`, tmpfs `/tmp`, `cap_drop: [ALL]`, `no-new-privileges`,
+  limit 1 CPU / 384M, logging json-file 20m×5, healthcheck
+  `python -c "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8080/healthz',timeout=3).status==200 else 1)"`.
+
+### 30.2 Secret & PKI
+
+| Secret | Generator (`scripts/secrets.list`) | Mount (dicek check-encryption) |
+|---|---|---|
+| `pg_password_prodplan` | `random` | `postgres` (00-roles.sh) + `prodplan` |
+| `prodplan_assert_key` | `hex32` (≥ 64 hex) | `insight-web` (penanda tangan `ppa1`) + `prodplan` (pemverifikasi) **saja** |
+| `esb_prodplan_password_<brand>` (v1: `pb`) | `host:disabled` (diisi operator; staging dan production = file berbeda per host) | `prodplan` saja |
+| `tls_prodplan_crt` / `tls_prodplan_key` | `pki` (leaf `prodplan|server`) | `prodplan-tls` saja (kunci) |
+| `tls_insight_web_pp_crt` / `tls_insight_web_pp_key` | `pki` (leaf `insight-web-pp|client`) | `insight-web-pp-tls` saja (kunci) |
+| `efn_ca_crt` | ada | prodplan, kedua sidecar |
+
+- `gen-pki.sh` `PKI_SERVICES`: tambah `"prodplan|server"` dan `"insight-web-pp|client"` → **intermediate staging/prod wajib
+  diterbitkan ulang** (nameConstraints; runbook internal-pki#service-baru).
+- Password ESB prodplan **terpisah** dari `esb_core_password_<brand>` walau isinya sementara sama (akun admin, R-S17) —
+  agar rotasi ke akun non-admin (Q-PP1) tidak menyentuh esb-extract. Username **tidak** di repo (SEC-180).
+- `infra/postgres/init/00-roles.sh`: entri `efn_prodplan:pg_password_prodplan:LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE
+  NOREPLICATION`. Migrasi `infra/postgres/init/23-prodplan-g66.sql` (idempoten; `CREATE DATABASE` via `\gexec` di luar
+  transaksi, isi skema dalam `BEGIN … COMMIT`), dijalankan loop migrasi `deploy.sh` (tidak masuk daftar wajib).
+
+### 30.3 Environment variable
+
+**prodplan**
+
+| Var | Default | Aturan |
+|---|---|---|
+| `APP_ENV` | `production` | |
+| `PRODPLAN_ENABLED` | `false` | Hanya `true` persis aktif. `false` → `/healthz` 200, semua `/v1/*` 503 `disabled`, worker idle, **tidak ada** panggilan ESB/PG selain readiness |
+| `PRODPLAN_WRITE_ENABLED` | `false` | `false` → `POST /v1/plans/{id}/post` 409 `write_disabled`; worker outbox tidak mengirim |
+| `PRODPLAN_ESB_BASE_URL` | `https://stg7.esb.co.id/core-stg` | ∈ {`https://services.esb.co.id/core` → `esb_env=production`, `https://stg7.esb.co.id/core-stg` → `esb_env=staging`}; nilai lain → exit 2 |
+| `PRODPLAN_ESB_MFG_MODE` | `actual` | `actual` → `…/assembly-actual`; `standard` → `…/assembly` (Q-PP3) |
+| `PRODPLAN_BRANDS` | `pb` | ⊆ {pb,wtz,bacha,imd,cup}; v1 hanya `pb` diuji |
+| `PRODPLAN_ESB_USER_<BRAND>` | kosong | dari `.env` lokal/config rilis; brand aktif tanpa user → exit 2 |
+| `PRODPLAN_ESB_PASSWORD_<BRAND>_FILE` | `/run/secrets/esb_prodplan_password_<brand>` | |
+| `PRODPLAN_CK_BRANCHES` | `pb:4=7` | `brand:branch=locationProduksi[|…];…` — cabang + lokasi produksi yang boleh direncanakan/ditulis |
+| `PRODPLAN_SOURCE_LOCATIONS` | kosong | `brand:branch=loc|loc;branch=loc` — allowlist lokasi sumber transfer (Q-PP6). Kosong → tanpa usulan transfer (hanya `shortage`) |
+| `PRODPLAN_APPLY_YIELD` | `false` | `true` → kebutuhan dibagi `yieldPercent/100` bila 0 < yield < 100 (Q-PP5) |
+| `PRODPLAN_STOCK_MAX_AGE_MINUTES` | `30` | 5..240; umur snapshot maksimum saat `submit` dan `post` |
+| `PRODPLAN_POST_MAX_DOCS` | `60` | 1..200 dokumen ESB per rencana |
+| `PRODPLAN_POST_DATE_WINDOW_DAYS` | `-1,7` | tanggal produksi ∈ [hari ini WIB − 1, + 7] saat posting |
+| `PRODPLAN_ESB_RATE_PER_SEC` | `2.0` | token bucket per brand (0.2..4) |
+| `PRODPLAN_JOB_MAX_CALLS` | `2000` | batas panggilan ESB per job |
+| `PRODPLAN_ESB_TIMEOUT_SECONDS` | `30` | |
+| `PRODPLAN_ESB_MAX_RESPONSE_BYTES` | `16777216` | |
+| `PRODPLAN_OUTBOX_POLL_SECONDS` | `10` | |
+| `PRODPLAN_RECONCILE_GRACE_SECONDS` | `300` | jeda sebelum `unknown` boleh dinyatakan tidak ditemukan |
+| `PRODPLAN_RETENTION_DAYS` | `730` | 400..1825 (§30.10) |
+| `PRODPLAN_ASSERT_KEY_FILE` | `/run/secrets/prodplan_assert_key` | |
+| `PG_HOST`/`PG_PORT`/`PG_DB`/`PG_USER` | `postgres`/`5432`/`efn_prodplan`/`efn_prodplan` | |
+| `PG_PASSWORD_FILE` | `/run/secrets/pg_password_prodplan` | |
+| `PG_SSLMODE` / `PG_SSLROOTCERT` | `verify-full` / `/run/secrets/efn_ca_crt` | selain `verify-full` → exit 2 |
+
+**Kunci kode (fail-closed, L-250):** konstanta `PROD_WRITE_UNLOCKED = False` di `efn_prodplan/config.py`. Bila
+`PRODPLAN_WRITE_ENABLED=true` dan `esb_env=production` dan konstanta `False` → log `prodplan_config_error
+reason=prod_write_locked` lalu **exit 2** (tidak start). Test wajib memastikan konstanta `False` sampai ADR-051 Accepted +
+Q-PP1; mengubahnya = PR terpisah dengan review security.
+
+**insight-web** (tambahan): `INSIGHT_PRODPLAN_ENABLED` (default `false`, hanya `true` persis), `PRODPLAN_URL`
+(tetap `http://127.0.0.1:7443`; selain host `127.0.0.1` port `7443` → fitur nonaktif; pengecualian loopback dicatat di
+check-encryption seperti sidecar lain), `PRODPLAN_ASSERT_KEY_FILE=/run/secrets/prodplan_assert_key`.
+
+### 30.4 Allowlist HTTP ke ESB (ditegakkan klien `efn_prodplan.esb`, sebelum socket dibuka)
+
+| Method | Path (template, relatif base) | Dipakai untuk |
+|---|---|---|
+| POST | `/auth/login` | token (`result.accessToken`; 401 → login ulang sekali) |
+| GET | `/product/bom`, `/product/bom/detail/{bomID}`, `/product/branch-stock`, `/location/branch/{branchID}`, `/purchase/purchase-request`, `/purchase/purchase-request/{num}`, master produk (endpoint sama dengan entitas `master` esb-extract), `/simple-transfer`, `/simple-transfer/{num}`, `/inventory/goods-transfer-request`, `/inventory/goods-transfer-request/{num}`, `/production/simple-manufacturing`, `/production/simple-manufacturing/{num}` | baca + rekonsiliasi |
+| POST | `/simple-transfer`, `/inventory/goods-transfer-request`, `/production/simple-manufacturing/assembly-actual` (mode `actual`) **atau** `/production/simple-manufacturing/assembly` (mode `standard`; hanya satu yang diizinkan per proses) | tulis (hanya worker outbox, hanya `PRODPLAN_WRITE_ENABLED=true`) |
+| DELETE | `/simple-transfer/{num}`, `/inventory/goods-transfer-request/{num}`, `/production/simple-manufacturing/{num}` | pembatalan (worker outbox) |
+
+Segmen `{num}` di-URL-encode (`"SM202611240001 - 1"` → `SM202611240001%20-%201`), regex nomor `^[A-Za-z0-9 ._/-]{1,40}$`
+sebelum encode. Path apa pun di luar tabel (termasuk `…/authorize`, `…/import`, `…/push`) → `EsbForbiddenCall` + test.
+
+### 30.5 Aturan perhitungan (deterministik)
+
+Aritmetika `decimal.Decimal` (prec 28); disimpan/dikirim dibulatkan **4 desimal ROUND_HALF_UP** hanya pada keluaran.
+Satuan = satuan dasar produk di ESB (`uomName`); baris BOM yang `uomName`-nya beda dari master produk → flag
+`uom_mismatch`, dikeluarkan dari kemasan & transfer (tetap tampil).
+
+1. **Permintaan** `D` = baris `plan_demand` (produk hasil + `bom_id` Assembly `bomTypeID=1` + qty > 0, sumber
+   `pr|manual|suggestion`). Produk tanpa BOM Assembly → ditolak 422 `bom_not_assembly` (manual) / masuk `unmapped` (impor PR).
+2. **Ledakan BOM**: untuk tiap produk hasil `x` dengan qty `Q` dan baris BOM `(c, q)`: `kebutuhan(c) += Q × q`
+   (÷ `yield/100` bila `PRODPLAN_APPLY_YIELD`). Bila `c` punya BOM Assembly → `c` menjadi **baris produksi** (level +1,
+   qty = total kebutuhan `c`, **tanpa netting stok WIP**, L-253) dan diledakkan lagi; selain itu `c` = **bahan**.
+   Kedalaman maks 10 (`bom_too_deep`); siklus dideteksi lewat stack DFS → 422 `bom_cycle` dengan jalur `productCode`.
+   Level: hasil permintaan = 1; urutan posting = level menurun (WIP dulu).
+3. **Kemasan utuh** (bahan dengan `pack_rule` aktif): `packs = ceil(need / pack_qty)`, `leftover = packs × pack_qty − need`,
+   `need_eff = packs × pack_qty`; bahan lain `need_eff = need`.
+4. **Usulan batch tambahan** (bila `leftover > 0`): untuk tiap baris produksi `b` (level berapa pun) yang BOM-nya memuat
+   bahan itu langsung dengan `q_eff > 0`: `extra_units = floor(leftover / q_eff)`; `extra_units ≥ 1` → `plan_suggestion`
+   (`open`). Usulan adalah **alternatif**: menerima satu → usulan lain bahan itu `superseded`, baris permintaan
+   `source=suggestion` ditambah, rencana `calc_status=stale` (wajib hitung ulang). Permintaan asal tidak pernah dikurangi.
+5. **Stok**: `stok(loc) = max(0, stockQty)` dari snapshot job terakhir (negatif → 0 + flag `negative_stock`; tanpa data →
+   0 + flag `no_stock_data`). `pendingQty` transfer berjalan **tidak** dikurangi (L-254).
+6. **Kekurangan** di lokasi produksi `short = max(0, need_eff − stok(loc_prod))`.
+7. **Usulan transfer**: sumber = `PRODPLAN_SOURCE_LOCATIONS`; urutan: cabang produksi dulu, lalu cabang lain (branch_id
+   naik); dalam satu cabang stok tersedia **terbesar** dulu, seri → location_id naik (**bukan FEFO**: ESB tanpa lot
+   kedaluwarsa, L-255). Ambil `take = min(sisa, stok_src)`; bahan kemasan: `take = min(ceil(sisa/pack_qty)×pack_qty,
+   floor(stok_src/pack_qty)×pack_qty)`. Berhenti saat `sisa ≤ 0`. Sisa > 0 = `shortage_qty` (merah, tidak memblokir simpan
+   maupun submit; posting produksi diblokir 409 `shortage_open` kecuali body `accept_shortage=true` yang dicatat di audit).
+   Baris transfer dikelompokkan per (lokasi asal, lokasi tujuan): cabang sama → `simple_transfer`, beda cabang →
+   `goods_transfer_request`.
+
+**Contoh angka (wajib jadi test vektor):**
+- Susu segar `RMT000021` (ML), `pack_qty=1000`. Permintaan FIN-A 30 pcs (45 ml/pcs) + FIN-B 20 pcs (30 ml/pcs) →
+  `need = 1350 + 600 = 1950`, `packs = 2`, `leftover = 50`, `need_eff = 2000`. Usulan: FIN-A `floor(50/45)=1`, FIN-B
+  `floor(50/30)=1` (alternatif).
+- Stok susu: lokasi produksi 7 = 700 → `short = 1300`. Sumber cabang 4: loc 8 = 1500, loc 9 = 400; cabang 13 loc 21 = 5000.
+  loc 8: `min(2000, 1000) = 1000` → sisa 300; loc 9: `min(1000, 0) = 0`; cabang 13 loc 21: `min(1000, 5000) = 1000` → sisa
+  −700 (kelebihan karena kemasan utuh) → `shortage = 0`. Hasil: `simple_transfer` 8→7 1000 ML, `goods_transfer_request`
+  13/21→4/7 1000 ML.
+- Tepung (KG, tanpa kemasan): `need = 12.5`, stok loc 7 = 4 → `short = 8.5`; loc 8 = 6 → ambil 6; cabang 13 loc 21 = 10 →
+  ambil 2.5 → `shortage = 0`.
+- Multi-level: FIN-C 10 pcs memakai 0.2 KG WIP-D (BOM Assembly) dan WIP-D memakai 0.5 KG tepung per KG → baris produksi
+  WIP-D level 2 qty 2.0000, FIN-C level 1 qty 10; tepung `need = 1.0`.
+
+### 30.6 Skema PostgreSQL (`efn_prodplan`, skema `prodplan`)
+
+Pemilik skema `efn_prodplan_owner` (NOLOGIN, migrasi `SET ROLE` oleh superuser, pola SEC-39). `efn_prodplan` (login) hanya
+DML: `SELECT, INSERT, UPDATE, DELETE` pada semua tabel kecuali `audit_event` (`SELECT, INSERT` saja); `USAGE` sequence.
+`REVOKE ALL ON DATABASE efn_prodplan FROM PUBLIC`; `GRANT CONNECT … TO efn_prodplan`. Tidak ada role lain (ETL/Metabase
+**tidak** membaca DB ini di G66). Kolom umum di tabel induk: `company_code text NOT NULL CHECK (company_code IN
+('PB','WTZ','BCF','BCR','IMD','CUP'))`, `esb_brand text NOT NULL CHECK (esb_brand IN ('pb','wtz','bacha','imd','cup'))`,
+`esb_env text NOT NULL CHECK (esb_env IN ('staging','production'))`. Aktor = `*_sub integer` (uid Odoo dari klaim) +
+`*_name varchar(64)`. Semua waktu `timestamptz`.
+
+```sql
+CREATE TABLE prodplan.pack_rule (
+  id bigserial PRIMARY KEY, company_code text NOT NULL, esb_brand text NOT NULL,
+  product_code varchar(40) NOT NULL, product_detail_id bigint, base_uom varchar(20) NOT NULL,
+  pack_qty numeric(18,4) NOT NULL CHECK (pack_qty > 0),
+  opened_shelf_life_hours integer CHECK (opened_shelf_life_hours BETWEEN 1 AND 720),
+  notes varchar(500), active boolean NOT NULL DEFAULT true,
+  created_by_sub integer NOT NULL, created_by_name varchar(64) NOT NULL, created_at timestamptz NOT NULL DEFAULT now(),
+  updated_by_sub integer NOT NULL, updated_at timestamptz NOT NULL DEFAULT now(), row_version integer NOT NULL DEFAULT 1,
+  UNIQUE (esb_brand, product_code));
+
+CREATE TABLE prodplan.plan (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(), plan_no varchar(32) NOT NULL,  -- PP-<CODE>-<YYYYMMDD>-<NNN>
+  company_code text NOT NULL, esb_brand text NOT NULL, esb_env text NOT NULL,
+  branch_id integer NOT NULL, production_location_id integer NOT NULL, production_date date NOT NULL,
+  status text NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','submitted','approved','posted','cancelled')),
+  calc_status text NOT NULL DEFAULT 'none' CHECK (calc_status IN ('none','stale','fresh','failed')),
+  calculated_at timestamptz, stock_snapshot_id uuid, notes varchar(1000),
+  created_by_sub integer NOT NULL, created_by_name varchar(64) NOT NULL, created_at timestamptz NOT NULL DEFAULT now(),
+  submitted_by_sub integer, submitted_by_name varchar(64), submitted_at timestamptz,
+  approved_by_sub integer, approved_by_name varchar(64), approved_at timestamptz,
+  posted_by_sub integer, posted_by_name varchar(64), posted_at timestamptz,
+  cancelled_by_sub integer, cancelled_at timestamptz, cancel_reason varchar(500),
+  row_version integer NOT NULL DEFAULT 1, updated_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (esb_env, plan_no),
+  CHECK (approved_by_sub IS NULL OR (approved_by_sub <> created_by_sub AND approved_by_sub <> submitted_by_sub)));
+CREATE INDEX ix_plan_brand_date ON prodplan.plan (esb_env, esb_brand, production_date DESC);
+CREATE INDEX ix_plan_status ON prodplan.plan (status) WHERE status IN ('draft','submitted','approved');
+
+CREATE TABLE prodplan.plan_demand (
+  id bigserial PRIMARY KEY, plan_id uuid NOT NULL REFERENCES prodplan.plan(id) ON DELETE CASCADE,
+  product_detail_id bigint NOT NULL, product_code varchar(40) NOT NULL, product_name varchar(200) NOT NULL,
+  bom_id bigint NOT NULL, uom_name varchar(20) NOT NULL, qty numeric(18,4) NOT NULL CHECK (qty > 0),
+  source text NOT NULL CHECK (source IN ('pr','manual','suggestion')), pr_nums text[] NOT NULL DEFAULT '{}',
+  suggestion_id bigint, created_by_sub integer NOT NULL, created_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (plan_id, product_detail_id, source));
+
+CREATE TABLE prodplan.plan_unmapped (          -- baris PR tanpa BOM Assembly (tampil, bukan permintaan)
+  id bigserial PRIMARY KEY, plan_id uuid NOT NULL REFERENCES prodplan.plan(id) ON DELETE CASCADE,
+  pr_num varchar(40) NOT NULL, product_code varchar(40) NOT NULL, product_name varchar(200), qty numeric(18,4) NOT NULL,
+  reason text NOT NULL CHECK (reason IN ('no_assembly_bom','unknown_product','uom_mismatch')));
+
+CREATE TABLE prodplan.plan_production_line (
+  id bigserial PRIMARY KEY, plan_id uuid NOT NULL REFERENCES prodplan.plan(id) ON DELETE CASCADE,
+  level smallint NOT NULL CHECK (level BETWEEN 1 AND 10), bom_id bigint NOT NULL, product_detail_id bigint NOT NULL,
+  product_code varchar(40) NOT NULL, product_name varchar(200) NOT NULL, uom_name varchar(20) NOT NULL,
+  qty numeric(18,4) NOT NULL CHECK (qty > 0), is_demand boolean NOT NULL,
+  materials jsonb NOT NULL,                     -- [{product_detail_id, product_code, qty_per_unit, total_qty}] (snapshot BOM)
+  UNIQUE (plan_id, bom_id));
+
+CREATE TABLE prodplan.plan_requirement (
+  id bigserial PRIMARY KEY, plan_id uuid NOT NULL REFERENCES prodplan.plan(id) ON DELETE CASCADE,
+  product_detail_id bigint NOT NULL, product_code varchar(40) NOT NULL, product_name varchar(200) NOT NULL,
+  uom_name varchar(20) NOT NULL, need_qty numeric(18,4) NOT NULL, pack_qty numeric(18,4), packs integer,
+  leftover_qty numeric(18,4), need_eff_qty numeric(18,4) NOT NULL, stock_prod_qty numeric(18,4) NOT NULL,
+  transfer_qty numeric(18,4) NOT NULL DEFAULT 0, shortage_qty numeric(18,4) NOT NULL DEFAULT 0,
+  flags text[] NOT NULL DEFAULT '{}',          -- uom_mismatch | no_stock_data | negative_stock | pack_rule_on_wip
+  UNIQUE (plan_id, product_detail_id));
+
+CREATE TABLE prodplan.plan_suggestion (
+  id bigserial PRIMARY KEY, plan_id uuid NOT NULL REFERENCES prodplan.plan(id) ON DELETE CASCADE,
+  material_detail_id bigint NOT NULL, bom_id bigint NOT NULL, product_detail_id bigint NOT NULL,
+  extra_units integer NOT NULL CHECK (extra_units >= 1), uses_qty numeric(18,4) NOT NULL, leftover_qty numeric(18,4) NOT NULL,
+  status text NOT NULL DEFAULT 'open' CHECK (status IN ('open','accepted','rejected','superseded')),
+  decided_by_sub integer, decided_at timestamptz);
+
+CREATE TABLE prodplan.plan_transfer (
+  id bigserial PRIMARY KEY, plan_id uuid NOT NULL REFERENCES prodplan.plan(id) ON DELETE CASCADE,
+  doc_type text NOT NULL CHECK (doc_type IN ('simple_transfer','goods_transfer_request')),
+  origin_branch_id integer NOT NULL, origin_location_id integer NOT NULL,
+  dest_branch_id integer NOT NULL, dest_location_id integer NOT NULL,
+  status text NOT NULL DEFAULT 'proposed' CHECK (status IN ('proposed','approved','rejected','superseded')),
+  decided_by_sub integer, decided_by_name varchar(64), decided_at timestamptz, reject_reason varchar(500),
+  UNIQUE (plan_id, origin_location_id, dest_location_id),
+  CHECK ((doc_type = 'simple_transfer') = (origin_branch_id = dest_branch_id)));
+CREATE TABLE prodplan.plan_transfer_line (
+  transfer_id bigint NOT NULL REFERENCES prodplan.plan_transfer(id) ON DELETE CASCADE,
+  product_detail_id bigint NOT NULL, product_code varchar(40) NOT NULL, uom_name varchar(20) NOT NULL,
+  qty numeric(18,4) NOT NULL CHECK (qty > 0), PRIMARY KEY (transfer_id, product_detail_id));
+
+CREATE TABLE prodplan.stock_snapshot (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(), company_code text NOT NULL, esb_brand text NOT NULL, esb_env text NOT NULL,
+  fetched_at timestamptz NOT NULL DEFAULT now(), esb_calls integer NOT NULL DEFAULT 0);
+CREATE TABLE prodplan.stock_snapshot_line (
+  snapshot_id uuid NOT NULL REFERENCES prodplan.stock_snapshot(id) ON DELETE CASCADE,
+  branch_id integer NOT NULL, location_id integer NOT NULL, product_detail_id bigint NOT NULL,
+  stock_qty numeric(18,4) NOT NULL, source text NOT NULL CHECK (source IN ('bom_detail','branch_stock')),
+  PRIMARY KEY (snapshot_id, branch_id, location_id, product_detail_id));
+-- plan.stock_snapshot_id REFERENCES stock_snapshot(id) ON DELETE SET NULL
+
+CREATE TABLE prodplan.job (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(), company_code text NOT NULL,
+  plan_id uuid NOT NULL REFERENCES prodplan.plan(id) ON DELETE CASCADE,
+  kind text NOT NULL CHECK (kind IN ('pr_import','calculate')),
+  status text NOT NULL DEFAULT 'queued' CHECK (status IN ('queued','running','done','failed')),
+  params jsonb NOT NULL DEFAULT '{}', result jsonb, error_code varchar(40), esb_calls integer NOT NULL DEFAULT 0,
+  requested_by_sub integer NOT NULL, created_at timestamptz NOT NULL DEFAULT now(), started_at timestamptz, finished_at timestamptz);
+CREATE UNIQUE INDEX ux_job_active ON prodplan.job (plan_id) WHERE status IN ('queued','running');
+
+CREATE TABLE prodplan.outbox (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(), company_code text NOT NULL, esb_brand text NOT NULL, esb_env text NOT NULL,
+  plan_id uuid NOT NULL REFERENCES prodplan.plan(id) ON DELETE RESTRICT,
+  seq smallint NOT NULL, phase text NOT NULL CHECK (phase IN ('transfers','production')),
+  doc_kind text NOT NULL CHECK (doc_kind IN ('simple_transfer','goods_transfer_request','simple_manufacturing')),
+  source_transfer_id bigint, source_line_id bigint,
+  marker varchar(16) NOT NULL CHECK (marker ~ '^pp:[0-9a-f]{12}$'),
+  request_body jsonb NOT NULL,                 -- body persis yang dikirim (tanpa kredensial)
+  status text NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','sending','sent','confirmed','unknown','failed',
+                                                             'delete_pending','deleting','deleted','delete_failed')),
+  attempts smallint NOT NULL DEFAULT 0, esb_doc_number varchar(40), esb_status_id integer,
+  last_http_status integer, last_error_code varchar(40), next_attempt_at timestamptz NOT NULL DEFAULT now(),
+  sent_at timestamptz, confirmed_at timestamptz, deleted_at timestamptz,
+  created_by_sub integer NOT NULL, created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (plan_id, seq), UNIQUE (marker));
+CREATE UNIQUE INDEX ux_outbox_docnum_live ON prodplan.outbox (esb_env, doc_kind, esb_doc_number) WHERE esb_doc_number IS NOT NULL AND status <> 'deleted';  -- §30.16
+CREATE INDEX ix_outbox_work ON prodplan.outbox (next_attempt_at)
+  WHERE status IN ('pending','sending','sent','unknown','delete_pending','deleting');
+
+CREATE TABLE prodplan.audit_event (
+  id bigserial PRIMARY KEY, company_code text NOT NULL, plan_id uuid, actor_sub integer, actor_name varchar(64),
+  action varchar(40) NOT NULL, detail jsonb NOT NULL DEFAULT '{}', request_id varchar(36), created_at timestamptz NOT NULL DEFAULT now());
+CREATE INDEX ix_audit_plan ON prodplan.audit_event (plan_id, created_at);
+```
+
+Penguncian: setiap mutasi rencana `SELECT … FOR UPDATE` baris `plan` + cek `row_version` (body) → 409 `conflict_version`.
+Worker mengambil kerja dengan `FOR UPDATE SKIP LOCKED`. `outbox.plan_id` `ON DELETE RESTRICT`: rencana ber-outbox tidak
+dihapus purge sebelum outbox-nya kedaluwarsa (§30.10).
+
+### 30.7 Identitas: insight-web → prodplan (`ppa1`) dan peran
+
+**Peran (revisi token `eit3`/sesi `eis3`, bukan format baru; L-251):** `roles` boleh memuat `pp_planner` dan/atau
+`pp_warehouse` (konstanta `PP_ROLES`, identik di Odoo `insight_token.py` dan insight-web `lib/claims.ts`). Urutan ASCII
+`all_brands < category < dc < exec < marketing < pp_planner < pp_warehouse < store < user`; panjang `roles` maks 8.
+Aturan baru (pembuat **dan** penerima; gagal = `bad_claims`): **T9** `PP ∩ roles ≠ ∅ ⇒ codes ∩ ESB_CODES ≠ ∅ ∧ brs = []`.
+PP bukan persona → `SQL_efn_personas` dan sig v1/v2/v3 tidak berubah. **Urutan rilis: insight-web dulu, lalu Odoo**
+(insight-web lama menolak token ber-PP).
+
+**Odoo `efn_insight` (19.0.3.1.0):** grup `efn_insight.group_prodplan_planner` ("Insight: Production planner CK") dan
+`efn_insight.group_prodplan_warehouse` ("Insight: Kepala gudang (persetujuan transfer)"), keduanya `implied_ids`
+`group_insight_user`, tidak ikut sinkron jabatan. Token: grup → peran; user dengan `brs` tidak kosong (kepala toko
+ber-cabang) → peran PP **dibuang** + log `insight_pp_conflict uid=<id>`. Satu user boleh memegang keduanya; SoD ditegakkan
+per dokumen di prodplan.
+
+**Header asersi** (dibuat insight-web per request, hanya dari sesi terverifikasi, hanya bila sesi memuat peran PP):
+`X-EFN-Actor: ppa1.<payload_b64url>.<sig_b64url>`; `sig = HMAC-SHA256(key = byte ASCII string hex prodplan_assert_key,
+msg = "ppa1." + payload_b64url)`; base64url tanpa padding; header ≤ 2048 byte, regex `^ppa1\.[A-Za-z0-9_-]{16,1800}\.[A-Za-z0-9_-]{43}$`.
+Payload = JSON tanpa spasi, **tepat 11 kunci dengan urutan**: `aud` (`"prodplan"`), `bh` (base64url SHA-256 byte body;
+body kosong = hash string kosong), `codes` (sesi `codes ∩ ESB_CODES`, urut, 1..6), `exp` (= `iat + 60`), `iat`, `jti`
+(16 byte acak base64url, 22 char), `m` (method huruf besar), `name` (≤ 64), `p` (path + query persis yang dikirim, awalan
+`/v1/`), `roles` (sesi `roles ∩ PP_ROLES`, urut, 1..2), `sub` (uid Odoo).
+
+prodplan memverifikasi berurutan (gagal → 401 `actor_invalid`, tanpa detail): regex → HMAC (constant-time) → kunci tepat
+→ `aud` → `iat ≤ now+30`, `now < exp`, `exp − iat = 60` → `m`/`p` sama dengan request → `bh` sama → `jti` belum dipakai
+(cache memori TTL 120 dtk) → tipe klaim. Otorisasi: `esb_brand` target harus ∈ `PRODPLAN_BRANDS` dan kode PT-nya ∈ `codes`
+(else 403 `forbidden`). Browser tidak pernah menerima/mengirim `ppa1`.
+
+### 30.8 API prodplan (lewat `prodplan-tls`, JSON UTF-8)
+
+Respons galat: `{"error": {"code": "<kode>", "message": "<pesan Indonesia singkat>", "details": {…}?}}`; tidak pernah memuat
+SQL, stack, URL ESB, atau body ESB. `details` hanya untuk `bom_cycle` (jalur kode produk), `conflict_version`
+(`row_version` terkini), `transfers_not_authorized` (nomor dokumen), validasi (nama field). Peran: **P** = `pp_planner`,
+**W** = `pp_warehouse`, **R** = salah satu.
+
+| Method & path | Peran | Body / query | Sukses | Galat khusus |
+|---|---|---|---|---|
+| `GET /healthz` | – (tanpa aktor) | | 200 `{"status":"ok"}` | |
+| `GET /readyz` | – | | 200 / 503 (PG) | |
+| `GET /metrics` | – | | Prometheus text | |
+| `GET /v1/meta` | R | | `{esb_env, write_enabled, mfg_mode, brands:[{esb_brand, company_code, ck:[{branch_id, production_location_id}], source_locations:[…]}]}` | |
+| `GET /v1/boms?brand=&q=&limit=20` | R | `q` ≥ 2 karakter (nama BOM), `limit` ≤ 50 | `{items:[{bom_id, bom_name, bom_code, product_detail_id, product_code, product_name, uom_name}]}` — hanya BOM Assembly aktif; sumber `GET /product/bom` + header `GET /product/bom/{bomID}` (cache memori TTL pendek); dipakai UI untuk memilih baris permintaan manual (ditambahkan lead 24 Nov 2026 setelah review UI) | 422 `bad_input` |
+| `GET /v1/pack-rules?brand=` | R | | `{items:[pack_rule]}` | |
+| `PUT /v1/pack-rules/{brand}/{product_code}` | P | `{base_uom, pack_qty, opened_shelf_life_hours?, notes?, active, row_version?}` | 200 | 409 `conflict_version` |
+| `GET /v1/plans?brand=&from=&to=&status=&limit=50&offset=` | R | | `{items, count}` | |
+| `POST /v1/plans` | P | `{brand, branch_id, production_location_id, production_date, notes?}` (cabang+lokasi ∈ `PRODPLAN_CK_BRANCHES`) | 201 plan | 422 `invalid_branch` |
+| `GET /v1/plans/{id}` | R | | plan + demand + unmapped + production_lines + requirements + suggestions + transfers + outbox ringkas + `limitations[]` | 404 |
+| `PUT /v1/plans/{id}/demand` | P (draft) | `{row_version, lines:[{product_detail_id, bom_id, qty, source:"manual"\|"pr", pr_nums?}]}` (ganti seluruh baris non-suggestion; maks 500) | 200, `calc_status=stale` | 409 `invalid_state`, 422 `bom_not_assembly` |
+| `POST /v1/plans/{id}/import-pr` | P (draft) | `{required_date_from, required_date_to, branch_ids?:[int], status_ids?:[3,30]}` | 202 `{job_id}` | 409 `job_running` |
+| `POST /v1/plans/{id}/calculate` | P (draft) | `{row_version}` | 202 `{job_id}` (segarkan BOM + stok, hitung §30.5) | 409 `job_running` |
+| `GET /v1/jobs/{id}` | R | | `{status, kind, error_code?, result?}` | |
+| `POST /v1/plans/{id}/suggestions/{sid}/accept` \| `/reject` | P (draft) | `{row_version}` | 200 | 409 `invalid_state` |
+| `POST /v1/plans/{id}/submit` | P (draft) | `{row_version}` | 200 `submitted` | 409 `stale_calculation`, `stock_too_old` |
+| `POST /v1/plans/{id}/transfers/{tid}/approve` \| `/reject` | W (submitted) | `{row_version, reason?}` (reject wajib reason) | 200 | 403 `sod_violation` (aktor = pembuat/pengaju) |
+| `POST /v1/plans/{id}/approve` | W (submitted) | `{row_version}`; semua transfer sudah diputuskan | 200 `approved` | 403 `sod_violation`, 409 `transfers_undecided` |
+| `POST /v1/plans/{id}/return-to-draft` | R (submitted) | `{row_version, reason}` | 200 `draft` (keputusan transfer direset) | |
+| `GET /v1/plans/{id}/post-preview?phase=transfers\|production` | R (approved/posted) | | `{phase, docs:[{doc_kind, origin, dest, lines}], stock_impact:[{location_id, product_code, qty_out, qty_in}], digest}` | 409 `invalid_state` |
+| `POST /v1/plans/{id}/post` | R (status `approved` untuk kedua fase; fase `transfers` tidak mengubah status) | `{row_version, phase, digest, accept_shortage?:false}` | 202 `{outbox_ids}`; phase `production` → plan `posted` | 409 `write_disabled`, `digest_mismatch`, `stock_too_old`, `transfers_not_authorized`, `shortage_open`, `too_many_docs`, `date_out_of_window` |
+| `POST /v1/plans/{id}/cancel` | P (draft/submitted/approved/posted) | `{row_version, reason}` | 200 `cancelled`; outbox `confirmed` → `delete_pending` (urutan seq menurun) | 409 `invalid_state` |
+| `POST /v1/outbox/{oid}/resend` | P | `{}`; hanya status `failed` dengan `last_error_code=not_found_after_timeout` | 202 (status `pending`, marker sama) | 409 `invalid_state` |
+
+Kode umum: 400 `invalid_request`, 401 `actor_invalid`, 403 `forbidden`, 404 `not_found`, 409 `conflict_version`/`invalid_state`,
+422 `bom_cycle`/`bom_too_deep`/`bom_not_assembly`, 429 `rate_limited` (60 mutasi/menit per `sub`), 502 `esb_unavailable`
+(hanya GET sinkron), 503 `disabled`. Kode galat job (`job.error_code`): `esb_unavailable`, `esb_auth_failed`,
+`call_budget_exceeded`, `bom_cycle`, `bom_too_deep`, `parse_error`.
+
+**Aturan fase posting:** `transfers` (hanya transfer `approved`) dulu; `production` mensyaratkan semua outbox transfer
+`confirmed` **dan** GET ulang `simple-transfer` menunjukkan `statusID=3` (sudah di-authorize manusia di ESB) — selain itu 409
+`transfers_not_authorized`. Status goods delivery dari goods-transfer-request **tidak** dicek (L-256; peringatan di UI).
+Rencana tanpa transfer langsung ke fase `production`. `digest` = hex SHA-256 dari JSON kanonik `docs` pratinjau; berbeda
+dari server (rencana/stok berubah) → 409 `digest_mismatch`.
+
+### 30.9 Outbox & payload ESB
+
+Satu baris outbox = satu dokumen ESB: satu per `plan_transfer` `approved`, satu per `plan_production_line` (urut level
+menurun, lalu `bom_id`). `seq` transfer < produksi. Marker `pp:<12 hex acak>` ditulis ke `additionalInfo` (transfer) atau
+`notes` (produksi; tampil sebagai `additionalInfo` dokumen). Semua tanggal = `production_date` (`YYYY-MM-DD`, Q-PP8).
+
+| doc_kind | Endpoint | Body (field ESB) | Nomor dokumen |
+|---|---|---|---|
+| `simple_transfer` | `POST /simple-transfer` | `{originLocationID, destinationLocationID, simpleTransferDate, additionalInfo: marker, simpleTransferDetails:[{productDetailID, qty}]}` | `result.simpleTransferNum`; lahir statusID 1 |
+| `goods_transfer_request` | `POST /inventory/goods-transfer-request` | `{originBranchID, destinationBranchID, originLocationID, categoryTypeID: 1, transferDate, additionalInfo: marker, transferDetails:[{productDetailID, qty, requestQty: qty}]}` — **tanpa** `transferDetailAssets`, tanpa `purchaseRequestNum` | `result.transferNum`; lahir statusID 3 |
+| `simple_manufacturing` (`actual`) | `POST /production/simple-manufacturing/assembly-actual` | `{branchID, originLocationID: loc_prod, destinationLocationID: loc_prod, simpleManufacturingDate, simpleManufacturingDetails:[{bomID, productDetailID: hasil, manufacturingQty: qty, resultQty: qty, notes: marker, simpleManufacturingMaterials:[{productDetailID, totalQty}]}]}` (material = `materials` baris produksi) | `result.simpleManufacturingNum` (mis. `"SM202611240001 - 1"`); lahir statusID 3, **stok langsung bergerak** |
+| `simple_manufacturing` (`standard`) | `POST /production/simple-manufacturing/assembly` | `{branchID, originLocationID, destinationLocationID, simpleManufacturingDate, simpleManufacturingDetails:[{bomID, productDetailID, qty, additionalInfo: marker}]}` | **belum diuji** (Q-PP3) |
+
+**Mesin status (worker, satu dokumen per rencana pada satu waktu, urut `seq`; baris berikut menunggu baris sebelumnya
+`confirmed`):**
+
+```mermaid
+stateDiagram-v2
+  [*] --> pending
+  pending --> sending: worker ambil (attempts+1)
+  sending --> sent: 200 + nomor dokumen
+  sending --> failed: 4xx validasi (tanpa kirim ulang)
+  sending --> pending: gagal SEBELUM request terkirim (DNS/connect/TLS), backoff 30s..10m
+  sending --> unknown: timeout / 5xx / putus SETELAH request terkirim
+  unknown --> sent: rekonsiliasi GET menemukan marker
+  unknown --> failed: tidak ditemukan setelah RECONCILE_GRACE (not_found_after_timeout)
+  failed --> pending: POST /v1/outbox/{id}/resend (manusia, marker sama)
+  sent --> confirmed: GET detail cocok marker (+ simpan esb_status_id)
+  confirmed --> delete_pending: rencana dibatalkan
+  delete_pending --> deleting
+  deleting --> deleted: DELETE 200 / dokumen sudah tidak ada
+  deleting --> delete_failed: ESB menolak (goods delivery ada / stok hasil terpakai)
+```
+
+- **Rekonsiliasi**: transfer → `GET /simple-transfer?additionalInfo=<marker>&dateFrom=&dateTo=` /
+  `GET /inventory/goods-transfer-request?additionalInfo=<marker>&…` (rentang = `production_date ± 1`); produksi → list
+  `GET /production/simple-manufacturing?dateFrom=&dateTo=&branchID=` lalu detail per nomor yang belum dikenal di outbox,
+  cocokkan `additionalInfo == marker`. Proses `sending` yang ditemukan saat start (crash) diperlakukan `unknown`.
+- **Tidak ada kirim ulang POST otomatis** setelah request terkirim. `delete_failed` tidak diulang otomatis (ditangani di ESB,
+  tercatat di audit).
+- Saat `PRODPLAN_WRITE_ENABLED=false` worker tidak memproses `pending`/`delete_pending` (rekonsiliasi GET tetap jalan).
+
+### 30.10 Retensi & PDP
+
+| Data | Retensi | Mekanisme |
+|---|---|---|
+| `plan` + anak (demand, lines, requirement, suggestion, transfer, job) | `PRODPLAN_RETENTION_DAYS` (default 730) setelah `production_date` | purge harian 02:00 WIB; dilewati bila masih ada outbox belum kedaluwarsa |
+| `outbox`, `audit_event` | 1825 hari (5 tahun; jejak dokumen ERP klien, Q-PP10) | purge harian; outbox dihapus dulu, lalu plan |
+| `stock_snapshot*` | 30 hari | purge harian (`plan.stock_snapshot_id` → NULL) |
+| `pack_rule` | selama aktif | – |
+
+Data pribadi: hanya uid Odoo + nama tampilan staf (≤ 64) sebagai aktor; tanpa data pelanggan/pemasok. Entri baru di
+`docs/compliance/PDP_DATA_INVENTORY.md` (tugas architect/DPO).
+
+### 30.11 Logging, metrik, health
+
+- Log JSON satu baris: `ts, level, event, request_id, sub, plan_id, job_id, outbox_id, esb_method, esb_path_template,
+  http_status, duration_ms, error_code`. **Dilarang**: password, token ESB/Bearer, header `X-EFN-Actor`, query string ESB,
+  body request/response ESB, username ESB. Kode/nama produk boleh dilog (bukan data pribadi).
+- Metrik: `prodplan_esb_requests_total{method,path_template,status}`, `prodplan_esb_request_seconds` (histogram),
+  `prodplan_jobs_total{kind,status}`, `prodplan_job_seconds{kind}`, `prodplan_outbox_rows{status}` (gauge),
+  `prodplan_outbox_oldest_pending_seconds`, `prodplan_actor_rejected_total{reason}`, `prodplan_write_enabled`,
+  `prodplan_info{esb_env,mfg_mode}`.
+- Alert: `EfnProdplanOutboxStuck` (`unknown`/`failed` > 0 selama 30 menit, warning), `EfnProdplanDeleteFailed`
+  (`delete_failed` > 0, warning), `EfnProdplanDown` (scrape gagal 15 menit, warning; bukan jalur transaksi).
+
+### 30.12 insight-web
+
+- Halaman (App Router, server components; data hanya dari prodplan): `/produksi` (daftar rencana), `/produksi/baru`,
+  `/produksi/[id]` (tab Permintaan · Kebutuhan · Usulan batch · Transfer · Posting · Riwayat), `/produksi/kemasan`
+  (master kemasan utuh). Banner tetap **"ESB STAGING"**/"ESB PRODUCTION" dari `/v1/meta`; tombol tulis tersembunyi bila
+  `write_enabled=false`.
+- Gerbang: `proxy.ts` menolak `/produksi*` (rewrite `/tidak-berwenang`) bila `INSIGHT_PRODPLAN_ENABLED` bukan `true` atau
+  sesi tanpa peran PP; halaman memeriksa ulang. Sesi `eis1`/`eis2` tidak pernah punya PP.
+- Mutasi: route handler `POST /api/prodplan/<aksi>` (di luar matcher proxy, autentikasi sendiri seperti route `/api/*`
+  lain) + `origin-guard` + batas per pengguna; meneruskan ke prodplan dengan `ppa1`. `lib/prodplan.ts` satu-satunya
+  pemanggil; timeout 15 dtk; galat prodplan dipetakan ke pesan Indonesia berdasarkan `error.code`.
+- Polling job: `GET /api/prodplan/jobs/{id}` tiap 2 dtk maks 5 menit. Konfirmasi posting menampilkan `stock_impact` +
+  `digest` dan meminta centang "Saya memahami dokumen produksi langsung mengubah stok ESB".
+- Tidak ada akses ClickHouse baru; tidak ada perubahan CSP.
+
+### 30.13 Pemetaan ke Odoo MRP (cutover)
+
+| prodplan | Odoo CE 19 | Catatan |
+|---|---|---|
+| `plan` | `mrp.production` per baris (field `origin = plan_no`), `company_id` dari `company_code` | Rencana itu sendiri = gap kecil (`efn_*` grup produksi) atau cukup `origin` |
+| `plan_production_line` (`bom_id`, `qty`, `level`) | `mrp.production.bom_id/product_id/product_qty`; level → produksi anak (CE: MO untuk sub-assembly) | `bom_id` ESB → `map_esb_odoo` (G43) |
+| `materials` / `plan_requirement` | `stock.move` bahan (`move_raw_ids`) | |
+| `pack_rule` | `product.packaging` (qty) + `efn_*` umur setelah dibuka | umur setelah dibuka = gap |
+| `plan_suggestion` | – (fitur aplikasi) | dibangun ulang di `efn_*` |
+| `plan_transfer` / `_line` | `stock.picking` internal (cabang sama) / antar-warehouse (resupply) + `stock.move` | persetujuan = gap (approval CE tidak ada) |
+| `outbox.esb_doc_number` | – | arsip; tidak dimigrasi sebagai transaksi |
+
+### 30.14 Pertanyaan terbuka (klien)
+
+| ID | Pertanyaan | Default sementara |
+|---|---|---|
+| **Q-PP1** | Akun API ESB non-admin per brand dengan hak baca + buat/hapus transfer & produksi, tanpa authorize | Tulis production terkunci kode |
+| **Q-PP2** | Pemilik proyek menerima penyimpangan ADR-051 §3.4 (produksi langsung Authorized; gerbang = SoD aplikasi) | Hanya staging |
+| **Q-PP3** | Mode costing produksi PB production (actual vs standard) | `PRODPLAN_ESB_MFG_MODE=actual` |
+| **Q-PP4** | Apakah semua pesanan outlet produk jadi lewat purchase request, dan PR mana (cabang peminta/tujuan) yang menjadi permintaan CK | Impor PR + input manual |
+| **Q-PP5** | Arti `yieldPercent` di BOM ESB (sudah termasuk di qty atau harus dibagi) | Tidak diterapkan |
+| **Q-PP6** | Daftar lokasi/cabang sumber transfer per CK (mis. WHProd 13) dan lokasi yang dilarang (reject/waste) | Kosong = tanpa usulan transfer |
+| **Q-PP7** | Siapa penyetuju rencana bila kepala gudang absen; boleh satu orang memegang dua peran | Boleh, SoD per dokumen |
+| **Q-PP8** | Tanggal dokumen transfer = tanggal produksi atau D-1 | Tanggal produksi |
+| **Q-PP9** | Netting stok WIP dan pengurangan transfer tertunda diperlukan di v1? | Tidak (L-253/L-254) |
+| **Q-PP10** | Retensi outbox/audit (usulan 5 tahun) — DPO/Finance | 1825 hari |
+| **Q-PP11** | Batas toleransi kelebihan transfer akibat kemasan utuh | Tanpa batas, tampil |
+| **Q-PP12** | CKWH cabang 38 (production-order) perlu ditulis di tahap berikut? | Hanya dibaca |
+
+### 30.15 Keputusan kontrak & keterbatasan (L-250..L-257) + gerbang
+
+- **L-250** tulis production terkunci konstanta kode (bukan env). **L-251** peran PP di `eit3`/`eis3` tanpa format baru;
+  T9. **L-252** `samenet` pg_hba meluas ke `prodplan-db` (diterima). **L-253** tanpa netting WIP. **L-254** `pendingQty`
+  tidak dikurangi. **L-255** urutan sumber = stok terbesar, bukan FEFO. **L-256** goods delivery GTR tidak dicek sebelum
+  produksi. **L-257** satu dokumen produksi per baris produksi (rekonsiliasi & DELETE per dokumen).
+- **Gerbang `check-encryption.sh` (devsecops):** overlay prodplan tanpa port host; network persis §30.1; secret mount persis
+  §30.2; `PG_SSLMODE=verify-full`; `PRODPLAN_ESB_BASE_URL` ∈ dua host; default `PRODPLAN_WRITE_ENABLED=false` dan
+  `PRODPLAN_ENABLED=false` pada render production; ghostunnel tanpa `--disable-authentication`, CN persis.
+- **Test wajib (prodplan):** vektor §30.5; allowlist §30.4 (method/path lain → exception, termasuk `…/authorize`); kunci
+  L-250; verifikasi `ppa1` (vektor positif + negatif: kunci salah, kedaluwarsa, replay `jti`, `p`/`m`/`bh` beda, kunci
+  tambahan); SoD (CHECK DB + 403); mesin status outbox dengan ESB palsu (timeout setelah kirim → `unknown`, tidak ada POST
+  kedua tanpa rekonsiliasi); log tidak memuat password/token/query string. **insight-web:** vektor `ppa1` byte-exact sama
+  dengan prodplan; T9; gerbang `/produksi`. **Odoo:** grup → peran, konflik `brs`.
+
+### 30.16 Perubahan setelah review & uji staging (24 Nov 2026) — menang atas §30.4–§30.9 bila berbeda
+
+Hasil QA, security review (SEC-225..233) dan uji E2E nyata ke ESB staging. Butir di bawah sudah diimplementasikan dan diuji.
+
+**Fakta ESB baru (uji staging):**
+- ESB **memakai ulang nomor dokumen** setelah dokumennya dihapus (`SM202611240001 - 1` terbit tiga kali dalam sehari).
+  Konsekuensi: indeks unik nomor hanya untuk dokumen hidup (`ux_outbox_docnum_live … AND status <> 'deleted'`);
+  `known_numbers` mengabaikan baris `deleted`; **sebelum DELETE** worker wajib `GET` dokumen dan mencocokkan marker
+  (`delete_failed`/`marker_mismatch` bila marker lain; `deleted` tanpa DELETE bila dokumen sudah tidak ada).
+- Filter `additionalInfo` pada list `/simple-transfer` dan `/inventory/goods-transfer-request` dihormati (substring).
+- `PATCH /simple-transfer/{num}/authorize` lewat API membalas sukses tetapi status tetap 1 "New" → authorize hanya oleh
+  manusia di layar ESB (fase produksi setelah simple-transfer belum teruji end-to-end, Q-PP13).
+- Outlet staging memesan produk jadi (FIN) lewat purchase request (5 PR → 3 baris permintaan + 2 unmapped) → mendukung Q-PP4.
+
+**Allowlist GET tambahan (§30.4):** `/product/bom/{bomID}`, `/product/list`, `/product/{productID}`, `/branch/list/user`.
+
+**API (§30.8):**
+- `POST /v1/plans/{id}/calculate` juga sah untuk rencana `approved` oleh P atau W (mode segarkan stok): hasil identik →
+  tetap `approved` + snapshot baru; berbeda → kembali `draft`, keputusan transfer direset. `job.result` + `plan_status`,
+  `changed`. Ditolak 409 `invalid_state` bila rencana sudah punya outbox aktif.
+- `…/suggestions/{sid}/reject` berlaku juga untuk usulan `accepted` (draf): baris permintaan `suggestion` dihapus. Usulan
+  yang ditolak tidak diusulkan ulang bila identik. Menerima usulan saat hitungan usang → 409 `stale_calculation`.
+- `POST /v1/plans/{id}/submit` tanpa baris permintaan/produksi → 409 `empty_plan`.
+- `POST /v1/outbox/{oid}/resend`: sah untuk `failed` tanpa nomor ESB dengan `last_error_code` ∈ {`esb_rejected`,
+  `not_sent`, `client_error`, `not_found_after_timeout`}; selalu rekonsiliasi marker dulu (dokumen ditemukan → nomor
+  diadopsi, balasan `{status:"sent", esb_doc_number}`; daftar tak terbaca tuntas → 409 `reconcile_incomplete`).
+- `GET /v1/boms`: validasi 422 `bad_input`; `q` 2..64 karakter.
+- Field tambahan: plan `branch_name`, `production_location_name`, `posting_state` ∈ {`none`,`in_progress`,
+  `needs_attention`,`complete`}; `meta.ck[]`/`source_locations[]`, `transfers[]`, `post-preview.docs[].origin/dest` membawa
+  nama cabang/lokasi (dari ESB, cache 1 jam, `null` bila gagal; tidak ikut digest).
+- Kode galat baru: `empty_plan`, `bad_input`, `invalid_quantity` (qty ≤ 0 ditolak sebelum kirim), `reconcile_incomplete`.
+
+**Outbox (§30.9):**
+- Rekonsiliasi membaca semua halaman (100/halaman, maks 50); tidak tuntas → tetap `unknown` (`reconcile_incomplete`),
+  tidak pernah `failed` (SEC-225).
+- Baris yang sudah memegang `esb_doc_number` tidak pernah turun ke `failed`/`unknown` dan nomornya tidak bisa ditimpa
+  (ditegakkan di SQL, SEC-226).
+- POST berhasil tetapi pencatatan gagal → `unknown` (`record_failed`) lalu diadopsi rekonsiliasi; tidak ada POST kedua.
+- Cancel mengunci baris outbox; worker tidak mengambil baris dari rencana `cancelled` (SEC-230).
+
+**SoD (§30.7):** penyetuju rencana dan pemutus transfer tidak boleh pembuat, pengaju, **maupun pengubah isi rencana**
+(diambil dari `audit_event`), 403 `sod_violation` (SEC-227). Grup PP masuk `SENSITIVE_GROUP_XMLIDS` `efn_role` (SEC-228).
+
+**Pertanyaan tambahan:** **Q-PP13** siapa yang meng-authorize simple-transfer buatan aplikasi di ESB dan berapa lama
+(fase produksi menunggu status 3); **Q-PP14** apakah pemakaian ulang nomor dokumen juga berlaku di ESB production.

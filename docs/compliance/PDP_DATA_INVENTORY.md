@@ -1,6 +1,7 @@
 # Inventaris Data Pribadi / RoPA (UU PDP No. 27/2022) — EFN Platform
 
 - **Status:** Draf teknis — **keputusan retensi & DPO ditetapkan pemilik proyek 10 Okt 2026** (v7); dasar pemrosesan & nomor pasal tetap wajib diverifikasi **Legal (DPO sementara)**.
+  - **v20 (2026-11-24, Gelombang 66 production planning ESB, ADR-051 Proposed — MENUNGGU DPO)**: §2.8.15 `efn_prodplan` (hanya uid Odoo + nama staf sebagai aktor audit; retensi 730/1825/30 hari).
   - **v19 (2026-11-20, Gelombang 50 kampanye supermarket — dibangun, OFF di production, MENUNGGU DPO)**: §2.8.12a entri tabel yang benar-benar dibangun (`member_email`, `email_outbound`, `email_unsubscribe_used`, `wa_unofficial_recipient`, `wa_unofficial_outbound`, `behavior.purchase_emitted`, `behavior.subject_erasure`, `behavior.segment_member`, inbox & voucher kampanye) + event server `purchase` (riwayat pembelian online masuk profil perilaku, L-185, SEC-G50-17); baris retensi §3 (penanda **(v19)**), termasuk DLQ `notify.wa_unofficial.dlq` (TTL 24 jam + max-length) dan `behavior.event.dlq` (7 hari) (SEC-G50-04/18). Pertanyaan DPO baru di `docs/04` §28.12: Q-SM33, Q-SM34, Q-SM38, Q-SM39.
   - **v18 (2026-11-18, Gelombang 43 fase 2, ADR-042 Accepted — MENUNGGU DPO)**: §2.8.14 **bundel migrasi ESB** (terenkripsi, retensi ≤ 90 hari setelah berita acara) dan **arsip histori ESB di Odoo** (`efn.legacy.flow.daily`, `efn.legacy.sales.daily`, `efn.legacy.sales.line`: `sales_num` = ID transaksi, bukan data pribadi) + **pelanggan B2B** ESB di `res.partner` (data badan; PIC/alamat/telepon/email dibuang); baris retensi §3; Q-P32.
   - **v17 (2026-11-18, ADR-043 — MENUNGGU DPO)**: §2.7 + §2.8.13 pemroses baru **Bima Creative (VPS)** — tahap A (dev, tanpa data/secret klien) dan tahap B (ekstraksi ESB, **diblokir** sampai persetujuan klien/DPO + DPA); pertanyaan Q-P30, Q-P31; draf `PERSETUJUAN_PEMROSESAN_VPS_BIMA.md`.
@@ -587,7 +588,7 @@ ulang. Enkripsi: disk/backup terenkripsi seperti seluruh DB Odoo (§2.5); tanpa 
 - **Prasyarat run nyata production:** entri ini disetujui DPO; Q-ESB24 (retensi bundel & penandatangan); prasyarat
   §2.8.11 (data ESB production) terpenuhi.
 
-**(d) (v19) Tambahan G65 — pembelian, harga beli supplier, stok awal (docs/04 §27.13, ADR-042 §0b, SEC-G65-04)** —
+**(d) (v21) Tambahan G65 — pembelian, harga beli supplier, stok awal (docs/04 §27.13, ADR-042 §0b, SEC-G65-04)** —
 status: **MENUNGGU DPO**
 | Tempat | Isi | Data pribadi? | Akses | Retensi (usulan) |
 |---|---|---|---|---|
@@ -599,6 +600,18 @@ status: **MENUNGGU DPO**
 
 - **Pertanyaan DPO:** apakah teks `supplier_name` perorangan di arsip pembelian cukup dilindungi disk/backup terenkripsi
   (seperti `sales.line`), atau perlu dipseudonimkan ke kode supplier saja sebelum production.
+#### 2.8.15 (v20) Production planning di atas ESB — Gelombang 66 (docs/04 §30, ADR-051 Proposed) — status: **MENUNGGU DPO**
+
+- **Lokasi:** PostgreSQL database `efn_prodplan` skema `prodplan` (role aplikasi sendiri, TLS verify-full).
+- **Data pribadi:** hanya **uid Odoo + nama tampilan staf** (≤ 64 karakter) sebagai aktor di `plan`, `plan_transfer`,
+  `outbox`, `audit_event`. Tanpa data pelanggan, member, maupun pemasok; nama produk/bahan dan qty = data bisnis klien.
+- **Tujuan & dasar (usulan):** jejak audit siapa membuat/menyetujui/memposting rencana produksi dan dokumen ESB
+  (kepentingan sah + kewajiban pencatatan operasional klien).
+- **Retensi (docs/04 §30.10):** rencana 730 hari setelah tanggal produksi; `outbox` + `audit_event` 1825 hari (Q-PP10,
+  menunggu DPO/Finance); `stock_snapshot` 30 hari. Purge harian otomatis.
+- **Pihak ketiga:** ESB Core (sistem klien sendiri) menerima dokumen transfer/produksi dengan penanda `pp:<id>` tanpa
+  data pribadi selain akun API yang dipakai. Log tidak memuat kredensial, token, maupun query string.
+- **Prasyarat production:** entri ini disetujui DPO; Q-PP1, Q-PP2, Q-PP10 terjawab.
 
 ## 3. Matriks retensi ringkas (default → ditetapkan DPO)
 | Data | Default | Mekanisme (pemilik) | Status |

@@ -7,6 +7,7 @@ import Link from 'next/link';
 import { usePathname, useSearchParams } from 'next/navigation';
 import { useEffect, useRef, useState } from 'react';
 import { DEFAULT_NAV_PREFS, NAV_PREFS_KEY, parseNavPrefs, serializeNavPrefs, toggleClosed, type NavPrefs } from '@/lib/nav-state';
+import { isProduksiPath, ppNavActive } from '@/lib/prodplan-access';
 import { navItemActive, scopedQuery, type NavGroup } from '@/lib/sm-personas';
 import { Icon } from './ui';
 
@@ -88,8 +89,12 @@ export function NavLinks({ groups }: { groups: readonly NavGroup[] }): React.Rea
               </button>
               <ul id={`nav-g-${g.id}`} hidden={!open}>
                 {g.items.map((it) => {
-                  const active = navItemActive(it, pathname, sp);
-                  const qs = (it.scope ? scopedQuery(it.scope, esbCarry, g.esbCodes ?? []) : smPaths.includes(it.href) ? smCarry : esbCarry).toString();
+                  const isPp = isProduksiPath(it.href);
+                  const active = isPp ? ppNavActive(it.href, pathname) : navItemActive(it, pathname, sp);
+                  // Modul Produksi memakai query sendiri (from/to/status): filter dashboard tidak dibawa ke sana.
+                  const qs = isPp
+                    ? ''
+                    : (it.scope ? scopedQuery(it.scope, esbCarry, g.esbCodes ?? []) : smPaths.includes(it.href) ? smCarry : esbCarry).toString();
                   return (
                     <li key={`${it.href}:${it.scope ?? ''}`}>
                       <Link href={`${it.href}${qs ? `?${qs}` : ''}`} aria-current={active ? 'page' : undefined} className="nav-link" title={it.label}>

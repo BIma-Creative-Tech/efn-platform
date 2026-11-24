@@ -23,7 +23,7 @@ help:
 	@echo "make lint          - lint lokal (ruff, hadolint, shellcheck via docker)"
 	@echo "make lint-enc      - cek tidak ada koneksi plaintext (scripts/check-encryption.sh)"
 	@echo "make test          - unit test api-gateway"
-	@echo "make test-py       - pytest ai-ocr-worker, etl, text2sql, esb-extract, scripts/migration"
+	@echo "make test-py       - pytest ai-ocr-worker, etl, text2sql, esb-extract, prodplan, scripts/migration"
 	@echo "make backup        - base backup WAL-G sekarang (stack harus jalan)"
 	@echo "make restore-test  - pulihkan backup terakhir ke container sementara + verifikasi"
 
@@ -73,6 +73,8 @@ validate: env secrets
 	$(PROD) $(ALL_PROFILES) config -q
 	$(DEV) -f $(COMPOSE_DIR)/docker-compose.esb.yml $(ALL_PROFILES) config -q
 	$(DEV) -f $(COMPOSE_DIR)/docker-compose.esb.yml -f $(COMPOSE_DIR)/docker-compose.migration.yml $(ALL_PROFILES) --profile migrate config -q
+	$(DEV) -f $(COMPOSE_DIR)/docker-compose.prodplan.yml $(ALL_PROFILES) config -q
+	$(PROD) -f $(COMPOSE_DIR)/docker-compose.prodplan.yml $(ALL_PROFILES) config -q
 
 # Image linter dipin digest (SEC-47; sama dengan job CI infra; G13: hadolint v2.14.0). Dependabot tidak membaca Makefile:
 # perbarui manual bersama ci.yml. Shellcheck: daftar file sama dengan job CI `infra`.
@@ -97,7 +99,7 @@ test:
 	cd services/api-gateway && npm ci && npm test
 
 test-py:
-	@for s in ai-ocr-worker etl text2sql esb-extract; do \
+	@for s in ai-ocr-worker etl text2sql esb-extract prodplan; do \
 	  if [ -d services/$$s/tests ]; then (cd services/$$s && python -m pytest -q tests) || exit 1; fi; \
 	done
 	@if [ -d scripts/migration/tests ]; then (cd scripts/migration && python -m pytest -q tests) || exit 1; fi

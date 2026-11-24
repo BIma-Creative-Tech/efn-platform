@@ -70,12 +70,13 @@ jobs:
       fail-fast: false
       matrix:
         service: [odoo, api-gateway, superapp-web, insight-web, login-gateway, ai-ocr-worker, etl, text2sql, esb-extract, forecast-worker,
-                  esb-migrate, segment-worker, wa-unofficial, postgres, minio, metabase]
+                  esb-migrate, segment-worker, wa-unofficial, prodplan, postgres, minio, metabase]
         include:
           - { service: odoo, context: services/odoo }
           - { service: api-gateway, context: services/api-gateway }
           - { service: superapp-web, context: services/superapp-web }
           - { service: insight-web, context: services/insight-web }   # G42 dashboard Insight (docs/04 §26)
+          - { service: prodplan, context: services/prodplan }   # G66 production planning ESB (docs/04 §30)
           - { service: login-gateway, context: services/login-gateway }   # G62 halaman masuk staf (docs/04 §29, ADR-050)
           - { service: segment-worker, context: services/segment-worker }   # G50 segmen perilaku (docs/04 §28.7)
           - { service: wa-unofficial, context: services/wa-unofficial }     # G50 WA tidak resmi (ADR-044)
@@ -167,11 +168,14 @@ jobs:
       fail-fast: false
       matrix:
         service: [odoo, api-gateway, superapp-web, insight-web, login-gateway, ai-ocr-worker, etl, text2sql, esb-extract, forecast-worker,
-                  esb-migrate, segment-worker, wa-unofficial, postgres, minio, metabase]
+                  esb-migrate, segment-worker, wa-unofficial, prodplan, postgres, minio, metabase]
         include:
           - { service: odoo, context: services/odoo }
           - { service: api-gateway, context: services/api-gateway }
           - { service: superapp-web, context: services/superapp-web }
+          # G66 (docs/04 §30): ditandatangani seperti service lain; BELUM dipakai deploy.yml (overlay prodplan tidak
+          # dipasang deploy.sh; IMAGE_PRODPLAN di rantai rilis = tindak lanjut, runbook prodplan.md §9)
+          - { service: prodplan, context: services/prodplan }
           # G50 (docs/04 §28.7/§28.9): ditandatangani seperti service lain; BELUM dipakai deploy.yml (overlay segment /
           # wa-unofficial; wa-unofficial OFF di production, ADR-044)
           - { service: segment-worker, context: services/segment-worker }

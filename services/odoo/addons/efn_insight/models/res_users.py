@@ -22,6 +22,13 @@ PERSONA_GROUPS = {
     "store": "efn_insight.group_insight_store",
 }
 
+# docs/04 §30.7 (G66, ADR-051 Proposed): peran production planning -> xmlid. Bukan persona (tidak masuk
+# PERSONA_GROUPS / SQL_efn_personas), tidak ikut sinkron jabatan.
+PP_GROUPS = {
+    "pp_planner": "efn_insight.group_prodplan_planner",
+    "pp_warehouse": "efn_insight.group_prodplan_warehouse",
+}
+
 
 def empty_sm_scope():
     """Bentuk nilai kembali hook. `no_outlet` = user ber-persona store tanpa outlet yang sah (halaman info)."""
@@ -49,6 +56,11 @@ class ResUsers(models.Model):
         """Persona yang dipegang user (himpunan kunci PERSONA_GROUPS)."""
         self.ensure_one()
         return {persona for persona, xmlid in PERSONA_GROUPS.items() if self.has_group(xmlid)}
+
+    def _efn_insight_pp_roles(self):
+        """Peran production planning yang dipegang user (himpunan kunci PP_GROUPS)."""
+        self.ensure_one()
+        return {role for role, xmlid in PP_GROUPS.items() if self.has_group(xmlid)}
 
     def _efn_insight_sm_scope(self, personas=None):
         """Cakupan supermarket user (satu record): personas, codes, cids, wids, cats (list int/str terurut).

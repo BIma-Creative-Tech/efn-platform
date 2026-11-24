@@ -21,7 +21,13 @@ export const ALL_CODES: readonly Code[] = [...ESB_CODES, ...SM_CODES].sort();
 export const PERSONAS = ['category', 'dc', 'exec', 'marketing', 'store'] as const;
 export type Persona = (typeof PERSONAS)[number];
 export type BaseRole = 'user' | 'all_brands';
-export type Role = BaseRole | Persona;
+/**
+ * Peran production planning (G66, docs/04 §30.7, ADR-051): BUKAN persona (tidak mengubah tanda tangan ClickHouse).
+ * Hanya sah di eit3/eis3. IDENTIK dengan `PP_ROLES` di Odoo `insight_token.py`.
+ */
+export const PP_ROLES = ['pp_planner', 'pp_warehouse'] as const;
+export type PpRole = (typeof PP_ROLES)[number];
+export type Role = BaseRole | Persona | PpRole;
 
 const CODE_SET: ReadonlySet<string> = new Set(ESB_CODES);
 const ALL_CODE_SET: ReadonlySet<string> = new Set(ALL_CODES);
@@ -36,6 +42,9 @@ export const isPersona = (r: string): r is Persona => PERSONA_SET.has(r);
 export const esbCodesOf = (codes: readonly string[]): EsbCode[] => codes.filter(isEsbCode);
 export const smCodesOf = (codes: readonly string[]): SmCode[] => codes.filter(isSmCode);
 export const personasOf = (roles: readonly string[]): Persona[] => roles.filter(isPersona);
+const PP_ROLE_SET: ReadonlySet<string> = new Set(PP_ROLES);
+export const isPpRole = (r: string): r is PpRole => PP_ROLE_SET.has(r);
+export const ppRolesOf = (roles: readonly string[]): PpRole[] => roles.filter(isPpRole);
 
 export function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v);
@@ -114,6 +123,23 @@ export function parseRolesV2(v: unknown): Role[] | null {
   for (const r of a) {
     if (r === 'user' || r === 'all_brands') base += 1;
     else if (!isPersona(r)) return null;
+  }
+  return base === 1 ? (a as Role[]) : null;
+}
+
+/**
+ * roles v3 (eit3/eis3, §30.7): seperti v2 + 0..2 peran PP; urut ASCII naik
+ * (all_brands < category < dc < exec < marketing < pp_planner < pp_warehouse < store < user), panjang maks 8.
+ */
+export function parseRolesV3(v: unknown): Role[] | null {
+  if (!Array.isArray(v) || v.length < 1 || v.length > 8) return null;
+  if (!v.every((x) => typeof x === 'string')) return null;
+  const a = v as string[];
+  if (!strictlyAscending(a)) return null;
+  let base = 0;
+  for (const r of a) {
+    if (r === 'user' || r === 'all_brands') base += 1;
+    else if (!isPersona(r) && !isPpRole(r)) return null;
   }
   return base === 1 ? (a as Role[]) : null;
 }
@@ -208,6 +234,8 @@ export function scopeConsistentV3(c: {
   if ((c.brs.length > 0) !== branchScoped) return false;
   // T7
   if (c.cats.length > 0 && !p.has('category')) return false;
+  // T9 (§30.7, G66): peran PP => ada kode ESB dan tanpa pembatasan cabang.
+  if (ppRolesOf(c.roles).length > 0 && (!hasEsb || c.brs.length > 0)) return false;
   return true;
 }
 

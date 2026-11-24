@@ -12,9 +12,11 @@ import { authenticate } from './lib/gate';
 import { getConfig, getKey } from './lib/runtime';
 import { SESSION_COOKIE, clearCookieHeader } from './lib/session';
 import { FNB_DENIAL_PATH, fnbRouteDenial } from './lib/fnb-personas';
+import { PP_DENIAL_PATH, ppRouteDenial } from './lib/prodplan-access';
 import { DENIAL_PATH, smRouteDenial } from './lib/sm-personas';
 
 const PUBLIC_PATHS = new Set([
+  '/pp-belum-aktif',
   '/belum-aktif',
   '/sesi-berakhir',
   '/keluar',
@@ -79,6 +81,9 @@ export function proxy(request: NextRequest): NextResponse {
     // G52 (§28.15.9): rute /fnb/* + penutupan halaman F&B lain untuk sesi ber-cabang. Tidak membaca INSIGHT_SM_ENABLED.
     const fnbDenial = fnbRouteDenial(path, auth.session, cfg.fnbEnabled);
     if (fnbDenial) return rewriteTo(request, FNB_DENIAL_PATH[fnbDenial], csp, nonce, false);
+    // G66 (§30.12): /produksi* butuh INSIGHT_PRODPLAN_ENABLED=true + peran PP (lapis kedua: halaman + route handler API).
+    const ppDenial = ppRouteDenial(path, auth.session, cfg.ppEnabled);
+    if (ppDenial) return rewriteTo(request, PP_DENIAL_PATH[ppDenial], csp, nonce, false);
   }
 
   const requestHeaders = new Headers(request.headers);

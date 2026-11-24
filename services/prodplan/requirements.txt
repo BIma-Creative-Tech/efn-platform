@@ -1,0 +1,5 @@
+# Runtime prodplan (Python 3.12). Versi di-pin; diaudit pip-audit di CI. HTTP ke ESB + API = stdlib.
+# Driver PostgreSQL resmi psycopg 3 (wheel binary memuat libpq; TLS verify-full via sslrootcert).
+psycopg[binary]==3.2.9
+# CA publik untuk TLS ke ESB (sama dengan services/esb-extract).
+certifi==2026.10.23

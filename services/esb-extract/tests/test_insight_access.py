@@ -15,11 +15,12 @@ DDL13 = (CH / "init" / "13-g42-insight.sql").read_text(encoding="utf-8")
 DDL19 = (CH / "init" / "19-insight-review.sql").read_text(encoding="utf-8")
 DDL21 = (CH / "init" / "21-g52-insight-fnb.sql").read_text(encoding="utf-8")
 DDL22 = (CH / "init" / "22-g53-insight-fnb-forecast.sql").read_text(encoding="utf-8")
+DDL23 = (CH / "init" / "23-insight-yoy.sql").read_text(encoding="utf-8")
 ACCESS = (CH / "access" / "insight-access.sql").read_text(encoding="utf-8")
 INIT_SH = (CH / "clickhouse-init.sh").read_text(encoding="utf-8")
 ESB_POLICY_SH = (CH / "access" / "insight-esb-policy.sh").read_text(encoding="utf-8")
-# G52 §28.15.7 + G53: jumlah policy ESB (11 + 4); konstanta yang sama di clickhouse-init.sh (ESB_POLICY_EXPECTED).
-ESB_POLICY_COUNT = 15
+# G52 §28.15.7 + G53 + YoY 24 Nov 2026: jumlah policy ESB (12 PT + 5 BR); sama dengan ESB_POLICY_EXPECTED di init.
+ESB_POLICY_COUNT = 17
 
 # G52: WHERE opsional satu baris (hanya v_esb_store_payment_daily: `WHERE branch_id != 0`).
 INSIGHT_VIEW_RE = re.compile(
@@ -45,8 +46,16 @@ EXPECTED_INSIGHT_VIEWS = {
     "v_esb_store_menu_daily",
     "v_esb_store_payment_daily",
     "v_esb_store_receipt_daily",
+    "v_esb_sales_done_day",  # Insight YoY 24 Nov 2026 (23-insight-yoy.sql)
+    "v_esb_menu_econ_daily",
 }
 REVIEW_DWH_VIEWS = {"v_esb_movement_daily", "v_esb_coverage"}
+YOY_DWH_VIEWS = {"v_esb_sales_done_day", "v_esb_menu_econ_daily"}
+DONE_DAY_COLUMNS = ["brand", "company_code", "branch_id", "day"]
+MENU_ECON_COLUMNS = (
+    "sales_date brand company_code branch_id menu_name menu_category qty_paid gross_paid disc_paid cogs_paid "
+    "qty_free cogs_free qty_pkg cogs_pkg pkg_qty pkg_gross pkg_disc"
+).split()
 # Kontrak kolom (frontend menulis query paralel terhadap daftar ini; urutan = urutan SELECT).
 MOVEMENT_COLUMNS = [
     "day",
@@ -75,9 +84,9 @@ def strip_comments(sql: str) -> str:
 
 
 def dwh_view_body(name: str) -> str:
-    """Badan view efn_dwh.<name> (tanpa komentar) dari 12/13/19/21/22."""
+    """Badan view efn_dwh.<name> (tanpa komentar) dari 12/13/19/21/22/23."""
     header = f"CREATE OR REPLACE VIEW efn_dwh.{name} AS"
-    for ddl in (DDL22, DDL21, DDL19, DDL13, DDL12):
+    for ddl in (DDL23, DDL22, DDL21, DDL19, DDL13, DDL12):
         if header in ddl:
             return strip_comments(ddl.split(header, 1)[1].split(";", 1)[0])
     raise AssertionError(f"view efn_dwh.{name} tidak ditemukan")
@@ -470,3 +479,33 @@ def test_policy_codes_predicate_uses_company_code() -> None:
     sm_at = INIT_SH.index("\n. /init/access/insight-sm-policy.sh\n")
     assert INIT_SH.index('[ "$INSIGHT_KEY" != "$SCOPE_KEY" ]') < esb_at < sm_at
     assert INIT_SH.index("\nunset INSIGHT_KEY\n") > sm_at
+
+
+def test_yoy_views_contract_and_rules() -> None:
+    """Insight YoY 24 Nov 2026: view idempoten, kolom kontrak, wrapper + row policy PT, aturan pemisahan baris."""
+    code = strip_comments(DDL23)
+    assert set(re.findall(r"CREATE OR REPLACE VIEW efn_dwh\.(\w+) AS", DDL23)) == YOY_DWH_VIEWS
+    assert not re.search(r"\b(DROP|TRUNCATE|ALTER|INSERT|CREATE TABLE)\b", code)
+    assert "SELECT *" not in code
+    assert output_columns("v_esb_sales_done_day") == DONE_DAY_COLUMNS
+    assert output_columns("v_esb_menu_econ_daily") == MENU_ECON_COLUMNS
+    for name in YOY_DWH_VIEWS:
+        assert _top_level_items(name) == len(output_columns(name)), name
+        assert f"GRANT SELECT ON efn_dwh.{name} TO efn_insight_definer;" in ACCESS
+    views = insight_views()
+    assert views["v_esb_sales_done_day"] == (DONE_DAY_COLUMNS, "efn_dwh.v_esb_sales_done_day")
+    assert views["v_esb_menu_econ_daily"] == (MENU_ECON_COLUMNS, "efn_dwh.v_esb_menu_econ_daily")
+    # Kelas PT: memuat cogs (menu) / dipakai bersama view PT; sesi persona toko (brs terisi) ditolak.
+    manifest = esb_policy_manifest()
+    assert all(manifest[name] == "PT" for name in YOY_DWH_VIEWS)
+    done = dwh_view_body("v_esb_sales_done_day")
+    # Hanya slice penjualan selesai; PT dari cabang, cabang tak dikenal -> '' (fail closed, tanpa PT default brand).
+    assert "WHERE entity = 'sales' AND status = 'done'" in done
+    assert "CAST(ifNull(b.company_code, ''), 'String') AS company_code" in done
+    econ = dwh_view_body("v_esb_menu_econ_daily")
+    # Versi slice terakhir saja; dikelompokkan per NAMA menu (kode SC000xx dan DB/TB lama bergabung).
+    assert "FROM efn_esb.extract_checkpoint FINAL WHERE entity = 'sales'" in econ
+    assert "GROUP BY sales_date, brand, company_code, branch_id, menu_name\n" in econ
+    assert "s.row_type = 'ALACARTE' AND s.price > 0" in econ
+    assert "s.row_type = 'ALACARTE' AND s.price = 0" in econ
+    assert "s.row_type = 'PACKAGE_COMPONENT'" in econ and "s.row_type = 'PACKAGE_HEADER'" in econ

@@ -75,7 +75,7 @@ describe('beranda, navigasi, chip', () => {
     const mixed = navGroups({ codes: ['PB', 'BCF', 'SMD'], roles: ['exec', 'marketing', 'dc', 'user'] }, true);
     expect(mixed.map((g) => g.title)).toEqual(['Ringkasan', 'Food & Beverage', 'Supermarket']);
     expect(mixed[0].items.map((i) => i.href)).toEqual(['/']);
-    expect(mixed[1].items.map((i) => i.href)).toEqual(['/sales', '/payments', '/flow', '/distribution', '/forecast', '/data-quality']);
+    expect(mixed[1].items.map((i) => i.href)).toEqual(['/sales', '/payments', '/yoy', '/flow', '/distribution', '/forecast', '/data-quality']);
     expect(mixed[1].items.filter((i) => i.scope === 'esb').map((i) => i.href)).toEqual(['/sales', '/payments', '/forecast']);
     expect(mixed[1].esbCodes).toEqual(['BCF', 'PB']);
     expect(mixed[2].items.map((i) => i.href)).toEqual(['/exec', '/dc', '/marketing', '/sales', '/payments', '/forecast']);
@@ -83,7 +83,7 @@ describe('beranda, navigasi, chip', () => {
   it('ESB-saja: tanpa grup Supermarket, tanpa scope; Forecast F&B tampil', () => {
     const esb = navGroups({ codes: ['PB'], roles: ['user'] }, true);
     expect(esb.map((g) => g.id)).toEqual(['summary', 'fnb']);
-    expect(esb[1].items.map((i) => i.href)).toEqual(['/sales', '/payments', '/flow', '/distribution', '/forecast', '/data-quality']);
+    expect(esb[1].items.map((i) => i.href)).toEqual(['/sales', '/payments', '/yoy', '/flow', '/distribution', '/forecast', '/data-quality']);
     expect(esb.flatMap((g) => g.items).some((i) => i.scope !== undefined)).toBe(false);
     expect(esb[1].esbCodes).toBeUndefined();
     // flag SM mati: tidak ada menu persona / salinan Supermarket

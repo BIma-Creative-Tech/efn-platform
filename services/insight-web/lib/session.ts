@@ -21,6 +21,7 @@ import {
   parseName,
   parseRoles,
   parseRolesV2,
+  parseRolesV3,
   parseWids,
   cidsMatchRole,
   scopeConsistent,
@@ -163,7 +164,7 @@ function verifyV3(value: string, key: string, nowSec: number): Session | null {
   const exp: unknown = raw.exp;
   if (!isSub(sub) || !isInt(iat) || !isInt(exp)) return null;
   const name = parseName(raw.name);
-  const roles = parseRolesV2(raw.roles);
+  const roles = parseRolesV3(raw.roles);
   const cids = parseCids(raw.cids);
   const codes = parseCodesV2(raw.codes);
   const wids = parseWids(raw.wids);

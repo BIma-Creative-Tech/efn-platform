@@ -3646,3 +3646,31 @@ Kontrak docs/04 §27.13.4 (format bundel, masukan), §27.13.6–§27.13.8; ADR-0
   `_has_common_reference`; gram = akar, kg relatif gram; `purchase/models/product.py` 19 tanpa `uom_po_id`.
 - [B]: perilaku RFQ `product_uom_id` ≠ UoM produk; AVCO dengan `date` mundur; filter `at_date` closing valuasi;
   `property_stock_inventory` company baru di test; pivot Char `supplier_name` sebagai row.
+---
+
+# G66 — `efn_insight` 19.0.3.1.0: peran production planning (24 Nov 2026)
+
+Kontrak `docs/04` §30.7 (L-251), ADR-051 (Proposed), ADR-041 §3.7. Worktree `efn-platform-prodplan`, branch
+`feat/production-planning`. Perubahan kecil pada addon yang ada (tanpa fit-gap baru).
+
+## File
+- `services/odoo/addons/efn_insight/security/efn_insight_security.xml` — 2 privilege (seq 80/90) + grup
+  `group_prodplan_planner`, `group_prodplan_warehouse` (implied `group_insight_user`).
+- `.../lib/insight_token.py` — `PP_ROLES`, `MAX_ROLES_V3 = 8`; `_validate_common(extra_roles=)` (eit2 tetap tanpa PP);
+  `validate_claims_v3` + batas 8 peran + T9.
+- `.../models/res_users.py` — `PP_GROUPS`, `_efn_insight_pp_roles()` (privat).
+- `.../controllers/main.py` — `apply_pp_roles()` dipanggil hanya di `_token_v3`.
+- `.../__manifest__.py` (19.0.3.1.0), `README.md` (bagian G66), `tests/test_insight_g66.py` (baru),
+  `tests/test_insight_sso.py` (+1 HttpCase), `tests/__init__.py`.
+
+## Tafsiran kontrak
+- T9 di pembuat = buang PP + log (`insight_pp_conflict` untuk `brs`, `insight_pp_no_esb` untuk tanpa kode ESB), bukan
+  halaman galat; `validate_claims_v3` tetap menolak (`bad_claims`) sebagai jaring pengaman.
+- PP hanya di eit3; tanpa flag Odoo; tidak bergantung `INSIGHT_FNB_PERSONA_ENABLED`.
+- Tidak ada data demo (addon tidak punya mekanisme demo) → tidak ditambah.
+
+## Belum diverifikasi
+- Test belum dijalankan di Odoo 19 nyata (tanpa shell); ruff belum dijalankan.
+- Interop byte-exact token ber-PP dengan insight-web `lib/claims.ts` (belum ada vektor bersama).
+- Apakah grup PP perlu masuk `efn_role` `SENSITIVE_GROUP_XMLIDS` / `efn_audit` — di luar area file saya; usul lead
+  memutuskan (planner dapat memposting ke ESB = sensitif).

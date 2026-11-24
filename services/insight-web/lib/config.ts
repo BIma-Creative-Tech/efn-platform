@@ -27,6 +27,14 @@ export interface InsightConfig {
   fnbEnabled: boolean;
   /** INSIGHT_FNB_DC_CODES: kode gudang pusat (agregat outlet) yang dikeluarkan dari total forecast F&B; dipisah koma, default kosong. */
   fnbDcCodes: string[];
+  /**
+   * INSIGHT_PRODPLAN_ENABLED (docs/04 §30.3, G66): aktif hanya string persis "true" DAN `PRODPLAN_URL` valid (selain
+   * http://127.0.0.1:7443 = fitur nonaktif, fail closed). Default false -> halaman /produksi "belum aktif".
+   */
+  ppEnabled: boolean;
+  /** Origin sidecar prodplan (selalu `http://127.0.0.1:7443` bila valid), null bila PRODPLAN_URL tidak sah. */
+  ppUrl: string | null;
+  ppAssertKeyFile: string;
   production: boolean;
   allowPlaintext: boolean;
   chUrl: string;
@@ -59,6 +67,24 @@ function checkUrl(name: string, raw: string, allowPlaintext: boolean, problems: 
   return url;
 }
 
+/** Satu-satunya tujuan sah: sidecar ghostunnel client di loopback namespace yang sama (§30.1). */
+export const PRODPLAN_SIDECAR_URL = 'http://127.0.0.1:7443';
+
+/** `PRODPLAN_URL` (default sidecar). Selain tepat http://127.0.0.1:7443 (tanpa kredensial/path/query) -> null. */
+export function parsePpUrl(raw: string | undefined): string | null {
+  const v = (raw ?? '').trim() === '' ? PRODPLAN_SIDECAR_URL : (raw ?? '').trim();
+  try {
+    const u = new URL(v);
+    const okPath = u.pathname === '/' || u.pathname === '';
+    if (u.protocol === 'http:' && u.hostname === '127.0.0.1' && u.port === '7443' && !u.username && !u.password && okPath && !u.search && !u.hash) {
+      return PRODPLAN_SIDECAR_URL;
+    }
+  } catch {
+    /* tidak sah */
+  }
+  return null;
+}
+
 export function parseConfig(env: Env): InsightConfig {
   const production = env.APP_ENV === 'production' || env.NODE_ENV === 'production';
   const allowPlaintext = env.EFN_ALLOW_PLAINTEXT === 'true' && !production;
@@ -77,8 +103,13 @@ export function parseConfig(env: Env): InsightConfig {
     problems.push('NODE_TLS_REJECT_UNAUTHORIZED=0 ditolak di production');
   }
 
+  const ppUrl = parsePpUrl(env.PRODPLAN_URL);
+
   return {
     enabled: env.INSIGHT_ENABLED === 'true',
+    ppEnabled: env.INSIGHT_PRODPLAN_ENABLED === 'true' && ppUrl !== null,
+    ppUrl,
+    ppAssertKeyFile: (env.PRODPLAN_ASSERT_KEY_FILE || '/run/secrets/prodplan_assert_key').trim(),
     smEnabled: env.INSIGHT_SM_ENABLED === 'true',
     acceptEit1: env.INSIGHT_ACCEPT_EIT1 === undefined || env.INSIGHT_ACCEPT_EIT1.trim() === '' ? true : env.INSIGHT_ACCEPT_EIT1 === 'true',
     acceptEit2: env.INSIGHT_ACCEPT_EIT2 === undefined || env.INSIGHT_ACCEPT_EIT2.trim() === '' ? true : env.INSIGHT_ACCEPT_EIT2 === 'true',
@@ -121,6 +152,8 @@ export function collectKeyProblems(cfg: InsightConfig, readFile: ReadFile, requi
     ['insight_session_key', cfg.sessionKeyFile],
     ['insight_scope_key', cfg.scopeKeyFile],
   ];
+  // G66 (§30.2): prodplan_assert_key wajib ada, valid, dan berbeda dari kunci lain bila modul produksi aktif.
+  if (cfg.ppEnabled) keys.push(['prodplan_assert_key', cfg.ppAssertKeyFile]);
   const seen = new Map<string, string>();
   for (const [label, path] of keys) {
     const raw = readFile(path);

@@ -8,7 +8,7 @@ import { parseConfig, type InsightConfig } from './config';
 import { parseKey } from './hmac';
 import { JtiCache } from './jti-cache';
 import { RateLimiter } from './rate-limit';
-import { createExportLimiter, createPageQueryLimiter } from './user-limits';
+import { createExportLimiter, createPageQueryLimiter, createPpMutationLimiter, createPpReadLimiter } from './user-limits';
 
 export function readFileOrNull(path: string): string | null {
   try {
@@ -26,6 +26,8 @@ interface RuntimeState {
   ssoLimiter: RateLimiter;
   pageQueryLimiter: RateLimiter;
   exportLimiter: RateLimiter;
+  ppMutationLimiter: RateLimiter;
+  ppReadLimiter: RateLimiter;
 }
 
 const g = globalThis as unknown as { __insightRuntime?: RuntimeState };
@@ -40,6 +42,8 @@ function state(): RuntimeState {
       // SEC-189: batas per pengguna (kunci = sub), lihat lib/user-limits.ts.
       pageQueryLimiter: createPageQueryLimiter(),
       exportLimiter: createExportLimiter(),
+      ppMutationLimiter: createPpMutationLimiter(),
+      ppReadLimiter: createPpReadLimiter(),
     };
   }
   return g.__insightRuntime;
@@ -51,14 +55,15 @@ export function getConfig(): InsightConfig {
   return s.config;
 }
 
-export type KeyName = 'sso' | 'session' | 'scope';
+export type KeyName = 'sso' | 'session' | 'scope' | 'ppassert';
 
 export function getKey(name: KeyName): string | null {
   const s = state();
   const cached = s.keys.get(name);
   if (cached) return cached;
   const cfg = getConfig();
-  const path = name === 'sso' ? cfg.ssoKeyFile : name === 'session' ? cfg.sessionKeyFile : cfg.scopeKeyFile;
+  const path =
+    name === 'sso' ? cfg.ssoKeyFile : name === 'session' ? cfg.sessionKeyFile : name === 'ppassert' ? cfg.ppAssertKeyFile : cfg.scopeKeyFile;
   const k = parseKey(readFileOrNull(path));
   if (k) s.keys.set(name, k);
   return k;
@@ -88,4 +93,12 @@ export function getPageQueryLimiter(): RateLimiter {
 
 export function getExportLimiter(): RateLimiter {
   return state().exportLimiter;
+}
+
+export function getPpMutationLimiter(): RateLimiter {
+  return state().ppMutationLimiter;
+}
+
+export function getPpReadLimiter(): RateLimiter {
+  return state().ppReadLimiter;
 }

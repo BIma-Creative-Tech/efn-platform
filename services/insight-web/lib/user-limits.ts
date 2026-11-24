@@ -17,6 +17,16 @@ export const EXPORT_LIMIT = 5;
 export const EXPORT_WINDOW_MS = 10 * 60_000;
 export const EXPORT_CONCURRENCY_DEFAULT = 3;
 
+/**
+ * G66 (docs/04 §30.8): prodplan membatasi 60 mutasi/menit per `sub`; sisi insight-web memakai batas yang sama agar penolakan
+ * terjadi lebih awal. Pembacaan (polling job tiap 2 dtk, pratinjau): 150/menit per `sub`.
+ */
+export const PP_MUTATION_LIMIT = 60;
+export const PP_READ_LIMIT = 150;
+export const PP_WINDOW_MS = 60_000;
+export const createPpMutationLimiter = (): RateLimiter => new RateLimiter(PP_MUTATION_LIMIT, PP_WINDOW_MS);
+export const createPpReadLimiter = (): RateLimiter => new RateLimiter(PP_READ_LIMIT, PP_WINDOW_MS);
+
 export const createPageQueryLimiter = (): RateLimiter => new RateLimiter(PAGE_QUERY_LIMIT, PAGE_QUERY_WINDOW_MS);
 export const createExportLimiter = (): RateLimiter => new RateLimiter(EXPORT_LIMIT, EXPORT_WINDOW_MS);
 

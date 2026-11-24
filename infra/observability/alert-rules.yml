@@ -5,8 +5,9 @@ groups:
   # ─────────────────────────── Ketersediaan ───────────────────────────
   - name: efn-availability
     rules:
+      # G66: job prodplan dikecualikan (bukan jalur transaksi) -> ditangani EfnProdplanDown (warning, 15 menit, §30.11).
       - alert: EfnServiceDown
-        expr: up{job!~"probe-.*"} == 0
+        expr: up{job!~"probe-.*|prodplan"} == 0
         for: 3m
         labels:
           severity: critical
@@ -274,6 +275,43 @@ groups:
           summary: "WA tidak resmi: nomor diblokir WhatsApp (banned)"
           description: "Risiko R-B16 terjadi. Matikan kanal (WA_UNOFFICIAL_ENABLED=false) dan JANGAN pairing nomor pengganti tanpa keputusan pemilik risiko (ADR-044). Kanal resmi tidak terdampak (nomor terpisah)."
           runbook_url: https://github.com/efn/efn-platform/blob/main/docs/runbooks/supermarket-campaign-channels.md#efnwaunofficialbanned
+
+  # ─────────────────────────── Production planning CK (G66, ADR-051 Proposed, docs/04 §30.11) ───────────────────────────
+  # Metrik services/prodplan (scrape job prodplan, hanya ada bila overlay docker-compose.prodplan.yml dipakai). BUKAN
+  # jalur transaksi (POS/checkout/Odoo tidak terdampak) -> warning jam kerja. Outbox = dokumen yang SUDAH/MUNGKIN
+  # tercatat di ESB (stok bisa sudah bergerak): unknown/failed/delete_failed butuh keputusan manusia, bukan retry otomatis.
+  - name: efn-prodplan
+    rules:
+      - alert: EfnProdplanDown
+        expr: up{job="prodplan"} == 0
+        for: 15m
+        labels:
+          severity: warning
+          team: ops
+        annotations:
+          summary: "prodplan tidak bisa di-scrape > 15 menit"
+          description: "Halaman /produksi Insight tidak berfungsi; rencana/posting ke ESB berhenti (outbox menunggu). POS, Odoo, dashboard lain tidak terdampak."
+          runbook_url: https://github.com/efn/efn-platform/blob/main/docs/runbooks/prodplan.md#efnprodplandown
+      - alert: EfnProdplanOutboxStuck
+        expr: sum(prodplan_outbox_rows{job="prodplan",status=~"unknown|failed"}) > 0
+        for: 30m
+        labels:
+          severity: warning
+          team: ops
+        annotations:
+          summary: "prodplan: {{ $value }} dokumen outbox ESB berstatus unknown/failed > 30 menit"
+          description: "Dokumen transfer/produksi tidak terkonfirmasi di ESB. JANGAN kirim ulang manual sebelum dicek di ESB (marker pp:...) - risiko dokumen ganda dan stok bergerak dua kali."
+          runbook_url: https://github.com/efn/efn-platform/blob/main/docs/runbooks/prodplan.md#efnprodplanoutboxstuck
+      - alert: EfnProdplanDeleteFailed
+        expr: sum(prodplan_outbox_rows{job="prodplan",status="delete_failed"}) > 0
+        for: 5m
+        labels:
+          severity: warning
+          team: ops
+        annotations:
+          summary: "prodplan: {{ $value }} dokumen ESB gagal dihapus saat pembatalan rencana"
+          description: "ESB menolak DELETE (goods delivery sudah ada / stok hasil terpakai). Dokumen tetap di ESB; tangani manual di ESB oleh admin gudang/produksi."
+          runbook_url: https://github.com/efn/efn-platform/blob/main/docs/runbooks/prodplan.md#efnprodplandeletefailed
 
   # ─────────────────────────── Penjualan online (G17, docs/04 §10.11) ───────────────────────────
   # Metrik BFF (services/api-gateway/src/odoo-rpc/online-metrics.ts), scrape job api-gateway (mTLS :9464). Selama

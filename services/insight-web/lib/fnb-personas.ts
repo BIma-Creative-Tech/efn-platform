@@ -46,7 +46,7 @@ export interface FnbSessionLike {
 }
 
 /** Halaman F&B non-persona yang ditutup untuk sesi ber-cabang (`/` ditangani pageCtx: dialihkan ke /fnb/store). */
-export const BRANCH_BLOCKED_PATHS: readonly string[] = ['/sales', '/payments', '/flow', '/distribution', '/forecast', '/data-quality'];
+export const BRANCH_BLOCKED_PATHS: readonly string[] = ['/sales', '/payments', '/yoy', '/flow', '/distribution', '/forecast', '/data-quality'];
 
 /** Persona F&B untuk path `/fnb/<persona>` (persis atau awalan segmen), selain itu null. */
 export function fnbPersonaOfPath(pathname: string): FnbPersona | null {
