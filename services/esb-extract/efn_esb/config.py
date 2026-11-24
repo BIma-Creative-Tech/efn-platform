@@ -33,6 +33,7 @@ BRANCH_SCOPED = frozenset({"sales", "fin_sold", "stock"})
 DEFAULT_CK_BRANCHES = "pb:4|38,wtz:5|6,imd:2,cup:4|6"
 _BRAND_RE = re.compile(r"^[a-z0-9]{2,16}$")
 _CODE_RE = re.compile(r"^[A-Z0-9]{2,8}$")
+_DB_RE = re.compile(r"^[a-z_][a-z0-9_]{0,63}$")
 # `disabled` = isi secret `host:disabled` dari scripts/secrets.list (belum diisi operator) -> brand gagal start.
 _PLACEHOLDERS = frozenset({"disabled", "changeme", "change-me", "placeholder", "xxx", "todo", "password"})
 
@@ -312,13 +313,19 @@ class ClickHouseSettings:
         password = read_secret("CH_PASSWORD", e)
         if not password:
             raise RuntimeError("CH_PASSWORD_FILE wajib diisi (secret clickhouse_password_esb)")
+        # SEC-AG-04: nama database disisipkan sebagai identifier SQL -> wajib identifier sederhana.
+        database = _str(e, "CH_DATABASE", "efn_dwh")
+        raw_database = _str(e, "CH_RAW_DATABASE", "efn_esb")
+        for name, value in (("CH_DATABASE", database), ("CH_RAW_DATABASE", raw_database)):
+            if not _DB_RE.fullmatch(value):
+                raise RuntimeError(f"{name} wajib identifier ^[a-z_][a-z0-9_]{{0,63}}$")
         return cls(
             host=_str(e, "CH_HOST", "clickhouse"),
             port=_int_range(e, "CH_PORT", 8443 if secure else 8123, 1, 65535),
             user=_str(e, "CH_USER", "efn_esb"),
             password=password,
-            database=_str(e, "CH_DATABASE", "efn_dwh"),
-            raw_database=_str(e, "CH_RAW_DATABASE", "efn_esb"),
+            database=database,
+            raw_database=raw_database,
             secure=secure,
             ca_file=ca,
         )

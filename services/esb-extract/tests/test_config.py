@@ -171,3 +171,27 @@ def test_clickhouse_requires_tls_and_password(tmp_path: Path) -> None:
         {"CH_SECURE": "false", "EFN_ALLOW_PLAINTEXT": "true", "APP_ENV": "dev", "CH_PASSWORD_FILE": str(pw)}
     )
     assert dev.port == 8123 and dev.ca_file is None
+
+
+@pytest.mark.parametrize(
+    ("name", "value"),
+    [
+        ("CH_DATABASE", "efn_dwh; DROP TABLE x"),
+        ("CH_DATABASE", "efn-dwh"),
+        ("CH_RAW_DATABASE", "Efn_esb"),
+        ("CH_RAW_DATABASE", "1efn"),
+        ("CH_RAW_DATABASE", "a" * 65),
+        ("CH_DATABASE", "efn_dwh.x"),
+    ],
+)
+def test_clickhouse_database_names_are_identifiers(tmp_path: Path, name: str, value: str) -> None:
+    # SEC-AG-04: nama database masuk SQL sebagai identifier -> ditolak sebelum klien dibuat.
+    ca = tmp_path / "ca.crt"
+    ca.write_text("-----BEGIN CERTIFICATE-----\nsintetis\n", encoding="utf-8")
+    pw = tmp_path / "ch"
+    pw.write_text("sintetisCHpassword123", encoding="utf-8")
+    env = {"CH_CA_FILE": str(ca), "CH_PASSWORD_FILE": str(pw)}
+    with pytest.raises(RuntimeError, match=name):
+        ClickHouseSettings.from_env({**env, name: value})
+    ok = ClickHouseSettings.from_env({**env, "CH_DATABASE": "efn_dwh_stg", "CH_RAW_DATABASE": "_efn_esb"})
+    assert (ok.database, ok.raw_database) == ("efn_dwh_stg", "_efn_esb")
