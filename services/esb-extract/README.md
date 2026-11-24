@@ -185,9 +185,11 @@ disalin karena tidak ada paket bersama antar-service Python.
 - Retensi mart: tabel ESB belum masuk loop TTL 10 tahun `clickhouse-init.sh` (tanpa PII, tidak mendesak).
 - Tidak ada lock global "satu backfill per brand"; disiplin operasional (runbook).
 - Agregat Insight (22 Nov 2026): desain awal (EXCHANGE) terverifikasi di efn-prod (total per bulan view = agg, 15
-  bulan). Desain REPLACE PARTITION + kunci heartbeat (SEC-AG-01/02/03) baru diuji statis + ClickHouse palsu: belum
-  diverifikasi di 24.8 nyata bahwa `SELECT` build + `ALTER DELETE, INSERT` agg cukup untuk REPLACE PARTITION,
-  `ALTER DELETE` cukup untuk DROP PARTITION, `TRUNCATE` dengan grant tabel, dan esb_writer melihat `system.parts`.
+  bulan). Desain REPLACE PARTITION + kunci heartbeat (SEC-AG-01/02/03): grant diuji 25 Nov 2026 di ClickHouse
+  24.8.14 sekali pakai — `SELECT, INSERT, TRUNCATE` build + `SELECT, INSERT, ALTER DELETE` agg cukup untuk TRUNCATE
+  build, REPLACE PARTITION, DROP PARTITION; CREATE TABLE, DROP TABLE, TRUNCATE agg ditolak (ACCESS_DENIED). User
+  tanpa hak `system.parts` → daftar partisi lewat kolom virtual `_partition_id`. Belum: `clickhouse-init.sh` penuh
+  (pagar skema/engine/policy) dan refresh nyata di efn-stg/efn-prod.
   Kunci: celah kecil bila dua proses menulis baris kunci hampir bersamaan dan baris yang lebih awal terlihat setelah jeda
   2 dtk; cek ulang sebelum setiap REPLACE membatasi dampaknya.
 - G43 `snapshot`: semua entitas (P1 dan P2) dibangun dari spec publik tanpa uji GET nyata. Arti kolom P2 **[B]**:

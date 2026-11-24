@@ -207,10 +207,9 @@ def drop_partition_sql(agg: Aggregate, mart: str, partition: str) -> str:
     return f"ALTER TABLE {mart}.{agg.name} DROP PARTITION ID '{_partition_id(partition)}'"
 
 
-PARTITIONS_SQL = (
-    "SELECT DISTINCT partition_id FROM system.parts "
-    "WHERE database = {db:String} AND table = {name:String} AND active ORDER BY partition_id"
-)
+def partitions_sql(agg: Aggregate, mart: str) -> str:
+    """Partisi agg lewat kolom virtual: cukup SELECT pada agg (esb_writer tanpa hak system.parts, diuji 24.8.14)."""
+    return f"SELECT DISTINCT _partition_id FROM {mart}.{agg.name} ORDER BY _partition_id"  # noqa: S608
 
 
 def day_range_sql(raw: str) -> str:
@@ -382,7 +381,7 @@ def refresh_one(
         lock.heartbeat()
     # Bulan di agg yang tidak lagi ada di sumber (data sumber dihapus / rentang menyempit) = penyusutan juga.
     wanted = {start.strftime("%Y%m") for start, _ in months}
-    for row in store.query_rows(PARTITIONS_SQL, {"db": mart, "name": agg.name}):
+    for row in store.query_rows(partitions_sql(agg, mart)):
         partition = str(row[0])
         if partition in wanted:
             continue

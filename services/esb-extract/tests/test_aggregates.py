@@ -19,7 +19,6 @@ from efn_esb.aggregates import (
     AGGREGATES,
     INSERT_SETTINGS,
     LOCK_TABLE,
-    PARTITIONS_SQL,
     REFRESH_COLUMNS,
     REFRESH_TABLE,
     TRIGGER_ENTITIES,
@@ -30,6 +29,7 @@ from efn_esb.aggregates import (
     insert_month_sql,
     is_shrink,
     month_ranges,
+    partitions_sql,
     refresh_all,
     replace_partition_sql,
 )
@@ -142,12 +142,13 @@ class FakeCh:
             self.events.append("holder")
             holder = self.holder()
             return [(holder,)] if holder else []
+        if "_partition_id" in sql:
+            assert sql in {partitions_sql(agg, "efn_dwh") for agg in AGGREGATES}, sql
+            return [(p,) for p in self.partitions]
         assert parameters is not None or sql.startswith("SELECT count() FROM")
         if "extract_checkpoint" in sql:
             assert parameters is not None
             return [self.ranges.get(tuple(parameters["entities"]), (date(1970, 1, 1), date(1970, 1, 1), 0))]
-        if sql == PARTITIONS_SQL:
-            return [(p,) for p in self.partitions]
         match = re.match(r"SELECT count\(\) FROM efn_dwh\.(\w+)", sql)
         assert match, sql
         if match.group(1).endswith("_build"):
@@ -225,6 +226,9 @@ def test_sql_shapes() -> None:
     )
     drop = drop_partition_sql(SALES_BRANCH, "efn_dwh", "202401")
     assert drop == f"ALTER TABLE efn_dwh.{A} DROP PARTITION ID '202401'"
+    # Partisi lewat kolom virtual (cukup SELECT pada agg); esb_writer tanpa hak system.* (ACCESS_DENIED di 24.8.14).
+    parts = partitions_sql(SALES_BRANCH, "efn_dwh")
+    assert parts == f"SELECT DISTINCT _partition_id FROM efn_dwh.{A} ORDER BY _partition_id"
     # Kunci: jam server, belum dilepas, urut (mulai, run_id), ambang basi lewat parameter.
     lock = holder_sql("efn_esb")
     assert "FROM efn_esb.aggregate_refresh_lock GROUP BY run_id" in lock
