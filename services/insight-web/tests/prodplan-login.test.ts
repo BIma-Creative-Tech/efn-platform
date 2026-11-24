@@ -106,7 +106,7 @@ describe('POST /api/prodplan/login: sukses', () => {
     expect(Object.keys(JSON.parse(String(calls[0].init.body)) as object)).toEqual(['username', 'password', 'n', 'c']);
   });
 
-  it('asersi ppa2 login: sid kosong, m=POST, p=/v1/session, bh = hash body (yang memuat n, bukan hash password)', async () => {
+  it('asersi ppa2 login: sid kosong, m=POST, p=/v1/session, bh = hash nonce n saja (password tidak pernah di-hash)', async () => {
     await handleLogin(loginReq(creds()), deps(fakePp(201, okBody())));
     const h = (calls[0].init.headers as Record<string, string>)['X-EFN-Actor'];
     const [prefix, b64, sig] = h.split('.');
@@ -115,8 +115,7 @@ describe('POST /api/prodplan/login: sukses', () => {
     const p = JSON.parse(Buffer.from(b64, 'base64url').toString('utf8')) as Record<string, unknown>;
     expect(Object.keys(p)).toEqual(['aud', 'bh', 'exp', 'iat', 'jti', 'm', 'p', 'sid']);
     expect(p).toMatchObject({ aud: 'prodplan', m: 'POST', p: '/v1/session', sid: '', iat: NOW, exp: NOW + 60 });
-    expect(p.bh).toBe(createHash('sha256').update(String(calls[0].init.body), 'utf8').digest('base64url'));
-    expect(p.bh).not.toBe(createHash('sha256').update(PASSWORD, 'utf8').digest('base64url'));
+    expect(p.bh).toBe(createHash('sha256').update(NONCE, 'utf8').digest('base64url'));
     expect(h).not.toContain(PASSWORD);
     expect((calls[0].init.headers as Record<string, string>)['Content-Type']).toBe('application/json');
   });

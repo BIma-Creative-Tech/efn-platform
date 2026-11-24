@@ -34,6 +34,19 @@ _ID = r"([0-9a-fA-F-]{36})"
 _NUM = r"([0-9]{1,18})"
 
 
+def _signed_bytes(method: str, path: str, body: bytes) -> bytes:
+    """Byte yang diikat `bh` asersi. Login (§30.17.18): hanya nonce `n` -- password tidak pernah masuk fungsi hash di
+    sisi mana pun. Badan login yang tidak terbaca / tanpa `n` sah -> hash badan (lalu ditolak 400 oleh validasi)."""
+    if method == "POST" and path == "/v1/session":
+        try:
+            nonce = json.loads(body.decode("utf-8")).get("n")
+        except (ValueError, UnicodeDecodeError, AttributeError):
+            return body
+        if isinstance(nonce, str) and NONCE_RE.fullmatch(nonce):
+            return nonce.encode("ascii")
+    return body
+
+
 class RateLimiter:
     def __init__(self, limit: int = MUTATIONS_PER_MINUTE, window: float = 60.0) -> None:
         self._limit = limit
@@ -201,7 +214,7 @@ class App:
                 headers.get("x-efn-actor"),
                 method=method,
                 path=raw_path,
-                body=body,
+                body=_signed_bytes(method, raw_path, body),
                 key=self._key,
                 jti_cache=self._jti,
                 now=self._clock(),

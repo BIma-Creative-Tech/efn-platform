@@ -13,7 +13,7 @@
 import { log } from './log';
 import { isSameOriginMutation } from './origin-guard';
 import { hmacSha256B64Url } from './hmac';
-import { ppCall, type PpDeps } from './prodplan-client';
+import { ppCall, ppLogin, type PpDeps } from './prodplan-client';
 import { loginErrorFor, normalizeUsername, parseLoginResult, ppClearCookie, ppSetCookie, ppSidFromHeader, validPassword, PP_COOKIE_FALLBACK_SEC } from './prodplan-session';
 import { newJti } from './prodplan-token';
 import { clientIp, type RateLimiter } from './rate-limit';
@@ -88,10 +88,7 @@ export async function handleLogin(req: Request, d: LoginDeps): Promise<Response>
   const nowMs = d.nowMs();
   // SEC-234: `c` mengikat percobaan ke IP klien (helper IP yang sama dengan batas laju); tidak di-log, tidak ke browser.
   const c = clientBinding(d.pp.key ?? '', ip);
-  const res = await ppCall(
-    { sid: '' },
-    'POST',
-    '/v1/session',
+  const res = await ppLogin(
     { username, password, n: (d.nonce ?? newJti)(), c },
     { ...d.pp, now: () => nowMs, timeoutMs: d.pp.timeoutMs ?? LOGIN_TIMEOUT_MS },
   );

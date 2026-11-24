@@ -34,12 +34,32 @@ export interface PpDeps {
 
 const localError = (status: number, code: string): PpResult<never> => ({ ok: false, status, error: mapPpError(status, { error: { code } }) });
 
-/** Inti tanpa akses runtime (dapat diuji dengan fetch palsu). */
-export async function ppCall(
+/** Inti tanpa akses runtime (dapat diuji dengan fetch palsu). `bh` asersi = hash badan yang dikirim. */
+export function ppCall(
   session: ActorSession,
   method: 'GET' | 'POST' | 'PUT' | 'DELETE',
   path: string,
   body: Record<string, unknown> | undefined,
+  deps: PpDeps,
+): Promise<PpResult<unknown>> {
+  const bodyStr = body === undefined ? '' : JSON.stringify(body);
+  return ppSend(session, method, path, bodyStr, bodyStr, deps);
+}
+
+/**
+ * Login (`POST /v1/session`, §30.17.18): badan memuat password, jadi `bh` asersi = hash NONCE `n` saja (bukan hash
+ * badan). Password tidak pernah masuk ke fungsi hash; prodplan mencocokkan `bh` dengan `n` di badan.
+ */
+export function ppLogin(body: { username: string; password: string; n: string; c: string }, deps: PpDeps): Promise<PpResult<unknown>> {
+  return ppSend({ sid: '' }, 'POST', '/v1/session', JSON.stringify(body), body.n, deps);
+}
+
+async function ppSend(
+  session: ActorSession,
+  method: 'GET' | 'POST' | 'PUT' | 'DELETE',
+  path: string,
+  bodyStr: string,
+  signed: string,
   deps: PpDeps,
 ): Promise<PpResult<unknown>> {
   if (!deps.baseUrl) return localError(503, 'disabled');
@@ -49,11 +69,10 @@ export async function ppCall(
   }
   if (!isValidActorPath(path)) return localError(400, 'bad_input');
 
-  const bodyStr = body === undefined ? '' : JSON.stringify(body);
   const nowMs = (deps.now ?? Date.now)();
   let actor: string;
   try {
-    actor = signActor({ session, method, path, body: bodyStr, key: deps.key, nowSec: Math.floor(nowMs / 1000) });
+    actor = signActor({ session, method, path, body: signed, key: deps.key, nowSec: Math.floor(nowMs / 1000) });
   } catch (e) {
     // sid tidak sah / path-method tidak sah / kunci rusak: fail closed, tanpa menyebut nilai apa pun.
     log('warn', 'prodplan_client', { code: e instanceof ActorError ? e.reason : 'actor_error' });

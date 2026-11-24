@@ -7171,6 +7171,10 @@ Teks di atas dikoreksi agar cocok dengan implementasi yang sudah benar (QA G66b;
   22 karakter pertama base64url(HMAC-SHA256(kunci asersi sebagai byte ASCII-hex, `"ppc1|" + ip_klien`)), regex
   `^[A-Za-z0-9_-]{22}$`; tidak ada/tidak valid → 400 `invalid_request`. prodplan tidak memverifikasi isinya dan tidak
   mencatatnya di log; IP klien memakai helper yang sama dengan batas laju login per IP.
+- **Asersi login mengikat nonce saja:** untuk `POST /v1/session`, `bh` = hash `n` (bukan hash badan), supaya password
+  tidak pernah masuk fungsi hash di sisi mana pun (CodeQL `js/insufficient-password-hash`). prodplan mencocokkan `bh`
+  dengan `n` di badan; asersi login yang meng-hash seluruh badan ditolak 401 `actor_invalid`. Panggilan lain tetap
+  mengikat seluruh badan. Integritas badan login dijaga mTLS antar-sidecar.
 - **Lockout (SEC-234):** 5 gagal/15 menit per pasangan (username, `c`) → pasangan itu terkunci 15 menit; rem global
   30 gagal/60 menit per username → semua sumber terkunci 15 menit. Login sukses hanya menghapus hitungan pasangannya.
   Limiter dibatasi 10.000 kunci dan disapu tiap 60 detik.

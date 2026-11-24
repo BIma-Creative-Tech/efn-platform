@@ -67,10 +67,22 @@ def session(sid=SID, actor_id=1000001, exp=NOW + 3000):
     )
 
 
+def _signed(method, path, body):
+    """Cermin §30.17.18: asersi login mengikat nonce `n` saja, panggilan lain mengikat seluruh badan."""
+    if method == "POST" and path == "/v1/session":
+        try:
+            nonce = json.loads(body).get("n")
+        except (ValueError, AttributeError):
+            return body
+        if isinstance(nonce, str) and len(nonce) == 22:
+            return nonce.encode()
+    return body
+
+
 def header(method, path, body=b"", sid=SID, **over):
     claims = {
         "aud": "prodplan",
-        "bh": body_hash(body),
+        "bh": body_hash(_signed(method, path, body)),
         "exp": NOW + 60,
         "iat": NOW,
         "jti": f"{next(_counter):022d}",
@@ -155,6 +167,13 @@ def test_session_routes():
     status, out = call(a, "POST", "/v1/session", body, header("POST", "/v1/session", body, sid=""))
     assert status == 201 and out["sid"] == SID2
     assert login.created == [("planner.uji", "rahasia-rekaan", CKEY)]
+    # asersi yang mengikat hash seluruh badan (memuat password) tidak lagi diterima untuk login
+    status, out = call(a, "POST", "/v1/session", body, header("POST", "/v1/session", sid="", bh=body_hash(body)))
+    assert status == 401 and out["error"]["code"] == "actor_invalid" and len(login.created) == 1
+    # nonce di asersi harus nonce di badan
+    other = json.dumps({**payload, "n": "Z" * 22}).encode()
+    status, out = call(a, "POST", "/v1/session", other, header("POST", "/v1/session", body, sid=""))
+    assert status == 401 and len(login.created) == 1
     status, out = call(a, "GET", "/v1/session", headers=header("GET", "/v1/session"))
     assert status == 200 and out["esb_brand"] == "pb" and "access_token" not in json.dumps(out)
     status, out = call(a, "DELETE", "/v1/session", headers=header("DELETE", "/v1/session"))
