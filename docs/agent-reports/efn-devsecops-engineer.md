@@ -1,5 +1,22 @@
 # Laporan Agent: efn-devsecops-engineer
 
+## G69 infra ESB OMS (25 Nov 2026, worktree `efn-platform-oms`, branch `feat/esb-oms-sales`, belum di-commit) — amandemen ADR-040 §6b, docs/04 §33
+
+**Lingkup:** env OMS di overlay `esb-extract`, gerbang `check-encryption`, `.env.example`, runbook. Tidak menyentuh `services/esb-extract` / `infra/clickhouse` (data engineer, paralel).
+
+| File | Perubahan |
+|---|---|
+| `infra/compose/docker-compose.esb.yml` | env `ESB_OMS_ENABLED` (`false`), `ESB_OMS_BASE_URL` (**tetap** `https://esbcore.co.id`, bukan interpolasi `.env`, pola `ESB_BASE_URL`), `ESB_OMS_BRANDS` (`pb`), `ESB_OMS_RATE_PER_SEC` (`2.0`), `ESB_OMS_INTERVAL_SECONDS` (`900`), `ESB_OMS_INTRADAY_HOURS` (`07-23`), `ESB_OMS_CORRECTION_DAYS` (`1,7`), `ESB_OMS_MAX_CALLS_PER_RUN` (`5000`), `ESB_OMS_BACKFILL_MAX_CALLS` (`60000`); komentar header allowlist. Tanpa secret/network baru (tetap `esb` + `egress-esb`, secret `esb_core_password_<brand>`). |
+| `scripts/check-encryption.sh` | header (G69); blok 6b3: `ESB_OMS_BASE_URL` wajib **persis** `https://esbcore.co.id` (string equality → menolak path, query, port, userinfo, slash akhir; nilai hilang juga gagal), `ESB_OMS_*` hanya di `esb-extract`; blok 8 (render prod-esb/prod-stack): `ESB_OMS_ENABLED == "false"`. Pemeriksaan Core (`ESB_BASE_URL` diawali `https://services.esb.co.id/`) tidak diubah. |
+| `infra/compose/.env.example` | 8 variabel OMS + komentar (tanpa username/secret; `ESB_OMS_BASE_URL` sengaja tidak ada karena tetap di overlay). |
+| `docs/runbooks/esb-extract.md` | §10 G69: env, prasyarat (termasuk PDP/DPO + Q-ESB7 untuk host OMS), `oms-probe`, menyalakan PB, `oms-backfill` jendela malam, mematikan, gejala 403 Cloudflare 1010 (User-Agent) vs 403 JSON vs 401, sisa risiko egress (proxy/nftables direkomendasikan sebelum production). |
+
+**Penyimpangan dari brief:** `ESB_OMS_BASE_URL` di-hardcode di overlay, bukan `${ESB_OMS_BASE_URL:-https://esbcore.co.id}` — lebih ketat dan konsisten dengan `ESB_BASE_URL`; aplikasi tetap menerima env itu dengan nilai yang sama. Bila lead ingin bisa di-override, ganti satu baris; gerbang check-encryption tetap menangkap nilai lain.
+
+**Belum terverifikasi (tanpa Bash/Docker):** `docker compose config` dan `scripts/check-encryption.sh` belum dijalankan; shellcheck belum. Perintah verifikasi diserahkan ke lead. Catatan: render lokal yang membaca `.env` dengan `ESB_OMS_ENABLED=true` akan gagal aturan blok 8 (perilaku sama dengan `ESB_ENABLED`; CI memakai `.env.example`).
+
+**Sisa risiko:** egress `egress-esb` kini dua host tujuan, allowlist hanya di aplikasi; egress proxy / nftables per subnet tetap belum ada (runbook §9/§10.7). Wiring rilis (`deploy.sh`) untuk overlay ESB masih tindak lanjut G41 (runbook §8), tidak berubah.
+
 ## G66 infra prodplan (24 Nov 2026, worktree `efn-platform-prodplan`, branch `feat/production-planning`, belum di-commit) — ADR-051, docs/04 §30
 
 - **Compose:** overlay baru `infra/compose/docker-compose.prodplan.yml` (profil `data`): `prodplan` (uid 65534, read_only,

@@ -100,6 +100,23 @@ GRANT SELECT ON efn_dwh.v_esb_ing_group_monthly TO efn_insight_definer;
 GRANT SELECT ON efn_dwh.mart_esb_ing_price_monthly TO efn_insight_definer;
 GRANT SELECT ON efn_dwh.mart_esb_menu_cost_monthly TO efn_insight_definer;
 GRANT SELECT ON efn_dwh.mart_esb_ing_group_monthly TO efn_insight_definer;
+-- G69 ESB OMS (init/26-g69-esb-oms.sql, docs/04 §33.5): view + tabel dasarnya (penutupan rujukan, diuji
+-- test_insight_access.py). Pemetaan FIN dibaca dari tabel turunan dim_esb_oms_menu_fin (qty FIN per menu saja), BUKAN
+-- dari tabel resep G43 (memuat HPP; tidak pernah di-grant ke Insight). raw_doc tidak di-grant.
+GRANT SELECT ON efn_dwh.v_esb_oms_bill TO efn_insight_definer;
+GRANT SELECT ON efn_dwh.v_esb_oms_line TO efn_insight_definer;
+GRANT SELECT ON efn_dwh.v_esb_oms_hourly TO efn_insight_definer;
+GRANT SELECT ON efn_dwh.v_esb_oms_menu_hourly TO efn_insight_definer;
+GRANT SELECT ON efn_dwh.v_esb_oms_menu_fin TO efn_insight_definer;
+GRANT SELECT ON efn_dwh.v_esb_oms_fin_line TO efn_insight_definer;
+GRANT SELECT ON efn_dwh.v_esb_oms_fin_hourly TO efn_insight_definer;
+GRANT SELECT ON efn_dwh.v_esb_oms_fin_mapping_quality TO efn_insight_definer;
+GRANT SELECT ON efn_dwh.v_esb_oms_recon_daily TO efn_insight_definer;
+GRANT SELECT ON efn_dwh.v_esb_oms_freshness TO efn_insight_definer;
+GRANT SELECT ON efn_dwh.fact_esb_oms_bill TO efn_insight_definer;
+GRANT SELECT ON efn_dwh.fact_esb_oms_bill_line TO efn_insight_definer;
+GRANT SELECT ON efn_dwh.fact_esb_oms_branch_daily TO efn_insight_definer;
+GRANT SELECT ON efn_dwh.dim_esb_oms_menu_fin TO efn_insight_definer;
 
 CREATE DATABASE IF NOT EXISTS efn_insight;
 
@@ -222,3 +239,42 @@ FROM efn_dwh.v_esb_menu_cost_monthly;
 CREATE OR REPLACE VIEW efn_insight.v_esb_ing_group_monthly DEFINER = efn_insight_definer SQL SECURITY DEFINER AS
 SELECT brand, company_code, month, ing_group, basket_value, base_value
 FROM efn_dwh.v_esb_ing_group_monthly;
+
+-- G69 ESB OMS (docs/04 §33.5/§33.7). Kelas BR (cabang `brs`, persona Toko F&B) untuk view ber-cabang tanpa data
+-- pembanding keuangan Core; v_esb_oms_recon_daily kelas PT (memuat Σ pembayaran ESB Core). Tanpa identitas member
+-- (hanya has_member 0/1), tanpa data kartu (§33.6). Kolom = keluaran view efn_dwh (urutan sama).
+CREATE OR REPLACE VIEW efn_insight.v_esb_oms_bill DEFINER = efn_insight_definer SQL SECURITY DEFINER AS
+SELECT sales_date, brand, company_code, branch_id, branch_code, branch_name, sales_num, bill_num,
+       parent_link_sales_num, sales_ts_in, sales_ts_out, hour, visit_purpose_id, visit_purpose_name, pax, subtotal,
+       discount_total, menu_discount_total, promotion_discount, other_tax_total, vat_total, voucher_total,
+       rounding_total, grand_total, payment_total, promotion_id, promotion_name, status_id, status_name, is_final,
+       has_member
+FROM efn_dwh.v_esb_oms_bill;
+
+CREATE OR REPLACE VIEW efn_insight.v_esb_oms_hourly DEFINER = efn_insight_definer SQL SECURITY DEFINER AS
+SELECT sales_date, brand, company_code, branch_id, branch_code, branch_name, hour, visit_purpose_name, bills, pax,
+       gross_sales, net_sales, items
+FROM efn_dwh.v_esb_oms_hourly;
+
+CREATE OR REPLACE VIEW efn_insight.v_esb_oms_menu_hourly DEFINER = efn_insight_definer SQL SECURITY DEFINER AS
+SELECT sales_date, brand, company_code, branch_id, branch_code, hour, line_kind, menu_code, menu_name, qty,
+       gross_sales, discount, net_sales
+FROM efn_dwh.v_esb_oms_menu_hourly;
+
+CREATE OR REPLACE VIEW efn_insight.v_esb_oms_fin_hourly DEFINER = efn_insight_definer SQL SECURITY DEFINER AS
+SELECT sales_date, brand, company_code, branch_id, branch_code, hour, product_key, product_name, uom, qty_fin
+FROM efn_dwh.v_esb_oms_fin_hourly;
+
+CREATE OR REPLACE VIEW efn_insight.v_esb_oms_fin_mapping_quality DEFINER = efn_insight_definer SQL SECURITY DEFINER AS
+SELECT sales_date, brand, company_code, branch_id, branch_code, menu_qty, fin_mapped_qty, no_fin_qty, unmapped_qty,
+       no_code_qty, unmapped_pct, qty_fin, core_fin_sold_qty
+FROM efn_dwh.v_esb_oms_fin_mapping_quality;
+
+CREATE OR REPLACE VIEW efn_insight.v_esb_oms_recon_daily DEFINER = efn_insight_definer SQL SECURITY DEFINER AS
+SELECT sales_date, brand, company_code, branch_id, branch_code, branch_name, bills_oms, grand_total_oms,
+       bills_summary, grand_total_summary, core_payment_amount, diff_bills_pct, diff_summary_pct, diff_core_pct
+FROM efn_dwh.v_esb_oms_recon_daily;
+
+CREATE OR REPLACE VIEW efn_insight.v_esb_oms_freshness DEFINER = efn_insight_definer SQL SECURITY DEFINER AS
+SELECT brand, company_code, branch_id, branch_code, max_sales_ts_out_today, last_finished_at
+FROM efn_dwh.v_esb_oms_freshness;

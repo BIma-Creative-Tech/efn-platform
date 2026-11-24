@@ -18,7 +18,7 @@
 #   - `egress-esb` (SEC-183): jalur keluar internet KHUSUS esb-extract (bukan `egress` bersama BFF/acme-dns/ollama),
 #     subnet sendiri, enable_icc=false. Bila esb-extract disusupi tidak ada jalur L3 ke container lain lewat egress.
 #     Repo TIDAK punya egress proxy/firewall per host (sama dengan 9router G37 dan WhatsApp): allowlist
-#     `services.esb.co.id:443` ditegakkan DI APLIKASI (klien HTTP efn_esb: host tetap, https saja, tanpa redirect lintas
+#     `services.esb.co.id:443` (+ G69: `esbcore.co.id:443`, ESB OMS, POST-baca path persis) ditegakkan DI APLIKASI (klien HTTP efn_esb: host tetap, https saja, tanpa redirect lintas
 #     host, tanpa proxy dari env). Allowlist tingkat jaringan (nftables subnet egress-esb -> IP ESB:443) = sisa risiko
 #     (runbook §9).
 #
@@ -26,7 +26,8 @@
 # host; tidak di GitHub Environment) + clickhouse_password_esb (random; juga di-mount clickhouse-init di base).
 # Username API per brand (SEC-180): TIDAK ditulis di repo (repo publik; akun saat ini berhak admin). Diisi lewat
 # `infra/compose/.env` lokal (gitignored) / config rilis; kosong = brand itu gagal start (fail-closed di config.py).
-# Hanya GET ke ESB (kecuali POST /auth/login), ditegakkan kode efn_esb + test. ESB_ENABLED=false -> service idle.
+# Hanya GET ke ESB Core (kecuali POST /auth/login), ditegakkan kode efn_esb + test. ESB_ENABLED=false -> service idle.
+# G69: ESB OMS = POST-baca allowlist 5 path persis (tanpa push/create/update), ESB_OMS_ENABLED=false default.
 services:
   esb-extract:
     image: ${IMAGE_ESB_EXTRACT:-ghcr.io/${EFN_STACK:-efn}/esb-extract:dev}
@@ -105,6 +106,30 @@ services:
       ESB_MARGIN_MONTHS: ${ESB_MARGIN_MONTHS:-13}
       ESB_MARGIN_WEEKDAY: ${ESB_MARGIN_WEEKDAY:-0}
       ESB_MARGIN_HOUR_WIB: ${ESB_MARGIN_HOUR_WIB:-2}
+      # G69 (amandemen ADR-040 §6b, docs/04 §33): sumber kedua ESB OMS (penjualan level struk). Klien terpisah dari Core:
+      # POST-baca allowlist path persis (ditegakkan kode efn_esb + test), Basic auth dengan ESB_USER_<BRAND> + secret
+      # esb_core_password_<brand> yang SAMA (tidak ada secret baru). Kill switch sendiri, terpisah dari ESB_ENABLED.
+      # Runbook: docs/runbooks/esb-extract.md §10.
+      ESB_OMS_ENABLED: ${ESB_OMS_ENABLED:-false}
+      # URL tetap (bukan dari .env, pola ESB_BASE_URL): host egress kedua yang diizinkan; dicek persis oleh
+      # scripts/check-encryption.sh (tanpa path/query/kredensial).
+      ESB_OMS_BASE_URL: https://esbcore.co.id
+      # Subset ESB_BRANDS (brand di luar ESB_BRANDS ditolak kode). Default pb saja.
+      ESB_OMS_BRANDS: ${ESB_OMS_BRANDS:-pb}
+      # Token bucket OMS per brand, terpisah dari bucket Core.
+      ESB_OMS_RATE_PER_SEC: ${ESB_OMS_RATE_PER_SEC:-2.0}
+      # Tarik ulang hari ini tiap N detik, hanya di jam WIB ESB_OMS_INTRADAY_HOURS; koreksi H-1/H-7.
+      ESB_OMS_INTERVAL_SECONDS: ${ESB_OMS_INTERVAL_SECONDS:-900}
+      ESB_OMS_INTRADAY_HOURS: ${ESB_OMS_INTRADAY_HOURS:-07-23}
+      ESB_OMS_CORRECTION_DAYS: ${ESB_OMS_CORRECTION_DAYS:-1,7}
+      # Rem darurat panggilan OMS per run loop / per proses oms-backfill.
+      ESB_OMS_MAX_CALLS_PER_RUN: ${ESB_OMS_MAX_CALLS_PER_RUN:-5000}
+      ESB_OMS_BACKFILL_MAX_CALLS: ${ESB_OMS_BACKFILL_MAX_CALLS:-60000}
+      # Batas keras halaman sales-head per slice (cabang × hari); slice yang menyentuhnya = partial, tanpa checkpoint.
+      ESB_OMS_MAX_PAGES: ${ESB_OMS_MAX_PAGES:-500}
+      # SEC-OMS-04: OMS aktif di APP_ENV production hanya bila true. HANYA di override lokal efn-prod pra-go-live
+      # (keputusan pemilik proyek 25 Nov 2026); default false, check-encryption menolak nilai lain di render repo.
+      ESB_OMS_ALLOW_PRODUCTION: ${ESB_OMS_ALLOW_PRODUCTION:-false}
       # ClickHouse HTTPS 8443, CA internal, user efn_esb (role esb_writer: SELECT/INSERT efn_esb.* + efn_dwh.*esb*).
       CH_HOST: clickhouse
       CH_PORT: "8443"

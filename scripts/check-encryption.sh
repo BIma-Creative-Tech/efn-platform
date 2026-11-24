@@ -33,6 +33,8 @@
 #           ESB_BASE_URL bukan https://services.esb.co.id/; ESB_ENABLED / ESB_ALLOW_IGNORE_WINDOW bukan default false di
 #           render prod-esb; ESB_USER_* ter-render berisi nilai di render prod-esb tanpa .env, atau nilai ESB_USER_*
 #           di-hardcode di overlay/.env.example; username akun ESB lama tertulis di repo (SEC-180)
+#   - (G69) esb-extract: ESB_OMS_BASE_URL bukan persis https://esbcore.co.id (tanpa path/query/kredensial); ESB_OMS_*
+#           di service selain esb-extract; ESB_OMS_ENABLED bukan default false di render prod-esb
 #   - (G42) insight_sso_key di luar odoo/insight-web, insight_session_key di luar insight-web, insight_scope_key /
 #           clickhouse_password_insight di luar clickhouse-init/insight-web, tls_insight_web_key di luar insight-web-tls,
 #           atau secret wajib tidak di-mount / env *_FILE tidak cocok; network insight-ingress dipakai selain
@@ -402,6 +404,18 @@ check_compose() {
       | (.key | capture("^ESB_PASSWORD_(?<k>[A-Z0-9]+)_FILE$") | .k) as $k
       | [$k, (.value // ""), (if ($m | index("esb_core_password_" + ($k | ascii_downcase))) != null then "1" else "0" end)]
       | @tsv' <<< "$json")
+  #  G69 (amandemen ADR-040 §6b, docs/04 §33): sumber kedua ESB OMS di esb-extract yang sama. ESB_OMS_BASE_URL wajib
+  #  PERSIS https://esbcore.co.id (host egress kedua; tanpa path, query, port, userinfo, slash akhir) dan hanya
+  #  esb-extract yang memegang ESB_OMS_* (OMS memakai kredensial ESB brand; service lain tidak boleh punya jalur ini).
+  #  Pemeriksaan Core di atas (ESB_BASE_URL https://services.esb.co.id/) tetap berlaku.
+  jq -e '(.services["esb-extract"] // null) as $w | $w == null
+         or ((($w.environment // {}).ESB_OMS_BASE_URL // "" | tostring) == "https://esbcore.co.id")' \
+      <<< "$json" > /dev/null \
+    || err "[$label] esb-extract: ESB_OMS_BASE_URL wajib persis https://esbcore.co.id (tanpa path/query/kredensial; docs/04 §33)"
+  jq -e '[.services | to_entries[] | select(.key != "esb-extract")
+          | select([(.value.environment // {}) | keys[] | startswith("ESB_OMS_")] | any) | .key]
+         | length == 0' <<< "$json" > /dev/null \
+    || err "[$label] env ESB_OMS_* dipakai service selain esb-extract (least privilege, docs/04 §33)"
   # 6b3a) G43 (docs/04 §27.2/§27.10, ADR-042): migrasi ESB -> Odoo. clickhouse_password_mig hanya clickhouse-init +
   #       esb-migrate; migration_bundle_key hanya esb-migrate + odoo, dan odoo HANYA di render overlay
   #       docker-compose.migration.yml (jendela migrasi). esb-migrate: hanya network esb (tanpa egress/data/internal),
@@ -949,7 +963,7 @@ check_compose() {
       || err "[$label] api-gateway: EMAIL_SMTP_TLS_MODE wajib implicit|starttls (ADR-048, L-160)"
   fi
 
-  # 8) G41: kill switch ekstraksi ESB default MATI di render prod + overlay (aktivasi lewat .env/config, runbook esb-extract)
+  # 8) G41/G69: kill switch ekstraksi ESB (Core + OMS) default MATI di render prod + overlay (aktivasi lewat .env/config, runbook esb-extract)
   if [[ "$kind" == prod-esb || "$label" == prod-stack ]]; then
     jq -e '.services["esb-extract"] != null' <<< "$json" > /dev/null \
       || err "[$label] esb-extract tidak ter-render (overlay docker-compose.esb.yml / profil data)"
@@ -958,6 +972,9 @@ check_compose() {
     # SEC-185: pagar --ignore-window di production default MATI
     jq -e '(.services["esb-extract"].environment.ESB_ALLOW_IGNORE_WINDOW // "") == "false"' <<< "$json" > /dev/null \
       || err "[$label] esb-extract: ESB_ALLOW_IGNORE_WINDOW harus diteruskan dengan default false di render prod (SEC-185)"
+    # G69: kill switch ESB OMS terpisah dari ESB_ENABLED, default MATI
+    jq -e '(.services["esb-extract"].environment.ESB_OMS_ENABLED // "") == "false"' <<< "$json" > /dev/null \
+      || err "[$label] esb-extract: ESB_OMS_ENABLED harus diteruskan dengan default false di render prod (docs/04 §33)"
     # SEC-180: render dari isi repo (CI menyalin .env.example -> .env) tidak boleh membawa username akun ESB. Di luar CI
     # .env lokal (gitignored) sah berisi username, jadi hanya peringatan; cek teks file repo ada di check_files.
     if ! jq -e '[(.services["esb-extract"].environment // {}) | to_entries[]

@@ -3,7 +3,8 @@
 - **Status:** Proposed — belum disetujui klien. G41 boleh dibangun mengikuti rekomendasi ini dengan `ESB_ENABLED=false`
   default; ekstraksi production menunggu **Q-ESB1** (user API read-only) dan **Q-ESB7** (izin beban backfill).
 - **Tanggal:** 2026-11-17 (Gelombang 41) · revisi 2026-11-18: §3.1 butir 1, §3.2, §4.4 dipersempit mengikuti ADR-042
-  (Accepted); keputusan ADR-040 sendiri tetap Proposed
+  (Accepted); keputusan ADR-040 sendiri tetap Proposed · revisi 2026-11-25: §6b amandemen ESB OMS POST-baca (G69),
+  rujukan singkat di §3.1 butir 3 dan §7
 - **Pemutus:** pemilik proyek (lingkup & cutover), IT klien (user API ESB, beban server), Finance (cutover & saldo awal
   G43), Legal/DPO (kepemilikan data & PDP)
 - **Referensi review:** R-O02 (migrasi data sistem lama), R-O01 (master data), R-L01 (PDP), R-O03 (beban ETL),
@@ -76,6 +77,8 @@
 3. **GET-only**: klien HTTP menolak method selain `GET`, kecuali `POST /auth/login` (ditegakkan di kode + test).
    Satu user API per brand (`ESB_USER_<BRAND>`, password dari `/run/secrets/esb_core_password_<brand>`). Klien diminta
    membuat **user API read-only** (Q-ESB1); sampai ada, akun admin yang ada dipakai **hanya di dev/uji** (R-S17).
+   *(25 Nov 2026:)* aturan ini berlaku untuk klien **ESB Core**; klien baca **ESB OMS** (method POST, allowlist path
+   persis) diatur terpisah di §6b.
 4. **Alur**: fetch → `efn_esb.raw_doc` (JSON apa adanya minus field identitas, L-110) → transform (logika prototipe
    `aggregate.py`, ditulis ulang teruji) → `efn_dwh.dim_esb_* / fact_esb_*` (ReplacingMergeTree) → checkpoint
    `efn_esb.extract_checkpoint` ditulis **terakhir**. Idempotensi = **versi slice**: semua baris fakta satu slice
@@ -196,8 +199,108 @@ Kebutuhan tulis ke ESB (transfer + produksi untuk production planning CK, G66) *
 `esb-extract` tetap GET-only (kode + test tidak berubah). Tulis ditangani service terpisah `services/prodplan` dengan
 kredensial, network egress, dan allowlist POST/DELETE sendiri — lihat ADR-051 dan `docs/04` §30.
 
+## 6b. Amandemen 25 Nov 2026 — ESB OMS POST-baca (G69)
+
+> **Ringkasan manajemen.** Data per jam, per kanal (dine-in/takeaway/online), jumlah tamu, dan promo per struk **tidak
+> ada** di ESB Core, tetapi ada di **ESB OMS** (API lain dari vendor yang sama). Kami menarik data struk OMS untuk
+> Paris Baguette saja, **hanya membaca**, untuk dashboard penjualan per jam & kanal dan sell-through per jam. Data
+> member dan kartu **dibuang** sebelum disimpan. Biaya ±1,5–2 minggu-engineer, Rp0 lisensi; fitur mati secara default
+> dan production menunggu akun read-only (Q-ESB1) serta izin beban intraday dari ESB (Q-OMS2). Arah ini disetujui
+> pemilik proyek 25 Nov 2026; ADR tetap **Proposed** sampai klien menandatangani.
+
+### 6b.1 Konteks
+- L-112 (`docs/04` §25.9): `v_esb_sales_hourly` tidak dibuat karena laporan Core tidak memuat jam transaksi. Pemilik
+  proyek meminta dashboard penjualan per jam/kanal dan sell-through per jam (25 Nov 2026).
+- Probe baca-saja production 25 Nov 2026 (akun brand PB, hanya jumlah yang dicatat di repo) menemukan ESB OMS
+  (`https://esbcore.co.id/external/general/*`, spec publik `developers.esb.co.id/esb-oms/api_data.json`) dengan data
+  struk: jam masuk/keluar, kanal (*visit purpose*), pax, diskon/promo, pembayaran, dan baris menu ber-`menuCode`.
+  Rekonsiliasi satu cabang × satu hari: jumlah struk dan Σ `grandTotal` struk = ringkasan cabang-hari OMS (selisih 0).
+- **Pertentangan dengan rumusan yang berlaku:**
+
+| Sumber | Bunyi | Pertentangan |
+|---|---|---|
+| §3.1 butir 3, `docs/04` §25.3, L-106 | "GET-only … klien HTTP menolak method selain `GET`, kecuali `POST /auth/login`"; allowlist host `services.esb.co.id:443` | **Semua** endpoint baca OMS memakai `POST` + body JSON filter, di host lain (`esbcore.co.id`). |
+| §6a | `esb-extract` tetap GET-only; tulis ke ESB di service terpisah | POST di sini **bukan tulis** (filter pencarian); tetapi method POST membuka risiko salah panggil endpoint tulis OMS (`push/*`, `create-*`, `update-*`) dengan akun admin (R-S17). |
+| ADR-003 / `CLAUDE.md` | ETL incremental 15 menit **dari replica PostgreSQL** | Tarik intraday tiap 15 menit langsung dari API eksternal ke ClickHouse. |
+
+### 6b.2 Opsi yang dipertimbangkan
+| # | Opsi | Kelebihan | Kekurangan | Biaya / waktu |
+|---|---|---|---|---|
+| **A** | **Klien OMS terpisah di dalam `esb-extract`**, allowlist POST persis (5 path), kredensial brand yang sama | Memakai ulang slice/checkpoint/raw/mart, token bucket, deploy, dan secret G41; satu tempat egress ESB | Pengecualian kedua di `esb-extract` (POST-baca); host egress bertambah | **±1,5–2 minggu-engineer** (data-AI 1–1,5; frontend Insight 0,5; devsecops/QA ≤ 0,5), Rp0 lisensi, RAM tambahan dapat diabaikan |
+| B | Service baru `esb-oms-extract` | Isolasi proses dari klien Core | Kredensial ESB **sama** (Basic, user brand yang sama) sehingga isolasi tidak mengecilkan dampak bocor; duplikasi image, overlay, secret mount, checkpoint | +±3–4 hari di atas A, + satu image untuk di-hardening dan di-review |
+| C | Tidak menarik OMS; tunggu endpoint jam di Core / ekspor vendor (opsi F) | Tanpa beban & risiko baru | Kebutuhan pemilik proyek tidak terpenuhi; tidak ada jadwal dari vendor | Rp0, waktu tidak diketahui |
+| D | OMS **harian saja** (H-1, H-7), tanpa intraday | Beban ±300 panggilan/hari (§6b.6) | Tidak ada "hari ini per jam"; sell-through per jam hanya untuk kemarin | Sama dengan A minus ±1–2 hari; **fallback** bila Q-OMS2 ditolak |
+
+### 6b.3 Keputusan (direkomendasikan: opsi A, dengan D sebagai fallback beban)
+1. **Allowlist OMS persis**, ditegakkan sebelum koneksi dibuka (kode + test): skema `https`, host persis
+   `esbcore.co.id`, port 443; method **hanya `POST`**; path persis salah satu dari `/external/general/get-branch`,
+   `/external/general/get-visit-purpose`, `/external/general/get-payment-method`,
+   `/external/general/sales-branch-summary`, `/external/general/sales-head`. Query hanya `page` (bilangan bulat ≥ 1,
+   hanya untuk `sales-head`). Body hanya kunci filter yang dikenal per path (`docs/04` §33.2). Selain itu (GET, method
+   lain, path lain termasuk `push/*`, `sales-data`, `create-*`, `update-*`, host lain, query lain) → ditolak. Redirect
+   tidak diikuti.
+2. **Klien Core tidak berubah**: tetap GET-only + `POST /auth/login` (§3.1 butir 3). Dua klien, dua allowlist, tidak
+   ada jalur kode yang memakai allowlist OMS untuk host Core atau sebaliknya.
+3. **Auth**: `Authorization: Basic` dari `ESB_USER_<BRAND>` + `/run/secrets/esb_core_password_<brand>` (kredensial brand
+   yang sama dengan Core; tidak ada secret baru). Tanpa JWT, sehingga tidak memutus sesi Core. Header `Authorization`
+   (password ter-encode di setiap permintaan) **tidak pernah** di-log/dimasukkan ke exception. `User-Agent` eksplisit
+   non-identitas wajib (Cloudflare menolak UA default library). R-S17 tetap: akun saat ini admin → production menunggu
+   **Q-ESB1** (user read-only, kini mencakup OMS).
+4. **Cakupan**: `ESB_OMS_BRANDS=pb` (subset `ESB_BRANDS`). Brand lain cukup konfigurasi setelah izin beban.
+5. **PDP / PCI**: field identitas member, data kartu/rekening, kode verifikasi/voucher, teks bebas, dan pelaku
+   dokumen **dibuang sebelum** `efn_esb.raw_doc` maupun mart (daftar persis `docs/04` §33.6); member hanya menjadi
+   `has_member UInt8`. Nama/nomor meja dan jam transaksi **bukan** data pribadi (tidak menunjuk orang tanpa sistem lain).
+   Tidak pernah menyimpan PAN; `cardNumber` (sudah ter-mask sebagian di sumber) tetap dibuang.
+6. **Kill switch** `ESB_OMS_ENABLED=false` default, terpisah dari `ESB_ENABLED` (OMS bisa dimatikan tanpa menghentikan
+   Core). Production `true` hanya setelah Q-ESB1 + Q-OMS2 dan entri PDP disetujui DPO.
+7. **Idempotensi**: pola versi slice §3.1 butir 4; slice `(brand, oms_sales, branch_code, sales_date)`; hari berjalan
+   ditarik ulang utuh tiap interval (slice diganti). Detail `docs/04` §33.4.
+
+### 6b.4 Penyimpangan dari ADR-003 (15 menit dari replica)
+Interval intraday 15 menit di sini **bukan** ETL ADR-003: sumbernya API sistem eksternal, bukan replica PostgreSQL.
+Alasannya sama dengan §3.2: data struk ESB tidak pernah ada di PostgreSQL EFN, mart tetap turunan yang bisa dibangun
+ulang dari ESB/raw 36 bulan, dan penulisnya job batch, bukan API transaksi. Pengecualian tetap terbatas pada
+`esb-extract`, database `efn_esb`, dan tabel `efn_dwh.*esb_oms*`. ETL ADR-003 tidak berubah.
+
+### 6b.5 Konsekuensi
+- **Positif:** dashboard per jam/kanal dan sell-through per jam untuk PB; rekonsiliasi silang OMS ↔ ringkasan OMS ↔
+  pembayaran Core (`docs/04` §33.5 `v_esb_oms_recon_daily`).
+- **Negatif / diterima:** host egress kedua (allowlist aplikasi; allowlist jaringan tetap sisa risiko, §4.3); perilaku
+  paginasi OMS yang tidak standar (halaman sesudah terakhir mengulang halaman terakhir) → batas keras halaman + deteksi
+  `salesNum` baru (R-O09); beban intraday ke server ESB (R-O10, Q-OMS2); `menuCode` kosong pada sebagian kecil baris →
+  porsi tak terpetakan ditampilkan, tidak disembunyikan.
+
+### 6b.6 Beban (perkiraan kasar, PB ±21 toko, 2 req/dtk per brand; belum terukur di production)
+Dasar probe: `sales-head` 20 struk/halaman, ±0,5 dtk/halaman, **±6 halaman per toko-hari** (+ paling banyak 1 panggilan
+pendeteksi halaman berulang bila halaman terakhir tepat 20 baris).
+
+| Komponen | Rumus | Panggilan/hari |
+|---|---|---|
+| Final harian H-1 + koreksi H-7 | 21 toko × 2 hari × ±7 | ±300 |
+| Intraday 07–23 WIB tiap 15 menit (±64 interval) | 64 × 21 × halaman hari berjalan (naik dari 1 ke ±6–7; rata-rata ±4) | ±5.400 (batas atas ±9.400) |
+| `sales-branch-summary` + master (cabang, kanal, metode bayar) | ±1 per interval + 3/hari | ±70 |
+| **Total** | | **±5.800–9.800** |
+
+- Per interval ±85–150 panggilan ≈ **45–75 detik** pada 2 req/dtk (≤ 10% dari interval 900 dtk); jauh di bawah
+  `ESB_OMS_MAX_CALLS_PER_RUN`=5000 (batas pengaman, bukan target).
+- Sebagai pembanding, incremental harian Core untuk 60 toko ±3–4 ribu panggilan/hari (§4.2): intraday OMS PB saja
+  ±1,5–3× itu → **izin beban tersendiri (Q-OMS2)**. Fallback opsi D (harian saja) ≈ ±370 panggilan/hari.
+- Backfill: ±7 panggilan per toko-hari → 12 bulan ≈ 54 ribu panggilan (≈ 7,5 jam, satu malam); 24 bulan ≈ 107 ribu
+  (≈ 15 jam, 2–3 malam dengan `ESB_OMS_BACKFILL_MAX_CALLS`=60000), di jendela 22:00–05:00 WIB, tidak bersamaan dengan
+  backfill Core brand yang sama.
+
+### 6b.7 Risiko & pertanyaan
+- Risiko: **R-S17** (akun admin, kini juga untuk endpoint tulis OMS → allowlist + test), **R-O10** (beban intraday),
+  **R-O09** (perilaku paginasi/skema OMS), **R-L01** (PDP: member/kartu dibuang).
+- Pertanyaan klien: **Q-ESB1** (kini termasuk OMS), **Q-ESB9** (hak data, berlaku juga untuk OMS), **Q-OMS1** token
+  statis PIC ESB untuk material usage & member (`core-api.esb.co.id`, 401 dengan kredensial brand; **di luar G69**),
+  **Q-OMS2** izin beban intraday, **Q-OMS3** retensi struk (usul raw 36 bulan, mart 10 tahun seperti G41). Rinci
+  `docs/04` §33.9 dan `docs/01` §5.12.
+- Ditinjau ulang bersama §7, ditambah: Q-OMS2 ditolak (beralih ke opsi D), ESB mengubah paginasi/skema OMS, atau
+  brand kedua ditambahkan ke `ESB_OMS_BRANDS`.
+
 ## 7. Kapan ditinjau ulang
-- Q-ESB1 atau Q-ESB7 dijawab (mengubah status ekstraksi production).
+- Q-ESB1 atau Q-ESB7 dijawab (mengubah status ekstraksi production); untuk OMS juga Q-OMS2 (§6b.7).
 - ESB mengubah API (alert R-O09) atau vendor menawarkan ekspor resmi (opsi F).
 - Cutover brand pertama (G43) — ekstraksi brand itu dihentikan, mart menjadi arsip.
 - Paling lambat **28 Feb 2027**, atau saat seluruh brand sudah cutover (ADR ini lalu `Superseded` oleh catatan arsip).

@@ -6851,3 +6851,195 @@ Tiga tabel `MergeTree` `ORDER BY (brand, company_code, _version, …)`, `TTL _lo
 - **L-262** Kelompok bahan dari sub-kategori ESB, bukan aturan nama di kode (repo publik, data klien).
 - **L-263** Versi-insert + view versi terakhir, bukan REPLACE PARTITION (tabel kecil; esb_writer cukup SELECT/INSERT).
 - **L-264** Laporan analisis asli tetap lokal (`E:\Projects\efn-reports\…`), tidak dipublikasikan.
+
+## 33. ESB OMS — penjualan level struk (G69)
+
+> **Catatan penomoran.** §32 dipakai PR G68 (Insight P&L/waste/fill rate) yang belum di-merge; bagian ini sengaja
+> bernomor §33 agar tidak bentrok. Nomor keputusan `L-xxx` dan entri versi di header dokumen diberikan efn-lead saat
+> merge (setelah G68). Berkas DDL `infra/clickhouse/init/26-g69-esb-oms.sql` (nomor 25 dipakai G68).
+
+Status: **kontrak, belum dibangun** (25 Nov 2026). Dasar: ADR-040 §6b (amandemen, Proposed); arah disetujui pemilik
+proyek 25 Nov 2026 (dashboard penjualan per jam/kanal dan sell-through per jam, brand PB). Pemilik:
+`services/esb-extract` + `infra/clickhouse` (data-AI engineer), `services/insight-web` (frontend), compose/secret check
+(devsecops). Tanpa perubahan Odoo, BFF, atau token Insight. Repo publik: fixture dan contoh **sintetis saja** — tidak
+ada angka penjualan, nama cabang, atau username ESB nyata di kode, test, dokumen, maupun PR.
+
+### 33.1 Sumber & auth
+| Butir | Kontrak |
+|---|---|
+| Sumber | ESB OMS `https://esbcore.co.id/external/general/*` (SaaS vendor ESB, sistem eksternal klien). Spec publik `developers.esb.co.id/esb-oms/api_data.json`. Melengkapi ESB Core (§25): jam, kanal, pax, promo, pembayaran per struk. Produksi, transfer, delivery tetap dari Core. |
+| Cakupan | Brand di `ESB_OMS_BRANDS` (awal `pb`), wajib subset `ESB_BRANDS`; `company_code` sama aturan §25.1. |
+| Auth | `Authorization: Basic base64(ESB_USER_<BRAND>:password)`; password dari `/run/secrets/esb_core_password_<brand>` (secret Core yang sama, **tidak ada secret baru**). Tanpa login/JWT → tidak memutus sesi Core. |
+| Header wajib | `User-Agent` eksplisit, generik, tanpa identitas orang/organisasi (UA default library ditolak Cloudflare 403/1010); `Content-Type: application/json`. |
+| TLS | Sama §25.2: CA publik (certifi), TLS ≥ 1.2, `trust_env=False`, redirect tidak diikuti. |
+| Rahasia | Header `Authorization`, password, dan body permintaan tidak pernah di-log/dimasukkan ke exception. Log = path + nomor halaman + jumlah baris. |
+| Status akun | Akun brand saat ini **admin** (R-S17) → dev/uji saja; production menunggu **Q-ESB1** (user read-only yang juga mencakup OMS). |
+| Di luar lingkup | `core-api.esb.co.id` (material usage, member, token statis) — 401 dengan kredensial brand; **Q-OMS1**. |
+
+### 33.2 Allowlist (klien OMS, ditegakkan sebelum koneksi dibuka)
+Skema `https`, host persis `esbcore.co.id`, port 443 (tanpa userinfo di URL). Method **hanya `POST`**. Path persis:
+
+| Path | Query | Kunci body yang diizinkan | Grain panggilan | Tujuan |
+|---|---|---|---|---|
+| `/external/general/get-branch` | — | (kosong) | brand | `dim_esb_branch` tidak disentuh; dipakai memetakan `branchCode` ↔ cabang Core (cache per siklus) |
+| `/external/general/get-visit-purpose` | — | (kosong) | brand | `dim_esb_oms_visit_purpose` |
+| `/external/general/get-payment-method` | — | (kosong) | brand | `dim_esb_oms_payment_method` |
+| `/external/general/sales-branch-summary` | — | `filterSalesDateFrom`, `filterSalesDateTo` | brand × rentang hari (1 panggilan) | `fact_esb_oms_branch_daily` |
+| `/external/general/sales-head` | `page` (int ≥ 1, wajib) | `filterSalesDateFrom`, `filterSalesDateTo`, `filterBranchCode` (**wajib**, satu cabang) | cabang × hari, per halaman | `fact_esb_oms_bill`, `_bill_line`, `_bill_payment` |
+
+- Tanggal filter format `YYYY-MM-DD`; untuk `sales-head` `From = To` (satu hari per slice). Nilai body hanya string
+  pendek tervalidasi (tanggal / kode cabang dari `get-branch`); kunci tak dikenal, body non-objek, atau nilai di luar
+  pola → ditolak.
+- Ditolak (exception sebelum koneksi, tanpa retry): GET/PUT/PATCH/DELETE, path lain (termasuk `push/*`, `sales-data`,
+  `create-*`, `update-*`, path dengan `..`/encoding ganda/trailing segment), query selain `page`, host/port lain.
+- Klien Core (§25.3) **tidak berubah**: GET-only + `POST /auth/login`, host `services.esb.co.id`. Dua klien tidak
+  berbagi allowlist.
+- Retry/backoff 429/5xx dan batas respons sama §25.3/§25.2 (`ESB_MAX_RETRIES`, `ESB_HTTP_TIMEOUT_SECONDS`,
+  `ESB_MAX_RESPONSE_BYTES`). Semua nilai angka di respons OMS berupa **string** → parse ketat ke Decimal; gagal parse =
+  error dokumen, slice tidak di-checkpoint.
+
+### 33.3 Env (semua default aman)
+| Env | Default | Arti |
+|---|---|---|
+| `ESB_OMS_ENABLED` | `false` | Kill switch OMS, terpisah dari `ESB_ENABLED`. `false` → tidak ada panggilan OMS; Core jalan seperti biasa. `true` mensyaratkan `ESB_ENABLED=true`; di production (`APP_ENV` kosong/tidak dikenal = production) ditolak kecuali `ESB_OMS_ALLOW_PRODUCTION=true` (SEC-OMS-04) |
+| `ESB_OMS_BRANDS` | `pb` | Brand OMS aktif, subset `ESB_BRANDS` (brand di luar `ESB_BRANDS` → tidak start, fail closed) |
+| `ESB_OMS_BASE_URL` | `https://esbcore.co.id` | Wajib persis host/port §33.2, tanpa path/query/kredensial; lain → tidak start |
+| `ESB_OMS_RATE_PER_SEC` | `2.0` | Token bucket per brand per proses, **terpisah** dari bucket Core |
+| `ESB_OMS_INTERVAL_SECONDS` | `900` | Jeda tarik hari berjalan (intraday) di loop `run` |
+| `ESB_OMS_INTRADAY_HOURS` | `07-23` | Jendela intraday WIB; di luar jendela hari berjalan tidak ditarik |
+| `ESB_OMS_CORRECTION_DAYS` | `1,7` | Tarik final H-1 dan koreksi H-7, sekali/hari setelah `ESB_SALES_READY_HOUR_WIB` (03:00 WIB, §25.2) |
+| `ESB_OMS_MAX_CALLS_PER_RUN` | `5000` | Budget satu siklus `run` per brand (pengaman; normal ±85–150/interval) → `extract_run.status='limit'` |
+| `ESB_OMS_BACKFILL_MAX_CALLS` | `60000` | Budget satu proses `oms-backfill` |
+| `ESB_OMS_MAX_PAGES` | (ikut `ESB_MAX_PAGES`=500) | Batas keras halaman per slice (§33.4) |
+| `ESB_OMS_ALLOW_PRODUCTION` | `false` | Hanya persis `true` mengizinkan OMS aktif di `APP_ENV` production. Keputusan pemilik proyek 25 Nov 2026: efn-prod lokal = staging berdata produksi (direset saat go-live) → `true` **hanya** di override lokal efn-prod, tidak pernah di repo (`check-encryption.sh` menegakkan default `false`). Go-live sungguhan: dihapus sampai Q-ESB1/Q-OMS2/Q-OMS3 + DPO |
+
+Perintah: `python -m efn_esb oms-probe --brand pb` (cetak status HTTP + **jumlah** cabang/kanal/metode saja, tanpa
+nama), loop OMS di `run` bila `ESB_OMS_ENABLED=true`, `python -m efn_esb oms-backfill --brand pb --from YYYY-MM-DD
+--to YYYY-MM-DD [--force]` (hanya di `ESB_BACKFILL_WINDOW` 22:00–05:00 WIB, hari terbaru dulu, resumable; jangan
+bersamaan dengan backfill Core brand yang sama).
+
+### 33.4 Slice, idempotensi, paginasi
+- **Slice** `(brand, entity='oms_sales', scope_key=branchCode, day=sales_date)`; `oms_branch_daily` slice
+  `(brand, 'oms_branch_daily', '*', day)`. Pola versi §25.4: urutan tulis `raw_doc` → mart → `extract_checkpoint`
+  (**terakhir**); semua baris satu slice membawa `_version` = `finished_at` checkpoint; view hanya membaca versi slice
+  yang ber-checkpoint (`status='done'`). Tanggal fakta = hari slice yang diminta.
+- **Hari berjalan** ditarik ulang **utuh** tiap interval intraday (slice diganti, termasuk struk yang di-void sejak
+  tarik sebelumnya). H-1 dan H-7 ditarik final sekali/hari. Gap fill mengikuti `ESB_GAP_FILL_DAYS`.
+- **`raw_doc`**: `endpoint='oms_sales_head'`, `doc_key='<hari>|<branchCode>'`, semua halaman digabung satu payload
+  (ter-redaksi §33.6) per slice.
+- **Paginasi `sales-head`** (20 struk/halaman; halaman sesudah halaman terakhir **mengulang** halaman terakhir, bukan
+  list kosong). Mulai `page=1`, berhenti bila salah satu:
+  1. jumlah baris < 20 (halaman terakhir);
+  2. halaman tidak memuat satu pun `salesNum` baru dibanding halaman sebelumnya (halaman berulang) — halaman itu
+     dibuang, bukan digandakan;
+  3. halaman kosong;
+  4. batas keras `ESB_OMS_MAX_PAGES` tercapai → slice **gagal** (`partial`, tanpa checkpoint), dicatat di
+     `extract_run.errors`; jangan menulis slice terpotong sebagai `done`.
+  Dedup struk dalam slice berdasarkan `salesNum` (kemunculan pertama dipakai). `filterBranchCode` wajib (tanpa itu
+  respons diurutkan lintas cabang dan tidak dipakai).
+- **Kunci baris**: `line_no` baris menu stabil per `sales_num` — urutan deterministik `(menu_id, menu_code, sales_type,
+  qty, price, total)` + pemecah seri `(discount_value, menu_name)`, lalu `packages[]`/`extras[]` diratakan depth-first
+  di bawah barisnya dengan `parent_line_no` (pola L-113). Pembayaran: urutan `(payment_method_type_id,
+  payment_method_id, payment_amount)`.
+
+### 33.5 Skema ClickHouse (`infra/clickhouse/init/26-g69-esb-oms.sql`, admin, idempoten, `storage_policy = 'encrypted'`; DDL menang untuk detail kolom)
+Semua tabel memuat `brand LowCardinality(String)`, `company_code LowCardinality(String)`, `_version DateTime64(3,'UTC')`,
+`_loaded_at DEFAULT now64(3)` (pola §25.5; `brand` setelah `company_code` di kunci). Fakta:
+`ReplacingMergeTree(_version)`, partisi `toYYYYMM(sales_date)`. Uang `Decimal(18,2)`, qty `Decimal(18,3)`, waktu
+`DateTime('Asia/Jakarta')` (sumber `"YYYY-MM-DD HH:MM:SS"` WIB).
+
+| Tabel | Kolom bisnis (ringkas) | Grain / ORDER BY |
+|---|---|---|
+| `efn_dwh.fact_esb_oms_bill` | `branch_code, sales_date Date, sales_num, bill_num, parent_link_sales_num, sales_ts_in, sales_ts_out Nullable(DateTime), visit_purpose_id UInt32, visit_purpose_name, pax UInt16, subtotal, discount_total, menu_discount_total, promotion_discount, other_tax_total, vat_total, voucher_total, rounding_total, grand_total, payment_total, promotion_id, promotion_name, status_id, status_name, has_member UInt8` | satu struk; `(company_code, brand, branch_code, sales_date, sales_num)` |
+| `efn_dwh.fact_esb_oms_bill_line` | `branch_code, sales_date, sales_num, line_no UInt32, parent_line_no UInt32 (0 = baris menu), line_kind LowCardinality ('menu'\|'package'\|'extra'), menu_id, menu_code ('' bila kosong), menu_name, menu_category_name, menu_category_detail_name, qty, original_price, price, discount_value, total, vat_value, status_id, status_name, sales_type, is_promo UInt8` | satu baris menu/paket/extra; `(…, sales_num, line_no)` |
+| `efn_dwh.fact_esb_oms_bill_payment` | `branch_code, sales_date, sales_num, line_no, payment_method_id, payment_method_name, payment_method_type_id, payment_method_type_name, bank_name, payment_amount, full_payment_amount` | satu pembayaran; `(…, sales_num, line_no)` |
+| `efn_dwh.fact_esb_oms_branch_daily` | `branch_code, sales_date, pax_total, bill_total UInt32, subtotal, discount_total, sc_total, tax_total, grand_total` | cabang-hari (`sales-branch-summary`); `(company_code, brand, branch_code, sales_date)` |
+| `efn_dwh.dim_esb_oms_visit_purpose` | `visit_purpose_id, visit_purpose_name, flag_dine_in UInt8` | `(brand, visit_purpose_id)` |
+| `efn_dwh.dim_esb_oms_payment_method` | `payment_method_type_id, payment_method_type_name, payment_method_id, payment_method_name` | `(brand, payment_method_type_id, payment_method_id)` |
+
+`tableName` **tidak disimpan** (SEC-OMS-01, §33.6): pada take away/ojol label meja bisa berisi nama pelanggan/driver;
+tidak dipakai G69. `is_promo` = baris punya `menuPromotionID` atau `promotionDetailID` tidak kosong.
+**Struk final** = status selesai; status void/batal/terbuka dikecualikan di view. Nilai `statusID` per status
+**belum terverifikasi** dari sumber primer → engineer menetapkan dari fixture probe (tanpa data nyata di repo) dan
+mencatatnya di README `esb-extract`; baris menu berstatus batal dikecualikan dari `items`/`qty`.
+
+View (`CREATE OR REPLACE VIEW efn_dwh.*`, `FINAL` di subquery, hanya versi slice ber-checkpoint; nama stabil untuk
+Insight):
+
+| View | Grain | Kolom |
+|---|---|---|
+| `v_esb_oms_bill` | struk | kolom `fact_esb_oms_bill` versi slice terbaru + `branch_name`, `hour`, `is_final` |
+| `v_esb_oms_hourly` | `sales_date` × PT × cabang × `hour` × kanal | `sales_date, brand, company_code, branch_id, branch_code, branch_name, hour UInt8` (jam WIB `sales_ts_out`; NULL → `sales_ts_in`; ditutup lewat tengah malam → 23), `visit_purpose_name, bills, pax, gross_sales` (Σ `grand_total`), `net_sales` (Σ `subtotal − discount_total`), `items` (Σ qty baris menu non-batal) — struk final saja |
+| `v_esb_oms_menu_hourly` | hari × cabang × jam × menu | `sales_date, brand, company_code, branch_id, branch_code, hour, line_kind, menu_code, menu_name, qty, gross_sales, discount, net_sales` |
+| `v_esb_oms_fin_hourly` | hari × cabang × jam × produk FIN | `sales_date, brand, company_code, branch_id, branch_code, hour, product_key` (kode produk polos = `v_esb_flow_daily.product_code`), `product_name, uom` (satuan resep), `qty_fin` — lewat tabel turunan `dim_esb_oms_menu_fin` yang ditulis esb-extract harian dari resep mart (`menu_code`=`bom_code` → `dim_esb_menu_price` → nama kanonik §31.2 butir 4); kunci mana yang benar di data nyata **belum terverifikasi** |
+| `v_esb_oms_fin_mapping_quality` | cabang-hari | `sales_date, brand, company_code, branch_id, branch_code, menu_qty, fin_mapped_qty, no_fin_qty, unmapped_qty, no_code_qty, unmapped_pct` (0–100), `qty_fin, core_fin_sold_qty` |
+| `v_esb_oms_recon_daily` | cabang-hari | `sales_date, brand, company_code, branch_id, branch_code, branch_name, bills_oms, grand_total_oms, bills_summary, grand_total_summary, core_payment_amount, diff_bills_pct, diff_summary_pct, diff_core_pct` |
+| `v_esb_oms_freshness` | cabang (hari ini saja) | `brand, company_code, branch_id, branch_code, max_sales_ts_out_today, last_finished_at` (DateTime64 UTC; Insight mengonversi ke WIB) |
+
+DDL `infra/clickhouse/init/26-g69-esb-oms.sql` menang bila tabel di atas berbeda. Semua view Insight kelas BR kecuali
+`v_esb_oms_recon_daily` (kelas PT).
+
+Akses: writer = user ClickHouse `efn_esb` / role `esb_writer` (`SELECT, INSERT` per tabel baru, tanpa DDL/ALTER/DROP/
+TRUNCATE — pola SEC-AG-01). `efn_insight`: wrapper/view + row policy `efn_insight_scope` per `company_code` (dan kelas
+cabang bila view memuat `branch_code`, pola §28.15) lewat `insight-esb-policy.sh` / `insight-access.sql`
+(`ESB_POLICY_VIEWS`, `ESB_POLICY_EXPECTED` naik sesuai jumlah view). `metabase_reader`, text2sql, forecast: **tidak**
+diberi akses di G69. `raw_doc` OMS tidak pernah di-grant ke pembaca mana pun.
+
+### 33.6 PDP / PCI
+Dibuang **sebelum** `efn_esb.raw_doc` dan mart, di semua tingkat sarang (`salesPayments[]`, `salesMenus[]`,
+`packages[]`, `extras[]`):
+
+| Kunci | Alasan |
+|---|---|
+| `memberID`, `memberCode`, `memberName` | Identitas member → hanya `has_member UInt8` (1 bila salah satu terisi) |
+| `cardNumber`, `accountName`, `verificationCode` | Data kartu/rekening (PCI DSS; sumber sudah ter-mask sebagian, tetap dibuang — tidak pernah menyimpan PAN) |
+| `voucherCode` | Kode yang bisa ditebus |
+| `notes`, `cancelNotes`, `additionalInfo` | Teks bebas (bisa memuat nama/telepon) |
+| `createdBy`, `editedBy` | Pelaku (kasir/staf) |
+| `selfOrderID` | Penghubung ke sesi pemesanan mandiri pelanggan |
+| `salesInfo[]` (seluruh larik) | Isi tidak terdokumentasi dan tidak dipakai — dibuang utuh (tambahan architect; tinjau bila kelak dibutuhkan) |
+| `tableName` | Label meja bisa berisi nama pelanggan/driver (take away/ojol); tidak dipakai (SEC-OMS-01) |
+| Kunci yang memuat `card`, `verification`, `approval`, `account`, `member`, `phone`, `email` (substring, tanpa beda huruf besar/kecil) | Menangkap field baru vendor (mis. `maskedCardNumber`, `approvalCode`, `customerPhone`) — SEC-OMS-02 |
+
+- Elemen `salesPayments[]` = **whitelist** (SEC-OMS-02): hanya `paymentMethodID`, `paymentMethodName`,
+  `paymentMethodTypeID`, `paymentMethodTypeName`, `bankName`, `paymentAmount`, `fullPaymentAmount`,
+  `salesPaymentBackendID`, `salesPaymentPosID` (nilai skalar); kunci lain dibuang sebelum raw & mart.
+- Denylist §25 L-110 (`*By`, `*UserID`, teks bebas, lampiran) tetap berlaku di atas daftar ini.
+- **Bukan data pribadi:** `tableID`, jam transaksi, `salesNum`/`billNum` (ID dokumen), nama kanal, nama
+  bank/metode bayar, promo.
+- Retensi: raw 36 bulan (TTL `doc_date`), mart 10 tahun — **usulan**, menunggu Q-OMS3/DPO.
+
+### 33.7 Konsumen Insight (`services/insight-web`)
+| Halaman | Bagian baru | Sumber | Isi |
+|---|---|---|---|
+| `/fnb/store` | "Penjualan per jam & kanal" | `v_esb_oms_hourly`, `v_esb_oms_freshness` | Pilih outlet + tanggal: bar penjualan per jam, pembagian kanal, struk, pax, rata-rata nilai struk, item/struk; label "data per HH:MM WIB" |
+| `/flow` | "Sell-through per jam" | produksi hari itu dari mart Core yang ada (`v_esb_flow_daily`) + `v_esb_oms_fin_hourly`, `v_esb_oms_fin_mapping_quality` | Pilih outlet + tanggal: produksi vs kumulatif terjual per jam per produk FIN; % terjual pada 12:00/15:00/18:00/tutup; perkiraan jam habis; porsi tak terpetakan ditampilkan |
+
+- Kedua bagian **tersembunyi rapi** (tanpa error, tanpa kartu kosong) bila view kosong atau OMS belum aktif untuk PT
+  itu. Akses dan filter mengikuti persona/cakupan cabang yang sudah ada (§28.15); tidak ada peran/token baru.
+
+### 33.8 Test wajib
+1. **Allowlist**: hanya 5 kombinasi `POST` + path §33.2 yang lolos; GET/PUT/DELETE pada path yang sama, `push/*`,
+   `sales-data`, `create-*`, `update-*`, path traversal/encoding, query selain `page`, `page` ≤ 0/non-angka, kunci body
+   tak dikenal, host/port lain → ditolak **sebelum** koneksi (transport palsu tidak pernah dipanggil). Klien Core tetap
+   menolak semua POST selain `/auth/login`.
+2. **Paginasi**: fixture sintetis halaman terakhir tepat 20 baris lalu halaman berulang → berhenti tanpa duplikat;
+   halaman < 20 → berhenti; batas `ESB_OMS_MAX_PAGES` → slice `partial` tanpa checkpoint.
+3. **Idempotensi**: tarik ulang hari yang sama (dengan satu struk di-void) → view hanya menampilkan versi baru, tanpa
+   dobel; `line_no` sama antar-tarik.
+4. **PDP**: tidak satu pun kunci §33.6 ada di `raw_doc.payload` maupun kolom mart (uji rekursif pada fixture yang
+   mengisi semua kunci itu); `has_member` benar.
+5. **Rekonsiliasi**: fixture sintetis — jumlah struk final dan Σ `grand_total` `fact_esb_oms_bill` = `fact_esb_oms_branch_daily`
+   (selisih 0); `v_esb_oms_recon_daily.diff_bills_pct` = `diff_summary_pct` = 0.
+6. **Kill switch**: `ESB_OMS_ENABLED=false` → nol panggilan OMS, Core tetap jalan; `true` tanpa `ESB_ENABLED=true` atau
+   brand di luar `ESB_BRANDS` → tidak start.
+7. **Log/secret**: header `Authorization` dan password tidak muncul di log/exception (uji tangkap log).
+8. **Akses ClickHouse**: `efn_insight` hanya melihat `company_code` (dan cabang) dalam cakupannya; tanpa akses `raw_doc`.
+
+### 33.9 Pertanyaan terbuka
+- **Q-OMS1** (IT klien / PIC ESB) Token statis `core-api.esb.co.id` untuk material usage & member: diberikan, untuk
+  siapa, dengan hak apa? **Di luar G69**; member tetap tidak ditarik tanpa DPO (Q-ESB19).
+- **Q-OMS2** (IT klien / vendor ESB) Izin beban intraday: tarik hari berjalan tiap 15 menit 07–23 WIB (perkiraan
+  ±5.800–9.800 panggilan/hari untuk PB ±21 toko, 2 req/dtk; ADR-040 §6b.6). Bila ditolak: harian saja (±370
+  panggilan/hari) atau interval lebih jarang. Sampai dijawab, production `ESB_OMS_ENABLED=false`.
+- **Q-OMS3** (DPO/Finance) Retensi data struk: usul raw 36 bulan, mart 10 tahun (sama G41, L-109).

@@ -23,8 +23,9 @@ DDL24 = (CH / "init" / "24-margin-bahan.sql").read_text(encoding="utf-8")
 ACCESS = (CH / "access" / "insight-access.sql").read_text(encoding="utf-8")
 INIT_SH = (CH / "clickhouse-init.sh").read_text(encoding="utf-8")
 ESB_POLICY_SH = (CH / "access" / "insight-esb-policy.sh").read_text(encoding="utf-8")
-# G52 §28.15.7 + G53 + YoY 24 Nov 2026 + G67: jumlah policy ESB (15 PT + 5 BR); sama dengan ESB_POLICY_EXPECTED di init.
-ESB_POLICY_COUNT = 20
+DDL26 = (CH / "init" / "26-g69-esb-oms.sql").read_text(encoding="utf-8")
+# G52 §28.15.7 + G53 + YoY 24 Nov + G67 + G69 OMS: jumlah policy ESB (16 PT + 11 BR); = ESB_POLICY_EXPECTED di init.
+ESB_POLICY_COUNT = 27
 
 # G52: WHERE opsional satu baris (hanya v_esb_store_payment_daily: `WHERE branch_id != 0`).
 INSIGHT_VIEW_RE = re.compile(
@@ -55,6 +56,13 @@ EXPECTED_INSIGHT_VIEWS = {
     "v_esb_ing_price_monthly",  # G67 margin bahan (24-margin-bahan.sql)
     "v_esb_menu_cost_monthly",
     "v_esb_ing_group_monthly",
+    "v_esb_oms_bill",  # G69 ESB OMS (26-g69-esb-oms.sql)
+    "v_esb_oms_hourly",
+    "v_esb_oms_menu_hourly",
+    "v_esb_oms_fin_hourly",
+    "v_esb_oms_fin_mapping_quality",
+    "v_esb_oms_recon_daily",
+    "v_esb_oms_freshness",
 }
 REVIEW_DWH_VIEWS = {"v_esb_movement_daily", "v_esb_coverage"}
 YOY_DWH_VIEWS = {"v_esb_sales_done_day", "v_esb_menu_econ_daily"}
@@ -93,9 +101,9 @@ def strip_comments(sql: str) -> str:
 
 
 def dwh_view_body(name: str) -> str:
-    """Badan view efn_dwh.<name> (tanpa komentar) dari 12/13/19/20/21/22/23/24."""
+    """Badan view efn_dwh.<name> (tanpa komentar) dari 12/13/19/20/21/22/23/24/26."""
     header = f"CREATE OR REPLACE VIEW efn_dwh.{name} AS"
-    for ddl in (DDL24, DDL23, DDL22, DDL21, DDL20, DDL19, DDL13, DDL12):
+    for ddl in (DDL26, DDL24, DDL23, DDL22, DDL21, DDL20, DDL19, DDL13, DDL12):
         if header in ddl:
             return strip_comments(ddl.split(header, 1)[1].split(";", 1)[0])
     raise AssertionError(f"view efn_dwh.{name} tidak ditemukan")

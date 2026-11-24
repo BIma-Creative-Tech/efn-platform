@@ -2253,3 +2253,40 @@ ruff/pytest; E2E staging ESB; PG nyata (`test_store_integration.py` skip tanpa `
 - `/v1/boms`: 422 `bad_input`, `q` 2..64 tanpa karakter kontrol. Kode galat job terdaftar di `workflow.JOB_ERROR_CODES`.
 - Test QA yang perilakunya berubah: `test_outbox_edges.test_confirm_*` (kini tetap `sent`), `test_outbox` marker
   mismatch, `test_jobs` (qty tak terbaca dilewati; `q` lebih longgar). Test baru: `tests/test_round2.py`.
+
+## Gelombang 69 — ESB OMS (penjualan level struk) ke ClickHouse (25 Nov 2026)
+
+docs/04 §33, amandemen ADR-040 §6b (Proposed). Worktree `efn-platform-oms`, branch `feat/esb-oms-sales`. Ditulis tanpa
+shell: ruff/pytest dijalankan lead di container.
+
+### File
+Baru: `services/esb-extract/efn_esb/{oms_http,oms_transform,oms_runner}.py`, `services/esb-extract/tests/test_oms.py`,
+`infra/clickhouse/init/26-g69-esb-oms.sql`. Diubah: `efn_esb/config.py` (`OmsSettings`, `oms_enabled`,
+`validate_oms_base_url`, `parse_hours`), `efn_esb/__main__.py` (thread OMS, `oms-probe`, `oms-backfill`, fail-closed
+OMS tanpa ESB), `infra/clickhouse/access/{esb-access.sql,insight-access.sql,insight-esb-policy.sh}`,
+`infra/clickhouse/clickhouse-init.sh` (`ESB_POLICY_EXPECTED=27`), test lama yang mengunci daftar/jumlah view
+(`test_insight_access.py`, `test_insight_fnb_access.py`, `test_margin.py`, `test_ddl.py`), README esb-extract.
+
+### Asumsi skema
+Tabel/kolom = DDL 26 (kolom `brand` + `branch_id` ditambahkan ke semua fakta: pola §25.5 + predikat row policy kelas BR).
+Kolom tambahan atas §33.5: `is_final` (struk), `menu_key`/`is_cancelled`/`has_packages` (baris), tabel turunan
+`dim_esb_oms_menu_fin`. Bentuk `packages[]`/`extras[]` dan arti `statusName` belum diketahui → README "G69 asumsi".
+
+### Keputusan
+1. Loop OMS = thread terpisah di proses `run`, klien HTTP + ClickHouse sendiri (independen dari loop Core per jam).
+2. Pemetaan FIN lewat tabel turunan `dim_esb_oms_menu_fin` (bukan view di atas resep G43): resep memuat HPP dan
+   `test_ddl_g43` melarang tabel G43 di-grant ke Insight. Kunci: `menu_code=bom_code` → `menu_code`→`menu_price.bom_name`
+   → nama kanonik §31.2. Kunci mana yang benar di data nyata belum terbukti (lihat kolom `method`, quality view).
+3. `v_esb_oms_freshness` per cabang (bukan per PT) agar persona toko (kelas BR) bisa membaca.
+4. Angka string diparse ketat; gagal = slice gagal tanpa checkpoint (§33.2), bentuk anak tak dikenal = errors.
+
+### Belum terverifikasi
+Belum dijalankan terhadap ESB OMS / ClickHouse nyata; view belum dieksekusi di 24.8; overlay compose belum memuat
+`ESB_OMS_MAX_PAGES` (test_contract akan gagal sampai devsecops menambahkannya).
+
+### G69 putaran 2 (security review, 25 Nov 2026)
+SEC-OMS-01 ditutup (`tableName` dibuang dari raw, kolom `table_name` dihapus dari DDL/transform/view/wrapper),
+SEC-OMS-02 ditutup (whitelist `salesPayments[]` + denylist substring rekursif), SEC-OMS-04 ditutup (konstanta kode
+`OMS_PROD_UNLOCKED=False` + `tls.is_production`, tanpa env baru), SEC-OMS-03 diterima (README). Status per temuan di
+`docs/reviews/SECURITY_REVIEW_2026-11-25_g69-esb-oms.md`. Belum: `docs/compliance/PDP_DATA_INVENTORY.md` baris 622 masih
+menyebut `tableName` bukan data pribadi (di luar lingkup; perlu diselaraskan pemiliknya).

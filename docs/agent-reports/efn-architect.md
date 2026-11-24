@@ -1491,3 +1491,32 @@ Q-PP1 (akun API non-admin), Q-PP2 (penyimpangan "draft di ESB" untuk produksi), 
 - Perilaku `samenet` pg_hba dengan postgres di dua network (asumsi: mencakup kedua subnet) dan aturan check-encryption yang
   perlu diubah devsecops.
 - Semua runtime (tidak ada kode yang ditulis).
+
+# G69 — ESB OMS penjualan level struk: ADR-040 §6b, kontrak §33 (2026-11-25)
+
+## Ringkasan (untuk manajemen)
+Data per jam/kanal/pax/promo per struk PB ditarik baca-saja dari ESB OMS (API kedua vendor ESB) untuk dashboard penjualan
+per jam & kanal dan sell-through per jam. Member & kartu dibuang. Biaya ±1,5–2 minggu-engineer, Rp0 lisensi. Mati
+default; production menunggu akun read-only (Q-ESB1) dan izin beban intraday (Q-OMS2, ±5.800–9.800 panggilan/hari).
+
+## File diubah (worktree `efn-platform-oms`, tanpa kode)
+- `docs/decisions/ADR-040-integrasi-esb-core-datamart.md`: §6b baru; header Tanggal; rujukan di §3.1 butir 3 dan §7
+- `docs/04_SERVICE_CONTRACTS.md`: §33 baru (§32 dicadangkan PR G68; header versi dan nomor L-xxx diserahkan ke lead)
+- `docs/compliance/PDP_DATA_INVENTORY.md`: v21, §2.8.16, baris retensi §3
+- `docs/01_REVIEW_RISK_GAP_ANALYSIS.md`: Q-OMS1..3 di §5.12
+- `docs/decisions/README.md`: satu baris pembaruan
+
+## Keputusan yang butuh tanda tangan klien
+Q-ESB1 (kini mencakup OMS), Q-OMS2 (beban intraday; fallback harian ±370 panggilan/hari), Q-OMS3 (retensi), Q-ESB9;
+Q-OMS1 di luar G69. Entri PDP §2.8.16 menunggu DPO.
+
+## Tambahan atas brief (perlu diterima lead)
+`brand` di semua tabel (pola §25.5); `salesInfo[]` dibuang utuh; `table_name` opsional di `fact_esb_oms_bill`;
+`ESB_OMS_MAX_PAGES` (ikut `ESB_MAX_PAGES`); `ESB_OMS_ENABLED=true` mensyaratkan `ESB_ENABLED=true`; slice yang menyentuh
+batas halaman = `partial` tanpa checkpoint; H-1/H-7 dijadwalkan setelah `ESB_SALES_READY_HOUR_WIB`.
+
+## Belum terverifikasi
+- Nilai `statusID` untuk struk final/void/batal dan baris menu batal.
+- Kunci menu ↔ BOM untuk `v_esb_oms_fin_hourly` (`menu_code` ↔ `bom_code` atau nama ternormalisasi).
+- Semantik `total` vs `discount_value` baris menu; `salesDateOut` kosong pada struk terbuka.
+- Angka beban (dari satu probe; rata-rata halaman intraday diasumsikan ±4).

@@ -1,6 +1,7 @@
 # Inventaris Data Pribadi / RoPA (UU PDP No. 27/2022) — EFN Platform
 
 - **Status:** Draf teknis — **keputusan retensi & DPO ditetapkan pemilik proyek 10 Okt 2026** (v7); dasar pemrosesan & nomor pasal tetap wajib diverifikasi **Legal (DPO sementara)**.
+  - **v21 (2026-11-25, Gelombang 69 penjualan level struk ESB OMS, ADR-040 §6b Proposed — MENUNGGU DPO)**: §2.8.16 data struk PB tanpa member/kartu (`has_member` saja; jam & meja bukan data pribadi); baris retensi §3; Q-OMS3.
   - **v20 (2026-11-24, Gelombang 66 production planning ESB, ADR-051 Proposed — MENUNGGU DPO)**: §2.8.15 `efn_prodplan` (hanya uid Odoo + nama staf sebagai aktor audit; retensi 730/1825/30 hari).
   - **v19 (2026-11-20, Gelombang 50 kampanye supermarket — dibangun, OFF di production, MENUNGGU DPO)**: §2.8.12a entri tabel yang benar-benar dibangun (`member_email`, `email_outbound`, `email_unsubscribe_used`, `wa_unofficial_recipient`, `wa_unofficial_outbound`, `behavior.purchase_emitted`, `behavior.subject_erasure`, `behavior.segment_member`, inbox & voucher kampanye) + event server `purchase` (riwayat pembelian online masuk profil perilaku, L-185, SEC-G50-17); baris retensi §3 (penanda **(v19)**), termasuk DLQ `notify.wa_unofficial.dlq` (TTL 24 jam + max-length) dan `behavior.event.dlq` (7 hari) (SEC-G50-04/18). Pertanyaan DPO baru di `docs/04` §28.12: Q-SM33, Q-SM34, Q-SM38, Q-SM39.
   - **v18 (2026-11-18, Gelombang 43 fase 2, ADR-042 Accepted — MENUNGGU DPO)**: §2.8.14 **bundel migrasi ESB** (terenkripsi, retensi ≤ 90 hari setelah berita acara) dan **arsip histori ESB di Odoo** (`efn.legacy.flow.daily`, `efn.legacy.sales.daily`, `efn.legacy.sales.line`: `sales_num` = ID transaksi, bukan data pribadi) + **pelanggan B2B** ESB di `res.partner` (data badan; PIC/alamat/telepon/email dibuang); baris retensi §3; Q-P32.
@@ -613,6 +614,22 @@ status: **MENUNGGU DPO**
   data pribadi selain akun API yang dipakai. Log tidak memuat kredensial, token, maupun query string.
 - **Prasyarat production:** entri ini disetujui DPO; Q-PP1, Q-PP2, Q-PP10 terjawab.
 
+#### 2.8.16 (v21) Penjualan level struk ESB OMS — Gelombang 69 (docs/04 §33, ADR-040 §6b Proposed) — status: **MENUNGGU DPO**
+- **Sumber & dasar:** ESB OMS (sistem POS klien, pengendali = PT brand), ditarik baca-saja oleh `esb-extract` untuk
+  dashboard penjualan per jam/kanal dan sell-through per jam; awal brand PB saja. Hak data = Q-ESB9.
+- **Data:** struk (nomor struk/bill, jam masuk/keluar, kanal, pax, nomor meja (ID), total, diskon, pajak, promo,
+  status), baris menu, pembayaran per metode/bank (tanpa data kartu), ringkasan cabang-hari. `tableName` **dibuang**
+  (SEC-OMS-01: untuk take away/ojol sering berisi nama pelanggan atau driver).
+- **Bukan data pribadi:** jam transaksi, `tableID`, `salesNum`/`billNum` (ID dokumen) — tidak menunjuk orang
+  tanpa sistem lain (ESB POS). Catatan sama dengan §2.8.14(b): ID struk menjadi dapat dihubungkan ke orang bila digabung
+  dengan data member/kartu di ESB.
+- **Dibuang sebelum `raw_doc` dan mart:** `memberID`/`memberCode`/`memberName` (hanya penanda `has_member`),
+  `cardNumber`, `accountName`, `verificationCode`, `voucherCode`, `notes`, `cancelNotes`, `additionalInfo`, `createdBy`,
+  `editedBy`, `selfOrderID`, larik `salesInfo[]`; denylist §2.8.11 tetap berlaku. Diuji fixture sintetis.
+- **Penyimpanan, akses & retensi:** ClickHouse (disk terenkripsi, TLS); raw 36 bulan, mart 10 tahun (**usulan**, Q-OMS3).
+  Akses: `esb_writer` (tulis), `efn_insight` (view dengan row policy PT/cabang); tanpa Metabase/text2sql.
+- **Prasyarat `ESB_OMS_ENABLED=true` di production:** entri ini disetujui DPO; Q-ESB1, Q-OMS2, Q-OMS3.
+
 ## 3. Matriks retensi ringkas (default → ditetapkan DPO)
 | Data | Default | Mekanisme (pemilik) | Status |
 |---|---|---|---|
@@ -670,6 +687,7 @@ status: **MENUNGGU DPO**
 | **(v18)** Bundel migrasi ESB (+ hasil impor, laporan antara) | ≤ 90 h setelah berita acara brand | Manual operator (runbook migrasi) + rotasi `migration_bundle_key` setelah brand terakhir | **Q-ESB24 / Q-P32**; belum ada brand yang dimigrasi |
 | **(v18)** Odoo `efn.legacy.sales.daily` / `efn.legacy.sales.line` (bukan PII) | 10 th sejak tanggal transaksi (usulan); rentang muat baris = `sales_line_months` | Belum ada job (hapus per irisan oleh skrip) | Keputusan Finance/DPO (Q-P32) |
 | **(v18)** Odoo `efn.legacy.flow.daily` (bukan PII) | Selama forecast v1 dipakai | Uninstall/hapus saat G44 | — |
+| **(v21)** ClickHouse struk ESB OMS: `raw_doc` (`oms_sales_head`) / `fact_esb_oms_*` (bukan PII setelah redaksi) | 36 bln / 10 th (usulan) | `TTL doc_date` / belum ada TTL mart | **Q-OMS3** |
 | **(v16)** `behavior.event_raw` (staging) | 7 h (drop partisi harian) | Job BFF | Rencana; **Q-SM17** |
 | **(v16)** ClickHouse `fact_visitor_event` | 90 h | `TTL` + delete by `subject_key` (erasure) | Rencana; **Q-SM17** |
 | **(v16)** ClickHouse `agg_visitor_*` (anonim, k ≥ 10) | 2 th | `TTL` | Rencana; **Q-SM17** |

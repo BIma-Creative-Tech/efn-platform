@@ -256,3 +256,71 @@ disalin karena tidak ada paket bersama antar-service Python.
   `qty` vs `stockQty` opname, `receivableTotal`/`payableTotal` = sisa atau nilai faktur, apakah invoice-aging hanya faktur
   terbuka, status opname yang final. `customer_name` bisa nama orang (pelanggan perorangan) → data pribadi (inventaris
   PDP). `bomTypeID/Name` arti [B] (Q-ESB17); header BOM ESB tanpa qty hasil (rasio dari `bom_ratio`).
+
+## G69 — ESB OMS (penjualan level struk)
+**Tujuan.** Melengkapi ESB Core dengan data per struk dari ESB OMS (`https://esbcore.co.id/external/general/*`, brand
+PB dulu): jam transaksi, kanal (visit purpose), pax, promo, pembayaran, baris menu ber-`menuCode`. Konsumen: Insight
+`/fnb/store` (penjualan per jam & kanal) dan `/flow` (sell-through per jam). Kontrak: docs/04 §33; **ADR-040 §6b
+(amandemen, Proposed)**. Risiko: **R-S17** (akun brand saat ini admin → production menunggu Q-ESB1), **R-O09/R-O10**
+(beban API vendor intraday & ketergantungan SaaS: kill switch, budget, token bucket terpisah, Q-OMS2), **R-L01**
+(PDP/PCI: denylist §33.6 sebelum raw & mart).
+
+**Kode.** `efn_esb/oms_http.py` (klien POST allowlist 5 path persis, Basic auth, User-Agent eksplisit, redirect tidak
+diikuti; klien Core tidak berubah), `oms_transform.py` (strip PII/PCI, transform murni, pemetaan menu→FIN),
+`oms_runner.py` (paginasi, slice, siklus, backfill, loop thread), `config.OmsSettings`. DDL
+`infra/clickhouse/init/26-g69-esb-oms.sql`; grant `access/esb-access.sql` (writer) + `access/insight-access.sql` /
+`insight-esb-policy.sh` (wrapper + row policy, `ESB_POLICY_EXPECTED=27`).
+
+**Runner.** Loop OMS = **thread terpisah** di proses `run` (klien HTTP, bucket, budget, circuit breaker auth, dan klien
+ClickHouse sendiri) → gagal OMS tidak menghentikan Core dan sebaliknya. Dipilih karena loop Core sekuensial per jam;
+menyisipkan interval 15 menit ke loop itu akan mengikat jadwal keduanya. Per siklus: master harian (visit purpose,
+payment method) + pemetaan menu→FIN harian; hari berjalan (di `ESB_OMS_INTRADAY_HOURS`) = summary 1 panggilan lalu
+semua cabang ber-struk ditarik ulang utuh; H-1/H-7 + gap fill final setelah `ESB_SALES_READY_HOUR_WIB` (penanda hari
+`oms_day`, ditulis hanya bila semua cabang sukses). Slice yang mencapai `ESB_OMS_MAX_PAGES` = `partial`, tanpa
+checkpoint. CLI: `oms-probe --brand pb` (jumlah saja), `oms-backfill --brand pb --from D --to D [--force]` (jendela
+`ESB_BACKFILL_WINDOW`, budget `ESB_OMS_BACKFILL_MAX_CALLS`, summary 1 panggilan per ≤ 31 hari).
+
+**Env.** `ESB_OMS_ENABLED=false` (kill switch; **`true` hanya berlaku bila `ESB_ENABLED=true`** — kalau tidak, proses
+tidak start, exit 2), `ESB_OMS_BRANDS=pb` (subset `ESB_BRANDS`, kredensial Core yang sama), `ESB_OMS_BASE_URL`
+(`https://esbcore.co.id` persis), `ESB_OMS_RATE_PER_SEC=2.0`, `ESB_OMS_INTERVAL_SECONDS=900`,
+`ESB_OMS_INTRADAY_HOURS=07-23`, `ESB_OMS_CORRECTION_DAYS=1,7`, `ESB_OMS_MAX_CALLS_PER_RUN=5000`,
+`ESB_OMS_BACKFILL_MAX_CALLS=60000`, `ESB_OMS_MAX_PAGES` (default = `ESB_MAX_PAGES`).
+
+**Pengunci production (SEC-OMS-04).** Di production — `tls.is_production` (fail closed: `APP_ENV`/`NODE_ENV` kosong atau
+di luar `dev/development/local/test/ci` = production; `staging` juga terhitung production) — `ESB_OMS_ENABLED=true`
+membuat proses tidak start, **kecuali** `ESB_OMS_ALLOW_PRODUCTION=true` (persis `true`). Keputusan pemilik proyek
+25 Nov 2026: efn-prod lokal = staging berdata produksi yang direset saat go-live, jadi flag ini boleh **hanya** di
+override lokal efn-prod (`prod-local.overrides`, tidak di-commit). Repo/CI: default `false`, ditegakkan
+`check-encryption.sh`. Go-live sungguhan: hapus flag sampai Q-ESB1, Q-OMS2, Q-OMS3, dan persetujuan DPO.
+
+**PDP tambahan (SEC-OMS-01/02).** `tableName` dibuang (label meja bisa berisi nama pelanggan/driver); kunci yang memuat
+`card`/`verification`/`approval`/`account`/`member`/`phone`/`email` dibuang rekursif; elemen `salesPayments[]` di-whitelist
+9 kunci (`oms_transform.PAYMENT_FIELDS`).
+
+**Sisa risiko yang diterima (SEC-OMS-03).** Circuit breaker auth OMS (`oms_loop`) terpisah dari breaker Core walau akun
+ESB-nya sama, sehingga saat password berubah percobaan gagal ke akun bisa ±2× batas SEC-186 (2 siklus Core + 2 siklus
+OMS). CLI `oms-probe`/`oms-backfill` tidak memakai breaker (sekali jalan, manual). Mitigasi operasional: setelah rotasi
+password ESB, perbarui secret lalu restart `esb-extract`; jangan menjalankan `oms-*` CLI berulang saat auth gagal.
+
+**Pemetaan menu → FIN.** Resep G43 (`dim_esb_bom` + `_line`) memuat HPP dan tidak boleh dibaca Insight, jadi esb-extract
+menurunkan tabel `dim_esb_oms_menu_fin` (qty FIN per menu saja) sekali sehari. Kunci, urutan prioritas: `menu_code` =
+`bom_code` BOM `Menu` → `menu_code` → `dim_esb_menu_price.bom_name` → nama menu kanonik (§31.2 butir 4). Komponen FIN =
+baris BOM langsung yang `is_fin` (dim_esb_product) / aturan FIN §25.5; sub-BOM tidak diurai. Butuh snapshot
+`bom_detail` (G43/G67) — tanpa resep, pemetaan kosong dan `v_esb_oms_fin_mapping_quality` menunjukkan 100% tak
+terpetakan.
+
+**G69 asumsi bentuk & status [B].** (1) Respons = list atau objek ber-`data`/`result`. (2) `packages[]`/`extras[]` berisi
+objek dengan `menuID`/`menuCode`/`menuName`/`qty`/`price`/`total` seperti `salesMenus[]`; bentuk lain diabaikan dan
+dihitung di `extract_run.errors`; qty anak disimpan apa adanya (per induk atau total — belum diketahui). (3) Struk
+**tidak final** bila `statusName` memuat void/cancel/batal/open/terbuka/draft/pending/hold/refund; baris batal sama
+(nilai `statusID` per status belum diverifikasi — perlu fixture probe). (4) `net_sales` struk = Σ(`subtotal` −
+`discountTotal`); `net_sales` menu = Σ(`total` − `discountValue`). (5) `branchCode` OMS = `branch_code` ESB Core
+(`dim_esb_branch`); cabang tak dikenal → `branch_id` 0, PT default brand. (6) Angka rusak = slice gagal (tanpa
+checkpoint).
+
+**Belum / belum diverifikasi.** Belum dijalankan terhadap ESB OMS atau ClickHouse nyata (hanya test sintetis); view
+belum dieksekusi di ClickHouse 24.8. Rekonsiliasi `v_esb_oms_recon_daily` (struk final vs summary vs pembayaran Core)
+belum dibuktikan pada data nyata. Production sungguhan: terkunci (SEC-OMS-04, `ESB_OMS_ALLOW_PRODUCTION` hanya untuk efn-prod lokal pra-go-live) sampai Q-ESB1 (akun read-only), Q-OMS2
+(izin beban intraday), Q-OMS3 (retensi) dan DPO. Bila `fact_esb_oms_bill` sudah dibuat dengan kolom `table_name` (DDL
+sebelum SEC-OMS-01), `CREATE IF NOT EXISTS` tidak menghapusnya: hapus tabel kosong itu manual (admin) lalu jalankan
+ulang `clickhouse-init`.

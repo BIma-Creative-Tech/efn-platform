@@ -190,6 +190,27 @@ docker run --rm -v "$(pwd -W)":/app -w /app node:22-alpine sh -c "npm install &&
 Dev lokal membutuhkan ClickHouse (profil `data`) dan secret; tanpa itu halaman menampilkan kartu galat per blok. Data contoh sintetis dev **tidak dibangun**.
 Cookie `__Host-` + `Secure` hanya diterima browser di `https://` atau `http://localhost`.
 
+## Penjualan level struk ESB OMS (G69, 25 Nov 2026; brand PB)
+Dua bagian baru, **tersembunyi rapi** (tanpa kartu galat) bila view OMS belum ada, OMS belum aktif, atau tidak ada struk pada hari itu (hanya pembatasan laju
+yang tampil sebagai kartu galat). Sumber = view `efn_insight.v_esb_oms_*` (kontrak `docs/04` §33.5; dibangun
+`infra/clickhouse/init/26-g69-esb-oms.sql`). Tanpa dependency baru.
+- `/fnb/store` **Penjualan per jam & kanal** (`components/oms/StoreHourlySection.tsx`): hari + cabang halaman; KPI struk, pax, rata-rata nilai struk
+  (penjualan bersih / struk), item per struk; grafik batang per jam (tab Penjualan bersih / Struk); tabel kanal (visit purpose).
+  **Pilihan hari sendiri** lewat search param `oms_day` (hanya `today` atau `date`; selain itu diabaikan): "Hari ini (berjalan)" dan "Tanggal filter halaman" tanpa
+  mengubah filter tanggal lain. Bawaan = hari ini (WIB, dihitung di server) bila `foms_freshness` mengembalikan waktu, selain itu tanggal filter. Label "Hari ini, data per
+  HH:MM WIB" / "Data final". Jam 23 memuat struk yang ditutup lewat tengah malam (aturan view).
+- `/flow` **Sell-through per jam** (`components/oms/SellThroughSection.tsx`): hanya bila tepat satu cabang terpilih (selain itu petunjuk "Pilih satu outlet", dan hanya
+  bila OMS aktif); sampai kemarin saja (pasokan Core baru ada keesokan hari); produk dengan satuan resep non-EA (EA/PCS/PC setara) ditandai "satuan beda" tanpa persen/jam
+  habis. Untuk hari terakhir filter periode; per produk FIN: pasokan toko hari itu
+  (`v_esb_flow_daily`, definisi SUPPLY yang sama dengan sell-through halaman), terjual, % terjual sebelum 12:00/15:00/18:00 dan sampai tutup, perkiraan jam habis,
+  catatan porsi tak terpetakan.
+- Query `foms_freshness | foms_hourly | foms_fin_hourly | foms_fin_supply | foms_fin_quality` di `lib/queries.ts`. Semua view OMS kelas BR (punya
+  `brand` + `branch_id`): cabang memakai makro BR yang sama dengan view BR lain. `product_key` view OMS = kode produk polos; join ke pasokan dan filter produk memakai
+  `<brand>:<product_key>`. Kesegaran = `max(last_finished_at)` (view per cabang, hanya hari ini); porsi tak terpetakan = Σ`unmapped_qty` / Σ`menu_qty` x 100.
+  Logika murni di `lib/oms-vm.ts`.
+- Test: `tests/oms-vm.test.ts` (kumulatif, persen jam patok, jam habis, kosong), `tests/oms-queries.test.ts` (view, parameter, cakupan). Fixture sintetis.
+- Belum diverifikasi: Vitest/lint/typecheck/build dan SQL insight-web terhadap view final belum dijalankan; tampilan di browser/pembaca layar.
+
 ## Belum dibangun / belum diverifikasi
 G52 (22 Nov 2026): kode ditulis tanpa dijalankan (tanpa Node di host): Vitest, lint, typecheck, build, dan SQL 18 query belum dijalankan; payload_b64/sig_b64 vektor D..G
 belum dicocokkan dengan builder Odoo; ekspor CSV halaman F&B persona belum dibuat (C3); UX/a11y halaman baru belum diuji di browser/pembaca layar.

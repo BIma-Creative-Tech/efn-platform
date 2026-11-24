@@ -93,6 +93,17 @@ GRANT SELECT, INSERT ON efn_dwh.mart_esb_ing_price_monthly TO esb_writer;
 GRANT SELECT, INSERT ON efn_dwh.mart_esb_menu_cost_monthly TO esb_writer;
 GRANT SELECT, INSERT ON efn_dwh.mart_esb_ing_group_monthly TO esb_writer;
 
+-- G69 ESB OMS (init/26-g69-esb-oms.sql, docs/04 §33.5; efn_esb/oms_runner.py): SELECT + INSERT saja (pola SEC-AG-01).
+-- dim_esb_oms_menu_fin diturunkan dari resep G43 (dim_esb_bom/_line, dim_esb_menu_price, dim_esb_product: SELECT sudah
+-- di-grant di atas). Tidak di-grant ke metabase_reader / text2sql / forecast (§33.5).
+GRANT SELECT, INSERT ON efn_dwh.fact_esb_oms_bill TO esb_writer;
+GRANT SELECT, INSERT ON efn_dwh.fact_esb_oms_bill_line TO esb_writer;
+GRANT SELECT, INSERT ON efn_dwh.fact_esb_oms_bill_payment TO esb_writer;
+GRANT SELECT, INSERT ON efn_dwh.fact_esb_oms_branch_daily TO esb_writer;
+GRANT SELECT, INSERT ON efn_dwh.dim_esb_oms_visit_purpose TO esb_writer;
+GRANT SELECT, INSERT ON efn_dwh.dim_esb_oms_payment_method TO esb_writer;
+GRANT SELECT, INSERT ON efn_dwh.dim_esb_oms_menu_fin TO esb_writer;
+
 -- Analis (opsional, §25.7): view v_esb_* + tabel dasarnya (view INVOKER; v_esb_data_quality membaca extract_run).
 -- Tanpa raw_doc (payload mentah) dan bom_ratio.
 -- metabase-access.sql berjalan SETELAH file ini (urutan alfabet) -> role dibuat di sini juga (idempoten).

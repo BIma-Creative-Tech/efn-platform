@@ -1,5 +1,7 @@
 # Runbook: ekstraksi ESB Core → ClickHouse (`esb-extract`, G41)
 
+> G69: sumber kedua **ESB OMS** (penjualan level struk, POST-baca allowlist, kill switch `ESB_OMS_ENABLED`) → §10.
+
 Kontrak: `docs/04_SERVICE_CONTRACTS.md` §25 · Keputusan: `docs/decisions/ADR-040-integrasi-esb-core-datamart.md` (**Proposed**) · Kode: `services/esb-extract` (paket `efn_esb`) · Compose: `infra/compose/docker-compose.esb.yml` (overlay, profil `data`) · Skema: `infra/clickhouse/init/12-g41-esb.sql`, akses `infra/clickhouse/access/esb-access.sql`.
 
 ## 0. Ringkas
@@ -339,3 +341,99 @@ SQL
 | Hapus total | `$DC rm -sf esb-extract`; data ClickHouse tetap (hapus mart/raw hanya dengan keputusan pemilik data; `raw_doc` habis sendiri oleh TTL 36 bulan). |
 
 **Sisa risiko jaringan:** network `egress-esb` hanya berisi `esb-extract` dengan `enable_icc=false` (SEC-183), jadi tidak ada jalur L3 langsung ke BFF atau service lain di `egress` bersama. Namun Docker tetap tidak membatasi **tujuan internet**: bila proses `esb-extract` disusupi, ia bisa menghubungi host internet lain. Mitigasi saat ini = allowlist host di klien (`ESB_BASE_URL` tetap, https saja, tanpa redirect lintas host, tanpa proxy env), container non-root/read-only tanpa capability, kredensial ClickHouse minimum, dan tidak berada di network `data`. Allowlist di tingkat jaringan (nftables subnet `172.30.8.0/24` → IP `services.esb.co.id`:443, atau egress proxy) belum ada untuk service mana pun (sama dengan 9router/WhatsApp); subnet khusus ini membuat aturan per service tersebut mudah ditambahkan nanti.
+
+## 10. G69 — sumber kedua ESB OMS (penjualan level struk)
+
+Kontrak: amandemen ADR-040 §6b, `docs/04_SERVICE_CONTRACTS.md` §33. ESB OMS (`https://esbcore.co.id/external/general/*`) memberi penjualan per **struk** (jam masuk/keluar, kanal/visit purpose, pax, promo, pembayaran, baris menu dengan `menuCode`) yang tidak ada di ESB Core. Produksi tetap dari Core (§5). Brand awal: **PB saja**.
+
+| Hal | Nilai |
+|---|---|
+| Arah | **POST-baca** saja, allowlist path persis: `get-branch`, `get-visit-purpose`, `get-payment-method`, `sales-branch-summary`, `sales-head` (query hanya `page`). GET, `push/*`, `sales-data`, `create-*`, `update-*`, host lain → ditolak kode (`MethodNotAllowed`). Redirect tidak diikuti. Klien Core tidak berubah (GET-only). |
+| Kredensial | `Authorization: Basic` dengan `ESB_USER_<BRAND>` + secret `esb_core_password_<brand>` yang **sama** dengan Core (tidak ada secret baru, tidak ada login JWT → sesi Core tidak terputus). Rotasi password brand (§8) otomatis berlaku untuk OMS. |
+| URL | `ESB_OMS_BASE_URL=https://esbcore.co.id` **tetap di overlay** (bukan dari `.env`); `scripts/check-encryption.sh` gagal bila bukan persis nilai itu atau bila service lain memegang `ESB_OMS_*`. |
+| Kill switch | `ESB_OMS_ENABLED=false` (default), **terpisah** dari `ESB_ENABLED`: `ESB_OMS_ENABLED` mengatur tarikan OMS, `ESB_ENABLED` mengatur tarikan Core. Mematikan satu tidak mematikan yang lain (perilaku persis bila `ESB_ENABLED=false` + `ESB_OMS_ENABLED=true`: lihat README `services/esb-extract`). |
+| Data pribadi / kartu | Dibuang sebelum raw & mart: `memberID/memberCode/memberName` (hanya `has_member`), `cardNumber`, `accountName`, `verificationCode`, `voucherCode`, `notes`, `cancelNotes`, `additionalInfo`, `createdBy`, `editedBy`, `selfOrderID`. |
+| Jaringan | Sama dengan Core: `esb` + `egress-esb` (§9). |
+
+**Env** (overlay `docker-compose.esb.yml`, nilai di `.env`):
+
+| Env | Default | Catatan |
+|---|---|---|
+| `ESB_OMS_ENABLED` | `false` | kill switch OMS |
+| `ESB_OMS_BRANDS` | `pb` | wajib subset `ESB_BRANDS` |
+| `ESB_OMS_RATE_PER_SEC` | `2.0` | token bucket per brand, terpisah dari bucket Core (beban total ke ESB = Core + OMS) |
+| `ESB_OMS_INTERVAL_SECONDS` | `900` | tarik ulang hari ini (slice diganti utuh) |
+| `ESB_OMS_INTRADAY_HOURS` | `07-23` | jam WIB tarikan intraday |
+| `ESB_OMS_CORRECTION_DAYS` | `1,7` | koreksi H-1, H-7 |
+| `ESB_OMS_MAX_CALLS_PER_RUN` / `ESB_OMS_BACKFILL_MAX_CALLS` | `5000` / `60000` | rem darurat |
+| `ESB_OMS_MAX_PAGES` | ikut `ESB_MAX_PAGES` (500) | batas keras halaman per slice; slice yang menyentuhnya = partial, tanpa checkpoint |
+| `ESB_OMS_ALLOW_PRODUCTION` | `false` | OMS aktif di `APP_ENV` production hanya bila persis `true` (SEC-OMS-04); lihat §10.1 butir 4 |
+
+### 10.1 Prasyarat
+
+1. §1–§2 sudah berjalan untuk brand itu (username di `.env`, secret password terisi, `probe` Core lolos).
+2. Skema ClickHouse G69 (`infra/clickhouse/init/26-g69-esb-oms.sql`) sudah diterapkan: `$DC up -d --force-recreate clickhouse-init`, log berakhir `... diterapkan`, exit 0.
+3. Production / prod lokal: prasyarat §1a berlaku juga untuk OMS, **ditambah** entri inventaris PDP diperbarui untuk data level struk (tanpa member/kartu, lihat tabel di atas) dan ditandatangani DPO, serta izin beban dari pemilik akun ESB mencakup host OMS (Q-ESB7).
+4. **efn-prod lokal (keputusan pemilik proyek 25 Nov 2026):** efn-prod = staging berdata produksi yang direset saat go-live; OMS boleh aktif di sana dengan `ESB_OMS_ALLOW_PRODUCTION=true` **hanya** di `prod-local.overrides` worktree efn-prod (tidak di-commit). Tanpa flag ini `APP_ENV=production` menolak start (`ESB_OMS_ALLOW_PRODUCTION`). **Checklist go-live:** hapus flag ini dari override sampai Q-ESB1, Q-OMS2, Q-OMS3, dan persetujuan DPO.
+
+### 10.2 Probe (tanpa menulis data)
+
+```bash
+$DC run --rm --no-deps esb-extract python -m efn_esb oms-probe --brand pb
+```
+
+Probe butuh `ESB_OMS_ENABLED=true` (dan `ESB_ENABLED=true`) di env container; bila `false` probe keluar 0 tanpa panggilan apa pun. Keluaran yang diharapkan: status HTTP per endpoint + **jumlah** (cabang, visit purpose, metode bayar, baris ringkasan) saja, tanpa nama/angka penjualan. `--no-deps`: tidak butuh ClickHouse. Gagal → §10.6.
+
+### 10.3 Menyalakan (PB)
+
+1. `infra/compose/.env`: `ESB_OMS_ENABLED=true`, `ESB_OMS_BRANDS=pb` (brand wajib juga ada di `ESB_BRANDS`).
+2. `$DC up -d esb-extract` lalu `$DC logs -f --tail=100 esb-extract`. Diharapkan: siklus OMS tiap `ESB_OMS_INTERVAL_SECONDS` di jam `ESB_OMS_INTRADAY_HOURS` WIB, tanpa password/header `Authorization`/isi struk di log.
+3. Verifikasi (admin): `v_esb_oms_freshness` menunjukkan tarikan terakhir < 30 menit di jam buka; `v_esb_oms_recon_daily` `diff_pct` ≈ 0 untuk hari kemarin.
+
+```bash
+chq <<'SQL'
+SELECT * FROM efn_dwh.v_esb_oms_freshness;
+SELECT sales_date, count() AS cabang, max(abs(diff_summary_pct)) AS max_diff_summary,
+       max(abs(diff_bills_pct)) AS max_diff_bills, max(abs(diff_core_pct)) AS max_diff_core
+FROM efn_dwh.v_esb_oms_recon_daily WHERE sales_date >= today() - 7 GROUP BY sales_date ORDER BY sales_date;
+SQL
+```
+
+Render setelah mengubah `.env` (bukan di CI): `check-encryption` render prod mensyaratkan `ESB_OMS_ENABLED` default `false`; di host yang sengaja menyalakan OMS, pesan itu memang muncul untuk render lokal yang membaca `.env` tersebut — sama seperti `ESB_ENABLED`.
+
+### 10.4 Backfill (jendela malam)
+
+Aturan §5 berlaku: hanya di `ESB_BACKFILL_WINDOW` (22:00–05:00 WIB), satu proses per brand (keluarkan brand dari `ESB_OMS_BRANDS` atau set `ESB_OMS_ENABLED=false` + recreate sebelum backfill brand yang sama). `oms-backfill` hanya menerima `--brand --from --to [--force]` (tanpa `--ignore-window`; `--force` = tarik ulang slice yang sudah done).
+
+```bash
+$DC run -d --name efn-esb-oms-backfill-pb esb-extract \
+  python -m efn_esb oms-backfill --brand pb --from 2026-10-01 --to 2026-11-24
+docker logs -f efn-esb-oms-backfill-pb
+```
+
+Perkiraan beban: `sales-head` 20 struk/halaman, ±0,5 dtk per panggilan → panggilan ≈ Σ (struk per cabang-hari / 20, dibulatkan ke atas, +1). Mulai dengan rentang pendek (1–2 bulan), ukur dari log/`extract_run`, lalu perpanjang. Resumable lewat checkpoint slice (brand, `oms_sales`, cabang, tanggal). Jangan menaikkan `ESB_OMS_RATE_PER_SEC` di atas 2 tanpa persetujuan pemilik akun.
+
+### 10.5 Mematikan
+
+| Tingkat | Langkah |
+|---|---|
+| OMS saja (Core tetap) | `.env` `ESB_OMS_ENABLED=false` → `$DC up -d esb-extract`. Backfill: `docker stop efn-esb-oms-backfill-<brand>`. Data mart tetap (Insight menampilkan data terakhir dengan label "data per HH:MM WIB"). |
+| Satu brand | keluarkan dari `ESB_OMS_BRANDS`, recreate. |
+| Darurat | §9 (putus `egress-esb` = Core ikut berhenti). |
+
+### 10.6 Gejala & tindakan
+
+| Gejala | Penyebab | Tindakan |
+|---|---|---|
+| **403** dengan halaman Cloudflare (error **1010**) | `User-Agent` default library (mis. `Python-urllib/*`) diblokir Cloudflare di depan `esbcore.co.id` | Bug klien (header `User-Agent` eksplisit wajib) → laporkan ke efn-data-ai-engineer. Jangan mencoba ulang paksa / mengganti IP. Bukan masalah kredensial. |
+| **403** JSON dari ESB (bukan Cloudflare) | akun tidak berhak cabang/endpoint | sama dengan §7 403 (minta hak baca, Q-ESB1) |
+| **401** | password brand salah/diganti, akun terkunci, atau username salah — **kredensial sama dengan Core**, jadi Core biasanya ikut gagal | Cek `probe` Core (§4) sekali; bila Core juga 401 → ikuti §7 401/§8. Bila hanya OMS 401 sementara Core OK → akun belum diberi akses OMS oleh pemilik akun; matikan OMS (`ESB_OMS_ENABLED=false`) agar tidak memicu penguncian akun, hubungi pemilik akun. |
+| `MethodNotAllowed` di log | kode mencoba path/method di luar allowlist | bug → laporkan; jangan melonggarkan allowlist tanpa amandemen ADR-040/docs/04 §33 |
+| 429 / 5xx / timeout | beban | §7; turunkan `ESB_OMS_RATE_PER_SEC` (mis. 1.0) atau naikkan `ESB_OMS_INTERVAL_SECONDS` |
+| `sales-head` berhenti di batas halaman | halaman setelah terakhir mengulang halaman terakhir (perilaku API); batas keras halaman per slice tercapai | slice ditandai `partial`, dicoba ulang; bila berulang laporkan (kemungkinan cabang-hari sangat ramai) |
+
+### 10.7 Sisa risiko
+
+- **Egress tidak dibatasi tujuan.** Network `egress-esb` tetap tidak membatasi host internet (§9); allowlist `services.esb.co.id` + `esbcore.co.id` hanya ditegakkan di aplikasi. Dengan dua host tujuan, **egress proxy dengan allowlist host (atau nftables subnet `egress-esb` → IP kedua host :443) direkomendasikan sebelum production**.
+- Satu kredensial ESB (saat ini akun admin, Q-ESB1) dipakai dua klien; kebocoran berdampak ke keduanya. Rotasi §8.
+- Data level struk lebih granular dari Core: retensi & akses mengikuti entri PDP yang ditandatangani DPO (§10.1 no. 3).

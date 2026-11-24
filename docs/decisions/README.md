@@ -1,5 +1,7 @@
 # Indeks Architecture Decision Records (ADR) — EFN Platform
 
+> **Pembaruan 25 Nov 2026 (Gelombang 69).** **ADR-040 §6b (amandemen, tetap Proposed):** data struk **ESB OMS** (jam, kanal, pax, promo, pembayaran) untuk Paris Baguette ditarik baca-saja lewat endpoint POST ber-allowlist persis; klien ESB Core tetap GET-only. Member & kartu dibuang. Mati default (`ESB_OMS_ENABLED=false`); production menunggu Q-ESB1 dan izin beban intraday (Q-OMS2). Kontrak `docs/04` §33. Jumlah ADR tidak berubah.
+
 > **Pembaruan 18 Nov 2026 (Gelombang 43 fase 2).** **ADR-042 diterima user (Accepted) dengan amendemen:** histori penjualan 24 bulan juga bisa dilihat di Odoo (ringkasan harian per outlet × menu dan rincian per baris struk) sebagai **arsip baca-saja**, bukan transaksi; pilot migrasi = **Paris Baguette**; brand supermarket di luar G43. Database Odoo bertambah ±2–2,7 GB untuk PB (perkiraan, diukur ulang saat uji coba PB). ADR-040 dipersempit mengikuti ADR-042. Total tetap **43 ADR**.
 
 > **Pembaruan 18 Nov 2026 (Gelombang 43, ADR-042).** **ADR-042 (Proposed, butuh persetujuan user sebelum fase 2):** data induk dan saldo awal dipindah dari ESB ke Odoo dengan skrip yang bisa diulang dan diuji tanpa menyimpan; histori 24 bulan **tidak** dijadikan transaksi Odoo (tetap lengkap di gudang data/Insight), Odoo hanya menyimpan ringkasan harian aliran produk untuk forecast stok. Im Donut & Curry Up menjadi PT ke-8/9 (placeholder, Q-ESB5). Pertanyaan baru Q-ESB10..Q-ESB24 (`docs/04` §27.12). Total kini **43 ADR**.

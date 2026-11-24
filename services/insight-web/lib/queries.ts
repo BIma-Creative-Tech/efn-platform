@@ -866,6 +866,69 @@ ORDER BY brand, branch_name
 LIMIT 500`,
   },
 
+  // ---------- G69: penjualan level struk ESB OMS (brand PB; view `v_esb_oms_*`, kontrak docs/04 §33.5) ----------
+  // Semua view OMS kelas BR (punya brand + branch_id): cakupan cabang memakai makro BR yang sama dengan view BR lain.
+  foms_freshness: {
+    // Per cabang, hanya hari ini; label "data per HH:MM WIB" = waktu tarik terakhir terbaru di cabang terpilih/terlihat.
+    params: ['pt', 'branch'],
+    // last_finished_at = DateTime64 UTC -> WIB; maxOrNull: tanpa baris hari ini = NULL (max() memberi 1970-01-01).
+    sql: `SELECT toString(toTimeZone(maxOrNull(last_finished_at), 'Asia/Jakarta')) AS finished_at
+FROM efn_insight.v_esb_oms_freshness
+WHERE ${PT}
+  AND ${BR}`,
+  },
+  foms_hourly: {
+    // Per jam x kanal (visit purpose) untuk hari acuan; status selesai saja (diatur di view). Dijumlahkan lintas cabang terpilih.
+    params: ['ref_day', 'pt', 'branch'],
+    sql: `SELECT hour, visit_purpose_name AS channel_name, sum(bills) AS bills_sum, sum(pax) AS pax_sum,
+       toFloat64(sum(gross_sales)) AS gross_sum, toFloat64(sum(net_sales)) AS net_sum, toFloat64(sum(items)) AS items_sum
+FROM efn_insight.v_esb_oms_hourly
+WHERE sales_date = {ref_day:Date}
+  AND ${PT}
+  AND ${BR}
+GROUP BY hour, channel_name
+ORDER BY hour, channel_name
+LIMIT 1000`,
+  },
+  foms_fin_hourly: {
+    // Terjual per jam per produk FIN. product_key view = kode produk polos (= v_esb_flow_daily.product_code); brand dibawa terpisah.
+    params: ['ref_day', 'pt', 'branch', 'product'],
+    // uom = satuan resep; non-EA tidak sebanding dengan pasokan Core (EA), ditandai di lib/oms-vm.ts.
+    sql: `SELECT brand, product_key, uom, any(product_name) AS product_label, hour, toFloat64(sum(qty_fin)) AS qty_sum
+FROM efn_insight.v_esb_oms_fin_hourly
+WHERE sales_date = {ref_day:Date}
+  AND ${PT}
+  AND ${BR}
+  AND (empty({product:Array(String)}) OR has({product:Array(String)}, concat(brand, ':', product_key)))
+GROUP BY brand, product_key, uom, hour
+ORDER BY brand, product_key, uom, hour
+LIMIT 5000`,
+  },
+  foms_fin_supply: {
+    // Pasokan toko hari acuan per produk FIN dari mart Core (definisi sama dengan sell-through /flow: SUPPLY).
+    params: ['ref_day', 'pt', 'branch', 'product'],
+    sql: `SELECT concat(brand, ':', product_code) AS product_key, any(product_name) AS product_label,
+       toFloat64(sum(${SUPPLY})) AS supply_qty, toFloat64(sum(store_prod)) AS store_prod_qty
+FROM efn_insight.v_esb_flow_daily
+WHERE day = {ref_day:Date}
+  AND ${PT}
+  AND ${BR}
+  AND ${PR}
+  AND ${SALES_BRANCH}
+GROUP BY product_key
+LIMIT 2000`,
+  },
+  foms_fin_quality: {
+    // Qty menu tak terpetakan per cabang-hari; porsi = Σunmapped_qty / Σmenu_qty x 100 dihitung di lib/oms-vm.ts (unmappedSharePct).
+    params: ['ref_day', 'pt', 'branch'],
+    sql: `SELECT toFloat64(unmapped_qty) AS unmapped_qty_f, toFloat64(menu_qty) AS menu_qty_f
+FROM efn_insight.v_esb_oms_fin_mapping_quality
+WHERE sales_date = {ref_day:Date}
+  AND ${PT}
+  AND ${BR}
+LIMIT 500`,
+  },
+
   // ---------- G52: Marketing F&B (/fnb/marketing) ----------
   fmkt_discount_kpi: {
     params: ['from', 'to', 'prev_from', 'prev_to', 'pt', 'branch'],

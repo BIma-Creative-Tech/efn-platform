@@ -3,18 +3,20 @@ import Link from 'next/link';
 import { Block, ErrorCard } from '@/components/blocks';
 import { ChartCard } from '@/components/ChartCard';
 import { FilterNotice } from '@/components/FilterNotice';
+import { StoreHourlySection } from '@/components/oms/StoreHourlySection';
 import { SmTable, type SmColumn } from '@/components/sm/SmTable';
 import { EmptyState, KpiRow, KpiTile, PageHeader, Section } from '@/components/ui';
 import { brandName } from '@/lib/brands';
 import { summarize, type ChartSpec } from '@/lib/chart-spec';
-import { addDays, isoWeekday } from '@/lib/dates';
+import { addDays, isoWeekday, wibToday } from '@/lib/dates';
 import { fnbStorePage, type FnbSearchParams } from '@/lib/fnb-data';
 import { fnbStoreChip, isBranchScoped } from '@/lib/fnb-personas';
 import { splitWeeks } from '@/lib/fnb-store';
 import { pctOfSafe } from '@/lib/fnb-vm';
+import { freshnessLabel, parseOmsDay, resolveOmsDay, type FreshnessRaw, type HourlyRaw } from '@/lib/oms-vm';
 import { ITEM_GROUP_LABEL } from '@/lib/flow-notes';
 import { fmtDate, fmtDayShort, fmtIdr, fmtInt, fmtPct, fmtQty, WEEKDAYS } from '@/lib/format';
-import { num, numOrNull } from '@/lib/loaders';
+import { num, numOrNull, run, settle } from '@/lib/loaders';
 import { pctDelta } from '@/lib/vm';
 
 export const dynamic = 'force-dynamic';
@@ -31,7 +33,8 @@ interface ReceiptRow {
 }
 
 /**
- * Toko F&B (docs/04 §28.15.9, G52): tanpa HPP/margin/MDR (view toko tidak memuatnya, L-244), tanpa data per jam (L-112), tanpa waste.
+ * Toko F&B (docs/04 §28.15.9, G52): tanpa HPP/margin/MDR (view toko tidak memuatnya, L-244), tanpa waste. Data per jam hanya dari
+ * ESB OMS (G69, bagian "Penjualan per jam & kanal"; tersembunyi bila OMS belum aktif).
  * Hari dan cabang dipilih di halaman ini (GET); kepala toko ber-cabang hanya melihat cabang yang ditugaskan (dipotong di
  * lib/fnb-data.ts dan ditegakkan row policy kelas BR di ClickHouse).
  */
@@ -41,12 +44,24 @@ export default async function FnbStorePage({ searchParams }: { searchParams: Fnb
   const lastWeek = addDays(day, -7);
   const branched = isBranchScoped(ctx.session);
 
-  const [kpiR, menuR, payR, ckR] = await Promise.all([
+  const omsParam = parseOmsDay((await searchParams).oms_day);
+  const [kpiR, menuR, payR, ckR, omsFreshR] = await Promise.all([
     q<KpiRaw>('fstore_kpi'),
     q<MenuRow>('fstore_top_menu'),
     q<PayRow>('fstore_payment_mix'),
     q<ReceiptRow>('fstore_ck_receipts'),
+    // G69: ESB OMS (PB). Gagal/kosong = bagian disembunyikan oleh StoreHourlySection (bukan galat halaman).
+    q<FreshnessRaw>('foms_freshness'),
   ]);
+  // Bagian OMS punya pilihan hari sendiri (oms_day=today|date): bawaan = hari ini (WIB, dari server) bila ada tarikan hari ini.
+  const omsFresh = omsFreshR.ok ? freshnessLabel(omsFreshR.data) : null;
+  const omsPick = resolveOmsDay({ param: omsParam, freshLabel: omsFresh, today: wibToday(new Date()), filterDay: day });
+  const omsR = await settle(run<HourlyRaw>('foms_hourly', ctx, { ref_day: omsPick.day }));
+  const omsLink = (m: 'today' | 'date'): string => {
+    const sp = new URLSearchParams({ day, oms_day: m });
+    if (selected.length > 0) sp.set('branch', selected.join(','));
+    return `/fnb/store?${sp.toString()}#oms`;
+  };
 
   const opts = options.ok ? options.data : [];
   const names = new Map(opts.map((o) => [o.key, o.label]));
@@ -112,7 +127,7 @@ export default async function FnbStorePage({ searchParams }: { searchParams: Fnb
           </Link>
         </div>
         <p className="muted small fb-summary">
-          Hari: {fmtDate(day)} dibanding {fmtDate(lastWeek)} (hari yang sama minggu lalu). Tidak ada data per jam. Basis penjualan bersih sebelum PB1/service.
+          Hari: {fmtDate(day)} dibanding {fmtDate(lastWeek)} (hari yang sama minggu lalu). Data per jam hanya dari ESB OMS (bila tersedia untuk cabang ini). Basis penjualan bersih sebelum PB1/service.
         </p>
       </form>
       {!options.ok ? <ErrorCard title="Daftar cabang" refId={options.ref} reason={options.reason} /> : null}
@@ -145,6 +160,8 @@ export default async function FnbStorePage({ searchParams }: { searchParams: Fnb
           }}
         </Block>
       </Section>
+
+      <StoreHourlySection day={omsPick.day} mode={omsPick.mode} fresh={omsFresh} links={{ today: omsLink('today'), date: omsLink('date') }} hourlyR={omsR} />
 
       <Section title="Penjualan 7 hari terakhir vs pekan lalu" id="trend">
         <Block result={daily} title="Penjualan 7 hari terakhir">
