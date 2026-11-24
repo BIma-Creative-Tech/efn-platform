@@ -5,6 +5,7 @@
  */
 import { esbCodesOf, isPersona, personasOf, smCodesOf, type Persona } from './claims';
 import { FNB_NAV, fnbNavItems, isBranchScoped } from './fnb-personas';
+import { ppNavItems } from './prodplan-access';
 import { FNB_ITEMS, NAV, SHARED_HREFS, SUMMARY_ITEMS, type NavItem } from './page-filters';
 
 export const PERSONA_ROUTES: Readonly<Record<Persona, string>> = {
@@ -114,7 +115,7 @@ export const SMD_NAV_HREFS: readonly string[] = ['/', '/sales', '/payments', '/d
 
 export interface NavGroup {
   /** Kunci stabil (dipakai untuk menyimpan status lipat di localStorage). */
-  id: 'summary' | 'fnb' | 'sm';
+  id: 'summary' | 'fnb' | 'sm' | 'prod';
   title: string;
   items: readonly NavItem[];
   /** Kode ESB sesi (terurut) untuk tautan ber-scope `esb` saat `pt` kosong / hanya SMD. Hanya di grup F&B sesi exec ber-SMD. */
@@ -137,6 +138,7 @@ export function navGroups(
   s: { codes: readonly string[]; roles: readonly string[]; v?: number; brs?: readonly string[] },
   smEnabled: boolean,
   fnbEnabled = false,
+  ppEnabled = false,
 ): NavGroup[] {
   const esb = hasEsbAccess(s);
   // G52 (§28.15.9): sesi ber-cabang (kepala toko F&B) hanya melihat grup F&B berisi "Toko"; Ringkasan dan grup lain disembunyikan.
@@ -165,6 +167,9 @@ export function navGroups(
     : [];
   if (smd) smItems.push(...[NAV.sales, NAV.payments, NAV.forecast].map((i): NavItem => ({ ...i, scope: 'smd' })));
   if (smItems.length > 0) groups.push({ id: 'sm', title: 'Supermarket', items: smItems });
+  // G66 (§30.12): grup "Produksi" hanya untuk sesi berperan PP dan bila INSIGHT_PRODPLAN_ENABLED aktif.
+  const pp = ppNavItems({ v: s.v ?? 3, roles: s.roles, codes: s.codes, brs: s.brs }, ppEnabled);
+  if (pp.length > 0) groups.push({ id: 'prod', title: 'Produksi', items: pp });
   return groups;
 }
 

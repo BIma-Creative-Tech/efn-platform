@@ -28,7 +28,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   const esbCodes = esbCodesOf(session.codes);
   const smd = smdAllowed(session, cfg.smEnabled);
   const odoo = odooHomeUrl(cfg);
-  const groups = navGroups(session, cfg.smEnabled, cfg.fnbEnabled);
+  const groups = navGroups(session, cfg.smEnabled, cfg.fnbEnabled, cfg.ppEnabled);
 
   // G52 (§28.15.9): sesi ber-cabang (kepala toko F&B) = cangkang minimal. Tanpa FilterBar global dan tanpa kesegaran tingkat PT:
   // query itu memakai view kelas PT yang memang kosong untuk sesi ber-cabang (halaman Toko memegang hari + cabang sendiri).

@@ -1,6 +1,42 @@
-# efn_insight — Dashboard Insight (SSO akun Odoo, G42 + G47 + G52)
+# efn_insight — Dashboard Insight (SSO akun Odoo, G42 + G47 + G52 + G66)
 
-**Versi:** 19.0.3.0.0 · **Lisensi:** LGPL-3 · **Depends:** `efn_core` (CE saja, tanpa modul pihak ketiga — ADR-031)
+**Versi:** 19.0.3.1.0 · **Lisensi:** LGPL-3 · **Depends:** `efn_core` (CE saja, tanpa modul pihak ketiga — ADR-031)
+
+## G66 (19.0.3.1.0): peran production planning di token `eit3`
+Kontrak `docs/04_SERVICE_CONTRACTS.md` §30.7 (L-251), **ADR-051** (Proposed, production planning di atas ESB) dan
+amandemen ADR-041 §3.7. Bukan modul baru; tanpa format token baru.
+
+**Tujuan.** Planner Central Kitchen dan kepala gudang membuka halaman `/produksi` di insight-web memakai akun Odoo.
+Odoo hanya menerbitkan peran; semua otorisasi dokumen (SoD) ditegakkan `services/prodplan`.
+
+| Bagian | Isi |
+|---|---|
+| Grup | `efn_insight.group_prodplan_planner` ("Insight: Production planner CK") → `pp_planner`; `efn_insight.group_prodplan_warehouse` ("Insight: Kepala gudang (persetujuan transfer)") → `pp_warehouse`. Satu privilege per grup (sequence 80/90, pola persona), `implied_ids` = `group_insight_user`. **Bukan persona** (tidak di `PERSONA_GROUPS`, tidak masuk `SQL_efn_personas`; sig v1/v2/v3 tidak berubah), tidak ikut sinkron jabatan (`efn_role`). Peta tunggal `models/res_users.PP_GROUPS`. |
+| Token | `roles` eit3 boleh memuat `PP_ROLES` (`lib/insight_token.PP_ROLES`), urutan ASCII, maks 8 peran. **eit1/eit2 tidak pernah memuat PP** (rollback = tanpa akses produksi). |
+| T9 (pembuat) | `validate_claims_v3`: `PP ∩ roles ≠ ∅ ⇒ codes ∩ ESB_CODES ≠ ∅ ∧ brs = []` → `bad_claims`. Controller (`apply_pp_roles`) memenuhi T9 dengan **membuang** peran PP sebelum membangun payload: `brs` tidak kosong (kepala toko ber-cabang) → log `insight_pp_conflict uid=<id>` (persis kontrak); tanpa kode ESB (mis. user SMD saja) → log `insight_pp_no_esb uid=<id>`. Dashboard lain tetap terbuka. |
+| SoD | Satu user boleh memegang kedua grup dan mendapat kedua peran. Pemisahan pembuat/penyetuju/pengaju per dokumen ditegakkan prodplan (CHECK DB + 403), **bukan** di Odoo. |
+
+**Tafsiran kontrak (dicatat untuk efn-lead).**
+- Kontrak hanya menyebut "dibuang + log" untuk `brs` tidak kosong. Untuk kasus tanpa kode ESB (yang juga melanggar T9)
+  dipilih perilaku sama (buang + log `insight_pp_no_esb`), bukan halaman `persona_conflict`, agar user SMD yang
+  terlanjur diberi grup tetap bisa membuka dashboard SMD (fail closed untuk PP, tanpa memblokir hak lain).
+- Tidak ada flag Odoo untuk PP (kontrak tidak menyebutnya); peran diterbitkan setiap kali grup dipegang dan versi
+  token = 3. Gerbang fitur = `INSIGHT_PRODPLAN_ENABLED` di insight-web. **Urutan rilis: insight-web dulu, lalu Odoo**
+  (insight-web lama menolak token ber-PP dengan `bad_claims`).
+- Peran PP tidak bergantung `INSIGHT_FNB_PERSONA_ENABLED`.
+
+**Risiko yang dimitigasi.** Eskalasi kepala toko ber-cabang ke fungsi produksi tingkat PT (T9 di Odoo + insight-web);
+token ber-PP tanpa PT ESB (otorisasi prodplan butuh `codes`); PP mengubah tanda tangan cakupan ClickHouse (PP bukan
+persona).
+
+**Cara uji manual.** Beri user grup "Insight: Production planner CK" + PT PB, buka *Dashboard Insight* dengan
+`EFN_INSIGHT_TOKEN_VERSION` kosong/3 → audit `ir.logging` `roles=pp_planner,user`. Tambah persona Kepala toko + cabang
+ESB (tanpa Direksi) dan `INSIGHT_FNB_PERSONA_ENABLED=true` → `roles=store,user`, log server `insight_pp_conflict`.
+
+**Belum / batasan G66.** Belum ada data demo/penugasan user (modul ini tidak punya data demo; penugasan grup lewat
+admin). Uji interop byte-exact token ber-PP dengan insight-web (`lib/claims.ts`) belum ada vektor bersama; test Odoo
+memakai rujukan verifikasi Python. Widget hak akses Odoo 19 untuk dua privilege baru belum diuji round-trip
+(pola satu privilege per grup sama dengan persona yang sudah diuji di `efn_insight_sm`).
 
 ## G52 (19.0.3.0.0): persona F&B, cabang ESB kepala toko, token `eit3`
 Kontrak `docs/04_SERVICE_CONTRACTS.md` §28.15.2–§28.15.5 (v21.1, L-237..L-249), **ADR-041 §3.6** (addendum 22 Nov
@@ -152,7 +188,9 @@ Test otomatis (tag `efn`): `tests/test_insight_token.py` (vektor §26.3), `tests
 N1..N5, sig2), `tests/test_insight_token_v3.py` (G52: D–G byte-exact dari `vectors_g52.json`, N6–N14, T1–T8, sig3,
 aturan persona), `tests/test_insight_g52.py` (relokasi grup + simulasi rename xmlid dengan keanggotaan tetap,
 constraint/ACL/record rule/impor CSV model cabang, matriks cakupan §28.15.11, pencabutan tanpa flag/rollback) dan
-`tests/test_insight_sso.py` (HttpCase; default `eit3`, rollback `eit2`/`eit1`, kepala toko F&B, `no_branch`). Test
+`tests/test_insight_sso.py` (HttpCase; default `eit3`, rollback `eit2`/`eit1`, kepala toko F&B, `no_branch`, G66 peran
+PP hanya di eit3), `tests/test_insight_g66.py` (G66: grup/privilege, grup → peran, kedua peran, T9 buang + log,
+validasi klaim T9/eit2). Test
 persona/cakupan SM ada di `efn_insight_sm`; audit cabang di `efn_audit/tests/test_audit_g52.py`.
 
 ## Referensi desain (bukan dependency, tidak disalin — ADR-031)

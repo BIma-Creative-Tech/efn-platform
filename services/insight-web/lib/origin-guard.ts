@@ -13,6 +13,21 @@ export function isOriginAllowed(origin: string | null | undefined, odooOrigin: s
   return origin === odooOrigin;
 }
 
+/**
+ * Untuk mutasi JSON `POST /api/prodplan/*` (G66): LEBIH KETAT dari /logout karena mengubah data.
+ *  - `Sec-Fetch-Site` ada -> hanya `same-origin` (bukan `same-site`/`none`/`cross-site`).
+ *  - tanpa `Sec-Fetch-Site` (klien lama) -> `Origin` WAJIB ada dan host-nya sama dengan header `Host`.
+ */
+export function isSameOriginMutation(secFetchSite: string | null | undefined, origin: string | null | undefined, host: string | null | undefined): boolean {
+  if (secFetchSite !== null && secFetchSite !== undefined && secFetchSite !== '') return secFetchSite === 'same-origin';
+  if (!origin || !host) return false;
+  try {
+    return new URL(origin).host === host;
+  } catch {
+    return false;
+  }
+}
+
 /** Untuk POST /logout: hanya permintaan sama-origin (atau tanpa metadata). */
 export function isSameOriginRequest(secFetchSite: string | null | undefined): boolean {
   return secFetchSite === null || secFetchSite === undefined || secFetchSite === 'same-origin' || secFetchSite === 'none';

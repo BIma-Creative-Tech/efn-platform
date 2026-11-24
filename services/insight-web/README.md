@@ -89,6 +89,9 @@ Halaman Penjualan juga memakai `sort` (`net|qty|margin`) dan `rank` (`top|bottom
 | `EFN_ALLOW_PLAINTEXT` | hanya dev non-production (http ke ClickHouse/Odoo) |
 | `INSIGHT_FNB_PERSONA_ENABLED` | `false`; aktif hanya string persis `true` (G52, §28.15.10). Production `false` sampai pemetaan cabang dimuat + QA/security G52 lulus |
 | `INSIGHT_ACCEPT_EIT2` | `true` (rollout G52); bila diset hanya `true` persis yang menerima `eit2`/`eis2`. Set `false` setelah Odoo 19.0.3.0.0 di semua env |
+| `INSIGHT_PRODPLAN_ENABLED` | `false`; aktif hanya string persis `true` (G66, §30.3). Mati -> `/produksi*` rewrite ke `/pp-belum-aktif` |
+| `PRODPLAN_URL` | `http://127.0.0.1:7443` (sidecar `insight-web-pp-tls`); nilai lain -> modul nonaktif (fail closed) |
+| `PRODPLAN_ASSERT_KEY_FILE` | `/run/secrets/prodplan_assert_key` (hex >= 64, beda dari tiga kunci lain; penanda tangan `ppa1`) |
 | `INSIGHT_CH_MAX_CONCURRENCY` | `12` (1..24): semaphore query **halaman** ke ClickHouse |
 | `INSIGHT_CH_EXPORT_CONCURRENCY` | `3` (1..8): semaphore **ekspor CSV**, terpisah dari semaphore halaman (SEC-189). Gabungan <= 24 = `max_concurrent_queries_for_user` |
 
@@ -157,6 +160,19 @@ Tujuan: perbandingan tahunan yang sah (temuan analisis 24 Nov: tabel bulanan lam
 - ADR-040/041 (Proposed). Logika murni `lib/yoy.ts` (tests/yoy.test.ts); SQL `infra/clickhouse/init/23-insight-yoy.sql`.
 - Belum: COGS ESB tidak memuat roti tidak terjual, komisi ojol, MDR; apakah ESB menghitung ulang COGS transaksi lama belum
   diverifikasi terhadap laporan ESB arsip Finance.
+
+## Production Order (`/produksi`, G66; docs/04 §30, ADR-051 + ADR-041 §3.7, Proposed)
+Modul perencanaan produksi Central Kitchen di atas ESB. **insight-web tetap tanpa akses DB/ESB**: semua data lewat API `prodplan` dari sisi server
+(`lib/prodplan-client.ts`, sidecar loopback `127.0.0.1:7443`, timeout 15 dtk). Identitas pengguna = header `X-EFN-Actor: ppa1...`
+(`lib/prodplan-token.ts`, HMAC `prodplan_assert_key`, umur 60 dtk, `jti`, terikat method + path + hash body) yang dibuat **hanya dari sesi
+terverifikasi**; browser tidak pernah menerima/mengirim token itu.
+- Peran `pp_planner` / `pp_warehouse` (hanya `eit3`/`eis3`; aturan T9: peran PP => kode ESB dan tanpa `brs`). Gerbang: `proxy.ts` (lapis 1),
+  `lib/pp-page.ts` (halaman) dan `lib/prodplan-guard.ts` (route API) (lapis 2).
+- Halaman (`app/(pp)/produksi/*`): daftar, `baru`, `[id]` (tab Permintaan, Kebutuhan, Usulan batch, Transfer, Posting, Riwayat), `kemasan`.
+- API (route handler, di luar matcher proxy): `POST /api/prodplan/<aksi>` (daftar aksi tertutup di `lib/prodplan-actions.ts`; same-origin ketat,
+  JSON, 60 mutasi/menit per pengguna) dan `GET /api/prodplan/jobs/{id}` (polling job 2 dtk, maks 5 menit).
+- Galat prodplan dipetakan ke pesan Indonesia dari tabel kita (`lib/prodplan-errors.ts`); teks/`details` server disaring.
+- Bentuk JSON respons prodplan **diasumsikan** (`lib/prodplan-types.ts`, parser defensif) sampai `services/prodplan` ada.
 
 ## Dev
 ```

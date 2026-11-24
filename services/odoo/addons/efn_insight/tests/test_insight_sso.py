@@ -104,6 +104,14 @@ class TestInsightSso(HttpCase):
             company_id=cls.pb.id,
             company_ids=[Command.set([cls.pb.id])],
         )
+        # G66 (docs/04 §30.7): planner + kepala gudang sekaligus (SoD per dokumen di prodplan).
+        cls.planner = new_test_user(
+            cls.env,
+            login="efn_ins_planner",
+            groups="base.group_user,efn_insight.group_prodplan_planner,efn_insight.group_prodplan_warehouse",
+            company_id=cls.pb.id,
+            company_ids=[Command.set([cls.pb.id])],
+        )
 
     # ------------------------------------------------------------------ helper
     def _env(self, **overrides):
@@ -269,6 +277,19 @@ class TestInsightSso(HttpCase):
         entry = self.env["ir.logging"].sudo().search([("name", "=", "efn_insight")], order="id desc", limit=1)
         self.assertIn(" v=3 ", entry.message)
         self.assertIn("wids_n=0 cats_n=0 brs_n=0", entry.message)
+
+    # ------------------------------------------------------------------ G66: peran production planning (§30.7)
+    def test_prodplan_roles_only_in_eit3(self):
+        payload = self._verify(self._token(self._open("efn_ins_planner", EFN_INSIGHT_TOKEN_VERSION="3")))
+        self.assertEqual(payload["roles"], ["pp_planner", "pp_warehouse", "user"])
+        self.assertEqual((payload["codes"], payload["brs"]), (["PB"], []))
+        entry = self.env["ir.logging"].sudo().search([("name", "=", "efn_insight")], order="id desc", limit=1)
+        self.assertIn("roles=pp_planner,pp_warehouse,user", entry.message)
+        # Rollback eit2/eit1: tanpa PP (format lama tidak mengenalnya).
+        for version in ("2", "1"):
+            with self.subTest(version=version):
+                payload = self._verify(self._token(self._open("efn_ins_planner", EFN_INSIGHT_TOKEN_VERSION=version)))
+                self.assertEqual(payload["roles"], ["user"])
 
     # ------------------------------------------------------------------ G52: kepala toko F&B (docs/04 §28.15.4)
     def test_store_fnb_token_has_branches(self):

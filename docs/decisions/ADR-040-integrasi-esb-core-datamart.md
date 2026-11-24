@@ -191,6 +191,11 @@ Pretzels (WTZ)? (**terjawab 18 Nov 2026: ya**) · **Q-ESB3** pemetaan cabang Bac
 backfill 24 bulan (rate, jendela) · **Q-ESB8** daftar cabang CK per brand · **Q-ESB9** hak EFN atas data & penggunaan API
 massal menurut kontrak ESB / ketersediaan ekspor resmi.
 
+## 6a. Catatan amandemen 24 Nov 2026 (ADR-051, Proposed)
+Kebutuhan tulis ke ESB (transfer + produksi untuk production planning CK, G66) **tidak** melonggarkan §3.1 butir 3:
+`esb-extract` tetap GET-only (kode + test tidak berubah). Tulis ditangani service terpisah `services/prodplan` dengan
+kredensial, network egress, dan allowlist POST/DELETE sendiri — lihat ADR-051 dan `docs/04` §30.
+
 ## 7. Kapan ditinjau ulang
 - Q-ESB1 atau Q-ESB7 dijawab (mengubah status ekstraksi production).
 - ESB mengubah API (alert R-O09) atau vendor menawarkan ekspor resmi (opsi F).

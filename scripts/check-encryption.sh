@@ -61,6 +61,15 @@
 #           port/label Traefik, root, tanpa read_only/cap_drop ALL/tmpfs /work, di luar profil migrate, CH bukan https
 #           8443 + CA internal, env *_FILE tanpa secret ter-mount; overlay migration menambah network ke odoo atau
 #           me-mount kode migrasi read-write (render prod-esb-migrate, prod-migration)
+#   - (G66) secret prodplan di luar service §30.2 (pg_password_prodplan -> postgres+prodplan; prodplan_assert_key ->
+#           insight-web+prodplan; esb_prodplan_password_* -> prodplan; tls_prodplan_* -> prodplan-tls; tls_insight_web_pp_*
+#           -> insight-web-pp-tls) atau set secret per service tidak persis; env *_FILE tidak cocok; network prodplan-db
+#           selain persis {postgres, prodplan}, insight-plan selain insight-web/prodplan/prometheus, egress-prodplan selain
+#           prodplan atau tanpa enable_icc=false; prodplan di network lain, root, tanpa read_only/cap_drop ALL, dengan
+#           port/label Traefik, PG_SSLROOTCERT bukan CA internal, PRODPLAN_ESB_BASE_URL di luar dua URL ESB; sidecar
+#           prodplan-tls/insight-web-pp-tls bukan namespace yang benar, CN/listen/target tidak persis; insight-web
+#           PRODPLAN_URL bukan http://127.0.0.1:7443; PRODPLAN_ENABLED / PRODPLAN_WRITE_ENABLED / INSIGHT_PRODPLAN_ENABLED
+#           bukan default false di render prod-prodplan; PRODPLAN_ESB_USER_* berisi nilai dari file repo (SEC-180)
 #   - (SEC-215/SEC-223) clickhouse-init tanpa CH_FORECAST_READER_HOST_CIDR /24../32 atau != subnet ipam forecast-ch;
 #           user efn_forecast_reader tidak dibuat dengan HOST IP; pagar allowlist objek efn_forecast hilang; pagar
 #           definisi view efn_forecast (SQL SECURITY DEFINER + definer) hilang; pola sama untuk efn_segment_reader
@@ -69,7 +78,8 @@
 #     dengan override entrypoint apa pun termasuk `[]`/`''` / dengan image resmi metabase/metabase (G16b, SEC-86)
 #   - (K25-06, identitas stack) nama project != EFN_STACK; network tanpa nama `<EFN_STACK>_<key>` atau subnet di luar
 #     `<EFN_SUBNET_BASE>.<n>.0/24` / duplikat; router Traefik tanpa traefik.enable + label traefik.docker.network
-#     `<EFN_STACK>_<network yang dipakai service dan Traefik>`; postgres di network selain `data` (pg_hba samenet);
+#     `<EFN_STACK>_<network yang dipakai service dan Traefik>`; postgres di network selain `data` (pg_hba samenet;
+#     pengecualian tunggal `data` + `prodplan-db` overlay G66, L-252);
 #     alias scrape api-gateway-metrics / ocr-worker-metrics (internal), wa-admin-relay-ingress (wa-ingress) hilang atau
 #     di network lain; TRUSTED_PROXIES tanpa `<EFN_SUBNET_BASE>.1.0/24`; IP statis relay WA / WA_RELAY_BIND_IP != <base>.21.10,
 #     extra_hosts wa-unofficial / IP wa-egress-proxy != <base>.14.10; Traefik/Promtail tanpa render-config.sh + EFN_STACK;
@@ -479,15 +489,16 @@ check_compose() {
   jq -e '[.services | to_entries[] | select((.value.networks // {}) | has("insight-data")) | .key]
          - ["clickhouse", "insight-web"] | length == 0' <<< "$json" > /dev/null \
     || err "[$label] network insight-data dipakai service selain clickhouse/insight-web (docs/04 §26.11)"
+  # G66: insight-plan (overlay prodplan, sidecar klien insight-web-pp-tls) diizinkan; anggotanya dibatasi di 6b7.
   jq -e '(.services["insight-web"] // null) as $w | $w == null
-         or (((($w.networks // {}) | keys) - ["insight-ingress", "insight-data"] | length == 0)
+         or (((($w.networks // {}) | keys) - ["insight-ingress", "insight-data", "insight-plan"] | length == 0)
              and ($w.read_only == true)
              and ((($w.cap_drop // []) | index("ALL")) != null)
              and ((($w.environment // {}).CH_URL // "") | startswith("https://"))
              and ((($w.environment // {}).EFN_INSIGHT_ODOO_URL // "") | startswith("https://"))
              and ((($w.environment // {}).INSIGHT_ENABLED // "") | tostring | test("^(true|false)$")))' \
       <<< "$json" > /dev/null \
-    || err "[$label] insight-web: wajib hanya network insight-ingress+insight-data (tanpa egress), read_only, cap_drop ALL, CH_URL & EFN_INSIGHT_ODOO_URL https://, INSIGHT_ENABLED boolean (docs/04 §26.10/§26.11)"
+    || err "[$label] insight-web: wajib hanya network insight-ingress+insight-data (+insight-plan overlay G66, tanpa egress), read_only, cap_drop ALL, CH_URL & EFN_INSIGHT_ODOO_URL https://, INSIGHT_ENABLED boolean (docs/04 §26.10/§26.11)"
   jq -e '(.services["insight-web-tls"] // null) as $t | $t == null
          or ([$t.command[]? | select(startswith("--allow-cn=")) | ltrimstr("--allow-cn=")]
              - ["traefik", "blackbox-exporter"] | length == 0)' <<< "$json" > /dev/null \
@@ -737,6 +748,108 @@ check_compose() {
              and ((($w.ports // []) | length) == 0)
              and ((($w.labels // {}) | keys | map(select(startswith("traefik."))) | length) == 0))' <<< "$json" > /dev/null \
     || err "[$label] wa-egress-proxy: wajib hanya network wa-egress/wa-internet, read_only, cap_drop ALL tanpa cap_add, tanpa port/Traefik (ADR-044 §3.6)"
+  # 6b7) G66 (docs/04 §30.1/§30.2/§30.15, ADR-051): prodplan (overlay docker-compose.prodplan.yml). Semua aturan berlaku
+  #      hanya bila service/network/secret-nya ter-render (tanpa overlay = lolos tanpa perubahan base).
+  #      (a) secret least privilege + set mount persis per service
+  for gsec in "pg_password_prodplan:postgres,prodplan" "prodplan_assert_key:insight-web,prodplan" \
+              "tls_prodplan_crt:prodplan-tls" "tls_prodplan_key:prodplan-tls" \
+              "tls_insight_web_pp_crt:insight-web-pp-tls" "tls_insight_web_pp_key:insight-web-pp-tls"; do
+    gok="${gsec#*:}"
+    jq -e --arg s "${gsec%%:*}" --arg ok "$gok" '
+        [.services | to_entries[] | select([.value.secrets[]? | (.source // .)] | index($s) != null) | .key]
+        - ($ok | split(",")) | length == 0' <<< "$json" > /dev/null \
+      || err "[$label] secret ${gsec%%:*} di-mount ke service selain ${gok} (least privilege, docs/04 §30.2)"
+  done
+  jq -e '[.services | to_entries[] | select([.value.secrets[]? | (.source // .) | startswith("esb_prodplan_password_")] | any)
+          | .key] - ["prodplan"] | length == 0' <<< "$json" > /dev/null \
+    || err "[$label] secret esb_prodplan_password_* di-mount ke service selain prodplan (docs/04 §30.2)"
+  jq -e '(.services.prodplan // null) as $w | $w == null
+         or (([$w.secrets[]? | (.source // .)] | map(select(startswith("esb_prodplan_password_") | not)) | sort)
+             == ["efn_ca_crt", "pg_password_prodplan", "prodplan_assert_key"])' <<< "$json" > /dev/null \
+    || err "[$label] prodplan: secret wajib persis pg_password_prodplan, prodplan_assert_key, efn_ca_crt (+ esb_prodplan_password_<brand>) (docs/04 §30.2)"
+  for spec in "prodplan-tls:efn_ca_crt,tls_prodplan_crt,tls_prodplan_key" \
+              "insight-web-pp-tls:efn_ca_crt,tls_insight_web_pp_crt,tls_insight_web_pp_key"; do
+    jq -e --arg svc "${spec%%:*}" --arg want "${spec#*:}" '(.services[$svc] // null) as $w | $w == null
+        or (([$w.secrets[]? | (.source // .)] | sort) == ($want | split(",") | sort))' <<< "$json" > /dev/null \
+      || err "[$label] ${spec%%:*}: secret wajib persis ${spec#*:} (docs/04 §30.2)"
+  done
+  #      (b) env *_FILE = secret ter-mount (prodplan + insight-web bila overlay me-mount kunci asersi)
+  for spec in prodplan:PG_PASSWORD_FILE:pg_password_prodplan prodplan:PRODPLAN_ASSERT_KEY_FILE:prodplan_assert_key \
+              prodplan:PG_SSLROOTCERT:efn_ca_crt; do
+    IFS=: read -r svc e s <<< "$spec"
+    jq -e --arg svc "$svc" --arg e "$e" --arg s "$s" '
+        (.services[$svc] == null)
+        or (([.services[$svc].secrets[]? | (.source // .)] | index($s) != null)
+            and ((.services[$svc].environment // {})[$e] == ("/run/secrets/" + $s)))' <<< "$json" > /dev/null \
+      || err "[$label] ${svc}: secret ${s} tidak di-mount atau ${e} != /run/secrets/${s} (docs/04 §30.3)"
+  done
+  while IFS=$'\t' read -r key val mounted; do
+    [[ -z "$key" ]] && continue
+    [[ "$val" == "/run/secrets/esb_prodplan_password_${key,,}" && "$mounted" == 1 ]] \
+      || err "[$label] prodplan PRODPLAN_ESB_PASSWORD_${key}_FILE=${val} tidak cocok dengan secret ter-mount esb_prodplan_password_${key,,}"
+  done < <(jq -r '.services.prodplan // {} | [.secrets[]? | (.source // .)] as $m
+      | (.environment // {}) | to_entries[] | select(.key | test("^PRODPLAN_ESB_PASSWORD_[A-Z0-9]+_FILE$"))
+      | (.key | capture("^PRODPLAN_ESB_PASSWORD_(?<k>[A-Z0-9]+)_FILE$") | .k) as $k
+      | [$k, (.value // ""), (if ($m | index("esb_prodplan_password_" + ($k | ascii_downcase))) != null then "1" else "0" end)]
+      | @tsv' <<< "$json")
+  jq -e '(.services["insight-web"] // null) as $w | $w == null
+         or ((([$w.secrets[]? | (.source // .)] | index("prodplan_assert_key")) == null)
+             and (($w.environment // {}) | has("PRODPLAN_URL") | not))
+         or ((($w.environment // {}).PRODPLAN_ASSERT_KEY_FILE == "/run/secrets/prodplan_assert_key")
+             and (($w.environment // {}).PRODPLAN_URL == "http://127.0.0.1:7443")
+             and ((($w.environment // {}).INSIGHT_PRODPLAN_ENABLED // "") | tostring | test("^(true|false)$")))' \
+      <<< "$json" > /dev/null \
+    || err "[$label] insight-web: overlay prodplan wajib PRODPLAN_URL=http://127.0.0.1:7443 (sidecar loopback), PRODPLAN_ASSERT_KEY_FILE=/run/secrets/prodplan_assert_key, INSIGHT_PRODPLAN_ENABLED boolean (docs/04 §30.3)"
+  #      (c) network persis §30.1
+  jq -e '(.networks["prodplan-db"] // null) == null
+         or ([.services | to_entries[] | select((.value.networks // {}) | has("prodplan-db")) | .key] | sort)
+            == ["postgres", "prodplan"]' <<< "$json" > /dev/null \
+    || err "[$label] network prodplan-db wajib beranggota persis postgres + prodplan (pg_hba samenet, L-252)"
+  for spec in "insight-plan:insight-web,prodplan,prometheus" "egress-prodplan:prodplan"; do
+    jq -e --arg n "${spec%%:*}" --arg ok "${spec#*:}" '[.services | to_entries[] | select((.value.networks // {}) | has($n)) | .key]
+           - ($ok | split(",")) | length == 0' <<< "$json" > /dev/null \
+      || err "[$label] network ${spec%%:*} dipakai service selain ${spec#*:} (docs/04 §30.1)"
+  done
+  for spec in prodplan-db insight-plan; do
+    jq -e --arg n "$spec" '(.networks[$n] // null) as $x | $x == null or ($x.internal == true)' <<< "$json" > /dev/null \
+      || err "[$label] network ${spec} wajib internal: true (docs/04 §30.1)"
+  done
+  jq -e '(.networks["egress-prodplan"] // null) as $n | $n == null
+         or ((($n.driver_opts // {})["com.docker.network.bridge.enable_icc"] // "" | tostring) == "false")' \
+      <<< "$json" > /dev/null \
+    || err "[$label] network egress-prodplan wajib driver_opts com.docker.network.bridge.enable_icc=\"false\" (pola SEC-183)"
+  #      (d) hardening + tujuan prodplan
+  jq -e '(.services.prodplan // null) as $w | $w == null
+         or (((($w.networks // {}) | keys | sort) == ["egress-prodplan", "insight-plan", "prodplan-db"])
+             and ($w.read_only == true)
+             and ((($w.cap_drop // []) | index("ALL")) != null)
+             and ((($w.cap_add // []) | length) == 0)
+             and ((($w.ports // []) | length) == 0)
+             and (($w.profiles // []) == ["data"])
+             and ((($w.user // "") | tostring) | test("^[1-9][0-9]*(:[0-9]+)?$"))
+             and ((($w.labels // {}) | keys | map(select(startswith("traefik."))) | length) == 0)
+             and ((($w.environment // {}).PG_SSLMODE // "") == "verify-full")
+             and ((($w.environment // {}).PRODPLAN_ESB_BASE_URL // "")
+                  | IN("https://services.esb.co.id/core", "https://stg7.esb.co.id/core-stg"))
+             and ((($w.environment // {}).PRODPLAN_ENABLED // "") | tostring | test("^(true|false)$"))
+             and ((($w.environment // {}).PRODPLAN_WRITE_ENABLED // "") | tostring | test("^(true|false)$")))' \
+      <<< "$json" > /dev/null \
+    || err "[$label] prodplan: wajib hanya network prodplan-db+insight-plan+egress-prodplan, read_only, cap_drop ALL tanpa cap_add, tanpa port/Traefik, profil data, user non-root uid, PG_SSLMODE verify-full, PRODPLAN_ESB_BASE_URL salah satu dari dua URL ESB, flag boolean (docs/04 §30.1/§30.3)"
+  #      (e) sidecar: namespace benar, CN/listen/target persis (tanpa --disable-authentication sudah dicek langkah 3)
+  jq -e '(.services["prodplan-tls"] // null) as $t | $t == null
+         or (($t.network_mode == "service:prodplan")
+             and (([$t.command[]? | select(startswith("--allow-cn=")) | ltrimstr("--allow-cn=")] | sort) == ["insight-web-pp", "prometheus"])
+             and ([$t.command[]? | select(startswith("--allow-uri=") or startswith("--allow-all") or startswith("--allow-ou=") or startswith("--allow-dns="))] | length == 0)
+             and ([$t.command[]? | select(. == "--listen=0.0.0.0:8443")] | length == 1)
+             and ([$t.command[]? | select(. == "--target=127.0.0.1:8080")] | length == 1))' <<< "$json" > /dev/null \
+    || err "[$label] prodplan-tls: wajib network_mode service:prodplan, --allow-cn persis insight-web-pp + prometheus, listen 0.0.0.0:8443 -> 127.0.0.1:8080 (docs/04 §30.1)"
+  jq -e '(.services["insight-web-pp-tls"] // null) as $t | $t == null
+         or (($t.network_mode == "service:insight-web")
+             and (([$t.command[]? | select(startswith("--verify-cn=")) | ltrimstr("--verify-cn=")]) == ["prodplan"])
+             and ([$t.command[]? | select(. == "--listen=127.0.0.1:7443")] | length == 1)
+             and ([$t.command[]? | select(. == "--target=prodplan:8443")] | length == 1)
+             and ([$t.command[]? | select(. == "--override-server-name=prodplan")] | length == 1))' <<< "$json" > /dev/null \
+    || err "[$label] insight-web-pp-tls: wajib network_mode service:insight-web, --verify-cn=prodplan, listen 127.0.0.1:7443 -> prodplan:8443, --override-server-name=prodplan (docs/04 §30.1)"
   # 6a) G21 (docs/04 §13.1 no. 3, L-61): kunci tanda tangan kebijakan poin WAJIB di-mount ke odoo (penanda tangan) DAN
   #     api-gateway (pemverifikasi) dengan env *_FILE yang cocok; di luar keduanya sudah ditolak loop di atas.
   local lp
@@ -882,6 +995,27 @@ check_compose() {
     done
   fi
 
+  # 11) G66 (docs/04 §30.3/§30.15): kill switch prodplan default MATI di render prod + overlay (aktivasi lewat .env/config)
+  if [[ "$label" == prod-prodplan || "$label" == prod-stack ]]; then
+    jq -e '.services.prodplan != null and .services["prodplan-tls"] != null and .services["insight-web-pp-tls"] != null' \
+        <<< "$json" > /dev/null \
+      || err "[$label] prodplan/prodplan-tls/insight-web-pp-tls tidak ter-render (overlay docker-compose.prodplan.yml / profil data)"
+    for ks in prodplan:PRODPLAN_ENABLED prodplan:PRODPLAN_WRITE_ENABLED insight-web:INSIGHT_PRODPLAN_ENABLED; do
+      jq -e --arg s "${ks%%:*}" --arg k "${ks#*:}" '(.services[$s].environment[$k] // "") == "false"' <<< "$json" > /dev/null \
+        || err "[$label] ${ks%%:*}: ${ks#*:} harus diteruskan dengan default false di render prod (docs/04 §30.3)"
+    done
+    # SEC-180: pola esb-extract (CI = render dari isi repo -> wajib kosong; lokal hanya info)
+    if ! jq -e '[(.services.prodplan.environment // {}) | to_entries[]
+                 | select(.key | test("^PRODPLAN_ESB_USER_")) | select(((.value // "") | tostring) != "")] | length == 0' \
+         <<< "$json" > /dev/null; then
+      if [[ -n "${CI:-}" ]]; then
+        err "[$label] prodplan: PRODPLAN_ESB_USER_* ter-render berisi nilai dari file repo (SEC-180: username ESB hanya di .env lokal/config rilis)"
+      else
+        echo "check-encryption: [$label] info: PRODPLAN_ESB_USER_* berisi nilai (dari .env lokal; pastikan tidak ada di file repo)"
+      fi
+    fi
+  fi
+
   check_stack_identity "$label" "$json"
   echo "check-encryption: compose ${label} diperiksa"
 }
@@ -928,9 +1062,12 @@ check_stack_identity() {
   [[ -z "$bad" ]] \
     || err "[$label] router Traefik tanpa traefik.enable=true + traefik.docker.network=${stack}_<network bersama Traefik>: ${bad//$'\n'/ }"
 
-  # (d) pg_hba `samenet` = subnet interface postgres -> postgres HANYA di network data (least privilege)
-  jq -e '(.services.postgres == null) or (((.services.postgres.networks // {}) | keys) == ["data"])' <<< "$json" > /dev/null \
-    || err "[$label] postgres wajib hanya di network data (pg_hba.conf memakai samenet)"
+  # (d) pg_hba `samenet` = subnet interface postgres -> postgres HANYA di network data (least privilege).
+  #     Pengecualian tunggal G66 (docs/04 §30.1, L-252): data + prodplan-db, dan anggota prodplan-db persis
+  #     {postgres, prodplan} (dicek 6b7) -> perluasan samenet hanya menjangkau container prodplan.
+  jq -e '(.services.postgres == null)
+         or (((.services.postgres.networks // {}) | keys | sort) | IN(["data"], ["data", "prodplan-db"]))' <<< "$json" > /dev/null \
+    || err "[$label] postgres wajib hanya di network data (+ prodplan-db overlay G66) (pg_hba.conf memakai samenet)"
 
   # (e) alias scrape Prometheus hanya di network internal service pemiliknya
   local spec svc alias
@@ -1095,7 +1232,7 @@ check_stack_files() {
   grep -qE '^[[:space:]]+network:[[:space:]]*"@EFN_STACK@_internal"[[:space:]]*$' "$tf" \
     || err "infra/traefik/traefik.yml: providers.docker.network wajib \"@EFN_STACK@_internal\" (K25-06)"
   local body
-  local net_re='efn_(internal|edge|data|egress|cache|socket-proxy|objstore|insight-[a-z]+|login-ingress|esb|egress-esb|forecast-[a-z]+|segment-[a-z]+|rmq|wa-[a-z]+|mail)([^a-z_-]|$)'
+  local net_re='efn_(internal|edge|data|egress|cache|socket-proxy|objstore|insight-[a-z]+|login-ingress|esb|egress-esb|forecast-[a-z]+|segment-[a-z]+|rmq|wa-[a-z]+|mail|prodplan-db|egress-prodplan)([^a-z_-]|$)'
   body="$(grep -vE "$COMMENT_RE" "$tf" || true)"
   if grep -qE "$net_re" <<< "$body"; then
     err "infra/traefik/traefik.yml: nama network tetap efn_* (pakai @EFN_STACK@_<network>)"
@@ -1112,6 +1249,9 @@ check_stack_files() {
   fi
   grep -qE '^hostssl[[:space:]]+[^[:space:]]+[[:space:]]+efn_odoo[[:space:]]+samenet[[:space:]]+scram-sha-256' "$hba" \
     || err "infra/postgres/pg_hba.conf: baris efn_odoo wajib hostssl ... samenet scram-sha-256"
+  # G66 (docs/04 §30.1): role efn_prodplan hanya ke DB efn_prodplan, TLS + SCRAM (sebelum baris reject)
+  grep -qE '^hostssl[[:space:]]+efn_prodplan[[:space:]]+efn_prodplan[[:space:]]+samenet[[:space:]]+scram-sha-256[[:space:]]*$' "$hba" \
+    || err "infra/postgres/pg_hba.conf: baris G66 wajib persis 'hostssl efn_prodplan efn_prodplan samenet scram-sha-256'"
   # SEC-G50-06 + K25-06: relay admin WA bind HANYA "${WA_RELAY_BIND_IP}:8443" (IP wa-ingress dari compose) + loopback
   # health; env tidak ada/kosong = .alert (start gagal), bukan bind semua interface.
   local rc="${ROOT_DIR}/infra/wa-egress/admin-relay.cfg" binds
@@ -1139,10 +1279,11 @@ check_esb_users() {
   for f in "$COMPOSE_DIR"/docker-compose*.yml "$COMPOSE_DIR/.env.example"; do
     [[ -f "$f" ]] && files+=("$f")
   done
+  # G66: PRODPLAN_ESB_USER_<BRAND> (prodplan, docs/04 §30.3) diperlakukan sama.
   for f in "${files[@]}"; do
     while IFS= read -r line; do
-      [[ "$line" =~ ^[0-9]+:[[:space:]]*-?[[:space:]]*(ESB_USER_[A-Za-z0-9_]+)[:=](.*)$ ]] || continue
-      key="${BASH_REMATCH[1]}"; val="${BASH_REMATCH[2]}"
+      [[ "$line" =~ ^[0-9]+:[[:space:]]*-?[[:space:]]*((PRODPLAN_)?ESB_USER_[A-Za-z0-9_]+)[:=](.*)$ ]] || continue
+      key="${BASH_REMATCH[1]}"; val="${BASH_REMATCH[3]}"
       val="${val%%[[:space:]]#*}"                       # buang komentar akhir baris
       val="${val#"${val%%[![:space:]]*}"}"              # trim kiri
       val="${val%"${val##*[![:space:]]}"}"              # trim kanan
@@ -1154,7 +1295,7 @@ check_esb_users() {
         [[ -z "$val" || "$val" == "$expect" ]] \
           || err "${f#"${ROOT_DIR}"/}: ${key} di-hardcode; wajib ${expect} (SEC-180, username ESB hanya di .env lokal)"
       fi
-    done < <(grep -nE '^[[:space:]]*-?[[:space:]]*ESB_USER_[A-Za-z0-9_]+[:=]' "$f" || true)
+    done < <(grep -nE '^[[:space:]]*-?[[:space:]]*(PRODPLAN_)?ESB_USER_[A-Za-z0-9_]+[:=]' "$f" || true)
   done
 
   # Pola disusun dari potongan agar file ini sendiri tidak cocok.
@@ -1208,16 +1349,20 @@ case "$MODE" in
       --profile migrate
     check_compose prod-migration -f docker-compose.yml -f docker-compose.prod.yml -f docker-compose.esb.yml \
       -f docker-compose.migration.yml --profile migrate
+    # G66 (docs/04 §30.15): overlay prodplan (postgres + network prodplan-db, insight-web + sidecar klien, egress ESB)
+    check_compose dev-prodplan -f docker-compose.yml -f docker-compose.dev.yml -f docker-compose.prodplan.yml
+    check_compose prod-prodplan -f docker-compose.yml -f docker-compose.prod.yml -f docker-compose.prodplan.yml
     # K25-06 (docs/runbooks/multi-env-local.md): stack bernama lain + subnet lain (gladi prod lokal di host yang rentang
     # 172.16-31-nya dipakai project lain) wajib lolos SEMUA aturan di atas + identitas stack. Overlay esb, forecast,
-    # segment, wa-unofficial (+ mail di dev) ikut agar semua network (oktet 0..21) ter-render.
+    # segment, wa-unofficial, prodplan (+ mail di dev) ikut agar semua network (oktet 0..25) ter-render.
     CC_STACK=efn-prod CC_BASE=10.250
     check_compose prod-stack -f docker-compose.yml -f docker-compose.prod.yml -f docker-compose.local-edge.yml \
       -f docker-compose.esb.yml -f docker-compose.forecast.yml -f docker-compose.segment.yml \
-      -f docker-compose.wa-unofficial.yml --profile wa-unofficial
+      -f docker-compose.wa-unofficial.yml -f docker-compose.prodplan.yml --profile wa-unofficial
     CC_STACK=efn-dev CC_BASE=10.252
     check_compose dev-stack -f docker-compose.yml -f docker-compose.dev.yml -f docker-compose.forecast.yml \
-      -f docker-compose.segment.yml -f docker-compose.wa-unofficial.yml --profile wa-unofficial
+      -f docker-compose.segment.yml -f docker-compose.wa-unofficial.yml -f docker-compose.prodplan.yml \
+      --profile wa-unofficial
     CC_STACK="" CC_BASE=""
     check_files
     ;;

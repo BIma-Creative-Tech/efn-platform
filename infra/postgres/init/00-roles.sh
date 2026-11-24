@@ -16,8 +16,9 @@
 efn_roles_main() {
   local secrets_dir="${EFN_SECRETS_DIR:-/run/secrets}"
   local su="${POSTGRES_USER:-postgres}"
-  local role secret pw attrs
-  # role:secret:atribut
+  local role secret pw attrs entry optional
+  # [?]role:secret:atribut. Awalan `?` = role OPSIONAL milik overlay: secret-nya hanya di-mount ke postgres oleh overlay
+  # itu, jadi tanpa overlay role dilewati (bukan gagal). Role wajib tanpa secret tetap gagal (fail-closed).
   local -a roles=(
     "efn_odoo:pg_password_odoo:LOGIN CREATEDB NOSUPERUSER NOCREATEROLE NOREPLICATION"
     "efn_bff:pg_password_bff:LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION"
@@ -25,13 +26,21 @@ efn_roles_main() {
     "efn_etl:pg_password_etl:LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION"
     "efn_metabase:pg_password_metabase:LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION"
     "efn_exporter:pg_password_exporter:LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION"
+    # G66 (docs/04 §30.2): overlay docker-compose.prodplan.yml. DB/skema/grant di 23-prodplan-g66.sql.
+    "?efn_prodplan:pg_password_prodplan:LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION"
   )
 
   for entry in "${roles[@]}"; do
+    optional=0
+    if [[ "$entry" == \?* ]]; then optional=1; entry="${entry#\?}"; fi
     role="${entry%%:*}"
     secret="${entry#*:}"; secret="${secret%%:*}"
     attrs="${entry##*:}"
     if [[ ! -r "${secrets_dir}/${secret}" ]]; then
+      if (( optional )); then
+        echo "00-roles: lewati role opsional ${role} (secret ${secret} tidak di-mount; overlay-nya tidak dipakai)"
+        continue
+      fi
       echo "00-roles: secret ${secrets_dir}/${secret} tidak terbaca (role ${role})" >&2
       return 1
     fi
@@ -72,7 +81,7 @@ SELECT 'GRANT efn_readonly TO efn_etl'
 SELECT 'ALTER DATABASE metabase OWNER TO efn_metabase'
  WHERE EXISTS (SELECT 1 FROM pg_database WHERE datname = 'metabase') \gexec
 SQL
-  echo "00-roles: role per service siap (efn_odoo, efn_bff, efn_ocr, efn_etl, efn_metabase, efn_exporter)"
+  echo "00-roles: role per service siap (efn_odoo, efn_bff, efn_ocr, efn_etl, efn_metabase, efn_exporter; opsional: lihat log di atas)"
 }
 
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then

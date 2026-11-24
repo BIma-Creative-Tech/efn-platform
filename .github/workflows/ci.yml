@@ -62,7 +62,7 @@ jobs:
       waunofficial: ${{ github.event_name == 'push' && 'true' || steps.filter.outputs['wa-unofficial'] }}
       odoo: ${{ github.event_name == 'push' && 'true' || steps.filter.outputs.odoo }}
       python: ${{ github.event_name == 'push' && 'true' || steps.filter.outputs.python }}
-      pyservices: ${{ github.event_name == 'push' && '["ai-ocr-worker","etl","text2sql","esb-extract","esb-migrate","forecast-worker","segment-worker"]' || steps.filter.outputs.changes }}
+      pyservices: ${{ github.event_name == 'push' && '["ai-ocr-worker","etl","text2sql","esb-extract","esb-migrate","forecast-worker","segment-worker","prodplan"]' || steps.filter.outputs.changes }}
       infra: ${{ github.event_name == 'push' && 'true' || steps.filter.outputs.infra }}
     steps:
       # Tanpa checkout: pada pull_request paths-filter membaca daftar file lewat API (pull-requests: read); pada push
@@ -80,7 +80,7 @@ jobs:
             login-gateway: ['services/login-gateway/**', '.github/workflows/ci.yml']   # G62 halaman masuk staf (ADR-050)
             wa-unofficial: ['services/wa-unofficial/**', '.github/workflows/ci.yml']   # G50 WA tidak resmi (ADR-044)
             odoo:   ['services/odoo/**', 'scripts/check-odoo-deps.sh', '.github/workflows/ci.yml']
-            python: ['services/ai-ocr-worker/**', 'services/etl/**', 'services/text2sql/**', 'services/esb-extract/**', 'infra/clickhouse/**', 'services/forecast-worker/**', 'scripts/migration/**', 'scripts/check-py-lock.sh', 'scripts/lock-python-deps.sh', 'services/segment-worker/**', 'services/odoo/addons/efn_campaign/**', 'services/api-gateway/src/behavior/dto/**', 'infra/postgres/init/20-platform-g50a.sql', '.github/workflows/ci.yml']
+            python: ['services/ai-ocr-worker/**', 'services/etl/**', 'services/text2sql/**', 'services/esb-extract/**', 'infra/clickhouse/**', 'services/forecast-worker/**', 'scripts/migration/**', 'scripts/check-py-lock.sh', 'scripts/lock-python-deps.sh', 'services/segment-worker/**', 'services/odoo/addons/efn_campaign/**', 'services/api-gateway/src/behavior/dto/**', 'infra/postgres/init/20-platform-g50a.sql', 'services/prodplan/**', 'infra/postgres/init/23-prodplan-g66.sql', '.github/workflows/ci.yml']
             ai-ocr-worker: ['services/ai-ocr-worker/**', '.github/workflows/ci.yml']
             etl:           ['services/etl/**', 'services/api-gateway/src/behavior/dto/**', 'infra/postgres/init/20-platform-g50a.sql', '.github/workflows/ci.yml']
             text2sql:      ['services/text2sql/**', '.github/workflows/ci.yml']
@@ -88,6 +88,7 @@ jobs:
             segment-worker: ['services/segment-worker/**', 'services/odoo/addons/efn_campaign/**', '.github/workflows/ci.yml']     # G50 (docs/04 §28.7, ADR-047)
             esb-migrate:   ['scripts/migration/**', '.github/workflows/ci.yml']      # G43 (docs/04 §27.2)
             forecast-worker: ['services/forecast-worker/**', 'scripts/check-py-lock.sh', '.github/workflows/ci.yml']   # G44 (docs/04 §28.2, ADR-046); SEC-214 lock
+            prodplan:      ['services/prodplan/**', 'infra/postgres/init/23-prodplan-g66.sql', '.github/workflows/ci.yml']   # G66 (docs/04 §30, ADR-051)
             infra:  ['infra/**', 'services/**/Dockerfile', '.github/workflows/**', 'scripts/**', 'Makefile']
 
   node:
@@ -181,7 +182,7 @@ jobs:
         run: |
           dirs=""
           for d in services/ai-ocr-worker services/etl services/text2sql services/esb-extract services/forecast-worker \
-                   services/segment-worker scripts/migration \
+                   services/segment-worker services/prodplan scripts/migration \
                    services/odoo/addons; do
             [ -d "$d" ] && dirs="$dirs $d"
           done
@@ -197,6 +198,7 @@ jobs:
           for f in services/ai-ocr-worker/requirements.txt services/etl/requirements.txt \
                    services/text2sql/requirements.txt services/esb-extract/requirements.txt \
                    services/forecast-worker/requirements.txt services/segment-worker/requirements.txt \
+                   services/prodplan/requirements.txt \
                    services/odoo/requirements.txt \
                    scripts/migration/requirements.txt; do   # G43: cryptography (bundel AES-GCM) ikut gate pip-audit
             [ -f "$f" ] || continue
@@ -223,8 +225,10 @@ jobs:
         # esb-extract: G41 (docs/04 §25); esb-migrate: G43 mesin migrasi scripts/migration (docs/04 §27.2);
         # forecast-worker: G44 (docs/04 §28.2, data sintetis G48). Fixture sintetis saja (repo publik, tanpa data klien).
         # segment-worker: G50 (docs/04 §28.7, ADR-047), tanpa ClickHouse/BFF/Odoo (fake transport).
-        service: [ai-ocr-worker, etl, text2sql, esb-extract, esb-migrate, forecast-worker, segment-worker]
+        # prodplan: G66 (docs/04 §30.15 test wajib), ESB palsu + fixture sintetis (tanpa kredensial/data klien).
+        service: [ai-ocr-worker, etl, text2sql, esb-extract, esb-migrate, forecast-worker, segment-worker, prodplan]
         include:
+          - { service: prodplan, dir: services/prodplan }
           - { service: ai-ocr-worker, dir: services/ai-ocr-worker }
           - { service: etl, dir: services/etl }
           - { service: text2sql, dir: services/text2sql }
@@ -665,7 +669,7 @@ jobs:
           openssl x509 -in secrets/tls_clickhouse_crt.txt -noout -ext subjectAltName | grep -q 'IP Address:127.0.0.1'
           # Klien mTLS (docs/04 §8.5) punya clientAuth; server murni TIDAK
           for s in traefik prometheus grafana promtail ocr_worker blackbox_exporter cadvisor etl metabase_provision \
-                   api_gateway odoo_rpc_gateway forecast_worker segment_worker wa_operator; do
+                   api_gateway odoo_rpc_gateway forecast_worker segment_worker wa_operator insight_web_pp; do
             openssl x509 -in "secrets/tls_${s}_crt.txt" -noout -ext extendedKeyUsage | grep -q 'Client Authentication'
           done
           if openssl x509 -in secrets/tls_postgres_crt.txt -noout -ext extendedKeyUsage | grep -q 'Client Authentication'; then
@@ -739,6 +743,23 @@ jobs:
             docker compose -f docker-compose.yml -f "docker-compose.${env}.yml" -f docker-compose.esb.yml \
               -f docker-compose.forecast.yml -f docker-compose.segment.yml -f docker-compose.wa-unofficial.yml "${P[@]}" config -q
           done
+      # G66 (docs/04 §30.1): overlay prodplan (postgres + prometheus + insight-web ikut network baru) sendiri dan bersama
+      # semua overlay lain yang menambah network ke prometheus/postgres; prod: tetap hanya Traefik yang mem-publish port.
+      - name: docker compose config (dev + prod, overlay prodplan)
+        working-directory: infra/compose
+        run: |
+          set -euo pipefail
+          P=(--profile core --profile data --profile ai --profile observability --profile ops --profile wa-unofficial)
+          for env in dev prod; do
+            docker compose -f docker-compose.yml -f "docker-compose.${env}.yml" -f docker-compose.prodplan.yml "${P[@]}" config -q
+            docker compose -f docker-compose.yml -f "docker-compose.${env}.yml" -f docker-compose.esb.yml \
+              -f docker-compose.forecast.yml -f docker-compose.segment.yml -f docker-compose.wa-unofficial.yml \
+              -f docker-compose.prodplan.yml "${P[@]}" config -q
+          done
+          published=$(docker compose -f docker-compose.yml -f docker-compose.prod.yml -f docker-compose.prodplan.yml \
+            "${P[@]}" config --format json \
+            | jq -r '.services | to_entries[] | select(.value.ports != null and (.value.ports | length) > 0) | .key')
+          [ "$published" = "traefik" ] || { echo "::error::overlay prodplan: port publish selain traefik: $published"; exit 1; }
       - name: Prod hanya mem-publish port Traefik
         working-directory: infra/compose
         run: |
@@ -763,10 +784,12 @@ jobs:
           # G44: odoo_api_key_forecast_* + tls_forecast_worker_* hanya di overlay docker-compose.forecast.yml -> ikut juga.
           # G50: odoo_api_key_segment_smd + tls_segment_worker_* (overlay segment) dan wa_unofficial_* +
           # rabbitmq_password_wa_unofficial + tls_wa_unofficial_* (overlay wa-unofficial, profil wa-unofficial) -> ikut juga.
+          # G66: pg_password_prodplan, prodplan_assert_key, esb_prodplan_password_pb, tls_prodplan_*, tls_insight_web_pp_*
+          # hanya di overlay docker-compose.prodplan.yml -> ikut juga.
           cfg=$(docker compose -f docker-compose.yml -f docker-compose.prod.yml -f docker-compose.payment.yml \
             -f docker-compose.pii.yml -f docker-compose.llm.yml -f docker-compose.llm-text2sql.yml \
             -f docker-compose.esb.yml -f docker-compose.migration.yml -f docker-compose.forecast.yml \
-            -f docker-compose.segment.yml -f docker-compose.wa-unofficial.yml \
+            -f docker-compose.segment.yml -f docker-compose.wa-unofficial.yml -f docker-compose.prodplan.yml \
             "${overlays[@]}" \
             --profile core --profile data --profile ai --profile observability --profile ops --profile migrate \
             --profile wa-unofficial \

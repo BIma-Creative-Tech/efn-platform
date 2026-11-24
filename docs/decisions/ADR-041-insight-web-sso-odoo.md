@@ -248,6 +248,14 @@ menerbitkan `store` (SEC-G47-01) dan persona berlaku untuk semua PT user (Q-INS-
 "perkiraan"). **Pertanyaan terbuka.** Q-INS-F1..Q-INS-F4. **Ditinjau ulang** saat brand F&B cutover ke POS Odoo (cabang
 → `stock.warehouse`) atau bila persona perlu berbeda per PT.
 
+### 3.7 Amandemen terbatas 24 Nov 2026 — halaman Production Order (G66, ADR-051, Proposed)
+Butir §3 nomor 1 ("read-only") dipersempit: insight-web tetap **tanpa akses tulis ke database atau ESB mana pun**, tetapi
+halaman `/produksi` meneruskan aksi pengguna (buat rencana, setujui transfer, posting) ke API internal `prodplan` dari sisi
+server, lewat mTLS (sidecar client `insight-web-pp-tls`, network `insight-plan`) dan asersi aktor HMAC `ppa1` per request
+(kunci `prodplan_assert_key`, beda dari kunci SSO/sesi/scope). Peran `pp_planner`/`pp_warehouse` ditambahkan ke `roles`
+token `eit3`/sesi `eis3` (bukan persona; tanda tangan ClickHouse tidak berubah; aturan T9). Rinci di ADR-051 dan
+`docs/04` §30.7.
+
 ## 4. Konsekuensi
 
 ### 4.1 Positif

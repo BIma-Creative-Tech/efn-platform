@@ -9,7 +9,9 @@
     # pre-migrate rename ir_model_data.module); model efn.insight.esb.branch + res.users.efn_insight_esb_branch_ids;
     # token eit3 (+ brs, T1-T8) default; kepala toko F&B store-only hanya cabangnya (pencabutan PT penuh tanpa flag);
     # INSIGHT_FNB_PERSONA_ENABLED; info no_branch. Upgrade wajib `-u efn_insight,efn_insight_sm` satu perintah.
-    "version": "19.0.3.0.0",
+    # 19.0.3.1.0 (G66, docs/04 §30.7, ADR-051 Proposed): grup group_prodplan_planner/_warehouse -> peran
+    # pp_planner/pp_warehouse di roles eit3 (bukan persona) + aturan T9; tanpa format token baru.
+    "version": "19.0.3.1.0",
     "category": "EFN",
     "author": "Era Food and Nourishment",
     # LGPL-3. Tanpa dependency modul pihak ketiga (ADR-031). `web` ikut lewat efn_core -> base_setup.

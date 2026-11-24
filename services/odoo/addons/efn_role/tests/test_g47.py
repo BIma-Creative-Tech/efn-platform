@@ -13,6 +13,9 @@ SM_SENSITIVE = (
     "efn_insight.group_insight_dc",
     "efn_insight.group_insight_marketing",
     "efn_insight_sm.group_insight_kpi_admin",
+    # SEC-228 (G66): peran production planning (bisa memicu dokumen ke ESB) -> penetapan manual.
+    "efn_insight.group_prodplan_planner",
+    "efn_insight.group_prodplan_warehouse",
 )
 
 
