@@ -31,7 +31,7 @@ export type ParamName =
   | 'yoy_to'
   | 'm_from'
   | 'ref_day'
-  // G67 (§31.9): akhir rentang bulan P&L (tanggal 1), kelas pemakaian item jurnal, pemasok fill rate (`brand:branch_id`)
+  // G68 (§32.9): akhir rentang bulan P&L (tanggal 1), kelas pemakaian item jurnal, pemasok fill rate (`brand:branch_id`)
   | 'm_to'
   | 'uclass'
   | 'supplier'
@@ -112,9 +112,9 @@ const YOY_DONE_PAIRS = `SELECT brand, branch_id, day FROM efn_insight.v_esb_sale
         AND (brand, branch_id, day - 364) IN (SELECT brand, branch_id, day FROM efn_insight.v_esb_sales_done_day WHERE ${PT} AND day BETWEEN {yoy_from:Date} AND {yoy_to:Date})`;
 const YOY_PAIR = `((brand, branch_id, if(sales_date >= {from:Date}, sales_date, sales_date + 364)) IN (${YOY_DONE_PAIRS}))`;
 
-// ---------- G67 (docs/04 §31.6/§31.10): Laba Rugi Outlet, Waste & Pemakaian Internal, Fill Rate Outlet -> CK ----------
+// ---------- G68 (docs/04 §32.6/§32.10): Laba Rugi Outlet, Waste & Pemakaian Internal, Fill Rate Outlet -> CK ----------
 // P&L: baris `summary` ESB diberi kunci tetap lewat nama pos (dinormalkan: huruf kecil, hanya a-z0-9). Daftar sinonim = konstanta
-// (nama pos summary ESB belum terverifikasi [B], §31.13); pos yang tak dikenal tetap tampil di pnl_statement dengan nama aslinya.
+// (nama pos summary ESB belum terverifikasi [B], §32.13); pos yang tak dikenal tetap tampil di pnl_statement dengan nama aslinya.
 // Daftar sinonim satu sumber di lib/pnl.ts (PL_SYNONYMS), dipakai juga TS untuk urutan/label.
 const PL_KEY = plKeySql();
 const PL_CUR = 'period_month BETWEEN {m_from:Date} AND {m_to:Date}';
@@ -1123,7 +1123,7 @@ ORDER BY gross_paid_cur + pkg_gross_cur DESC
 LIMIT 3000`,
   },
 
-  // ---------- G67: /pnl (view kelas PT; basis = angka laporan ESB; scope 'branch' = per cabang, 'brand' = total brand) ----------
+  // ---------- G68: /pnl (view kelas PT; basis = angka laporan ESB; scope 'branch' = per cabang, 'brand' = total brand) ----------
   pnl_kpi: {
     params: ['m_from', 'm_to', 'yoy_from', 'yoy_to', 'pt', 'branch'],
     sql: `SELECT
@@ -1208,7 +1208,7 @@ LIMIT 50 BY section
 LIMIT 600`,
   },
 
-  // ---------- G67: /waste (view kelas PT; nilai = HPP jurnal item; qty per satuan, tidak dijumlah lintas satuan) ----------
+  // ---------- G68: /waste (view kelas PT; nilai = HPP jurnal item; qty per satuan, tidak dijumlah lintas satuan) ----------
   waste_kpi: {
     // Waste dan pemakaian internal selalu dua KPI tetap (filter `uclass` hanya untuk tren, rincian, dan produk).
     params: ['from', 'to', 'prev_from', 'prev_to', 'pt', 'branch'],
@@ -1297,7 +1297,7 @@ ORDER BY value_sum DESC
 LIMIT 50`,
   },
 
-  // ---------- G67: /fill-rate (view kelas PT; kohort tanggal permintaan; hanya baris matang & dihitung, §31.6.1) ----------
+  // ---------- G68: /fill-rate (view kelas PT; kohort tanggal permintaan; hanya baris matang & dihitung, §32.6.1) ----------
   fr_kpi: {
     params: ['from', 'to', 'prev_from', 'prev_to', 'pt', 'branch', 'supplier'],
     sql: `SELECT
@@ -1394,6 +1394,36 @@ WHERE month BETWEEN toStartOfMonth({from:Date}) AND {to:Date}
 GROUP BY brand, product_code, uom
 ORDER BY short_qty DESC
 LIMIT 50`,
+  },
+
+  // ---------- Margin bahan (/margin-bahan, G67, docs/04 §31; init/24-margin-bahan.sql) ----------
+  // Wrapper `efn_insight.v_esb_*_monthly` = kolom mart tanpa _version, versi terakhir per brand, row policy kelas PT.
+  // Hanya parameter `pt` (jendela bulan ditentukan job refresh, bukan filter tanggal halaman).
+  mb_group_monthly: {
+    params: ['pt'],
+    // Tanpa alias bernama sama dengan kolom (alias siklik di ClickHouse); Date keluar sebagai 'YYYY-MM-DD', angka dikonversi di halaman.
+    sql: `SELECT brand, company_code, month, ing_group, basket_value, base_value
+FROM efn_insight.v_esb_ing_group_monthly
+WHERE ${PT}
+ORDER BY month, ing_group
+LIMIT 5000`,
+  },
+  mb_price_monthly: {
+    // Kolom dipangkas ke yang dipakai halaman (tanpa receipt_qty/value/price/price_4m) agar muatan kecil.
+    params: ['pt'],
+    sql: `SELECT brand, company_code, month, product_code, product_name, ing_group, uom, idx, usage_value
+FROM efn_insight.v_esb_ing_price_monthly
+WHERE ${PT}
+ORDER BY brand, product_code, month
+LIMIT 40000`,
+  },
+  mb_menu_monthly: {
+    params: ['pt'],
+    sql: `SELECT brand, company_code, month, menu_name, menu_category, qty, net, cogs, bom_matched, cost_idx, leaf_coverage
+FROM efn_insight.v_esb_menu_cost_monthly
+WHERE ${PT}
+ORDER BY brand, menu_name, month
+LIMIT 30000`,
   },
 } as const satisfies Record<string, QueryDef>;
 

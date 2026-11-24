@@ -18,7 +18,7 @@ export default async function SmLayout({ children }: { children: React.ReactNode
   return (
     <Shell
       session={session}
-      groups={navGroups(session, cfg.smEnabled, cfg.fnbEnabled, cfg.ppEnabled, cfg.g67Enabled)}
+      groups={navGroups(session, cfg.smEnabled, cfg.fnbEnabled, cfg.ppEnabled, cfg.g68Enabled)}
       odooUrl={odooHomeUrl(cfg)}
       roleLabel={roleLabel}
       footNote="Data: mart supermarket (ETL tiap 15 menit)"

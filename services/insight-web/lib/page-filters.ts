@@ -15,11 +15,13 @@ export const PAGE_FILTERS: Record<string, readonly FilterKey[]> = {
   '/data-quality': ['pt'],
   '/forecast': [],
   '/glosarium': [],
+  // G67 (§31.5): hanya Brand / PT; jendela bulan ditentukan job refresh, bukan filter tanggal.
+  '/margin-bahan': ['pt'],
   // G52 (§28.15.9): Eksekutif dan Marketing F&B memakai filter global; Toko memegang hari dan cabang sendiri di halamannya.
   '/fnb/exec': ['date', 'pt', 'branch'],
   '/fnb/marketing': ['date', 'pt', 'branch'],
   '/fnb/store': [],
-  // G67 (§31.9): /pnl memakai bulan (mfrom/mto di halaman), jadi tanpa rentang tanggal global; /waste dan /fill-rate memakai tanggal.
+  // G68 (§32.9): /pnl memakai bulan (mfrom/mto di halaman), jadi tanpa rentang tanggal global; /waste dan /fill-rate memakai tanggal.
   '/pnl': ['pt', 'branch'],
   '/waste': ['date', 'pt', 'branch'],
   '/fill-rate': ['date', 'pt', 'branch'],
@@ -36,12 +38,13 @@ export const SMD_ONLY_FILTERS: Record<string, readonly FilterKey[]> = {
 export const DATE_NA_REASON: Record<string, string> = {
   '/data-quality': 'halaman ini menampilkan status terkini (kesegaran dan temuan terakhir), bukan angka per periode.',
   '/forecast': 'forecast memakai 8 minggu terakhir untuk evaluasi dan 14 hari ke depan untuk prediksi.',
+  '/margin-bahan': 'halaman ini memakai jendela bulanan tetap dari penyegaran mingguan (bukan rentang tanggal).',
   '/store': 'halaman ini memakai minggu berjalan (Senin s.d. hari ini) dibanding minggu lalu.',
   '/fnb/store': 'halaman ini memakai satu hari (pilih di halaman) dibanding hari yang sama minggu lalu.',
   '/pnl': 'laporan laba rugi per bulan; pilih bulan awal dan akhir di halaman.',
 };
 
-/** Halaman ESB-saja di luar `/fnb/` (G67): SMD tidak boleh ditawarkan di toolbar; server menolak `pt=SMD`. */
+/** Halaman ESB-saja di luar `/fnb/` (G68): SMD tidak boleh ditawarkan di toolbar; server menolak `pt=SMD`. */
 const ESB_ONLY_PATHS: readonly string[] = ['/pnl', '/waste', '/fill-rate'];
 
 /**
@@ -49,7 +52,9 @@ const ESB_ONLY_PATHS: readonly string[] = ['/pnl', '/waste', '/fill-rate'];
  * server (`fnbRangePage`) memang menolak `pt=SMD` ("filter tidak valid"). Mengembalikan kode yang boleh dipilih di toolbar.
  */
 export function selectableCodes(pathname: string, sessionCodes: readonly string[]): string[] {
-  return pathname.startsWith('/fnb/') || ESB_ONLY_PATHS.includes(pathname) ? sessionCodes.filter((c) => c !== 'SMD') : [...sessionCodes];
+  return pathname.startsWith('/fnb/') || pathname === '/margin-bahan' || ESB_ONLY_PATHS.includes(pathname)
+    ? sessionCodes.filter((c) => c !== 'SMD')
+    : [...sessionCodes];
 }
 
 export function appliesTo(pathname: string, key: FilterKey, smdAllowed = false): boolean {

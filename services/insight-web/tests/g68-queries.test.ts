@@ -1,6 +1,6 @@
 /**
- * Katalog query G67 (docs/04 §31.10): 15 query bernama (`pnl_*`, `waste_*`, `fr_*`), pemeriksaan statis (parameter terdeklarasi,
- * view yang dibaca = §31.6/§31.7, tanpa view internal, filter PT lapis 1). Tidak menjalankan ClickHouse: SQL belum dieksekusi
+ * Katalog query G68 (docs/04 §32.10): 15 query bernama (`pnl_*`, `waste_*`, `fr_*`), pemeriksaan statis (parameter terdeklarasi,
+ * view yang dibaca = §32.6/§32.7, tanpa view internal, filter PT lapis 1). Tidak menjalankan ClickHouse: SQL belum dieksekusi
  * terhadap ClickHouse 24.8 dan view baru dibangun paralel oleh paket W-A (lihat README dan laporan).
  */
 import { describe, expect, it } from 'vitest';
@@ -19,12 +19,12 @@ const PLACEHOLDER = /\{(\w+):([A-Za-z0-9()]+)\}/g;
 const sqlOf = (n: QueryName): string => QUERIES[n].sql;
 const viewsOf = (n: QueryName): string[] => Array.from(new Set(Array.from(sqlOf(n).matchAll(/FROM\s+([\w.]+)/g)).map((m) => m[1])));
 
-describe('katalog query G67', () => {
-  it('memuat tepat 16 query G67 (15 kontrak §31.10 + opsi pemasok)', () => {
+describe('katalog query G68', () => {
+  it('memuat tepat 16 query G68 (15 kontrak §32.10 + opsi pemasok)', () => {
     expect(ALL).toHaveLength(16);
     for (const n of ALL) expect(Object.keys(QUERIES), n).toContain(n);
-    const g67 = Object.keys(QUERIES).filter((n) => /^(pnl|waste|fr)_/.test(n));
-    expect(g67.sort()).toEqual([...ALL].sort());
+    const g68 = Object.keys(QUERIES).filter((n) => /^(pnl|waste|fr)_/.test(n));
+    expect(g68.sort()).toEqual([...ALL].sort());
   });
 
   it.each(ALL)('%s: placeholder = params terdeklarasi bertipe benar, filter PT lapis 1, tanpa interpolasi, LIMIT literal', (n) => {
@@ -46,7 +46,7 @@ describe('katalog query G67', () => {
     expect(PARAM_TYPES.supplier).toBe('Array(String)');
   });
 
-  it('hanya membaca view efn_insight yang dibungkus §31.7 (tanpa v_esb_fill_rate_line / v_esb_g67_quality / tabel dasar)', () => {
+  it('hanya membaca view efn_insight yang dibungkus §32.7 (tanpa v_esb_fill_rate_line / v_esb_g68_quality / tabel dasar)', () => {
     const ok = new Set([
       'efn_insight.v_esb_pl_monthly',
       'efn_insight.v_esb_item_usage_daily',
@@ -59,10 +59,10 @@ describe('katalog query G67', () => {
       expect(viewsOf(n).length, n).toBeGreaterThan(0);
       for (const v of viewsOf(n)) expect(ok.has(v), `${n}: ${v}`).toBe(true);
     }
-    for (const n of ALL) expect(sqlOf(n), n).not.toMatch(/v_esb_g67_quality|v_esb_fill_rate_line\b|fact_esb_|efn_dwh/);
+    for (const n of ALL) expect(sqlOf(n), n).not.toMatch(/v_esb_g68_quality|v_esb_fill_rate_line\b|fact_esb_|efn_dwh/);
   });
 
-  it('pemetaan query -> view sesuai §31.10', () => {
+  it('pemetaan query -> view sesuai §32.10', () => {
     for (const n of PNL) expect(viewsOf(n), n).toEqual(['efn_insight.v_esb_pl_monthly']);
     for (const n of ['waste_trend', 'waste_by_purpose'] as const) expect(viewsOf(n), n).toEqual(['efn_insight.v_esb_item_usage_daily']);
     expect(viewsOf('waste_kpi').sort()).toEqual(['efn_insight.v_esb_item_usage_daily', 'efn_insight.v_esb_sales_branch_daily']);
@@ -121,7 +121,7 @@ describe('katalog query G67', () => {
   });
 });
 
-describe('buildChSearchParams untuk query G67', () => {
+describe('buildChSearchParams untuk query G68', () => {
   const scope = scopeSettings([5], ['PB'], [], KEY);
   const base = { from: '2026-11-01', to: '2026-11-21', prev_from: '2026-10-11', prev_to: '2026-10-31', pt: ['PB'], branch: [] as string[] };
 

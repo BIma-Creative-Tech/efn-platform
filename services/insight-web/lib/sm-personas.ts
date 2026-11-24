@@ -4,8 +4,8 @@
  * halaman (lapis kedua), dan layout.
  */
 import { esbCodesOf, isPersona, personasOf, smCodesOf, type Persona } from './claims';
-import { FNB_NAV, fnbNavItems, isBranchScoped } from './fnb-personas';
-import { g67NavItems } from './g67-access';
+import { FNB_NAV, fnbExecOnlyNavItems, fnbNavItems, isBranchScoped } from './fnb-personas';
+import { g68NavItems } from './g68-access';
 import { ppNavItems } from './prodplan-access';
 import { FNB_ITEMS, NAV, SHARED_HREFS, SUMMARY_ITEMS, type NavItem } from './page-filters';
 
@@ -132,7 +132,7 @@ const SM_ORDER: readonly Persona[] = ['exec', 'store', 'dc', 'category', 'market
  *  - Food & Beverage: Penjualan, Pembayaran, Produksi vs Penjualan, Distribusi CK, Forecast, Kualitas Data ESB. Hanya bila ada
  *    kode ESB; sesi exec ber-SMD tanpa PT F&B hanya mendapat Distribusi (isinya bagian DC supermarket, docs/04 §28.14.1).
  *  - Supermarket: menu persona (∈ roles; hanya bila INSIGHT_SM_ENABLED) + Penjualan, Pembayaran, Forecast (hanya exec ber-SMD).
- * G67: Laba Rugi Outlet, Waste & Pemakaian Internal, Fill Rate Outlet ke CK masuk grup F&B (sebelum Forecast) bila `g67Enabled`.
+ * G68: Laba Rugi Outlet, Waste & Pemakaian Internal, Fill Rate Outlet ke CK masuk grup F&B (sebelum Forecast) bila `g68Enabled`.
  * Sesi exec ber-SMD + PT F&B: halaman bersama tampil di dua grup, dibedakan `scope` (tautan F&B tanpa SMD, tautan Supermarket
  * `pt=SMD`). Eksekutif/Toko/Marketing versi F&B menyusul (gelombang terpisah). Grup kosong disembunyikan.
  */
@@ -141,7 +141,7 @@ export function navGroups(
   smEnabled: boolean,
   fnbEnabled = false,
   ppEnabled = false,
-  g67Enabled = false,
+  g68Enabled = false,
 ): NavGroup[] {
   const esb = hasEsbAccess(s);
   // G52 (§28.15.9): sesi ber-cabang (kepala toko F&B) hanya melihat grup F&B berisi "Toko"; Ringkasan dan grup lain disembunyikan.
@@ -156,13 +156,13 @@ export function navGroups(
 
   if (esb) {
     // G52: item persona F&B (Eksekutif, Toko, Marketing) di urutan teratas grup F&B bila flag aktif dan sesi memilikinya.
-    const persona = fnbEnabled ? fnbNavItems(s) : [];
+    const persona = fnbEnabled ? [...fnbNavItems(s), ...fnbExecOnlyNavItems(s)] : [];
     const base = FNB_ITEMS.map((i): NavItem => (smd && SHARED_HREFS.includes(i.href) ? { ...i, scope: 'esb' } : i));
-    // G67 (§31.8): Laba Rugi (exec), Waste, Fill Rate disisipkan sebelum Forecast, hanya bila INSIGHT_G67_ENABLED aktif.
-    const g67 = g67Enabled ? g67NavItems({ v: s.v ?? 3, roles: s.roles, codes: s.codes, brs: s.brs }, { g67Enabled, fnbEnabled }) : [];
+    // G68 (§32.8): Laba Rugi (exec), Waste, Fill Rate disisipkan sebelum Forecast, hanya bila INSIGHT_G68_ENABLED aktif.
+    const g68 = g68Enabled ? g68NavItems({ v: s.v ?? 3, roles: s.roles, codes: s.codes, brs: s.brs }, { g68Enabled, fnbEnabled }) : [];
     const at = base.findIndex((i) => i.href === NAV.forecast.href);
-    const withG67 = g67.length === 0 || at < 0 ? base : [...base.slice(0, at), ...g67, ...base.slice(at)];
-    const items = [...persona, ...withG67];
+    const withG68 = g68.length === 0 || at < 0 ? base : [...base.slice(0, at), ...g68, ...base.slice(at)];
+    const items = [...persona, ...withG68];
     groups.push(smd ? { id: 'fnb', title: 'Food & Beverage', items, esbCodes: esbCodesOf(s.codes).sort() } : { id: 'fnb', title: 'Food & Beverage', items });
   } else if (smd) {
     groups.push({ id: 'fnb', title: 'Food & Beverage', items: [{ ...NAV.distribution, label: 'Distribusi CK / DC' }] });

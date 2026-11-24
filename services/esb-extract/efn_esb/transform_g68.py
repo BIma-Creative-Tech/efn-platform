@@ -1,10 +1,11 @@
-"""Transform murni G67 (docs/04 §31.1, §31.5; ADR-040 amandemen G67) -> baris DDL `24-g67-esb-pl-waste-fillrate.sql`.
+"""Transform murni G68 (docs/04 §32.1, §32.5; ADR-040 amandemen G68) -> baris DDL `25-g68-esb-pl-waste-fillrate.sql`.
 
 Tanpa I/O. Input sudah ter-whitelist (`normalize.PL_FIELDS`, `ITEM_JOURNAL_*`, `GTR_*`; detail goods-delivery = payload
-G41 ter-redaksi). Setiap baris berakhir dengan `_version`. `tests/test_g67.py` memastikan DDL memuat semua kolom
-`G67_TABLES`. Angka lewat `to_decimal` (Decimal(str(x)), bukan float); teks bukan angka -> ValueError (slice error).
+G41 ter-redaksi). Setiap baris berakhir dengan `_version`. `tests/test_g68.py` memastikan DDL memuat semua kolom
+`G68_TABLES`. Angka lewat `to_decimal` (Decimal(str(x)), bukan float); teks bukan angka -> ValueError (slice error).
+(Semula `transform_g67.py`; dinomori ulang G68 saat merge #165 "Margin bahan" = G67.)
 
-Fail closed (docs/04 §31 "[B]"): struktur respons yang tidak sesuai fakta probe (label bulan tak terbaca, prefix
+Fail closed (docs/04 §32 "[B]"): struktur respons yang tidak sesuai fakta probe (label bulan tak terbaca, prefix
 cabang/`area.id` beda, tahun beda) -> ValueError -> slice `error` tanpa checkpoint, bukan tebakan.
 """
 
@@ -40,7 +41,7 @@ FACT_DELIVERY_REF_LINE_COLUMNS = (
 )  # fmt: skip
 DIM_PRODUCT_ID_COLUMNS = ("brand", "company_code", "product_id", "product_code", "source", "_version")
 
-G67_TABLES: dict[str, tuple[str, ...]] = {
+G68_TABLES: dict[str, tuple[str, ...]] = {
     "fact_esb_profit_loss": FACT_PROFIT_LOSS_COLUMNS,
     "fact_esb_item_journal_line": FACT_ITEM_JOURNAL_LINE_COLUMNS,
     "fact_esb_transfer_request_line": FACT_TRANSFER_REQUEST_LINE_COLUMNS,
@@ -53,7 +54,7 @@ SCOPE_BRAND = "brand"
 LINE_ACCOUNT = "account"
 LINE_SUMMARY = "summary"
 SOURCE_GTR = "gtr"
-# [B] arah GTR (docs/04 §31.1.3): origin = cabang PEMASOK (CK/gudang), destination = cabang PEMINTA (outlet). Bila
+# [B] arah GTR (docs/04 §32.1.3): origin = cabang PEMASOK (CK/gudang), destination = cabang PEMINTA (outlet). Bila
 # backfill membuktikan terbalik, ubah konstanta ini (kontrak kolom requester/supplier tidak berubah) dan catat.
 GTR_ORIGIN_IS_SUPPLIER = True
 TEMPLATE_MAX = 128
@@ -162,7 +163,7 @@ def transform_profit_loss(
     """Respons month-to-month (ter-whitelist) -> fact_esb_profit_loss. `branch_id` 0 = total brand (scope 'brand').
 
     - Seksi top-level (`PL_SECTIONS`) = list baris akun -> `line_type='account'`; akun sama dua kali dalam satu seksi x
-      bulan dijumlah, `source_lines` = jumlah baris sumber (> 1 = `dup_account` di v_esb_g67_quality).
+      bulan dijumlah, `source_lines` = jumlah baris sumber (> 1 = `dup_account` di v_esb_g68_quality).
     - `summaries.<pos>` -> `line_type='summary'`, `account_no=''`: nilai per bulan dari `details` bila strukturnya sama
       dengan baris akun [B], jika tidak `total` untuk bulan M saja.
     - Tanda angka apa adanya (konvensi tanda beban [B], Q-ESB34)."""
@@ -328,7 +329,7 @@ def gtr_parties(doc: Mapping[str, Any]) -> tuple[int, int]:
 
 def resolve_gtr_code(line: Mapping[str, Any], product_ids: Mapping[int, str], aliases: Mapping[str, str]) -> str:
     """Kode produk baris GTR: `productCode` -> `dim_esb_product_id` (productID) -> alias nama -> '' (tetap disimpan,
-    dihitung di v_esb_g67_quality)."""
+    dihitung di v_esb_g68_quality)."""
     code = text(line.get("productCode"), 64)
     if code:
         return code
@@ -350,7 +351,7 @@ def transform_transfer_requests(
 ) -> list[list[Any]]:
     """Dokumen GTR (list + detail digabung, ter-whitelist) -> fact_esb_transfer_request_line. Satu baris per (dokumen,
     product_code, uom); baris ganda dijumlah (qty) dan atribut produk dari baris pertama. company_code = PT cabang
-    PEMINTA (L-266)."""
+    PEMINTA (L-276)."""
     by_num: dict[str, Mapping[str, Any]] = {}
     for doc in docs:
         num = text(doc.get("transferNum"), 64)
@@ -426,7 +427,7 @@ def transform_delivery_ref(
 ) -> list[list[Any]]:
     """Detail goods-delivery (list + detail digabung, payload G41) -> fact_esb_delivery_ref_line. Status 33 / tanpa
     nomor / baris tanpa productCode diabaikan (sama G41). `referenceNumber` per baris bila ada, jika tidak dari header
-    [B]. qty kirim (`deliveryQty`) dan terima (`receiptQty`) TERPISAH. company_code = PT cabang asal (L-266)."""
+    [B]. qty kirim (`deliveryQty`) dan terima (`receiptQty`) TERPISAH. company_code = PT cabang asal (L-276)."""
     agg: dict[tuple[str, str, str, str], list[Any]] = {}
     for doc in details:
         doc_num = text(doc.get("goodsDeliveryNum"), 64)
@@ -466,7 +467,7 @@ class RawMissing(ValueError):
 
 
 def delivery_details_from_raw(day: date, listed: Any, details: Mapping[str, tuple[date, Any]]) -> list[dict[str, Any]]:
-    """Retransform (§31.1.4): list raw `inventory/goods-delivery` hari D + detail raw per nomor ({num: (doc_date,
+    """Retransform (§32.1.4): list raw `inventory/goods-delivery` hari D + detail raw per nomor ({num: (doc_date,
     payload)}) -> dokumen gabungan (bentuk sama dengan extract_delivery). Kekurangan apa pun -> RawMissing."""
     if not isinstance(listed, list):
         raise RawMissing(day, ["<list>"])

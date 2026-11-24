@@ -101,7 +101,7 @@ LEFT JOIN (SELECT brand, product_code, product_name, category FROM efn_dwh.dim_e
 --   days = jumlah hari unik dengan minimal satu slice selesai (per toko: cukup satu cabang PT itu); hari bolong di
 --   tengah rentang terlihat dari days < dateDiff('day', first_day, last_day) + 1.
 -- Brand tanpa cabang terdaftar -> tidak ada baris (fail closed).
--- G67 (docs/04 §31.4): + item_journal, transfer_request, delivery_ref (per brand '*'). profit_loss TIDAK (slice tahun;
+-- G68 (docs/04 §32.4): + item_journal, transfer_request, delivery_ref (per brand '*'). profit_loss TIDAK (slice tahun;
 -- cakupannya = min/max period_month di v_esb_pl_monthly).
 CREATE OR REPLACE VIEW efn_dwh.v_esb_coverage AS
 SELECT

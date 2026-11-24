@@ -23,7 +23,7 @@ export default async function ProdLayout({ children }: { children: React.ReactNo
   return (
     <Shell
       session={session}
-      groups={navGroups(session, cfg.smEnabled, cfg.fnbEnabled, cfg.ppEnabled, cfg.g67Enabled)}
+      groups={navGroups(session, cfg.smEnabled, cfg.fnbEnabled, cfg.ppEnabled, cfg.g68Enabled)}
       odooUrl={odooHomeUrl(cfg)}
       roleLabel={ppRoleLabel(session.roles)}
       footNote="Data: ESB Core melalui layanan perencanaan produksi"

@@ -63,7 +63,7 @@ class FakeStore:
         self.ratios: dict[int, BomRatio] = {}
         self.suppliers: list[tuple[int, str, str]] = []
         self.product_ids: dict[int, str] = {}
-        # G67 retransform: {(endpoint, doc_key): (doc_date, payload)} = isi raw_doc (versi terakhir).
+        # G68 retransform: {(endpoint, doc_key): (doc_date, payload)} = isi raw_doc (versi terakhir).
         self.raw: dict[tuple[str, str], tuple[date, Any]] = {}
 
     # Sama dengan ClickHouseStore: baris kosong tidak ditulis.

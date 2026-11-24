@@ -120,7 +120,7 @@ describe('navGroups dengan item persona F&B (§28.15.9)', () => {
   it('flag aktif: item persona di urutan teratas grup F&B (Eksekutif, Toko, Marketing) sebelum halaman bersama', () => {
     const g = navGroups({ codes: ['PB'], roles: ['exec', 'store', 'user'], v: 3, brs: [] }, false, true);
     expect(g.map((x) => x.id)).toEqual(['summary', 'fnb']);
-    expect(hrefs(g[1])).toEqual(['/fnb/exec', '/fnb/store', ...FNB_BASE]);
+    expect(hrefs(g[1])).toEqual(['/fnb/exec', '/fnb/store', '/margin-bahan', ...FNB_BASE]); // G67: Margin bahan khusus exec
     const m = navGroups({ codes: ['PB'], roles: ['marketing', 'user'], v: 3, brs: [] }, false, true);
     expect(hrefs(m[1])).toEqual(['/fnb/marketing', ...FNB_BASE]);
     expect(g[1].items.slice(0, 2).map((i) => i.label)).toEqual(['Eksekutif', 'Toko']);
@@ -156,7 +156,7 @@ describe('navGroups dengan item persona F&B (§28.15.9)', () => {
   it('exec F&B + SMD: item persona F&B di depan, halaman bersama ber-scope esb, grup Supermarket tetap', () => {
     const g = navGroups({ codes: ['PB', 'SMD'], roles: ['exec', 'user'], v: 3, brs: [] }, true, true);
     expect(g.map((x) => x.id)).toEqual(['summary', 'fnb', 'sm']);
-    expect(hrefs(g[1])).toEqual(['/fnb/exec', ...FNB_BASE]);
+    expect(hrefs(g[1])).toEqual(['/fnb/exec', '/margin-bahan', ...FNB_BASE]);
     expect(g[1].items[0].scope).toBeUndefined();
     expect(g[1].items.filter((i) => i.scope === 'esb').map((i) => i.href)).toEqual(['/sales', '/payments', '/forecast']);
     expect(g[1].esbCodes).toEqual(['PB']);

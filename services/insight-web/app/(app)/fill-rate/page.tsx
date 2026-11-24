@@ -4,7 +4,7 @@ import { ErrorCard } from '@/components/blocks';
 import { ChartCard } from '@/components/ChartCard';
 import { DataTable, type TableRow } from '@/components/DataTable';
 import { FilterNotice } from '@/components/FilterNotice';
-import { CheckGroup, G67Form } from '@/components/g67/G67Form';
+import { CheckGroup, G68Form } from '@/components/g68/G68Form';
 import { EmptyState, KpiRow, KpiTile, PageHeader, Section } from '@/components/ui';
 import { brandName, codeName } from '@/lib/brands';
 import { fmtInt, fmtRange } from '@/lib/format';
@@ -16,8 +16,8 @@ import {
   fillRateTrendSpec,
   parseSuppliers,
   type WeeklyFillRow,
-} from '@/lib/g67-vm';
-import { g67Page, type G67SearchParams } from '@/lib/g67-page';
+} from '@/lib/g68-vm';
+import { g68Page, type G68SearchParams } from '@/lib/g68-page';
 import { loadCoverage, num, numOrNull, type Result } from '@/lib/loaders';
 import { runEsb } from '@/lib/smd-data';
 import type { ColumnDef } from '@/lib/table-defs';
@@ -65,9 +65,9 @@ function fail(r: Result<unknown>, title: string): ReactNode | null {
 
 const pp = (a: number | null, b: number | null, hasPrev: boolean): number | null => (hasPrev && a !== null && b !== null ? a - b : null);
 
-/** Fill Rate Outlet ke CK (docs/04 §31.6.1, §31.8-§31.10): kohort tanggal permintaan, hanya permintaan matang; tanpa target resmi (Q-ESB31). */
-export default async function FillRatePage({ searchParams }: { searchParams: G67SearchParams }) {
-  const { ctx, adjusted, raw } = await g67Page('/fill-rate', searchParams);
+/** Fill Rate Outlet ke CK (docs/04 §32.6.1, §32.8-§32.10): kohort tanggal permintaan, hanya permintaan matang; tanpa target resmi (Q-ESB31). */
+export default async function FillRatePage({ searchParams }: { searchParams: G68SearchParams }) {
+  const { ctx, adjusted, raw } = await g68Page('/fill-rate', searchParams);
   const { from, to } = ctx.filters;
   const sup = parseSuppliers(raw);
   const extra = { supplier: sup.supplier };
@@ -78,7 +78,7 @@ export default async function FillRatePage({ searchParams }: { searchParams: G67
     runEsb<Raw>(true, 'fr_trend_weekly', ctx, extra),
     runEsb<Raw>(true, 'fr_by_outlet', ctx, extra),
     runEsb<Raw>(true, 'fr_by_supplier', ctx, extra),
-    // View produk bulanan tidak punya kolom pemasok (kontrak §31.6): dengan filter Pemasok aktif query tidak dijalankan, UI memberi catatan.
+    // View produk bulanan tidak punya kolom pemasok (kontrak §32.6): dengan filter Pemasok aktif query tidak dijalankan, UI memberi catatan.
     runEsb<Raw>(sup.supplier.length === 0, 'fr_top_short_products', ctx, extra),
     runEsb<Raw>(true, 'fr_suppliers', ctx, extra),
     loadCoverage(ctx),
@@ -144,7 +144,7 @@ export default async function FillRatePage({ searchParams }: { searchParams: G67
       <PageHeader title="Fill Rate Outlet ke CK" question="Seberapa penuh permintaan barang outlet ke CK terpenuhi, dan outlet, pemasok, atau produk mana yang paling sering kurang kirim?" />
       <FilterNotice adjusted={adjusted || sup.adjusted} />
 
-      <G67Form
+      <G68Form
         path="/fill-rate"
         label="Pilih pemasok"
         carry={{ pt: one(raw.pt), branch: one(raw.branch), from: one(raw.from), to: one(raw.to) }}
@@ -157,7 +157,7 @@ export default async function FillRatePage({ searchParams }: { searchParams: G67
         {shownOptions.length > 0 ? (
           <CheckGroup legend="Pemasok (CK)" name="supplier" options={shownOptions} checked={sup.supplier} hint="Kosong = semua pemasok." />
         ) : null}
-      </G67Form>
+      </G68Form>
 
       <p className="muted small">
         Dihitung per tanggal permintaan. Hanya permintaan matang (selesai, atau berumur lebih dari 7 hari) yang masuk; sisanya masih berjalan. Fill rate baris =

@@ -1,9 +1,10 @@
--- Gelombang 67 (docs/04 §31.5-§31.6, ADR-040 amandemen G67, ADR-041, L-260..L-268): laba rugi outlet, waste &
+-- Gelombang 68 (docs/04 §32.5-§32.6, ADR-040 amandemen G68, ADR-041, L-270..L-278): laba rugi outlet, waste &
 -- pemakaian internal, fill rate outlet -> CK dari ESB Core (PB dulu). Idempoten (CREATE ... IF NOT EXISTS / CREATE OR
--- REPLACE VIEW; tanpa ALTER tabel G41/G65). Dijalankan clickhouse-init.sh setiap deploy setelah 01..23.
+-- REPLACE VIEW; tanpa ALTER tabel G41/G65). Dijalankan clickhouse-init.sh setiap deploy setelah 01..24.
+-- (Semula G67 / 24-g67-…sql; dinomori ulang saat merge #165 "Margin bahan" = G67 / 24-margin-bahan.sql.)
 -- Penulis: esb-extract (role esb_writer). Pembaca: efn_insight_definer lewat view efn_insight.* ber-row-policy kelas PT
 -- (access/insight-access.sql + insight-esb-policy.sh). TIDAK di-grant ke metabase_reader, efn_t2s/text2sql,
--- forecast_reader, mig_rw (L-267: P&L = data keuangan sensitif per outlet).
+-- forecast_reader, mig_rw (L-277: P&L = data keuangan sensitif per outlet).
 -- PDP (L-110): whitelist per endpoint SEBELUM disimpan (creator/editor/authorizer/createdBy/additionalInfo dibuang);
 -- tanpa data orang. Retensi: ikut DWH (#59); raw_doc TTL 36 bln.
 -- Pembaca wajib pola §25.4: FINAL + hanya versi slice ber-checkpoint per entitas (view di bawah).
@@ -104,7 +105,7 @@ ENGINE = ReplacingMergeTree(_version)
 PARTITION BY toYYYYMM(transfer_date)
 ORDER BY (company_code, brand, transfer_date, transfer_num, product_code, uom);
 
--- Referensi goods delivery -> transfer request (L-262; tabel baru, fact_esb_delivery TIDAK diubah). Ditulis slice
+-- Referensi goods delivery -> transfer request (L-272; tabel baru, fact_esb_delivery TIDAK diubah). Ditulis slice
 -- `delivery` (checkpoint entitas delivery_ref sendiri) dan mode retransform dari raw_doc. qty kirim/terima TERPISAH.
 CREATE TABLE IF NOT EXISTS efn_dwh.fact_esb_delivery_ref_line
 (
@@ -143,7 +144,7 @@ CREATE TABLE IF NOT EXISTS efn_dwh.dim_esb_product_id
 ENGINE = ReplacingMergeTree(_version)
 ORDER BY (brand, product_id);
 
--- ============================================================== view (INVOKER; nama & kolom = docs/04 §31.6)
+-- ============================================================== view (INVOKER; nama & kolom = docs/04 §32.6)
 -- Bulan x brand x PT x scope x cabang x seksi x akun. Laba memakai baris summary ESB (sumber resmi), bukan rumus EFN.
 -- is_partial = bulan berjalan WIB (angka sementara).
 CREATE OR REPLACE VIEW efn_dwh.v_esb_pl_monthly AS
@@ -169,7 +170,7 @@ LEFT JOIN (SELECT brand, branch_id, branch_name FROM efn_dwh.dim_esb_branch FINA
 
 -- Internal (tidak dibungkus efn_insight): baris jurnal item versi slice terakhir + kelas purpose + status dihitung.
 -- ITEM_JOURNAL_COUNTED_STATUS = ('authorized', 'finished', 'closed') (nama status, lower/trim) -- default sementara
--- [B]; diganti dari distribusi status hasil backfill (laporan W-A). Kelas purpose (L-265, ubah lewat PR):
+-- [B]; diganti dari distribusi status hasil backfill (laporan W-A). Kelas purpose (L-275, ubah lewat PR):
 --   WASTE -> waste; PRODUCTION/PACKAGING/SELLING/CONSUMABLES/CLEANING/SAFETY/STATIONARY SUPPLIES + UNIFORM ->
 --   internal_use (PRODUCTION SUPPLIES menunggu Q-ESB30); RESEARCH & DEVELOPMENT -> rnd; OTHER RECEIVABLE -> other;
 --   lainnya -> unclassified.
@@ -220,7 +221,7 @@ LEFT JOIN (SELECT brand, branch_id, branch_name FROM efn_dwh.dim_esb_branch FINA
     ON b.brand = a.brand AND b.branch_id = a.branch_id;
 
 -- Bulan x brand x PT x cabang x kelas x produk x satuan. product_code di-resolve SAAT QUERY lewat dim_esb_product_id
--- (L-268: pemetaan yang dipelajari belakangan berlaku untuk data lama); tak terpetakan -> 'ID:<product_id>'.
+-- (L-278: pemetaan yang dipelajari belakangan berlaku untuk data lama); tak terpetakan -> 'ID:<product_id>'.
 -- qty_out = -Σ qty per uom (tidak dijumlah lintas satuan).
 CREATE OR REPLACE VIEW efn_dwh.v_esb_item_usage_product_monthly AS
 SELECT
@@ -240,7 +241,7 @@ FROM
     GROUP BY month, brand, company_code, branch_id, usage_class, purpose_name, p_code, uom
 ) AS g;
 
--- Internal (tidak dibungkus efn_insight): satu baris per baris permintaan GTR (versi slice terakhir), L-263:
+-- Internal (tidak dibungkus efn_insight): satu baris per baris permintaan GTR (versi slice terakhir), L-273:
 --   qty_sent / qty_received = Σ fact_esb_delivery_ref_line trans_type 'Transfer Request' dengan reference_num =
 --     transfer_num, product_code DAN uom sama, versi slice delivery_ref terakhir, SEMUA tanggal kirim;
 --   uom_mismatch = ada kiriman produk itu untuk permintaan itu tetapi tidak satu pun bersatuan sama (tanpa konversi);
@@ -296,7 +297,7 @@ LEFT JOIN
     ON a.brand = r.brand AND a.reference_num = r.transfer_num AND a.product_code = r.product_code;
 
 -- Tanggal permintaan (kohort) x brand x PT peminta x outlet peminta x pemasok. Semua kolom ADITIF; rasio dihitung di
--- query (§31.6.1): fill rate baris = Σ line_ratio_sum / Σ lines; % baris penuh = Σ lines_full / Σ lines;
+-- query (§32.6.1): fill rate baris = Σ line_ratio_sum / Σ lines; % baris penuh = Σ lines_full / Σ lines;
 -- % permintaan penuh = Σ requests_full / Σ requests; waktu kirim = Σ lead_days_sum / Σ lead_days_n.
 --   lines/lines_full/lines_zero/line_ratio_sum/lead_* = baris is_counted dan uom_mismatch = 0 (lead_* hanya baris
 --   dengan first_delivery_date terisi);
@@ -366,11 +367,11 @@ FROM
     GROUP BY month, brand, company_code, branch_id, product_code, uom
 ) AS g;
 
--- Cek kualitas G67 (bentuk kolom = v_esb_data_quality). View TERPISAH (tidak dibungkus efn_insight, tidak di-grant
+-- Cek kualitas G68 (bentuk kolom = v_esb_data_quality). View TERPISAH (tidak dibungkus efn_insight, tidak di-grant
 -- ke role aplikasi mana pun): dibaca admin/lead. Jendela 90 hari untuk cek harian.
 --   pl_branch_vs_brand        : summary total brand - Σ cabang per pos-bulan (= tidak teralokasi ke outlet, Q-ESB33)
 --   pl_sign_check             : porsi baris akun bernilai negatif per seksi beban (0 = beban positif) + selisih
---                               |netProfitLoss - rumus fallback| per brand (0 = rumus §31.1.1 cocok)
+--                               |netProfitLoss - rumus fallback| per brand (0 = rumus §32.1.1 cocok)
 --   dup_account               : baris akun dengan source_lines > 1
 --   journal_product_unmapped  : product_id jurnal item (dihitung) tanpa pemetaan dim_esb_product_id
 --   unknown_status            : status di luar ITEM_JOURNAL_COUNTED_STATUS / GTR_COUNTED_STATUS
@@ -379,7 +380,7 @@ FROM
 --   gtr_without_delivery_mature: baris GTR terhitung tanpa kiriman sama sekali (qty_sent = 0)
 --   gtr_bypass_gd             : baris GTR bypassGoodsDelivery = 1 (dikeluarkan dari rasio)
 --   gtr_product_unmapped      : baris GTR dengan product_code ''
-CREATE OR REPLACE VIEW efn_dwh.v_esb_g67_quality AS
+CREATE OR REPLACE VIEW efn_dwh.v_esb_g68_quality AS
 SELECT 'pl_branch_vs_brand' AS check_name, d.brand AS brand, d.c_code AS company_code,
        concat(d.section, ' ', toString(d.period_month)) AS item, toFloat64(d.diff) AS value, d.period_month AS last_day
 FROM

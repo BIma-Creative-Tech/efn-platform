@@ -163,7 +163,7 @@ def incremental_tasks(
     return sorted(tasks, key=lambda t: (t.day, t.entity, t.scope), reverse=True)
 
 
-# ================================================================== G67 profit_loss (docs/04 §31.1.1, L-261/L-264)
+# ================================================================== G68 profit_loss (docs/04 §32.1.1, L-271/L-274)
 # Satu slice = (profit_loss, `<branch_id>` | '*', Y-01-01): satu GET month-to-month memberi semua bulan Januari..M tahun
 # Y. Total brand (scope '*') selalu ikut sebagai pembanding "tidak teralokasi ke outlet".
 

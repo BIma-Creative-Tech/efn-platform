@@ -1,55 +1,56 @@
 #!/bin/sh
-# G67 (docs/04 §31.6.1 + §31.7): uji PERILAKU view G67 di ClickHouse 24.8 dengan fixture SINTETIS.
+# G68 (docs/04 §32.6.1 + §32.7): uji PERILAKU view G68 di ClickHouse 24.8 dengan fixture SINTETIS.
+# (Semula g67_views_harness.sh; dinomori ulang G68 saat merge #165 "Margin bahan" = G67.)
 # BELUM PERNAH DIJALANKAN oleh penulis (tanpa shell) -- dijalankan lead, hasil dicatat di laporan efn-data-ai-engineer.
 #
-# Badan tabel + view = infra/clickhouse/init/24-g67-esb-pl-waste-fillrate.sql APA ADANYA (efn_dwh./efn_esb. diganti ke
-# database uji `efn_g67_v_test`). Kasus wajib §31.6.1: kirim parsial, kirim lebih (rasio 1), dua GD untuk satu GTR,
+# Badan tabel + view = infra/clickhouse/init/25-g68-esb-pl-waste-fillrate.sql APA ADANYA (efn_dwh./efn_esb. diganti ke
+# database uji `efn_g68_v_test`). Kasus wajib §32.6.1: kirim parsial, kirim lebih (rasio 1), dua GD untuk satu GTR,
 # GD beda satuan, GTR tanpa GD (zero), GTR belum matang, GD dihapus lalu ditarik ulang (slice versi baru -> kirim
 # hilang) + GD trans_type lain diabaikan, status batal & bypass tidak dihitung. Ditambah: P&L hanya versi slice
 # ber-checkpoint + selisih total brand, kelas purpose/status jurnal item, resolusi product_id, dan negatif row policy
-# §31.7 (scope PB tidak melihat WTZ, brs terisi -> 0 baris, company_code '' tidak terlihat) memakai predikat PRODUKSI
+# §32.7 (scope PB tidak melihat WTZ, brs terisi -> 0 baris, company_code '' tidak terlihat) memakai predikat PRODUKSI
 # (access/insight-esb-policy.sh, ESB_POLICY_DEFINE_ONLY=1). Semua objek uji dihapus di akhir.
 #
 # Contoh (dev; pola g52_row_policy_harness.sh):
 #   docker compose run --rm --entrypoint sh \
 #     -v "$(pwd -W)/services/esb-extract/tests/clickhouse:/harness:ro" clickhouse-init \
 #     -c 'CH="clickhouse-client --config-file /tmp/efn-clickhouse-client.xml" \
-#         POLICY_SH=/init/access/insight-esb-policy.sh DDL24=/init/schema/24-g67-esb-pl-waste-fillrate.sql \
-#         sh /harness/g67_views_harness.sh'
+#         POLICY_SH=/init/access/insight-esb-policy.sh DDL25=/init/schema/25-g68-esb-pl-waste-fillrate.sql \
+#         sh /harness/g68_views_harness.sh'
 set -eu
 
 : "${CH:?CH = perintah klien admin ClickHouse (TLS)}"
 HERE="$(dirname "$0")"
 POLICY_SH="${POLICY_SH:-${HERE}/../../../../infra/clickhouse/access/insight-esb-policy.sh}"
-DDL24="${DDL24:-${HERE}/../../../../infra/clickhouse/init/24-g67-esb-pl-waste-fillrate.sql}"
+DDL25="${DDL25:-${HERE}/../../../../infra/clickhouse/init/25-g68-esb-pl-waste-fillrate.sql}"
 # shellcheck disable=SC2034 # dibaca file yang di-source di bawah
 ESB_POLICY_DEFINE_ONLY=1
 # shellcheck source=/dev/null
 . "$POLICY_SH"
 
 KEY="abababababababababababababababababababababababababababababababab"
-DB=efn_g67_v_test
-TUSER=g67_v_user
+DB=efn_g68_v_test
+TUSER=g68_v_user
 TPW="$(head -c 24 /dev/urandom | od -An -tx1 | tr -d ' \n')"
 FAILS=0
 
 cleanup() {
   $CH --multiquery <<EOF >/dev/null 2>&1 || true
 DROP USER IF EXISTS ${TUSER};
-DROP ROLE IF EXISTS g67_v_reader;
+DROP ROLE IF EXISTS g68_v_reader;
 DROP DATABASE IF EXISTS ${DB} SYNC;
 EOF
 }
 trap cleanup EXIT INT TERM
 cleanup
 
-SCHEMA_SQL="$(grep -v '^--' "$DDL24" | sed -e "s/efn_dwh\./${DB}./g" -e "s/efn_esb\./${DB}./g")"
+SCHEMA_SQL="$(grep -v '^--' "$DDL25" | sed -e "s/efn_dwh\./${DB}./g" -e "s/efn_esb\./${DB}./g")"
 case "$SCHEMA_SQL" in
-  *efn_dwh.*|*efn_esb.*) echo "g67_views_harness: masih ada rujukan efn_dwh/efn_esb" >&2; exit 1 ;;
+  *efn_dwh.*|*efn_esb.*) echo "g68_views_harness: masih ada rujukan efn_dwh/efn_esb" >&2; exit 1 ;;
 esac
 case "$SCHEMA_SQL" in
   *"CREATE OR REPLACE VIEW ${DB}.v_esb_fill_rate_line AS"*) ;;
-  *) echo "g67_views_harness: view fill rate tidak ditemukan di ${DDL24}" >&2; exit 1 ;;
+  *) echo "g68_views_harness: view fill rate tidak ditemukan di ${DDL25}" >&2; exit 1 ;;
 esac
 
 D30="toDate(now(), 'Asia/Jakarta') - 30"
@@ -238,9 +239,9 @@ expect "pl: baris total brand" \
   "$(a "SELECT concat(branch_name, '|', toString(is_partial)) FROM ${P} WHERE brand = 'pb' AND scope = 'brand'")" \
   "(Total brand)|0"
 expect "pl: quality pl_branch_vs_brand (250 - 200)" \
-  "$(a "SELECT value FROM ${DB}.v_esb_g67_quality WHERE check_name = 'pl_branch_vs_brand' AND brand = 'pb'")" 50
+  "$(a "SELECT value FROM ${DB}.v_esb_g68_quality WHERE check_name = 'pl_branch_vs_brand' AND brand = 'pb'")" 50
 
-# ---------------------------------------------------------------- row policy §31.7 (predikat produksi, kelas PT)
+# ---------------------------------------------------------------- row policy §32.7 (predikat produksi, kelas PT)
 P_PT="$(esb_policy_predicate "$KEY" PT)"
 $CH --log_queries=0 --multiquery <<EOF
 CREATE VIEW ${DB}.w_pl AS SELECT * FROM ${DB}.v_esb_pl_monthly;
@@ -248,16 +249,16 @@ CREATE VIEW ${DB}.w_usage AS SELECT * FROM ${DB}.v_esb_item_usage_daily;
 CREATE VIEW ${DB}.w_usage_product AS SELECT * FROM ${DB}.v_esb_item_usage_product_monthly;
 CREATE VIEW ${DB}.w_fill AS SELECT * FROM ${DB}.v_esb_fill_rate_daily;
 CREATE VIEW ${DB}.w_fill_product AS SELECT * FROM ${DB}.v_esb_fill_rate_product_monthly;
-CREATE ROLE g67_v_reader;
-GRANT SELECT ON ${DB}.* TO g67_v_reader;
+CREATE ROLE g68_v_reader;
+GRANT SELECT ON ${DB}.* TO g68_v_reader;
 CREATE USER ${TUSER} IDENTIFIED WITH sha256_password BY '${TPW}' HOST ANY;
-GRANT g67_v_reader TO ${TUSER};
-SET DEFAULT ROLE g67_v_reader TO ${TUSER};
-CREATE ROW POLICY efn_insight_scope ON ${DB}.w_pl USING ${P_PT} TO g67_v_reader;
-CREATE ROW POLICY efn_insight_scope ON ${DB}.w_usage USING ${P_PT} TO g67_v_reader;
-CREATE ROW POLICY efn_insight_scope ON ${DB}.w_usage_product USING ${P_PT} TO g67_v_reader;
-CREATE ROW POLICY efn_insight_scope ON ${DB}.w_fill USING ${P_PT} TO g67_v_reader;
-CREATE ROW POLICY efn_insight_scope ON ${DB}.w_fill_product USING ${P_PT} TO g67_v_reader;
+GRANT g68_v_reader TO ${TUSER};
+SET DEFAULT ROLE g68_v_reader TO ${TUSER};
+CREATE ROW POLICY efn_insight_scope ON ${DB}.w_pl USING ${P_PT} TO g68_v_reader;
+CREATE ROW POLICY efn_insight_scope ON ${DB}.w_usage USING ${P_PT} TO g68_v_reader;
+CREATE ROW POLICY efn_insight_scope ON ${DB}.w_usage_product USING ${P_PT} TO g68_v_reader;
+CREATE ROW POLICY efn_insight_scope ON ${DB}.w_fill USING ${P_PT} TO g68_v_reader;
+CREATE ROW POLICY efn_insight_scope ON ${DB}.w_fill_product USING ${P_PT} TO g68_v_reader;
 EOF
 
 sig3() {
@@ -280,19 +281,19 @@ for w in w_pl w_usage w_usage_product w_fill w_fill_product; do
   expect "policy ${w}: scope PB melihat baris PB (kontrol positif)" \
     "$(u "$w" "company_code = 'PB'" "$PB_EXEC")" "$(a "SELECT count() FROM ${DB}.$w WHERE company_code = 'PB'")"
 done
-# SEC-G67-01: total brand Bacha (multi-PT, company_code '') tidak terlihat eksekutif PT mana pun; baris cabangnya tetap.
+# SEC-G68-01: total brand Bacha (multi-PT, company_code '') tidak terlihat eksekutif PT mana pun; baris cabangnya tetap.
 BCF_EXEC="$(scope 4 BCF '' "$(sig3 4 BCF '')")"
 BOTH_EXEC="$(scope 4 BCF,BCR '' "$(sig3 4 BCF,BCR '')")"
-expect "SEC-G67-01: scope BCF tidak melihat total brand Bacha" "$(u w_pl "brand = 'bacha' AND scope = 'brand'" "$BCF_EXEC")" 0
-expect "SEC-G67-01: scope BCF+BCR tidak melihat total brand Bacha" \
+expect "SEC-G68-01: scope BCF tidak melihat total brand Bacha" "$(u w_pl "brand = 'bacha' AND scope = 'brand'" "$BCF_EXEC")" 0
+expect "SEC-G68-01: scope BCF+BCR tidak melihat total brand Bacha" \
   "$(u w_pl "brand = 'bacha' AND scope = 'brand'" "$BOTH_EXEC")" 0
-expect "SEC-G67-01: scope BCF melihat cabang BCF saja (kontrol positif)" \
+expect "SEC-G68-01: scope BCF melihat cabang BCF saja (kontrol positif)" \
   "$(u w_pl "brand = 'bacha' AND scope = 'branch'" "$BCF_EXEC")" 1
 expect "policy w_fill: baris PB ada (kontrol positif tidak kosong)" \
   "$(a "SELECT count() > 0 FROM ${DB}.w_fill WHERE company_code = 'PB'")" 1
 
 if [ "$FAILS" -ne 0 ]; then
-  echo "g67_views_harness: ${FAILS} uji GAGAL" >&2
+  echo "g68_views_harness: ${FAILS} uji GAGAL" >&2
   exit 1
 fi
-echo "g67_views_harness: semua uji lulus"
+echo "g68_views_harness: semua uji lulus"

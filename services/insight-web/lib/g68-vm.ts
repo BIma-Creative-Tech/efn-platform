@@ -1,5 +1,5 @@
 /**
- * Logika murni halaman `/waste` dan `/fill-rate` (docs/04 §31.9-§31.10, G67): parsing filter khusus halaman (`uclass`,
+ * Logika murni halaman `/waste` dan `/fill-rate` (docs/04 §32.9-§32.10, G68): parsing filter khusus halaman (`uclass`,
  * `supplier`), label kelas pemakaian, agregasi mingguan, dan penyusun spesifikasi grafik. Tanpa I/O; dapat diuji.
  * Nilai Rupiah waste = HPP jurnal item (positif = biaya keluar); qty selalu per satuan (tidak dijumlah lintas satuan).
  */
@@ -14,7 +14,7 @@ type Raw = Record<string, string | string[] | undefined>;
 // ---------- cakupan untuk keadaan kosong ----------
 
 /**
- * Nama entitas di `v_esb_coverage` untuk tiga sumber G67 BELUM terverifikasi (W-A memperluas view; nama pasti ada di DDL 24-*.sql).
+ * Nama entitas di `v_esb_coverage` untuk tiga sumber G68 BELUM terverifikasi (W-A memperluas view; nama pasti ada di DDL 24-*.sql).
  * Dicocokkan longgar: entitas yang namanya memuat salah satu kata kunci. Tidak ada kecocokan -> null (kalimat cakupan tidak tampil,
  * keadaan kosong tetap jujur "belum tersedia pada rentang ini").
  */
@@ -89,7 +89,7 @@ const USAGE_COLOR: Readonly<Record<UsageClass, ColorToken>> = {
 
 export const usageLabel = (c: string): string => (USAGE_LABEL as Record<string, string>)[c] ?? c;
 
-/** Rentang lebih dari 62 hari -> tren per minggu (§31.10). */
+/** Rentang lebih dari 62 hari -> tren per minggu (§32.10). */
 export const WEEKLY_AFTER_DAYS = 62;
 export const isWeekly = (from: string, to: string): boolean => diffDays(from, to) + 1 > WEEKLY_AFTER_DAYS;
 

@@ -2,7 +2,7 @@
 # G52 (docs/04 §28.15.6-§28.15.7 v21.1, L-243/L-244): row policy `efn_insight_scope` untuk view efn_insight.v_esb_*.
 # Pemilik isi: efn-data-ai-engineer. BUKAN dieksekusi loop access/*.sql (ekstensi .sh); DISOURCING clickhouse-init.sh:
 #
-#     ESB_POLICY_EXPECTED=14
+#     ESB_POLICY_EXPECTED=25
 #     . /init/access/insight-esb-policy.sh
 #
 # SETELAH validasi $INSIGHT_KEY (hex >= 64, beda dari text2sql_scope_key) dan SEBELUM `unset INSIGHT_KEY`; $CH = klien
@@ -37,6 +37,9 @@ v_esb_coverage PT
 v_esb_forecast_daily PT
 v_esb_sales_done_day PT
 v_esb_menu_econ_daily PT
+v_esb_ing_price_monthly PT
+v_esb_menu_cost_monthly PT
+v_esb_ing_group_monthly PT
 v_esb_pl_monthly PT
 v_esb_item_usage_daily PT
 v_esb_item_usage_product_monthly PT

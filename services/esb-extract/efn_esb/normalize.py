@@ -137,7 +137,7 @@ STOCK_MOVEMENT_FIELDS = (
     "amountIn", "qtyOut", "amountOut", "qtyBalance", "amountBalance",
 )  # fmt: skip
 
-# G67 (docs/04 §31.1, L-110): whitelist per endpoint SEBELUM raw/mart. Dibuang: additionalInfo, createdBy, creator*,
+# G68 (docs/04 §32.1, L-110): whitelist per endpoint SEBELUM raw/mart. Dibuang: additionalInfo, createdBy, creator*,
 # editor*, authorizer*, transferDetailAssets, dan semua kunci lain di luar daftar.
 # P&L (`/report/profit-loss/month-to-month`): seksi top-level (list baris akun) + pos summaries. `description` = nama
 # akun (bukan teks bebas) -> whitelist rekursif, BUKAN redact() (pola COA_FIELDS). `area.key` = nama cabang (boleh).
@@ -203,7 +203,7 @@ def whitelist(row: Mapping[str, Any], fields: Iterable[str]) -> dict[str, Any]:
 
 def whitelist_tree(value: Any, allowed: frozenset[str]) -> Any:
     """Salinan rekursif: dict hanya dengan kunci di `allowed` (di setiap kedalaman), list diproses per elemen, skalar
-    apa adanya. Untuk laporan bersarang (P&L G67) yang kuncinya sama di banyak tingkat."""
+    apa adanya. Untuk laporan bersarang (P&L G68) yang kuncinya sama di banyak tingkat."""
     if isinstance(value, Mapping):
         return {str(k): whitelist_tree(v, allowed) for k, v in value.items() if str(k) in allowed}
     if isinstance(value, list):

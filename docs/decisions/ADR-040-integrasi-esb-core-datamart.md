@@ -3,8 +3,9 @@
 - **Status:** Proposed — belum disetujui klien. G41 boleh dibangun mengikuti rekomendasi ini dengan `ESB_ENABLED=false`
   default; ekstraksi production menunggu **Q-ESB1** (user API read-only) dan **Q-ESB7** (izin beban backfill).
 - **Tanggal:** 2026-11-17 (Gelombang 41) · revisi 2026-11-18: §3.1 butir 1, §3.2, §4.4 dipersempit mengikuti ADR-042
-  (Accepted); keputusan ADR-040 sendiri tetap Proposed · amandemen 2026-11-25 §6b (G67, entitas P&L/jurnal item/
-  transfer request, Proposed)
+  (Accepted); keputusan ADR-040 sendiri tetap Proposed · amandemen 2026-11-25 §6b (G68, entitas P&L/jurnal item/
+  transfer request, Proposed; semula ditulis G67, dinomori ulang saat merge #165 "Margin bahan" = G67, yang tidak
+  menambah amandemen ADR ini)
 - **Pemutus:** pemilik proyek (lingkup & cutover), IT klien (user API ESB, beban server), Finance (cutover & saldo awal
   G43), Legal/DPO (kepemilikan data & PDP)
 - **Referensi review:** R-O02 (migrasi data sistem lama), R-O01 (master data), R-L01 (PDP), R-O03 (beban ETL),
@@ -197,7 +198,9 @@ Kebutuhan tulis ke ESB (transfer + produksi untuk production planning CK, G66) *
 `esb-extract` tetap GET-only (kode + test tidak berubah). Tulis ditangani service terpisah `services/prodplan` dengan
 kredensial, network egress, dan allowlist POST/DELETE sendiri — lihat ADR-051 dan `docs/04` §30.
 
-## 6b. Amandemen G67, 25 Nov 2026 (Proposed)
+## 6b. Amandemen G68, 25 Nov 2026 (Proposed)
+(Semula "G67"; dinomori ulang G68 / `docs/04` §32 / L-270..L-278 saat merge #165. G67 = Insight "Margin bahan",
+`docs/04` §31 — turunan baca di atas ADR ini tanpa amandemen.)
 Keputusan user 25 Nov 2026: Insight PB mendapat laba rugi per outlet per bulan, waste & pemakaian internal (jurnal item),
 dan fill rate permintaan outlet → CK, histori 24 bulan. Ini **masih dalam lingkup datamart ESB** keputusan §3.1:
 - Entitas baru `profit_loss` (`/report/profit-loss/month-to-month`), `item_journal` (`/inventory/item-journal` + detail),
@@ -208,7 +211,7 @@ dan fill rate permintaan outlet → CK, histori 24 bulan. Ini **masih dalam ling
 - Beban tambahan PB: backfill ±61 rb GET (2–3 malam, jendela 22:00–05:00 WIB) + ±210 GET/hari → **Q-ESB7** (izin beban)
   makin penting sebelum production. Data keuangan per outlet (P&L) menambah sensitivitas datamart: akses dibatasi persona
   Eksekutif (Q-ESB35).
-- Biaya ±12–15,5 hari-engineer, Rp0 lisensi. Detail kontrak: `docs/04` §31 (L-260..L-268, Q-ESB30..Q-ESB36).
+- Biaya ±12–15,5 hari-engineer, Rp0 lisensi. Detail kontrak: `docs/04` §32 (L-270..L-278, Q-ESB30..Q-ESB36).
 - Ditinjau ulang bersama §7; tambahan pemicu: definisi waste/fill rate dari klien (Q-ESB30/31) mengubah view.
 
 ## 7. Kapan ditinjau ulang

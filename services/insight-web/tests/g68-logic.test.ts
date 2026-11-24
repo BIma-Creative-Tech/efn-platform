@@ -1,9 +1,9 @@
 /**
- * Logika murni G67 (docs/04 §31.9-§31.10): filter bulan P&L, pemetaan pos, tabel pos x bulan + "Tidak teralokasi ke outlet",
+ * Logika murni G68 (docs/04 §32.9-§32.10): filter bulan P&L, pemetaan pos, tabel pos x bulan + "Tidak teralokasi ke outlet",
  * parsing `uclass`/`supplier`, spesifikasi grafik, cakupan, dan glosarium. Fixture sintetis (bukan data ESB).
  */
 import { describe, expect, it } from 'vitest';
-import { coverageHint, fillRateByOutletSpec, fillRateTrendSpec, isWeekly, parseSuppliers, parseUsageClasses, pctSafe, wasteTrendSpec } from '@/lib/g67-vm';
+import { coverageHint, fillRateByOutletSpec, fillRateTrendSpec, isWeekly, parseSuppliers, parseUsageClasses, pctSafe, wasteTrendSpec } from '@/lib/g68-vm';
 import { getTerm, termsIn } from '@/lib/glossary';
 import {
   buildStatement,
@@ -73,7 +73,7 @@ describe('pemetaan pos dan rasio', () => {
     expect(plKeyOf('Laba Bersih')).toBe('net_profit');
     expect(plKeyOf('Net-Profit')).toBe('net_profit');
     expect(plKeyOf('Pos Lain')).toBeNull();
-    // Kunci `section` yang disimpan esb-extract (camelCase ESB `summaries`, W-A G67).
+    // Kunci `section` yang disimpan esb-extract (camelCase ESB `summaries`, W-A G68).
     expect(plKeyOf('netSales')).toBe('net_sales');
     expect(plKeyOf('grossProfit')).toBe('gross_profit');
     expect(plKeyOf('operationalExpenses')).toBe('opex');
@@ -181,7 +181,7 @@ describe('parseUsageClasses / parseSuppliers / isWeekly (/waste, /fill-rate)', (
   });
 });
 
-describe('spesifikasi grafik G67', () => {
+describe('spesifikasi grafik G68', () => {
   it('waste: batang bertumpuk per kelas, tanpa kelas yang tidak muncul, nol untuk sel kosong', () => {
     const s = wasteTrendSpec(
       [
@@ -226,7 +226,7 @@ describe('coverageHint', () => {
   });
 });
 
-describe('glosarium G67', () => {
+describe('glosarium G68', () => {
   it('entri baru tersedia dan id fill-rate-line terpisah dari fill-rate (SMD)', () => {
     for (const id of ['laba-kotor', 'ebitda', 'laba-bersih', 'tidak-teralokasi', 'waste', 'pemakaian-internal', 'fill-rate-line', 'permintaan-penuh', 'waktu-kirim', 'permintaan-matang']) {
       expect(getTerm(id), id).toBeDefined();

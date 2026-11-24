@@ -36,7 +36,10 @@ PT_VIEWS = {
     "v_esb_forecast_daily",
     "v_esb_sales_done_day",  # Insight YoY 24 Nov 2026 (23-insight-yoy.sql)
     "v_esb_menu_econ_daily",
-    # G67 §31.7 (24-g67-esb-pl-waste-fillrate.sql)
+    "v_esb_ing_price_monthly",  # G67 margin bahan (24-margin-bahan.sql)
+    "v_esb_menu_cost_monthly",
+    "v_esb_ing_group_monthly",
+    # G68 §32.7 (25-g68-esb-pl-waste-fillrate.sql)
     "v_esb_pl_monthly",
     "v_esb_item_usage_daily",
     "v_esb_item_usage_product_monthly",
@@ -172,7 +175,7 @@ def test_policy_manifest_classes() -> None:
     manifest = esb_policy_manifest()
     assert {v for v, c in manifest.items() if c == "PT"} == PT_VIEWS
     assert {v for v, c in manifest.items() if c == "BR"} == BR_VIEWS
-    assert len(PT_VIEWS) + len(BR_VIEWS) == 22
+    assert len(PT_VIEWS) + len(BR_VIEWS) == 25
     views = insight_views()
     # Kelas PT wajib untuk setiap view yang memuat cogs/mdr (Q-INS-F3).
     for name, (cols, _src) in views.items():

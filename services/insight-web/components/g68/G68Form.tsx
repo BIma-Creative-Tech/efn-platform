@@ -2,10 +2,10 @@ import Link from 'next/link';
 import type { ReactNode } from 'react';
 
 /**
- * Formulir filter khusus halaman G67 (GET; server memvalidasi ulang, klien hanya UX). Filter global (pt, branch, from, to)
+ * Formulir filter khusus halaman G68 (GET; server memvalidasi ulang, klien hanya UX). Filter global (pt, branch, from, to)
  * dibawa lewat input tersembunyi agar tidak hilang saat "Terapkan". Tanpa JavaScript klien.
  */
-export function G67Form({
+export function G68Form({
   path,
   label,
   carry,
@@ -51,7 +51,7 @@ export function CheckGroup({
   hint?: string;
 }): ReactNode {
   return (
-    <details className="g67-checks">
+    <details className="g68-checks">
       <summary>
         {legend} ({checked.length} dipilih)
       </summary>

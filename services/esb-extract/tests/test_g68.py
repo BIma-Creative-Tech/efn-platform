@@ -1,6 +1,7 @@
-"""G67 (docs/04 §31.1-§31.4): profit_loss, item_journal, transfer_request, delivery_ref (+ retransform) dengan ESB &
+"""G68 (docs/04 §32.1-§32.4): profit_loss, item_journal, transfer_request, delivery_ref (+ retransform) dengan ESB &
 ClickHouse palsu; planning, konfigurasi, CLI. Semua fixture SINTETIS (nama, kode, angka karangan; tidak ada data klien).
-DDL/view/akses statis: tests/test_g67_ddl.py; perilaku view di ClickHouse 24.8: tests/clickhouse/g67_views_harness.sh.
+DDL/view/akses statis: tests/test_g68_ddl.py; perilaku view di ClickHouse 24.8: tests/clickhouse/g68_views_harness.sh.
+(Semula test_g67.py; dinomori ulang G68 saat merge #165 "Margin bahan" = G67.)
 """
 
 import argparse
@@ -26,7 +27,7 @@ from efn_esb.config import (
     parse_pl_refresh_months,
 )
 from efn_esb.extract import BrandRuntime, extractor_for, run_slice
-from efn_esb.extract_g67 import G67_EXTRACTORS, GTR_PATH, ITEM_JOURNAL_PATH, PL_PATH
+from efn_esb.extract_g68 import G68_EXTRACTORS, GTR_PATH, ITEM_JOURNAL_PATH, PL_PATH
 from efn_esb.http import check_request
 from efn_esb.planning import (
     WIB,
@@ -39,12 +40,12 @@ from efn_esb.planning import (
 )
 from efn_esb.records import RAW_COLUMNS, raw_rows
 from efn_esb.runner import ALL_TABLES, execute, run_backfill, run_cycle, run_retransform, write_slice
-from efn_esb.transform_g67 import (
+from efn_esb.transform_g68 import (
     FACT_DELIVERY_REF_LINE_COLUMNS,
     FACT_ITEM_JOURNAL_LINE_COLUMNS,
     FACT_PROFIT_LOSS_COLUMNS,
     FACT_TRANSFER_REQUEST_LINE_COLUMNS,
-    G67_TABLES,
+    G68_TABLES,
     RawMissing,
     account_key,
     delivery_details_from_raw,
@@ -257,7 +258,7 @@ def test_extract_profit_loss_brand_scope_and_past_year() -> None:
     facts = brand.tables["fact_esb_profit_loss"]
     assert {r[PL["scope"]] for r in facts} == {"brand"} and {r[PL["company_code"]] for r in facts} == {"PB"}
     assert brand.raw[0].doc_key == "2026|*" and not CFG.multi_company
-    # Negatif SEC-G67-01: Bacha multi-PT (BCF + override 6=BCR) -> total brand company_code '' (row policy membuang).
+    # Negatif SEC-G68-01: Bacha multi-PT (BCF + override 6=BCR) -> total brand company_code '' (row policy membuang).
     multi = run_slice(runtime(BACHA), SliceTask(date(2026, 1, 1), "profit_loss", "*"), V, esb.get)
     assert BACHA.multi_company and {r[PL["company_code"]] for r in multi.tables["fact_esb_profit_loss"]} == {""}
     same_pt = BrandConfig("bacha", "u", "p", "BCF", frozenset(), frozenset(), {6: "BCF"})
@@ -415,7 +416,7 @@ def test_transform_transfer_requests_direction_merge_and_resolution() -> None:
     assert set(rows) == {("P1", "KG"), ("P2", "PCS"), ("RM77", "KG"), ("RM88", "KG"), ("", "LTR")}
     p1 = rows[("P1", "KG")]
     assert (p1["request_qty"], p1["qty"], p1["stock_qty"]) == (Decimal("5.500"), Decimal("3.000"), Decimal("4.000"))
-    # Arah [B]: origin = pemasok (CK), destination = peminta (outlet); PT = PT peminta (cabang 6 -> BCR, L-266).
+    # Arah [B]: origin = pemasok (CK), destination = peminta (outlet); PT = PT peminta (cabang 6 -> BCR, L-276).
     assert (p1["requester_branch_id"], p1["supplier_branch_id"], p1["company_code"]) == (6, 4, "BCR")
     assert p1["finished"] == 1 and p1["bypass_gd"] == 0 and p1["purchase_request_num"] == "PR/1"
     assert p1["status_id"] == 3 and p1["category_type"] == "Bahan" and p1["transfer_date"] == DAY
@@ -651,9 +652,9 @@ def test_entities_opt_in_and_registry() -> None:
     assert {"item_journal", "transfer_request"} <= set(DAILY_ENTITIES)
     assert "profit_loss" not in DAILY_ENTITIES and "delivery_ref" not in DAILY_ENTITIES
     assert parse_entities("delivery,delivery_ref,profit_loss") == ("delivery", "delivery_ref", "profit_loss")
-    for name in G67_EXTRACTORS:
-        assert extractor_for(name) is G67_EXTRACTORS[name]
-    assert set(G67_TABLES) <= set(ALL_TABLES)
+    for name in G68_EXTRACTORS:
+        assert extractor_for(name) is G68_EXTRACTORS[name]
+    assert set(G68_TABLES) <= set(ALL_TABLES)
     with pytest.raises(KeyError):
         extractor_for("delivery_ref")  # turunan, tanpa extractor sendiri
 
@@ -726,7 +727,7 @@ def test_cli_retransform_respects_kill_switch(
     assert "ESB dinonaktifkan" in capsys.readouterr().out
 
 
-def test_cli_parser_accepts_g67_commands() -> None:
+def test_cli_parser_accepts_g68_commands() -> None:
     args = cli._parse_args(["retransform", "--brand", "pb", "--entity", "delivery_ref", "--from", "2024-12-01",
                             "--to", "2026-11-24"])  # fmt: skip
     assert (args.cmd, args.entity, args.start, args.end) == ("retransform", "delivery_ref", date(2024, 12, 1),

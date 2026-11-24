@@ -1,5 +1,12 @@
 # Security Review G67: ESB P&L, Waste, Fill Rate -> Insight (2026-11-25)
 
+> **Catatan penomoran ulang (25 Nov 2026, rekonsiliasi merge #165):** gelombang yang direview di sini **dinomori ulang
+> menjadi G68** karena label G67 sudah dipakai Insight "Margin bahan" (#165). Padanan: docs/04 §31 → **§32** (§31.x →
+> §32.x), L-260..L-268 → **L-270..L-278**, `24-g67-esb-pl-waste-fillrate.sql` → `25-g68-esb-pl-waste-fillrate.sql`,
+> `v_esb_g67_quality` → `v_esb_g68_quality`, `INSIGHT_G67_ENABLED` → `INSIGHT_G68_ENABLED`, modul/test `*_g67*` →
+> `*_g68*`, ID temuan **SEC-G67-xx = SEC-G68-xx** (kode memakai SEC-G68-01). Jumlah policy ESB setelah merge = 25 (bukan
+> 22). Isi review di bawah tidak diubah (rekaman historis); nama file dipertahankan.
+
 Reviewer: efn-security-reviewer (read-only, kode/konfigurasi saja; tidak ada eksekusi test).
 Lingkup: worktree `efn-platform-g67`, branch `feat/esb-insight-pl-waste-fillrate`, commit `78aaa8b` vs `origin/main` `8738838`.
 Acuan: docs/04 §31, ADR-040 §6b (amandemen G67), ADR-041 (Proposed), CLAUDE.md (PDP, least privilege, multi-company).

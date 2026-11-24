@@ -1,7 +1,8 @@
 """Adapter ClickHouse (pola `services/etl/efn_etl/adapters.py`): HTTPS 8443 + CA internal, user `efn_esb`.
 
-Hak `esb_writer` = SELECT + INSERT saja (infra/clickhouse/access/esb-access.sql); tidak ada DDL/ALTER dari service.
-Semua query berparameter.
+Hak `esb_writer` = SELECT + INSERT (infra/clickhouse/access/esb-access.sql). Tanpa CREATE/DROP TABLE (SEC-AG-01);
+pengecualian tabel agregat Insight (efn_esb/aggregates.py): TRUNCATE pada `efn_dwh.agg_esb_*_build`, ALTER DELETE
+(REPLACE/DROP PARTITION) pada `efn_dwh.agg_esb_*`, grant per tabel. Semua nilai lewat parameter.
 """
 
 import json
@@ -45,6 +46,22 @@ class ClickHouseStore:
         self._client = client
         self._mart = mart_db
         self._raw = raw_db
+
+    @property
+    def mart_db(self) -> str:
+        return self._mart
+
+    @property
+    def raw_db(self) -> str:
+        return self._raw
+
+    def command(
+        self, sql: str, parameters: dict[str, Any] | None = None, settings: dict[str, Any] | None = None
+    ) -> None:
+        self._client.command(sql, parameters=parameters, settings=settings)
+
+    def query_rows(self, sql: str, parameters: dict[str, Any] | None = None) -> list[Sequence[Any]]:
+        return list(self._client.query(sql, parameters=parameters).result_rows)
 
     def insert(self, table: str, columns: Sequence[str], rows: list[list[Any]]) -> None:
         if rows:
@@ -90,7 +107,7 @@ class ClickHouseStore:
         return [(int(i), str(c), str(n)) for i, c, n in result.result_rows]
 
     def load_product_ids(self, brand: str) -> dict[int, str]:
-        """G67: {productID: productCode} versi terakhir (dim_esb_product_id, 24-g67-esb-pl-waste-fillrate.sql)."""
+        """G68: {productID: productCode} versi terakhir (dim_esb_product_id, 25-g68-esb-pl-waste-fillrate.sql)."""
         result = self._client.query(
             f"SELECT product_id, product_code FROM {self._mart}.dim_esb_product_id FINAL "  # noqa: S608
             "WHERE brand = {brand:String} AND product_code != ''",
@@ -99,7 +116,7 @@ class ClickHouseStore:
         return {int(p): str(c) for p, c in result.result_rows}
 
     def load_raw(self, brand: str, endpoint: str, doc_keys: Sequence[str]) -> dict[str, tuple[date, Any]]:
-        """G67 retransform: {doc_key: (doc_date, payload JSON)} versi terakhir raw_doc (tanpa panggilan ESB)."""
+        """G68 retransform: {doc_key: (doc_date, payload JSON)} versi terakhir raw_doc (tanpa panggilan ESB)."""
         if not doc_keys:
             return {}
         result = self._client.query(

@@ -4,7 +4,7 @@ import { ErrorCard } from '@/components/blocks';
 import { ChartCard } from '@/components/ChartCard';
 import { DataTable, type TableRow } from '@/components/DataTable';
 import { FilterNotice } from '@/components/FilterNotice';
-import { CheckGroup, G67Form } from '@/components/g67/G67Form';
+import { CheckGroup, G68Form } from '@/components/g68/G68Form';
 import { EmptyState, KpiRow, KpiTile, PageHeader, Section } from '@/components/ui';
 import { codeName } from '@/lib/brands';
 import { fmtIdrShort, fmtRange } from '@/lib/format';
@@ -19,8 +19,8 @@ import {
   usageLabel,
   wasteTrendSpec,
   type WasteTrendRow,
-} from '@/lib/g67-vm';
-import { g67Page, type G67SearchParams } from '@/lib/g67-page';
+} from '@/lib/g68-vm';
+import { g68Page, type G68SearchParams } from '@/lib/g68-page';
 import { loadCoverage, num, numOrNull, type Result } from '@/lib/loaders';
 import { changePct } from '@/lib/pnl';
 import { runEsb } from '@/lib/smd-data';
@@ -62,9 +62,9 @@ function fail(r: Result<unknown>, title: string): ReactNode | null {
   return r.ok ? null : <ErrorCard title={title} refId={r.ref} reason={r.reason} />;
 }
 
-/** Waste & Pemakaian Internal (docs/04 §31.8-§31.10): nilai = HPP jurnal item per outlet; kelas purpose = pemetaan sementara (Q-ESB30). */
-export default async function WastePage({ searchParams }: { searchParams: G67SearchParams }) {
-  const { ctx, adjusted, raw } = await g67Page('/waste', searchParams);
+/** Waste & Pemakaian Internal (docs/04 §32.8-§32.10): nilai = HPP jurnal item per outlet; kelas purpose = pemetaan sementara (Q-ESB30). */
+export default async function WastePage({ searchParams }: { searchParams: G68SearchParams }) {
+  const { ctx, adjusted, raw } = await g68Page('/waste', searchParams);
   const { from, to } = ctx.filters;
   const cls = parseUsageClasses(raw);
   const weekly = isWeekly(from, to);
@@ -127,7 +127,7 @@ export default async function WastePage({ searchParams }: { searchParams: G67Sea
       <PageHeader title="Waste & Pemakaian Internal" question="Berapa nilai barang yang terbuang atau dipakai internal di tiap outlet, dan seberapa besar dibanding penjualan?" />
       <FilterNotice adjusted={adjusted || cls.adjusted} />
 
-      <G67Form
+      <G68Form
         path="/waste"
         label="Pilih kelas pemakaian"
         carry={{ pt: one(raw.pt), branch: one(raw.branch), from: one(raw.from), to: one(raw.to) }}
@@ -145,7 +145,7 @@ export default async function WastePage({ searchParams }: { searchParams: G67Sea
           checked={cls.uclass}
           hint="Bawaan: Waste dan Pemakaian internal."
         />
-      </G67Form>
+      </G68Form>
 
       <p className="muted small">
         Nilai = HPP pada jurnal item (positif = biaya keluar). Kelas dipetakan dari purpose jurnal ESB (sementara, menunggu konfirmasi Ops/Finance): purpose

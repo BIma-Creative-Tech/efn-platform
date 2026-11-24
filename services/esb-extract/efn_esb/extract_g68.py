@@ -1,5 +1,6 @@
-"""Extractor G67 (docs/04 §31.1, ADR-040 amandemen G67, L-260..L-268): laba rugi per cabang, jurnal item (waste &
+"""Extractor G68 (docs/04 §32.1, ADR-040 amandemen G68, L-270..L-278): laba rugi per cabang, jurnal item (waste &
 pemakaian internal), goods transfer request (fill rate). GET saja; I/O hanya lewat `get` (diinjeksi di test).
+(Semula `extract_g67.py`; dinomori ulang G68 saat merge #165 "Margin bahan" = G67.)
 
 - `profit_loss`: satu slice = cabang x TAHUN (`SliceTask.day` = 1 Januari, scope `<branch_id>` atau '*' = total brand).
   `/report/profit-loss/month-to-month?year=Y&month=M[&branchIDs=<id>]` (`branchIDs[]=` diabaikan server -> tidak
@@ -35,7 +36,7 @@ from efn_esb.normalize import (
 )
 from efn_esb.paging import Getter, fetch_all
 from efn_esb.planning import BRAND_SCOPE, SliceTask, pl_month, wib_today
-from efn_esb.transform_g67 import (
+from efn_esb.transform_g68 import (
     SOURCE_GTR,
     check_detail_num,
     check_doc_day,
@@ -66,7 +67,7 @@ def extract_profit_loss(rt: BrandRuntime, task: SliceTask, version: datetime, ge
     if not isinstance(response, Mapping):
         raise ValueError("respons profit-loss bukan objek")
     payload = whitelist_tree(response, PL_FIELDS)
-    # SEC-G67-01: total brand milik brand multi-PT (mis. Bacha BCF + override BCR) memuat agregat semua PT ->
+    # SEC-G68-01: total brand milik brand multi-PT (mis. Bacha BCF + override BCR) memuat agregat semua PT ->
     # company_code '' (row policy efn_insight membuangnya; tetap ada untuk admin/quality). Satu PT (PB) -> PT default.
     if branch_id > 0:
         company = cfg.company_for(branch_id)
@@ -149,7 +150,7 @@ def extract_transfer_request(rt: BrandRuntime, task: SliceTask, version: datetim
     return result
 
 
-G67_EXTRACTORS: dict[str, Extractor] = {
+G68_EXTRACTORS: dict[str, Extractor] = {
     "profit_loss": extract_profit_loss,
     "item_journal": extract_item_journal,
     "transfer_request": extract_transfer_request,

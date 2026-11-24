@@ -16,16 +16,18 @@ import logging
 import threading
 import time
 import uuid
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from typing import Any, Protocol
 
-from efn_esb.config import DAILY_ENTITIES, DELIVERY_REF_ENTITY, PL_ENTITY, EsbSettings
+from efn_esb.aggregates import TRIGGER_ENTITIES, RefreshResult, RefreshStore, error_label, refresh_all
+from efn_esb.config import DAILY_ENTITIES, DELIVERY_REF_ENTITY, PL_ENTITY, EsbSettings, MarginSettings
 from efn_esb.extract import BrandRuntime, SliceResult, run_slice
 from efn_esb.heartbeat import heartbeat_line
 from efn_esb.http import CallBudgetExceeded, EsbAuthError
+from efn_esb.margin import is_due, last_ok, record, refresh_margin, refresh_name
 from efn_esb.paging import Getter
 from efn_esb.planning import (
     BRAND_SCOPE,
@@ -55,9 +57,9 @@ from efn_esb.records import (
 )
 from efn_esb.transform import DIM_SUPPLIER_COLUMNS, MART_TABLES, BomRatio
 from efn_esb.transform_g65 import G65_TABLES
-from efn_esb.transform_g67 import (
+from efn_esb.transform_g68 import (
     DIM_PRODUCT_ID_COLUMNS,
-    G67_TABLES,
+    G68_TABLES,
     RawMissing,
     delivery_details_from_raw,
     raw_delivery_nums,
@@ -66,11 +68,11 @@ from efn_esb.transform_g67 import (
 from efn_esb.transform_mig import MIG_TABLES
 
 log = logging.getLogger("efn_esb.runner")
-# Tabel mart G41 + migrasi G43 (14-g43-migration.sql) + G65 (23-g65-…sql) + G67 (24-g67-esb-pl-waste-fillrate.sql).
-ALL_TABLES: dict[str, tuple[str, ...]] = {**MART_TABLES, **MIG_TABLES, **G65_TABLES, **G67_TABLES}
+# Tabel mart G41 + migrasi G43 (14-g43-migration.sql) + G65 (23-g65-…sql) + G68 (25-g68-esb-pl-waste-fillrate.sql).
+ALL_TABLES: dict[str, tuple[str, ...]] = {**MART_TABLES, **MIG_TABLES, **G65_TABLES, **G68_TABLES}
 # G65: entitas yang memetakan supplier lewat dim_esb_supplier.supplier_id (docs/04 §27.13.1).
 SUPPLIER_ID_ENTITIES = frozenset({"purchase_line"})
-# G67: entitas yang memetakan productID -> productCode lewat dim_esb_product_id (docs/04 §31.1.3).
+# G68: entitas yang memetakan productID -> productCode lewat dim_esb_product_id (docs/04 §32.1.3).
 PRODUCT_ID_ENTITIES = frozenset({"transfer_request"})
 _PID = DIM_PRODUCT_ID_COLUMNS.index("product_id")
 _PCODE = DIM_PRODUCT_ID_COLUMNS.index("product_code")
@@ -154,7 +156,7 @@ def write_slice(store: Store, brand: str, result: SliceResult, fetched_at: datet
         CHECKPOINT_COLUMNS,
         [checkpoint_row(brand, result.task, result.version, result.rows, result.calls)],
     )
-    if result.derived:  # G67: checkpoint entitas turunan (delivery_ref) SETELAH checkpoint utama, versi sama
+    if result.derived:  # G68: checkpoint entitas turunan (delivery_ref) SETELAH checkpoint utama, versi sama
         store.insert_control(
             "extract_checkpoint",
             CHECKPOINT_COLUMNS,
@@ -166,7 +168,7 @@ def _absorb(rt: BrandRuntime, result: SliceResult) -> None:
     """Alias/cabang hasil slice -> status runtime (untuk slice berikutnya di proses yang sama)."""
     with rt.lock:
         rt.aliases.update(result.aliases)
-        for row in result.tables.get("dim_esb_product_id", []):  # G67: pemetaan productID dari slice GTR
+        for row in result.tables.get("dim_esb_product_id", []):  # G68: pemetaan productID dari slice GTR
             rt.product_ids[int(row[_PID])] = str(row[_PCODE])
     if result.task.entity == "branch":
         rt.branch_rows = result.tables.get("dim_esb_branch", [])
@@ -270,7 +272,7 @@ def prepare_brand(
     G65 `need_supplier_ids` (entitas `purchase_line` aktif): supplier dimuat dari dim_esb_supplier; bila belum ada satu
     pun `supplier_id` > 0 (kolom baru, master belum jalan sejak deploy) master dipaksa SEKALI per proses agar join
     header PO -> kode supplier tidak jatuh ke fallback nama.
-    G67 `need_product_ids` (entitas `transfer_request` aktif): pemetaan productID -> kode dari dim_esb_product_id."""
+    G68 `need_product_ids` (entitas `transfer_request` aktif): pemetaan productID -> kode dari dim_esb_product_id."""
     rt.aliases = store.load_aliases(rt.cfg.key)
     rt.ratios = store.load_bom_ratios(rt.cfg.key)
     if need_product_ids:
@@ -316,7 +318,7 @@ def run_cycle(
     on_written: Callable[[SliceResult], None] | None = None,
 ) -> RunRecord:
     """Satu siklus incremental satu brand: cabang, master harian, H-1 + koreksi H-7 + gap fill.
-    G67: + slice tahun `profit_loss` (sekali/hari, `planning.pl_run_tasks`) bila tercantum di ESB_ENTITIES."""
+    G68: + slice tahun `profit_loss` (sekali/hari, `planning.pl_run_tasks`) bila tercantum di ESB_ENTITIES."""
     started = time.monotonic()
     run = RunRecord(rt.cfg.key, "run", datetime.now(UTC), uuid.uuid4())
     outcome = Outcome()
@@ -440,6 +442,100 @@ def guarded_cycle(
     return run
 
 
+def refresh_aggregates(store: RefreshStore, allow_shrink: bool = False) -> bool:
+    """Bangun ulang tabel agregat Insight (efn_esb/aggregates.py). Tidak pernah melempar: gagal = log error + False,
+    data ekstraksi yang sudah tersimpan tidak terpengaruh. `allow_shrink` hanya dari CLI manual (SEC-AG-03)."""
+    try:
+        results = refresh_all(store, allow_shrink=allow_shrink)
+    except Exception as exc:
+        log.error("refresh agregat gagal error=%s", error_label(exc))
+        return False
+    return all(r.status == "ok" for r in results)
+
+
+class RefreshTrigger:
+    """Tandai perlu refresh bila slice entitas pengisi agregat (TRIGGER_ENTITIES) ditulis; refresh di akhir siklus.
+    Gagal/busy -> tetap ditandai, dicoba lagi di akhir siklus berikutnya."""
+
+    def __init__(self) -> None:
+        self.dirty = False
+
+    def note(self, result: SliceResult) -> None:
+        if result.task.entity in TRIGGER_ENTITIES:
+            self.dirty = True
+
+    def maybe_refresh(self, store: RefreshStore) -> bool | None:
+        """None = tidak ada data baru (tidak ada query); True/False = hasil refresh."""
+        if not self.dirty:
+            return None
+        if refresh_aggregates(store):
+            self.dirty = False
+            return True
+        return False
+
+
+class MarginSchedule:
+    """G67 (docs/04 §31.2): refresh margin bahan mingguan di loop `run`. Per brand di ESB_MARGIN_BRANDS yang jatuh
+    tempo (margin.is_due): (1) snapshot `bom_detail` brand itu, (2) hitung + tulis (margin.refresh_margin). Paling
+    banyak satu percobaan per brand per hari WIB (di memori). Tidak pernah melempar: gagal = log + aggregate_refresh
+    `error`, ekstraksi harian tidak terpengaruh (pola agregat §25.7)."""
+
+    def __init__(self, margin: MarginSettings) -> None:
+        self.margin = margin
+        self.attempted: dict[str, date] = {}
+
+    def run_due(
+        self,
+        settings: EsbSettings,
+        runtimes: Mapping[str, tuple[BrandRuntime, Budgeted]],
+        store: Any,
+        breaker: AuthBreaker,
+        now: datetime,
+        stop: threading.Event,
+        on_written: Callable[[SliceResult], None] | None = None,
+    ) -> list[RefreshResult]:
+        results: list[RefreshResult] = []
+        for brand in self.margin.brands:
+            pair = runtimes.get(brand)
+            if stop.is_set() or pair is None or breaker.suspended(brand):
+                continue
+            try:
+                previous = last_ok(store, brand)
+            except Exception as exc:  # ClickHouse tidak terjangkau: coba lagi siklus berikutnya
+                log.error("margin=%s cek jadwal gagal error=%s", brand, error_label(exc))
+                continue
+            if not is_due(now, self.margin.weekday, self.margin.hour_wib, previous, self.attempted.get(brand)):
+                continue
+            today = wib_today(now)
+            self.attempted[brand] = today
+            try:
+                results.append(self._refresh(settings, pair, store, brand, today, stop, on_written))
+            except Exception as exc:  # pertahanan berlapis: loop ekstraksi tidak boleh berhenti karena margin
+                log.error("margin=%s refresh gagal error=%s", brand, error_label(exc))
+        return results
+
+    def _refresh(
+        self,
+        settings: EsbSettings,
+        pair: tuple[BrandRuntime, Budgeted],
+        store: Any,
+        brand: str,
+        today: date,
+        stop: threading.Event,
+        on_written: Callable[[SliceResult], None] | None,
+    ) -> RefreshResult:
+        rt, client = pair
+        started = version_now()
+        snap = run_snapshot(settings, rt, client, store, ["bom_detail"], today, stop, on_written=on_written)
+        if snap.status != "ok":
+            # Resep basi tidak dihitung diam-diam: refresh berikutnya minggu depan atau `refresh-margin` manual.
+            label = f"snapshot_{snap.status}"
+            result = RefreshResult(refresh_name(brand), "error", started, version_now(), error=label)
+            record(store, result)
+            return result
+        return refresh_margin(store, brand, self.margin.months, today)
+
+
 def run_backfill(
     settings: EsbSettings,
     rt: BrandRuntime,
@@ -457,7 +553,7 @@ def run_backfill(
 ) -> RunRecord:
     """Backfill resumable satu brand. Di luar `ESB_BACKFILL_WINDOW` (WIB) berhenti di batas slice berikutnya
     (`status=window_closed`); jalankan ulang perintah yang sama untuk melanjutkan.
-    G67: `profit_loss` = slice tahun yang beririsan [start, end] x semua cabang (+ nonaktif bila
+    G68: `profit_loss` = slice tahun yang beririsan [start, end] x semua cabang (+ nonaktif bila
     ESB_BACKFILL_INCLUDE_INACTIVE) + total brand; `delivery_ref` hanya bersama `delivery` (turunan, tanpa GET)."""
     started = time.monotonic()
     run = RunRecord(rt.cfg.key, "backfill", datetime.now(UTC), uuid.uuid4())
@@ -553,7 +649,7 @@ def run_retransform(
     *,
     clock: Callable[[], datetime] = version_now,
 ) -> tuple[RunRecord, list[date]]:
-    """G67 §31.1.4: isi ulang `fact_esb_delivery_ref_line` dari raw_doc goods-delivery G41 TANPA panggilan/login ESB.
+    """G68 §32.1.4: isi ulang `fact_esb_delivery_ref_line` dari raw_doc goods-delivery G41 TANPA panggilan/login ESB.
 
     Per hari D: list raw (`doc_key=D`) -> nomor dokumen -> detail raw (`doc_key=<nomor>`, wajib `doc_date=D`). Lengkap
     -> slice versi baru (tabel + checkpoint `delivery_ref`, tanpa raw baru). Tidak lengkap -> slice TIDAK ditulis,

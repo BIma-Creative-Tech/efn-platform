@@ -155,7 +155,7 @@ export const GLOSSARY: readonly GlossaryEntry[] = [
     term: 'Fill rate',
     def: 'Seberapa penuh pesanan terpenuhi: qty yang benar-benar dikirim atau diterima dibanding qty usulan yang disetujui.',
     read: 'Makin dekat 100% makin baik. Di bawah ambang berarti ada kurang kirim.',
-    // G67: label F&B "Fill rate outlet (baris)" memakai entri `fill-rate-line`; definisi entri ini (usulan DC SMD) tidak diubah,
+    // G68: label F&B "Fill rate outlet (baris)" memakai entri `fill-rate-line`; definisi entri ini (usulan DC SMD) tidak diubah,
     // dan label SMD ("Fill rate baris", "Fill rate qty", "Fill rate per outlet") tetap memakainya.
     match: 'fill ?rate(?! outlet)',
   },
@@ -206,7 +206,7 @@ export const GLOSSARY: readonly GlossaryEntry[] = [
     read: 'Dilakukan dua fase (transfer, lalu produksi). Dokumen produksi langsung mengubah stok ESB, karena itu butuh pratinjau dan konfirmasi eksplisit.',
     match: '\\bposting\\b',
   },
-  // G67 (Laba Rugi Outlet, Waste & Pemakaian Internal, Fill Rate Outlet ke CK; docs/04 §31.10).
+  // G68 (Laba Rugi Outlet, Waste & Pemakaian Internal, Fill Rate Outlet ke CK; docs/04 §32.10).
   {
     id: 'laba-kotor',
     term: 'Laba kotor',

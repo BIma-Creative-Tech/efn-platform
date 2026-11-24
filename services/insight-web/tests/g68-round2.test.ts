@@ -1,9 +1,9 @@
 /**
- * G67 putaran perbaikan (QA G67): irisan cakupan fill rate, keadaan "belum matang", filter Pemasok pada tabel produk,
+ * G68 putaran perbaikan (QA G68): irisan cakupan fill rate, keadaan "belum matang", filter Pemasok pada tabel produk,
  * dan pemetaan seluruh kunci `summaries` ESB. Fixture sintetis.
  */
 import { describe, expect, it } from 'vitest';
-import { COVERAGE_KEYS, coverageIntersectHint, fillRateEmptyKind } from '@/lib/g67-vm';
+import { COVERAGE_KEYS, coverageIntersectHint, fillRateEmptyKind } from '@/lib/g68-vm';
 import { PL_KEYS, PL_SECTION_LABEL, PL_SECTION_ORDER, plKeyOf, plKeySql } from '@/lib/pnl';
 import { QUERIES } from '@/lib/queries';
 

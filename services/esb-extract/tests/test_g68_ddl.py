@@ -1,14 +1,14 @@
-"""G67 (docs/04 §31.5-§31.7) statis: DDL `24-g67-esb-pl-waste-fillrate.sql` cocok dengan kolom transform, kunci dedup
-& partisi kontrak, view §31.6 (nama & kolom = antarmuka insight-web), rumus fill rate / kelas purpose / filter versi
+"""G68 (docs/04 §32.5-§32.7) statis: DDL `25-g68-esb-pl-waste-fillrate.sql` cocok dengan kolom transform, kunci dedup
+& partisi kontrak, view §32.6 (nama & kolom = antarmuka insight-web), rumus fill rate / kelas purpose / filter versi
 slice (cek string DDL), grant & row policy (positif + negatif). Perilaku view di ClickHouse 24.8 = harness
-tests/clickhouse/g67_views_harness.sh (dijalankan lead)."""
+tests/clickhouse/g68_views_harness.sh (dijalankan lead). Semula G67 (dinomori ulang saat merge #165)."""
 
 import re
 from pathlib import Path
 
 from test_insight_access import (
     ACCESS,
-    DDL24,
+    DDL25,
     ESB_POLICY_SH,
     INIT_SH,
     dwh_view_body,
@@ -18,14 +18,14 @@ from test_insight_access import (
     strip_comments,
 )
 
-from efn_esb.transform_g67 import G67_TABLES
+from efn_esb.transform_g68 import G68_TABLES
 
 ROOT = Path(__file__).resolve().parents[3]
 CH = ROOT / "infra" / "clickhouse"
 ESB_ACCESS = (CH / "access" / "esb-access.sql").read_text(encoding="utf-8")
-CODE = strip_comments(DDL24)
+CODE = strip_comments(DDL25)
 
-# Kontrak kolom §31.6 (urutan tetap; W-B menulis query terhadap daftar ini).
+# Kontrak kolom §32.6 (urutan tetap; W-B menulis query terhadap daftar ini).
 VIEW_COLUMNS = {
     "v_esb_pl_monthly": (
         "period_month brand company_code scope branch_id branch_name line_type section account_no account_key "
@@ -51,13 +51,13 @@ VIEW_COLUMNS = {
         "month brand company_code branch_id product_code product_name uom lines request_qty sent_capped qty_sent "
         "qty_received"
     ).split(),
-    "v_esb_g67_quality": "check_name brand company_code item value last_day".split(),
+    "v_esb_g68_quality": "check_name brand company_code item value last_day".split(),
 }
 WRAPPED = (
     "v_esb_pl_monthly", "v_esb_item_usage_daily", "v_esb_item_usage_product_monthly", "v_esb_fill_rate_daily",
     "v_esb_fill_rate_product_monthly",
 )  # fmt: skip
-INTERNAL = ("v_esb_item_journal_line", "v_esb_fill_rate_line", "v_esb_g67_quality")
+INTERNAL = ("v_esb_item_journal_line", "v_esb_fill_rate_line", "v_esb_g68_quality")
 ORDER_BY = {
     "fact_esb_profit_loss": "(company_code, brand, scope, branch_id, period_month, line_type, section, account_no)",
     "fact_esb_item_journal_line": "(company_code, brand, journal_date, journal_num, detail_id, line_no)",
@@ -71,7 +71,7 @@ PARTITION = {
     "fact_esb_transfer_request_line": "toYYYYMM(transfer_date)",
     "fact_esb_delivery_ref_line": "toYYYYMM(delivery_date)",
 }
-G67_OBJECTS = (*G67_TABLES, *VIEW_COLUMNS, "v_esb_item_journal_line")
+G68_OBJECTS = (*G68_TABLES, *VIEW_COLUMNS, "v_esb_item_journal_line")
 
 
 def table_block(table: str) -> str:
@@ -95,8 +95,8 @@ def top_level_items(name: str) -> int:
 
 # ---------------------------------------------------------------- tabel
 def test_tables_columns_engine_key_partition() -> None:
-    assert set(re.findall(r"CREATE TABLE IF NOT EXISTS efn_dwh\.(\w+)", CODE)) == set(G67_TABLES)
-    for table, columns in G67_TABLES.items():
+    assert set(re.findall(r"CREATE TABLE IF NOT EXISTS efn_dwh\.(\w+)", CODE)) == set(G68_TABLES)
+    for table, columns in G68_TABLES.items():
         block = table_block(table)
         cols = block.split("ENGINE", 1)[0]
         for column in columns:
@@ -134,9 +134,16 @@ def test_ddl_idempotent_additive_only() -> None:
     assert not re.search(r"\b(SQL SECURITY|DEFINER)\b", CODE)  # view efn_dwh = INVOKER
     views = re.findall(r"CREATE OR REPLACE VIEW efn_dwh\.(\w+) AS", CODE)
     assert set(views) == set(VIEW_COLUMNS) | {"v_esb_item_journal_line"}
-    # Tidak menyentuh objek G41/G65 (L-262: fact_esb_delivery TIDAK di-ALTER; v_esb_flow_daily tidak disentuh).
+    # Tidak menyentuh objek G41/G65 (L-272: fact_esb_delivery TIDAK di-ALTER; v_esb_flow_daily tidak disentuh).
     assert "fact_esb_delivery " not in CODE and "fact_esb_delivery\n" not in CODE
     assert "v_esb_flow_daily" not in CODE and "efn_esb.raw_doc" not in CODE
+
+
+def test_init_file_renumbered_after_margin_bahan() -> None:
+    # Penomoran ulang G67 -> G68 (merge #165): file lama 24-g67-… tidak boleh ada lagi (DDL ganda di glob init/*.sql).
+    assert not (CH / "init" / "24-g67-esb-pl-waste-fillrate.sql").exists()
+    assert (CH / "init" / "24-margin-bahan.sql").exists()
+    assert "g67" not in CODE.lower()
 
 
 # ---------------------------------------------------------------- view: kontrak kolom
@@ -213,7 +220,7 @@ def test_item_usage_formulas() -> None:
     assert "GROUP BY month, brand, company_code, branch_id, usage_class, purpose_name, p_code, uom\n" in product
 
 
-# ---------------------------------------------------------------- view: rumus fill rate (L-263, §31.6.1)
+# ---------------------------------------------------------------- view: rumus fill rate (L-273, §32.6.1)
 def test_fill_rate_line_join_and_flags() -> None:
     line = dwh_view_body("v_esb_fill_rate_line")
     # Join: brand + reference_num = transfer_num + product_code + uom; hanya trans_type Transfer Request; semua tanggal.
@@ -279,7 +286,7 @@ def test_fill_rate_product_monthly_capped_qty() -> None:
 
 
 def test_quality_checks_present() -> None:
-    quality = dwh_view_body("v_esb_g67_quality")
+    quality = dwh_view_body("v_esb_g68_quality")
     for check in ("pl_branch_vs_brand", "pl_sign_check", "dup_account", "journal_product_unmapped", "unknown_status",
                   "fill_rate_uom_mismatch", "delivery_ref_unmatched", "gtr_without_delivery_mature",
                   "gtr_bypass_gd", "gtr_product_unmapped"):  # fmt: skip
@@ -288,19 +295,19 @@ def test_quality_checks_present() -> None:
     assert "status_id NOT IN (3, 6, 8)" in quality and "is_counted = 0" in quality
 
 
-def test_coverage_extended_with_g67_daily_entities() -> None:
+def test_coverage_extended_with_g68_daily_entities() -> None:
     coverage = dwh_view_body("v_esb_coverage")
     assert coverage.count("'item_journal'") == 2 and coverage.count("'transfer_request'") == 2
     assert coverage.count("'delivery_ref'") == 2 and "profit_loss" not in coverage
 
 
-# ---------------------------------------------------------------- akses (§31.7)
+# ---------------------------------------------------------------- akses (§32.7)
 def _grants(text: str, role: str, privileges: str) -> set[str]:
     return set(re.findall(rf"^GRANT {privileges} ON (efn_\w+\.\w+) TO {role};$", text, re.MULTILINE))
 
 
-def test_esb_writer_select_insert_on_g67_tables_only() -> None:
-    tables = {f"efn_dwh.{t}" for t in G67_TABLES}
+def test_esb_writer_select_insert_on_g68_tables_only() -> None:
+    tables = {f"efn_dwh.{t}" for t in G68_TABLES}
     assert tables <= _grants(ESB_ACCESS, "esb_writer", "SELECT, INSERT")
     views = {f"efn_dwh.{v}" for v in (*VIEW_COLUMNS, "v_esb_item_journal_line")}
     assert not views & set(re.findall(r"ON (efn_\w+\.\w+) TO esb_writer", ESB_ACCESS))
@@ -315,35 +322,36 @@ def test_insight_wrappers_exact_columns_and_pt_policy() -> None:
         assert manifest[name] == "PT", name  # sesi ber-cabang -> 0 baris (§28.15.7)
     for name in INTERNAL:
         assert name not in views and name not in manifest, name  # tidak dibungkus efn_insight
-    assert "\nESB_POLICY_EXPECTED=22\n" in INIT_SH
-    assert sum(1 for c in manifest.values() if c == "PT") == 17
+    # 12 PT dasar + 3 margin bahan (§31.4) + 5 G68 = 20 PT; + 5 BR = 25.
+    assert "\nESB_POLICY_EXPECTED=25\n" in INIT_SH
+    assert sum(1 for c in manifest.values() if c == "PT") == 20
 
 
-def test_definer_reads_g67_objects_but_quality_view_is_admin_only() -> None:
+def test_definer_reads_g68_objects_but_quality_view_is_admin_only() -> None:
     definer = _grants(ACCESS, "efn_insight_definer", "SELECT")
-    expected = {f"efn_dwh.{n}" for n in (*G67_TABLES, *WRAPPED, "v_esb_item_journal_line", "v_esb_fill_rate_line")}
+    expected = {f"efn_dwh.{n}" for n in (*G68_TABLES, *WRAPPED, "v_esb_item_journal_line", "v_esb_fill_rate_line")}
     assert expected <= definer
     for path in sorted((CH / "access").iterdir()):  # cek kualitas = admin/lead saja (tidak di-grant ke role mana pun)
         text = path.read_text(encoding="utf-8")
-        assert not re.search(r"GRANT [^;]*v_esb_g67_quality", text), path.name
-        assert "efn_insight.v_esb_g67_quality" not in text and "efn_insight.v_esb_fill_rate_line" not in text
+        assert not re.search(r"GRANT [^;]*v_esb_g68_quality", text), path.name
+        assert "efn_insight.v_esb_g68_quality" not in text and "efn_insight.v_esb_fill_rate_line" not in text
 
 
-def test_g67_objects_not_granted_to_other_roles() -> None:
-    # L-267: tanpa Metabase, text2sql, forecast, mig, segment, ETL, Insight SM.
+def test_g68_objects_not_granted_to_other_roles() -> None:
+    # L-277: tanpa Metabase, text2sql, forecast, mig, segment, ETL, Insight SM.
     for path in sorted((CH / "access").iterdir()):
         if path.name in ("esb-access.sql", "insight-access.sql", "insight-esb-policy.sh"):
             continue
         text = path.read_text(encoding="utf-8")
-        for name in G67_OBJECTS:
+        for name in G68_OBJECTS:
             assert name not in text, (path.name, name)
     metabase = _grants(ESB_ACCESS, "metabase_reader", "SELECT")
-    assert not metabase & {f"efn_dwh.{n}" for n in G67_OBJECTS}
-    objects = "|".join(G67_OBJECTS)
+    assert not metabase & {f"efn_dwh.{n}" for n in G68_OBJECTS}
+    objects = "|".join(G68_OBJECTS)
     assert not re.search(rf"ON efn_dwh\.({objects}) TO (?!esb_writer;|efn_insight_definer;)", ESB_ACCESS + ACCESS)
 
 
-def test_insight_reader_cannot_read_g67_base_tables_directly() -> None:
+def test_insight_reader_cannot_read_g68_base_tables_directly() -> None:
     reader = [line for line in ACCESS.splitlines() if re.search(r"\bTO insight_reader\b", line)]
     assert not any("efn_dwh" in line for line in reader)
     assert "REVOKE ALL ON efn_dwh.* FROM insight_reader;" in ACCESS

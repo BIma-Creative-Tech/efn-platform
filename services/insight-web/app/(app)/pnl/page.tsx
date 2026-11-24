@@ -4,13 +4,13 @@ import { ErrorCard } from '@/components/blocks';
 import { ChartCard } from '@/components/ChartCard';
 import { DataTable, type TableRow } from '@/components/DataTable';
 import { FilterNotice } from '@/components/FilterNotice';
-import { G67Form } from '@/components/g67/G67Form';
+import { G68Form } from '@/components/g68/G68Form';
 import { EmptyState, KpiRow, KpiTile, PageHeader, Section } from '@/components/ui';
 import { codeName } from '@/lib/brands';
 import { summarize, type ChartSpec } from '@/lib/chart-spec';
 import { fmtDate, fmtIdrShort, fmtMonth, fmtRange } from '@/lib/format';
-import { COVERAGE_KEYS, coverageHint } from '@/lib/g67-vm';
-import { g67Page, type G67SearchParams } from '@/lib/g67-page';
+import { COVERAGE_KEYS, coverageHint } from '@/lib/g68-vm';
+import { g68Page, type G68SearchParams } from '@/lib/g68-page';
 import { loadCoverage, num, type Result } from '@/lib/loaders';
 import {
   buildStatement,
@@ -88,9 +88,9 @@ function tiles(cur: PnlSide, ly: PnlSide | null): ReactNode {
   );
 }
 
-/** Laba Rugi Outlet (docs/04 §31.8-§31.10): hanya persona Eksekutif; basis = angka laporan ESB, tanpa penyesuaian EFN. */
-export default async function PnlPage({ searchParams }: { searchParams: G67SearchParams }) {
-  const { ctx, adjusted, raw } = await g67Page('/pnl', searchParams);
+/** Laba Rugi Outlet (docs/04 §32.8-§32.10): hanya persona Eksekutif; basis = angka laporan ESB, tanpa penyesuaian EFN. */
+export default async function PnlPage({ searchParams }: { searchParams: G68SearchParams }) {
+  const { ctx, adjusted, raw } = await g68Page('/pnl', searchParams);
   const mr = parseMonthRange(raw, new Date());
   const extra = { m_from: mr.from, m_to: mr.to, yoy_from: mr.ly.from, yoy_to: mr.ly.to };
   const ptNames = ctx.filters.pt.map(codeName).join(', ');
@@ -178,7 +178,7 @@ export default async function PnlPage({ searchParams }: { searchParams: G67Searc
       <PageHeader title="Laba Rugi Outlet" question="Berapa laba setiap outlet menurut laporan ESB, dan pos mana yang menggerakkannya?" actions={<span className="persona-chip">Eksekutif</span>} />
       <FilterNotice adjusted={adjusted || mr.adjusted} />
 
-      <G67Form
+      <G68Form
         path="/pnl"
         label="Pilih rentang bulan"
         carry={{ pt: one(raw.pt), branch: one(raw.branch) }}
@@ -197,7 +197,7 @@ export default async function PnlPage({ searchParams }: { searchParams: G67Searc
           <span>Sampai bulan</span>
           <input className="input" type="month" name="mto" defaultValue={mr.mto} max={mr.current.slice(0, 7)} required />
         </label>
-      </G67Form>
+      </G68Form>
 
       <p className="muted small">
         Angka mengikuti laporan laba rugi ESB tanpa penyesuaian EFN. {partialNote}Bulan yang sudah tertutup dapat berubah karena jurnal susulan; data

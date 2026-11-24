@@ -28,7 +28,7 @@ ENTITIES = (
     "profit_loss", "item_journal", "transfer_request", "delivery_ref",
 )  # fmt: skip
 # Entitas harian (punya tanggal). `branch` & `master` = snapshot per hari jalan.
-# G67 (docs/04 §31.1): `item_journal`, `transfer_request` = harian per brand (opt-in). `profit_loss` BUKAN harian
+# G68 (docs/04 §32.1): `item_journal`, `transfer_request` = harian per brand (opt-in). `profit_loss` BUKAN harian
 # generik (slice = cabang x TAHUN, planning.pl_*_tasks); `delivery_ref` = turunan `delivery` (tanpa slice sendiri).
 DAILY_ENTITIES = (
     "sales", "fin_sold", "payment", "production", "delivery", "transfer", "stock", "purchase_line", "item_journal",
@@ -38,7 +38,7 @@ PL_ENTITY = "profit_loss"
 DELIVERY_REF_ENTITY = "delivery_ref"
 # Entitas yang diterima `backfill --entity` (harian + P&L + turunan delivery_ref).
 BACKFILL_ENTITIES = (*DAILY_ENTITIES, PL_ENTITY, DELIVERY_REF_ENTITY)
-# Mode `retransform` (tanpa API, dari raw_doc): hanya delivery_ref di G67 (§31.3).
+# Mode `retransform` (tanpa API, dari raw_doc): hanya delivery_ref di G68 (§32.3).
 RETRANSFORM_ENTITIES = (DELIVERY_REF_ENTITY,)
 DEFAULT_PL_REFRESH_MONTHS = 2
 # `stock` bersyarat (§25.4): default tidak aktif sampai parameter terbukti di production.
@@ -51,6 +51,7 @@ SNAPSHOT_BRANCH_SCOPED = frozenset({"stock_opening"})
 DEFAULT_CK_BRANCHES = "pb:4|38,wtz:5|6,imd:2,cup:4|6"
 _BRAND_RE = re.compile(r"^[a-z0-9]{2,16}$")
 _CODE_RE = re.compile(r"^[A-Z0-9]{2,8}$")
+_DB_RE = re.compile(r"^[a-z_][a-z0-9_]{0,63}$")
 # `disabled` = isi secret `host:disabled` dari scripts/secrets.list (belum diisi operator) -> brand gagal start.
 _PLACEHOLDERS = frozenset({"disabled", "changeme", "change-me", "placeholder", "xxx", "todo", "password"})
 
@@ -180,7 +181,7 @@ def parse_entities(text: str) -> tuple[str, ...]:
 
 
 def parse_pl_refresh_months(raw: str | None) -> int:
-    """`ESB_PL_REFRESH_MONTHS` (docs/04 §31.2): 1..12; kosong, bukan bilangan bulat, atau di luar rentang -> 2
+    """`ESB_PL_REFRESH_MONTHS` (docs/04 §32.2): 1..12; kosong, bukan bilangan bulat, atau di luar rentang -> 2
     (kontrak: di luar -> default, bukan gagal start)."""
     try:
         value = int(str(raw).strip())
@@ -237,7 +238,7 @@ class EsbSettings:
     backfill_window: tuple[time, time] = (time(22, 0), time(5, 0))
     backfill_include_inactive: bool = True
     entities: tuple[str, ...] = DEFAULT_ENTITIES
-    # G67: jendela refresh harian P&L (bulan berjalan + N-1 bulan sebelumnya; L-264).
+    # G68: jendela refresh harian P&L (bulan berjalan + N-1 bulan sebelumnya; L-274).
     pl_refresh_months: int = DEFAULT_PL_REFRESH_MONTHS
     run_once: bool = False
     # SEC-187: batas body respons ESB (byte).
@@ -324,6 +325,43 @@ class EsbSettings:
 
 
 @dataclass(frozen=True)
+class MarginSettings:
+    """G67 "Margin bahan" (docs/04 §31.2, L-259/L-261). Tanpa secret: dipakai juga CLI `refresh-margin` yang hanya
+    membaca/menulis ClickHouse (jalan dengan ESB_ENABLED=false). `brands` kosong = fitur mati (default)."""
+
+    brands: tuple[str, ...] = ()
+    months: int = 13
+    weekday: int = 0  # 0 = Senin (WIB)
+    hour_wib: int = 2
+
+    @classmethod
+    def from_env(cls, env: Mapping[str, str] | None = None) -> Self:
+        e: Mapping[str, str] = os.environ if env is None else env
+        brands = tuple(dict.fromkeys(item.lower() for item in _items(_str(e, "ESB_MARGIN_BRANDS", ""))))
+        if any(brand not in KNOWN_BRANDS for brand in brands):
+            raise RuntimeError(f"ESB_MARGIN_BRANDS: brand tidak dikenal; pilihan {', '.join(KNOWN_BRANDS)}")
+        return cls(
+            brands=brands,
+            months=_int_range(e, "ESB_MARGIN_MONTHS", 13, 2, 24),
+            weekday=_int_range(e, "ESB_MARGIN_WEEKDAY", 0, 0, 6),
+            hour_wib=_int_range(e, "ESB_MARGIN_HOUR_WIB", 2, 0, 23),
+        )
+
+
+def validate_margin(settings: EsbSettings, margin: MarginSettings) -> None:
+    """Loop `run` (fail-fast saat start): brand margin wajib aktif di ESB_BRANDS (snapshot bom_detail butuh login) dan
+    entitas `purchase_line` wajib aktif (harga PO harian, §31.1)."""
+    if not margin.brands:
+        return
+    active = {cfg.key for cfg in settings.brands}
+    missing = [brand for brand in margin.brands if brand not in active]
+    if missing:
+        raise RuntimeError(f"ESB_MARGIN_BRANDS: {', '.join(missing)} tidak ada di ESB_BRANDS")
+    if "purchase_line" not in settings.entities:
+        raise RuntimeError("ESB_MARGIN_BRANDS membutuhkan entitas purchase_line di ESB_ENTITIES")
+
+
+@dataclass(frozen=True)
 class ClickHouseSettings:
     host: str = "clickhouse"
     port: int = 8443
@@ -348,13 +386,19 @@ class ClickHouseSettings:
         password = read_secret("CH_PASSWORD", e)
         if not password:
             raise RuntimeError("CH_PASSWORD_FILE wajib diisi (secret clickhouse_password_esb)")
+        # SEC-AG-04: nama database disisipkan sebagai identifier SQL -> wajib identifier sederhana.
+        database = _str(e, "CH_DATABASE", "efn_dwh")
+        raw_database = _str(e, "CH_RAW_DATABASE", "efn_esb")
+        for name, value in (("CH_DATABASE", database), ("CH_RAW_DATABASE", raw_database)):
+            if not _DB_RE.fullmatch(value):
+                raise RuntimeError(f"{name} wajib identifier ^[a-z_][a-z0-9_]{{0,63}}$")
         return cls(
             host=_str(e, "CH_HOST", "clickhouse"),
             port=_int_range(e, "CH_PORT", 8443 if secure else 8123, 1, 65535),
             user=_str(e, "CH_USER", "efn_esb"),
             password=password,
-            database=_str(e, "CH_DATABASE", "efn_dwh"),
-            raw_database=_str(e, "CH_RAW_DATABASE", "efn_esb"),
+            database=database,
+            raw_database=raw_database,
             secure=secure,
             ca_file=ca,
         )

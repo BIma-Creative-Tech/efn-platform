@@ -1,14 +1,14 @@
 /**
- * Logika murni halaman `/pnl` (Laba Rugi Outlet; docs/04 §31.9-§31.10, G67): filter bulan `mfrom`/`mto`, pemetaan nama pos
+ * Logika murni halaman `/pnl` (Laba Rugi Outlet; docs/04 §32.9-§32.10, G68): filter bulan `mfrom`/`mto`, pemetaan nama pos
  * ringkasan ESB ke kunci tetap, rasio (persen terhadap penjualan bersih), dan penyusunan tabel pos x bulan beserta baris
- * "Tidak teralokasi ke outlet" (total brand dikurangi jumlah cabang). Basis = angka laporan ESB, tanpa penyesuaian EFN (§31.10).
+ * "Tidak teralokasi ke outlet" (total brand dikurangi jumlah cabang). Basis = angka laporan ESB, tanpa penyesuaian EFN (§32.10).
  * Tanpa I/O; dapat diuji. Daftar sinonim nama pos dipakai juga oleh katalog query (lib/queries.ts) agar SQL dan TS selaras.
  */
 import { addYears, startOfMonthShift, wibToday } from './dates';
 import { fmtMonth } from './format';
 import type { ColumnDef } from './table-defs';
 
-/** Nama pos `summary` ESB (dinormalkan: huruf kecil, hanya a-z0-9) -> kunci tetap. Nama sebenarnya belum terverifikasi [B] (§31.13). */
+/** Nama pos `summary` ESB (dinormalkan: huruf kecil, hanya a-z0-9) -> kunci tetap. Nama sebenarnya belum terverifikasi [B] (§32.13). */
 export const PL_SYNONYMS = {
   net_sales: ['netsales', 'penjualanbersih', 'nettsales'],
   gross_profit: ['grossprofit', 'labakotor'],

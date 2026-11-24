@@ -12,7 +12,7 @@ import { authenticate } from './lib/gate';
 import { getConfig, getKey } from './lib/runtime';
 import { SESSION_COOKIE, clearCookieHeader } from './lib/session';
 import { FNB_DENIAL_PATH, fnbRouteDenial } from './lib/fnb-personas';
-import { G67_DISABLED_PATH, g67RouteDenial } from './lib/g67-access';
+import { G68_DISABLED_PATH, g68RouteDenial } from './lib/g68-access';
 import { PP_DENIAL_PATH, ppRouteDenial } from './lib/prodplan-access';
 import { DENIAL_PATH, smRouteDenial } from './lib/sm-personas';
 
@@ -23,7 +23,7 @@ const PUBLIC_PATHS = new Set([
   '/keluar',
   '/sm-belum-aktif',
   '/fnb-belum-aktif',
-  '/g67-belum-aktif',
+  '/g68-belum-aktif',
   '/tidak-berwenang',
   '/buka-ulang',
 ]);
@@ -83,9 +83,9 @@ export function proxy(request: NextRequest): NextResponse {
     // G52 (§28.15.9): rute /fnb/* + penutupan halaman F&B lain untuk sesi ber-cabang. Tidak membaca INSIGHT_SM_ENABLED.
     const fnbDenial = fnbRouteDenial(path, auth.session, cfg.fnbEnabled);
     if (fnbDenial) return rewriteTo(request, FNB_DENIAL_PATH[fnbDenial], csp, nonce, false);
-    // G67 (§31.8): /pnl, /waste, /fill-rate butuh INSIGHT_G67_ENABLED=true (mati -> halaman "Segera"); /pnl juga persona exec.
-    const g67Denial = g67RouteDenial(path, auth.session, { g67Enabled: cfg.g67Enabled, fnbEnabled: cfg.fnbEnabled });
-    if (g67Denial) return rewriteTo(request, g67Denial === 'g67-belum-aktif' ? G67_DISABLED_PATH : FNB_DENIAL_PATH[g67Denial], csp, nonce, false);
+    // G68 (§32.8): /pnl, /waste, /fill-rate butuh INSIGHT_G68_ENABLED=true (mati -> halaman "Segera"); /pnl juga persona exec.
+    const g68Denial = g68RouteDenial(path, auth.session, { g68Enabled: cfg.g68Enabled, fnbEnabled: cfg.fnbEnabled });
+    if (g68Denial) return rewriteTo(request, g68Denial === 'g68-belum-aktif' ? G68_DISABLED_PATH : FNB_DENIAL_PATH[g68Denial], csp, nonce, false);
     // G66 (§30.12): /produksi* butuh INSIGHT_PRODPLAN_ENABLED=true + peran PP (lapis kedua: halaman + route handler API).
     const ppDenial = ppRouteDenial(path, auth.session, cfg.ppEnabled);
     if (ppDenial) return rewriteTo(request, PP_DENIAL_PATH[ppDenial], csp, nonce, false);

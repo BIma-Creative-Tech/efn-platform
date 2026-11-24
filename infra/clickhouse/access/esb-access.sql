@@ -1,18 +1,28 @@
 -- Hak user ClickHouse `efn_esb` (services/esb-extract, G41, docs/04 §25.7). Dijalankan clickhouse-init.sh (idempoten)
 -- SETELAH user dibuat dari secret `clickhouse_password_esb`; pengikatan role -> user dilakukan di clickhouse-init.sh.
--- Role `esb_writer`: SELECT + INSERT pada efn_esb.* dan efn_dwh.*esb* SAJA. Tanpa DDL/ALTER/DROP/TRUNCATE/OPTIMIZE dan
--- tanpa akses tabel non-ESB (mart Odoo/platform, salinan audit). DDL hanya oleh clickhouse-init (admin).
+-- Role `esb_writer`: SELECT + INSERT pada efn_esb.* dan efn_dwh.*esb* SAJA. Tanpa CREATE/DROP/OPTIMIZE dan tanpa akses
+-- tabel non-ESB (mart Odoo/platform, salinan audit). DDL skema (CREATE/DROP, engine, storage policy) hanya oleh
+-- clickhouse-init (admin).
+-- Pengecualian (tabel agregat Insight, 22 Nov 2026, init/20-esb-aggregates.sql, efn_esb/aggregates.py; SEC-AG-01):
+--   build `efn_dwh.agg_esb_*_build` : SELECT, INSERT, TRUNCATE        (TRUNCATE TABLE build; INSERT bulan dari view)
+--   agg   `efn_dwh.agg_esb_*`       : SELECT, INSERT, ALTER DELETE    (ALTER TABLE agg REPLACE PARTITION ID .. FROM build
+--                                     = SELECT pada sumber + ALTER DELETE|INSERT pada tujuan; DROP PARTITION = ALTER
+--                                     DELETE -- InterpreterAlterQuery::getRequiredAccessForCommand, ClickHouse 24.8)
+-- TANPA CREATE TABLE / DROP TABLE: engine & storage policy tidak bisa dipilih esb_writer (temuan SEC-AG-01: CREATE tingkat
+-- tabel mengizinkan ENGINE = Memory/Log dan SETTINGS storage_policy = 'default' tanpa enkripsi). allow_ddl tetap 1:
+-- TRUNCATE dan ALTER termasuk kelompok DDL yang ditolak allow_ddl=0 walau di-grant; batas efektif = grant per tabel.
+-- Data agregat = turunan view (dibangun ulang), jadi ALTER DELETE/TRUNCATE tidak menghilangkan data sumber.
 
 CREATE SETTINGS PROFILE IF NOT EXISTS esb_writer_profile SETTINGS
     readonly = 0 CONST,
-    allow_ddl = 0 CONST,
+    allow_ddl = 1 CONST,
     allow_introspection_functions = 0 CONST,
     max_execution_time = 300 MAX 900,
     max_memory_usage = 2000000000 MAX 4000000000;
 -- Profil dari deploy sebelumnya (CREATE ... IF NOT EXISTS tidak mengubahnya).
 ALTER SETTINGS PROFILE esb_writer_profile SETTINGS
     readonly = 0 CONST,
-    allow_ddl = 0 CONST,
+    allow_ddl = 1 CONST,
     allow_introspection_functions = 0 CONST,
     max_execution_time = 300 MAX 900,
     max_memory_usage = 2000000000 MAX 4000000000;
@@ -53,13 +63,42 @@ GRANT SELECT, INSERT ON efn_dwh.fact_esb_ar_open TO esb_writer;
 -- metabase_reader / Insight / forecast. Kolom baru dim_esb_supplier.supplier_id tidak butuh grant baru.
 GRANT SELECT, INSERT ON efn_dwh.fact_esb_purchase_line TO esb_writer;
 GRANT SELECT, INSERT ON efn_dwh.fact_esb_stock_opening TO esb_writer;
--- G67 (24-g67-esb-pl-waste-fillrate.sql, docs/04 §31.7, L-267). Pembaca hanya efn_insight_definer (insight-access.sql);
+-- G68 (25-g68-esb-pl-waste-fillrate.sql, docs/04 §32.7, L-277). Pembaca hanya efn_insight_definer (insight-access.sql);
 -- TIDAK ke metabase_reader / text2sql / forecast / mig. Mode retransform membaca efn_esb.raw_doc (SELECT di atas).
 GRANT SELECT, INSERT ON efn_dwh.fact_esb_profit_loss TO esb_writer;
 GRANT SELECT, INSERT ON efn_dwh.fact_esb_item_journal_line TO esb_writer;
 GRANT SELECT, INSERT ON efn_dwh.fact_esb_transfer_request_line TO esb_writer;
 GRANT SELECT, INSERT ON efn_dwh.fact_esb_delivery_ref_line TO esb_writer;
 GRANT SELECT, INSERT ON efn_dwh.dim_esb_product_id TO esb_writer;
+
+-- Tabel agregat Insight (init/20-esb-aggregates.sql). Sumber refresh = 3 view (INVOKER: tabel dasarnya sudah di-grant
+-- SELECT di atas). aggregate_refresh = catatan kesegaran; aggregate_refresh_lock = kunci refresh (SEC-AG-02).
+GRANT SELECT, INSERT ON efn_esb.aggregate_refresh TO esb_writer;
+GRANT SELECT, INSERT ON efn_esb.aggregate_refresh_lock TO esb_writer;
+GRANT SELECT ON efn_dwh.v_esb_sales_branch_daily TO esb_writer;
+GRANT SELECT ON efn_dwh.v_esb_sales_daily TO esb_writer;
+GRANT SELECT ON efn_dwh.v_esb_flow_daily TO esb_writer;
+-- Grant deploy sebelumnya (desain EXCHANGE): GRANT yang dihapus dari file ini TIDAK dicabut otomatis -> REVOKE eksplisit.
+REVOKE CREATE TABLE, DROP TABLE ON efn_dwh.agg_esb_sales_branch_daily FROM esb_writer;
+REVOKE CREATE TABLE, DROP TABLE ON efn_dwh.agg_esb_sales_branch_daily_build FROM esb_writer;
+REVOKE CREATE TABLE, DROP TABLE ON efn_dwh.agg_esb_sales_daily FROM esb_writer;
+REVOKE CREATE TABLE, DROP TABLE ON efn_dwh.agg_esb_sales_daily_build FROM esb_writer;
+REVOKE CREATE TABLE, DROP TABLE ON efn_dwh.agg_esb_flow_daily FROM esb_writer;
+REVOKE CREATE TABLE, DROP TABLE ON efn_dwh.agg_esb_flow_daily_build FROM esb_writer;
+GRANT SELECT, INSERT, ALTER DELETE ON efn_dwh.agg_esb_sales_branch_daily TO esb_writer;
+GRANT SELECT, INSERT, TRUNCATE ON efn_dwh.agg_esb_sales_branch_daily_build TO esb_writer;
+GRANT SELECT, INSERT, ALTER DELETE ON efn_dwh.agg_esb_sales_daily TO esb_writer;
+GRANT SELECT, INSERT, TRUNCATE ON efn_dwh.agg_esb_sales_daily_build TO esb_writer;
+GRANT SELECT, INSERT, ALTER DELETE ON efn_dwh.agg_esb_flow_daily TO esb_writer;
+GRANT SELECT, INSERT, TRUNCATE ON efn_dwh.agg_esb_flow_daily_build TO esb_writer;
+
+-- G67 "Margin bahan" (init/24-margin-bahan.sql, docs/04 §31.3, L-263; efn_esb/margin.py): versi-insert -> SELECT +
+-- INSERT saja (tanpa CREATE/DROP/ALTER/TRUNCATE; versi lama terbuang lewat TTL 60 hari). Sumber hitung sudah di-grant
+-- SELECT di atas: dim_esb_bom, dim_esb_bom_line, fact_esb_purchase_line, dim_esb_branch, agg_esb_sales_daily,
+-- extract_checkpoint; kesegaran + kunci = aggregate_refresh / aggregate_refresh_lock (sama dengan refresh agregat).
+GRANT SELECT, INSERT ON efn_dwh.mart_esb_ing_price_monthly TO esb_writer;
+GRANT SELECT, INSERT ON efn_dwh.mart_esb_menu_cost_monthly TO esb_writer;
+GRANT SELECT, INSERT ON efn_dwh.mart_esb_ing_group_monthly TO esb_writer;
 
 -- Analis (opsional, §25.7): view v_esb_* + tabel dasarnya (view INVOKER; v_esb_data_quality membaca extract_run).
 -- Tanpa raw_doc (payload mentah) dan bom_ratio.
