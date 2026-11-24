@@ -3,6 +3,7 @@
  *  1. membuat nonce + CSP ketat (lib/csp.ts) dan meneruskannya ke Server Components lewat header permintaan;
  *  2. gerbang sesi: kill switch / kunci hilang -> /belum-aktif; cookie hilang/invalid/kedaluwarsa -> /sesi-berakhir
  *     (cookie dihapus bila ada). Halaman dan route data tetap memverifikasi ulang sendiri (lapis kedua).
+ *     Pengecualian `/produksi*` (docs/04 §30.17.2): gerbang = cookie sesi ESB `__Host-epp`, bukan sesi Odoo.
  * Route handler (/api/*, /sso, /logout) dikecualikan: mereka memasang header & autentikasi sendiri.
  * Gerbang memakai rewrite internal (bukan redirect): host di belakang sidecar/Traefik tidak dipercaya untuk URL absolut.
  */
@@ -12,7 +13,8 @@ import { authenticate } from './lib/gate';
 import { getConfig, getKey } from './lib/runtime';
 import { SESSION_COOKIE, clearCookieHeader } from './lib/session';
 import { FNB_DENIAL_PATH, fnbRouteDenial } from './lib/fnb-personas';
-import { PP_DENIAL_PATH, ppRouteDenial } from './lib/prodplan-access';
+import { PP_LOGIN_PATH, isProduksiPath } from './lib/prodplan-access';
+import { PP_COOKIE, isPpSid } from './lib/prodplan-session';
 import { DENIAL_PATH, smRouteDenial } from './lib/sm-personas';
 
 const PUBLIC_PATHS = new Set([
@@ -60,7 +62,15 @@ export function proxy(request: NextRequest): NextResponse {
   const csp = buildCsp(nonce, isDev);
   const path = request.nextUrl.pathname;
 
-  if (!PUBLIC_PATHS.has(path)) {
+  if (isProduksiPath(path)) {
+    // G66 (§30.17.2): /produksi* memakai SESI ESB (`__Host-epp`), BUKAN sesi Odoo: autentikasi Odoo tidak dijalankan dan
+    // cookie `__Host-eis` tidak dibaca. Lapis kedua (GET /v1/session) di lib/pp-page.ts.
+    if (!getConfig().ppEnabled) return rewriteTo(request, '/pp-belum-aktif', csp, nonce, false);
+    if (path !== PP_LOGIN_PATH && !isPpSid(request.cookies.get(PP_COOKIE)?.value)) {
+      return rewriteTo(request, PP_LOGIN_PATH, csp, nonce, false);
+    }
+  } else if (!PUBLIC_PATHS.has(path)) {
+    // Sebaliknya: selain /produksi* gerbang TIDAK PERNAH membaca `__Host-epp` (sesi ESB tidak membuka halaman Insight lain).
     const cfg = getConfig();
     const auth = authenticate(
       request.cookies.get(SESSION_COOKIE)?.value,
@@ -81,9 +91,6 @@ export function proxy(request: NextRequest): NextResponse {
     // G52 (§28.15.9): rute /fnb/* + penutupan halaman F&B lain untuk sesi ber-cabang. Tidak membaca INSIGHT_SM_ENABLED.
     const fnbDenial = fnbRouteDenial(path, auth.session, cfg.fnbEnabled);
     if (fnbDenial) return rewriteTo(request, FNB_DENIAL_PATH[fnbDenial], csp, nonce, false);
-    // G66 (§30.12): /produksi* butuh INSIGHT_PRODPLAN_ENABLED=true + peran PP (lapis kedua: halaman + route handler API).
-    const ppDenial = ppRouteDenial(path, auth.session, cfg.ppEnabled);
-    if (ppDenial) return rewriteTo(request, PP_DENIAL_PATH[ppDenial], csp, nonce, false);
   }
 
   const requestHeaders = new Headers(request.headers);

@@ -1,8 +1,12 @@
-"""Verifikasi header asersi aktor `X-EFN-Actor: ppa1.<payload>.<sig>` (docs/04 §30.7). Logika murni + cache jti.
+"""Verifikasi header asersi `X-EFN-Actor: ppa2.<payload>.<sig>` (docs/04 §30.17.7, menggantikan `ppa1` §30.7).
 
-Urutan verifikasi persis kontrak: regex -> HMAC (constant-time) -> kunci tepat (11, berurutan) -> aud -> waktu ->
+`ppa2` hanya mengikat request ke sesi Produksi (`sid` = cookie `__Host-epp`); identitas, peran, brand, dan cabang
+diambil dari sesi memori prodplan, BUKAN dari klaim insight-web. `ppa1` ditolak (regex gagal -> `actor_invalid`).
+
+Urutan verifikasi persis kontrak: regex -> HMAC (constant-time) -> kunci tepat (8, berurutan) -> aud -> waktu ->
 m/p -> bh -> jti -> tipe klaim. Semua kegagalan = `ActorInvalid` (API membalas 401 `actor_invalid` tanpa detail);
-`reason` hanya untuk metrik `prodplan_actor_rejected_total{reason}`.
+`reason` hanya untuk metrik `prodplan_actor_rejected_total{reason}`. Aturan `sid` kosong + sesi tak dikenal ditegakkan
+di `api.App` (butuh tabel route + penyimpanan sesi).
 """
 
 import base64
@@ -12,19 +16,21 @@ import json
 import re
 import threading
 import time
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import dataclass, field
 from typing import Any
 
-HEADER_RE = re.compile(r"^ppa1\.[A-Za-z0-9_-]{16,1800}\.[A-Za-z0-9_-]{43}$")
+PREFIX = "ppa2"
+HEADER_RE = re.compile(r"^ppa2\.[A-Za-z0-9_-]{16,1800}\.[A-Za-z0-9_-]{43}$")
+SID_RE = re.compile(r"^[A-Za-z0-9_-]{43}$")
 MAX_HEADER_BYTES = 2048
-CLAIM_KEYS = ("aud", "bh", "codes", "exp", "iat", "jti", "m", "name", "p", "roles", "sub")
+CLAIM_KEYS = ("aud", "bh", "exp", "iat", "jti", "m", "p", "sid")
 AUDIENCE = "prodplan"
 TTL_SECONDS = 60
 CLOCK_SKEW_SECONDS = 30
 JTI_TTL_SECONDS = 120
 JTI_CACHE_MAX = 50_000
 PP_ROLES = ("pp_planner", "pp_warehouse")
-ESB_CODES = ("BCF", "BCR", "CUP", "IMD", "PB", "WTZ")
 _B64_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 
 
@@ -36,10 +42,17 @@ class ActorInvalid(Exception):
 
 @dataclass(frozen=True)
 class Actor:
+    """Identitas pemanggil dari SESI prodplan (§30.17.4). `sub` = `prodplan.actor.id`. Tanpa token/username."""
+
     sub: int
-    name: str
-    roles: frozenset[str]
-    codes: frozenset[str]
+    name: str = field(repr=False)
+    roles: frozenset[str] = frozenset()
+    brand: str = ""
+    branch_ids: frozenset[int] = frozenset()
+    doc_insert: frozenset[str] = frozenset()
+    doc_delete: frozenset[str] = frozenset()
+    branch_names: Mapping[int, str] = field(default_factory=dict, repr=False, compare=False, hash=False)
+    sid_hash: str = field(default="", repr=False)
 
     def has(self, role: str) -> bool:
         return role in self.roles
@@ -59,15 +72,25 @@ def body_hash(body: bytes) -> str:
     return b64url_encode(hashlib.sha256(body).digest())
 
 
+def sid_hash(sid: str) -> str:
+    """Kunci penyimpanan sesi = hex SHA-256 dari sid (sid mentah tidak pernah disimpan)."""
+    return hashlib.sha256(sid.encode("ascii")).hexdigest()
+
+
 def sign(payload_b64: str, key: bytes) -> str:
-    return b64url_encode(hmac.new(key, ("ppa1." + payload_b64).encode("ascii"), hashlib.sha256).digest())
+    return b64url_encode(hmac.new(key, (PREFIX + "." + payload_b64).encode("ascii"), hashlib.sha256).digest())
 
 
-def make_header(claims: dict[str, Any], key: bytes) -> str:
-    """Pembuat header (dipakai test; insight-web punya implementasi TypeScript yang byte-exact sama)."""
+def canonical_payload(claims: Mapping[str, Any]) -> str:
+    """JSON tanpa spasi, tepat 8 kunci berurutan `CLAIM_KEYS`, UTF-8 apa adanya (insight-web: `JSON.stringify`)."""
     ordered = {k: claims[k] for k in CLAIM_KEYS}
-    payload = b64url_encode(json.dumps(ordered, separators=(",", ":"), ensure_ascii=False).encode("utf-8"))
-    return f"ppa1.{payload}.{sign(payload, key)}"
+    return json.dumps(ordered, separators=(",", ":"), ensure_ascii=False)
+
+
+def make_header(claims: Mapping[str, Any], key: bytes) -> str:
+    """Pembuat header (dipakai test; insight-web punya implementasi TypeScript yang byte-exact sama)."""
+    payload = b64url_encode(canonical_payload(claims).encode("utf-8"))
+    return f"{PREFIX}.{payload}.{sign(payload, key)}"
 
 
 class JtiCache:
@@ -106,16 +129,7 @@ def _is_int(value: Any) -> bool:
     return isinstance(value, int) and not isinstance(value, bool)
 
 
-def _sorted_unique_strs(value: Any, allowed: tuple[str, ...], low: int, high: int) -> bool:
-    return (
-        isinstance(value, list)
-        and low <= len(value) <= high
-        and all(isinstance(x, str) and x in allowed for x in value)
-        and value == sorted(set(value))
-    )
-
-
-def verify_actor(
+def verify_assertion(
     header: str | None,
     *,
     method: str,
@@ -124,7 +138,8 @@ def verify_actor(
     key: bytes,
     jti_cache: JtiCache,
     now: float | None = None,
-) -> Actor:
+) -> str:
+    """Kembalikan `sid` (string 43 karakter, atau `""`). Semua kegagalan -> `ActorInvalid(reason)`."""
     current = time.time() if now is None else now
     if not header or len(header.encode("utf-8", "replace")) > MAX_HEADER_BYTES or not HEADER_RE.fullmatch(header):
         raise ActorInvalid("format")
@@ -154,18 +169,14 @@ def verify_actor(
         raise ActorInvalid("jti")
     if not jti_cache.use(jti, current):
         raise ActorInvalid("replay")
-    name, sub, p = claims["name"], claims["sub"], claims["p"]
+    sid, p, m = claims["sid"], claims["p"], claims["m"]
     if (
-        not _is_int(sub)
-        or sub <= 0
-        or not isinstance(name, str)
-        or not 1 <= len(name) <= 64
+        not isinstance(sid, str)
+        or (sid != "" and not SID_RE.fullmatch(sid))
         or not isinstance(p, str)
         or not p.startswith("/v1/")
-        or not isinstance(claims["m"], str)
-        or claims["m"] != claims["m"].upper()
-        or not _sorted_unique_strs(claims["codes"], ESB_CODES, 1, 6)
-        or not _sorted_unique_strs(claims["roles"], PP_ROLES, 1, 2)
+        or not isinstance(m, str)
+        or m != m.upper()
     ):
         raise ActorInvalid("claims")
-    return Actor(sub=sub, name=name, roles=frozenset(claims["roles"]), codes=frozenset(claims["codes"]))
+    return sid

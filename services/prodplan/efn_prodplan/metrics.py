@@ -100,9 +100,14 @@ JOBS = Counter("prodplan_jobs_total", "Job selesai", ("kind", "status"))
 JOB_SECONDS = Histogram("prodplan_job_seconds", "Durasi job", ("kind",))
 OUTBOX_ROWS = Gauge("prodplan_outbox_rows", "Baris outbox per status", ("status",))
 OUTBOX_OLDEST = Gauge("prodplan_outbox_oldest_pending_seconds", "Umur baris outbox pending/unknown tertua")
-ACTOR_REJECTED = Counter("prodplan_actor_rejected_total", "Asersi ppa1 ditolak", ("reason",))
+ACTOR_REJECTED = Counter("prodplan_actor_rejected_total", "Asersi ppa2 ditolak", ("reason",))
 WRITE_ENABLED = Gauge("prodplan_write_enabled", "1 bila PRODPLAN_WRITE_ENABLED=true")
 INFO = Gauge("prodplan_info", "Info konfigurasi", ("esb_env", "mfg_mode"))
+# §30.17.13 (login per pengguna ESB)
+LOGIN_TOTAL = Counter("prodplan_login_total", "Percobaan login ESB per hasil", ("result",))
+SESSIONS_ACTIVE = Gauge("prodplan_sessions_active", "Sesi ESB hidup di memori")
+SESSION_EVICTIONS = Counter("prodplan_session_evictions_total", "Sesi ESB dibuang per alasan", ("reason",))
+ODOO_PROVISION = Counter("prodplan_odoo_provision_total", "Provisioning identitas ESB ke Odoo per hasil", ("result",))
 
 ALL: tuple[_Metric, ...] = (
     ESB_REQUESTS,
@@ -114,6 +119,10 @@ ALL: tuple[_Metric, ...] = (
     ACTOR_REJECTED,
     WRITE_ENABLED,
     INFO,
+    LOGIN_TOTAL,
+    SESSIONS_ACTIVE,
+    SESSION_EVICTIONS,
+    ODOO_PROVISION,
 )
 
 

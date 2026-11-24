@@ -1,0 +1,63 @@
+# G66 amandemen A1 (docs/04 §30.17.11, ADR-051 §8.5 Proposed): jalur provisioning JIT prodplan -> Odoo. Setelah login ESB
+# sukses (hanya bila PRODPLAN_ODOO_PROVISION_ENABLED=true) thread latar prodplan memanggil SATU method
+#   POST https://odoo-rpc-gateway:8443/json/2/efn.esb.identity/efn_esb_provision
+# lewat filter L7 odoo-rpc-gateway (pola forecast-worker §28.2): mTLS verify-full CA internal, sertifikat klien CN
+# `prodplan-odoo` (EKU clientAuth saja), bearer API key user teknis `efn_esb_provisioner` (bukan superuser/ERP manager).
+# haproxy.cfg: CN prodplan-odoo HANYA path p_esb_identity, body <= 16 KiB, backend odoo_forecast (maxconn 1).
+# Runbook: docs/runbooks/prodplan.md §11.
+#
+# WAJIB dipakai BERSAMA docker-compose.prodplan.yml (overlay ini hanya menambah network/secret/env ke service prodplan):
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml -f docker-compose.prodplan.yml \
+#     -f docker-compose.prodplan-odoo.yml --profile core --profile data up -d prodplan odoo-rpc-gateway
+#
+# Mengapa overlay terpisah (bukan di docker-compose.prodplan.yml):
+#   - Tanpa overlay ini prodplan TIDAK memegang API key Odoo, sertifikat klien, maupun network ke odoo-rpc-gateway;
+#     PRODPLAN_ODOO_PROVISION_ENABLED dipaku "false" literal di docker-compose.prodplan.yml (fail-closed). Stack inti dan
+#     overlay prodplan tetap jalan tanpa overlay ini (§30.17.16 langkah 3).
+#   - Tidak depends_on odoo-rpc-gateway: gateway berprofil core (bisa mati / di mesin lain, K25-02). Odoo mati / gateway
+#     503 = login ESB tetap sukses, identitas tertunda sampai login berikutnya (§30.17.11).
+#
+# Jaringan (dicek scripts/check-encryption.sh; oktet 26 di peta oktet docker-compose.yml):
+#   prodplan-rpc (internal, .26): HANYA odoo-rpc-gateway <-> prodplan (HTTPS 8443 mTLS). Terpisah dari forecast-rpc /
+#   segment-rpc agar worker lain tidak menjangkau prodplan dan sebaliknya. prodplan tetap TIDAK di internal/data.
+#   K25-02: bila stack data (prodplan, profil data) pindah mesin, jalur ini menjadi lintas host lewat WireGuard (belum
+#   dibangun, sama dengan forecast-worker; tinjau saat pemisahan).
+#
+# Secret (semua lewat /run/secrets; mount HANYA prodplan):
+#   odoo_api_key_esb_provisioner  host:disabled (dibuat di Odoo oleh Superadmin, runbook prodplan.md §11.3; rotasi 30 hari)
+#   tls_prodplan_odoo_crt/_key    pki (gen-pki.sh profil client, CN prodplan-odoo)
+#   efn_ca_crt                    sudah di-mount overlay prodplan (verifikasi sertifikat odoo-rpc-gateway)
+services:
+  prodplan:
+    environment:
+      # Hanya "true" persis yang aktif (§30.17.11). Default false di SEMUA env; render prod dicek check-encryption.
+      PRODPLAN_ODOO_PROVISION_ENABLED: ${PRODPLAN_ODOO_PROVISION_ENABLED:-false}
+      PRODPLAN_ODOO_API_KEY_FILE: /run/secrets/odoo_api_key_esb_provisioner
+      PRODPLAN_ODOO_CLIENT_CERT_FILE: /run/secrets/tls_prodplan_odoo_crt
+      PRODPLAN_ODOO_CLIENT_KEY_FILE: /run/secrets/tls_prodplan_odoo_key
+      PRODPLAN_ODOO_CA_FILE: /run/secrets/efn_ca_crt
+    secrets:
+      - pg_password_prodplan
+      - prodplan_assert_key
+      - efn_ca_crt
+      - odoo_api_key_esb_provisioner
+      - tls_prodplan_odoo_crt
+      - tls_prodplan_odoo_key
+    networks: [prodplan-db, insight-plan, egress-prodplan, prodplan-rpc]
+
+  # Union dengan base (+ overlay forecast/segment): sertifikat tls_odoo_rpc_gateway ber-SAN nama service.
+  odoo-rpc-gateway:
+    networks: [internal, prodplan-rpc]
+
+# K25-06: nama `<EFN_STACK>_<key>` + subnet <EFN_SUBNET_BASE>.26 (peta oktet di docker-compose.yml).
+networks:
+  prodplan-rpc:   # hanya odoo-rpc-gateway <-> prodplan (dicek scripts/check-encryption.sh)
+    name: ${EFN_STACK:-efn}_prodplan-rpc
+    internal: true
+    ipam:
+      config: [{ subnet: "${EFN_SUBNET_BASE:-172.30}.26.0/24" }]
+
+secrets:
+  odoo_api_key_esb_provisioner: { file: ../../secrets/odoo_api_key_esb_provisioner.txt }
+  tls_prodplan_odoo_crt: { file: ../../secrets/tls_prodplan_odoo_crt.txt }
+  tls_prodplan_odoo_key: { file: ../../secrets/tls_prodplan_odoo_key.txt }

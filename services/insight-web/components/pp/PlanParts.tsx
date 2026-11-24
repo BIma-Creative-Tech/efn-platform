@@ -278,7 +278,7 @@ function Place({ bn, bid, ln, lid }: { bn?: string | null; bid: number; ln?: str
   );
 }
 
-export function TransfersPanel({ plan, caps, sub }: { plan: Plan; caps: PpCaps; sub: number }): ReactNode {
+export function TransfersPanel({ plan, caps, sub }: { plan: Plan; caps: PpCaps; sub: number | null }): ReactNode {
   if (plan.transfers.length === 0) {
     return (
       <EmptyState

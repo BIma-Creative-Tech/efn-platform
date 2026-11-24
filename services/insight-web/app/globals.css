@@ -2066,6 +2066,15 @@ body[data-busy] main {
 .pp-banner .icon {
   vertical-align: -3px;
 }
+.pp-login .pp-banner {
+  margin: 12px 0;
+}
+.pp-login-form {
+  max-width: 28rem;
+}
+.pp-clock {
+  white-space: nowrap;
+}
 .pp-action {
   display: inline-flex;
   flex-direction: column;

@@ -3,8 +3,10 @@
 Pilihan stdlib (bukan framework): tanpa dependency tambahan; TLS + mTLS (CN `insight-web-pp` / `prometheus`) diterminasi
 sidecar ghostunnel `prodplan-tls` di namespace yang sama, jadi server ini hanya terjangkau dari loopback.
 
-`App.handle()` murni terhadap socket (dipakai test): verifikasi `X-EFN-Actor` (`ppa1`, §30.7), rate limit mutasi
-60/menit per `sub`, batas body 256 KiB, galat `{"error": {...}}` tanpa SQL/stack/URL/body ESB.
+`App.handle()` murni terhadap socket (dipakai test): verifikasi `X-EFN-Actor` (`ppa2`, §30.17.7; `ppa1` ditolak),
+sesi Produksi memori (`sid` -> `sha256(sid)`; `sid` kosong hanya untuk `POST /v1/session` dan `GET /v1/meta`), rate
+limit mutasi 60/menit per `actor_id`, batas body 256 KiB, galat `{"error": {...}}` tanpa SQL/stack/URL/body ESB.
+Body `POST /v1/session` (berisi password) tidak pernah dilog atau disimpan.
 """
 
 import json
@@ -21,8 +23,9 @@ from typing import Any
 from urllib.parse import parse_qs, urlsplit
 
 from efn_prodplan import metrics
-from efn_prodplan.actor import ActorInvalid, JtiCache, verify_actor
+from efn_prodplan.actor import ActorInvalid, JtiCache, sid_hash, verify_assertion
 from efn_prodplan.logs import log_event
+from efn_prodplan.session import CLIENT_KEY_RE, NONCE_RE
 from efn_prodplan.workflow import ApiError
 
 MAX_BODY_BYTES = 256 * 1024
@@ -61,6 +64,9 @@ class Route:
 ROUTES: tuple[Route, ...] = tuple(
     Route(m, re.compile(p), n)
     for m, p, n in (
+        ("POST", r"^/v1/session$", "session_create"),
+        ("GET", r"^/v1/session$", "session_get"),
+        ("DELETE", r"^/v1/session$", "session_delete"),
         ("GET", r"^/v1/meta$", "meta"),
         ("GET", r"^/v1/boms$", "search_boms"),
         ("GET", r"^/v1/pack-rules$", "list_pack_rules"),
@@ -80,11 +86,14 @@ ROUTES: tuple[Route, ...] = tuple(
         ("GET", rf"^/v1/plans/{_ID}/post-preview$", "post_preview"),
         ("POST", rf"^/v1/plans/{_ID}/post$", "post"),
         ("POST", rf"^/v1/plans/{_ID}/cancel$", "cancel"),
+        ("POST", rf"^/v1/plans/{_ID}/resume-posting$", "resume_posting"),
         ("POST", rf"^/v1/outbox/{_ID}/resend$", "resend"),
     )
 )
 _CREATED = frozenset({"create_plan"})
-_ACCEPTED = frozenset({"import_pr", "calculate", "post", "resend"})
+_ACCEPTED = frozenset({"import_pr", "calculate", "post", "resend", "resume_posting"})
+_SID_OPTIONAL = frozenset({"session_create", "meta"})  # §30.17.7: hanya dua route ini boleh `sid:""`
+_SESSION_KEYS = ("username", "password", "n", "c")  # SEC-234: `c` = kunci klien buram untuk lockout
 
 
 def dispatch(
@@ -125,14 +134,19 @@ class App:
         assert_key: bytes | None,
         service: Any,
         ready_check: Callable[[], bool],
+        sessions: Any = None,
+        login: Any = None,
         jti_cache: JtiCache | None = None,
         rate_limiter: RateLimiter | None = None,
         clock: Callable[[], float] = time.time,
     ) -> None:
+        """`sessions` = `session.SessionStore`, `login` = `session.LoginService` (keduanya wajib saat aktif)."""
         self._enabled = enabled
         self._key = assert_key
         self._service = service
         self._ready = ready_check
+        self._sessions = sessions
+        self._login = login
         self._jti = jti_cache or JtiCache()
         self._rate = rate_limiter or RateLimiter()
         self._clock = clock
@@ -169,7 +183,7 @@ class App:
             )
         if not path.startswith("/v1/"):
             return self._json(404, ApiError(404, "not_found").body(), rid)
-        if not self._enabled or self._key is None or self._service is None:
+        if not self._enabled or self._key is None or self._service is None or self._sessions is None:
             return self._json(503, ApiError(503, "disabled").body(), rid)
         route, groups, path_known = None, (), False
         for candidate in ROUTES:
@@ -183,7 +197,7 @@ class App:
             err = ApiError(405, "method_not_allowed") if path_known else ApiError(404, "not_found")
             return self._json(err.status, err.body(), rid)
         try:
-            actor = verify_actor(
+            sid = verify_assertion(
                 headers.get("x-efn-actor"),
                 method=method,
                 path=raw_path,
@@ -192,11 +206,21 @@ class App:
                 jti_cache=self._jti,
                 now=self._clock(),
             )
+            if route.name == "session_create" and sid != "":
+                raise ActorInvalid("sid")  # login selalu tanpa sesi
+            if sid == "" and route.name not in _SID_OPTIONAL:
+                raise ActorInvalid("sid")  # §30.17.7: sid kosong di path lain
         except ActorInvalid as exc:
             metrics.ACTOR_REJECTED.inc(exc.reason)
             log_event("actor_rejected", logging.WARNING, request_id=rid, reason=exc.reason, route=route.name)
             return self._json(401, ApiError(401, "actor_invalid").body(), rid)
-        if method != "GET" and not self._rate.allow(actor.sub, self._clock()):
+        session = self._sessions.get(sid_hash(sid)) if sid else None
+        if sid and session is None:
+            if route.name == "session_delete":
+                return self._empty(204, rid)  # idempoten: sesi tak dikenal juga 204
+            return self._json(401, ApiError(401, "session_expired").body(), rid)
+        actor = session.actor() if session is not None else None
+        if actor is not None and method != "GET" and not self._rate.allow(actor.sub, self._clock()):
             return self._json(429, ApiError(429, "rate_limited").body(), rid)
         payload: Any = {}
         if body:
@@ -209,9 +233,12 @@ class App:
         query = {k: v[0] for k, v in parse_qs(parts.query, keep_blank_values=True).items() if v}
         started = time.monotonic()
         try:
-            result = dispatch(self._service, route.name, actor, groups, query, payload, rid)
-            status = 201 if route.name in _CREATED else 202 if route.name in _ACCEPTED else 200
-            response = self._json(status, result, rid)
+            if route.name.startswith("session_"):
+                response = self._session_route(route.name, session, payload, rid)
+            else:
+                result = dispatch(self._service, route.name, actor, groups, query, payload, rid)
+                status = 201 if route.name in _CREATED else 202 if route.name in _ACCEPTED else 200
+                response = self._json(status, result, rid)
         except ApiError as exc:
             response = self._json(exc.status, exc.body(), rid)
         except Exception as exc:  # noqa: BLE001 - galat internal tidak membocorkan detail
@@ -220,13 +247,33 @@ class App:
         log_event(
             "api_request",
             request_id=rid,
-            sub=actor.sub,
+            sub=actor.sub if actor is not None else None,
             route=route.name,
             method=method,
             http_status=response[0],
             duration_ms=int((time.monotonic() - started) * 1000),
         )
         return response
+
+    def _empty(self, status: int, rid: str) -> tuple[int, dict[str, str], bytes]:
+        return status, {"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff", "X-Request-ID": rid}, b""
+
+    def _session_route(
+        self, name: str, session: Any, payload: Mapping[str, Any], rid: str
+    ) -> tuple[int, dict[str, str], bytes]:
+        """§30.17.3 `POST|GET|DELETE /v1/session`."""
+        if name == "session_create":
+            nonce, client_key = payload.get("n"), payload.get("c")
+            valid_nonce = isinstance(nonce, str) and NONCE_RE.fullmatch(nonce) is not None
+            valid_key = isinstance(client_key, str) and CLIENT_KEY_RE.fullmatch(client_key) is not None
+            if sorted(payload) != sorted(_SESSION_KEYS) or not valid_nonce or not valid_key:
+                raise ApiError(400, "invalid_request")  # JSON tepat 4 kunci {username, password, n, c}
+            created = self._login.create(payload.get("username"), payload.get("password"), client_key)
+            return self._json(201, created, rid)
+        if name == "session_get":
+            return self._json(200, session.view(), rid)
+        self._login.logout(session)
+        return self._empty(204, rid)
 
 
 class _Handler(BaseHTTPRequestHandler):
@@ -271,6 +318,7 @@ class _Handler(BaseHTTPRequestHandler):
     do_GET = _serve  # noqa: N815
     do_POST = _serve  # noqa: N815
     do_PUT = _serve  # noqa: N815
+    do_DELETE = _serve  # noqa: N815
 
 
 def make_server(app: App, host: str = "127.0.0.1", port: int = 8080) -> ThreadingHTTPServer:

@@ -1,7 +1,7 @@
 import type { Metadata } from 'next';
 import { PackRuleEditor } from '@/components/pp/PackRuleEditor';
 import { EmptyState, PageHeader, Section } from '@/components/ui';
-import { firstParam, requirePpSession, type SearchParams } from '@/lib/pp-page';
+import { firstParam, redirectIfExpired, requirePpSession, type SearchParams } from '@/lib/pp-page';
 import { loadMeta, loadPackRules } from '@/lib/prodplan-data';
 
 export const dynamic = 'force-dynamic';
@@ -12,13 +12,15 @@ export const metadata: Metadata = { title: 'Kemasan utuh' };
  * kepala gudang hanya melihat.
  */
 export default async function PackRulesPage({ searchParams }: { searchParams: SearchParams }) {
-  const { session, caps } = await requirePpSession();
+  const { sid, caps } = await requirePpSession();
   const raw = await searchParams;
-  const metaRes = await loadMeta(session);
+  const metaRes = await loadMeta(sid);
+  redirectIfExpired(metaRes);
   const brands = metaRes.ok ? metaRes.data.brands : [];
   const brandParam = firstParam(raw, 'brand');
   const brand = brands.find((b) => b.esb_brand === brandParam)?.esb_brand ?? brands[0]?.esb_brand;
-  const rules = brand ? await loadPackRules(session, brand) : null;
+  const rules = brand ? await loadPackRules(sid, brand) : null;
+  if (rules) redirectIfExpired(rules);
 
   return (
     <>

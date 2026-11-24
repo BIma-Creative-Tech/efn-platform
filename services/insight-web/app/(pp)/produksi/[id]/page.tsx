@@ -14,7 +14,7 @@ import {
 import { PpAction } from '@/components/pp/PpAction';
 import { EmptyState, PageHeader, Section } from '@/components/ui';
 import { fmtDate } from '@/lib/format';
-import { firstParam, requirePpSession, type SearchParams } from '@/lib/pp-page';
+import { firstParam, redirectIfExpired, requirePpSession, type SearchParams } from '@/lib/pp-page';
 import { loadMeta, loadPackRules, loadPlan, loadPreview, type PpLoad } from '@/lib/prodplan-data';
 import {
   PLAN_TABS,
@@ -42,12 +42,13 @@ export default async function PlanDetailPage({
   params: Promise<{ id: string }>;
   searchParams: SearchParams;
 }) {
-  const { session, caps } = await requirePpSession();
+  const { sid, view, caps } = await requirePpSession();
   const { id } = await params;
   const raw = await searchParams;
   const tab = parseTab(firstParam(raw, 'tab'));
 
-  const [metaRes, planRes] = await Promise.all([loadMeta(session), loadPlan(session, id)]);
+  const [metaRes, planRes] = await Promise.all([loadMeta(sid), loadPlan(sid, id)]);
+  redirectIfExpired(planRes);
   if (!planRes.ok) {
     if (planRes.error.code === 'not_found') notFound();
     return (
@@ -68,13 +69,14 @@ export default async function PlanDetailPage({
   // Pemuatan tambahan hanya untuk tab yang memerlukannya.
   let packRules: ReadonlyMap<string, PackRule> = new Map();
   if (tab === 'kebutuhan' && brand) {
-    const pr = await loadPackRules(session, brand);
+    const pr = await loadPackRules(sid, brand);
     if (pr.ok) packRules = new Map(pr.data.map((r) => [r.product_code, r]));
   }
   const phase = initialPhase(plan, parsePhase(firstParam(raw, 'phase')));
   let preview: PpLoad<PostPreview> | null = null;
   if (tab === 'posting' && (plan.status === 'approved' || plan.status === 'posted')) {
-    preview = await loadPreview(session, plan.id, phase);
+    preview = await loadPreview(sid, plan.id, phase);
+    redirectIfExpired(preview);
   }
 
   const href = (t: PlanTab): string => `/produksi/${encodeURIComponent(plan.id)}${t === 'permintaan' ? '' : `?tab=${t}`}`;
@@ -101,7 +103,7 @@ export default async function PlanDetailPage({
       <Section>
         <StatusSteps status={plan.status} />
         <PlanHeaderInfo plan={plan} />
-        <WorkflowBar plan={plan} caps={caps} sub={session.sub} />
+        <WorkflowBar plan={plan} caps={caps} sub={view.actor_id} />
         {plan.status === 'submitted' && undecided > 0 ? (
           <p className="muted small" role="status">
             {undecided} usulan transfer menunggu keputusan Kepala gudang (tab Transfer).
@@ -204,7 +206,7 @@ export default async function PlanDetailPage({
             Sumber dipilih dari stok terbesar (bukan FEFO) di lokasi yang diizinkan. Kepala gudang menyetujui atau menolak tiap transfer; pembuat dan pengaju rencana tidak boleh menyetujui.
           </p>
           <ShortageNotice reqs={plan.requirements} />
-          <TransfersPanel plan={plan} caps={caps} sub={session.sub} />
+          <TransfersPanel plan={plan} caps={caps} sub={view.actor_id} />
         </Section>
       ) : null}
 

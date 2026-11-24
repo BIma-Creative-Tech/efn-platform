@@ -1,7 +1,14 @@
 # UAT G66 — Production Order (rencana produksi Central Kitchen di atas ESB)
 
-Untuk: **Planner CK** dan **Kepala gudang**. Kontrak: `docs/04_SERVICE_CONTRACTS.md` §30; keputusan ADR-051 (Proposed);
-runbook `docs/runbooks/prodplan.md`. Format mengikuti `docs/qa/G51_UAT.md` (kotak centang; Given/When/Then).
+Untuk: **Planner CK** dan **Kepala gudang**. Kontrak: `docs/04_SERVICE_CONTRACTS.md` §30 dan **§30.17 (login per pengguna ESB, 25 Nov 2026,
+menang bila berbeda)**; keputusan ADR-051 + amandemen A1 (Proposed); runbook `docs/runbooks/prodplan.md`. Format mengikuti `docs/qa/G51_UAT.md`
+(kotak centang; Given/When/Then).
+
+> **Perubahan 25 Nov 2026 (G66b).** Modul Produksi tidak lagi memakai login Odoo/grup Insight: pengguna masuk di halaman `/produksi/masuk`
+> dengan **username + password ESB milik sendiri**; sesi maksimal 1 jam; peran dan cabang diambil dari izin ESB orang itu. Bagian 0, 1, 7 dan
+> 10 di bawah sudah disesuaikan; **bagian 12 baru** menguji login. Skenario bertanda **[AKUN-2]** butuh **dua akun ESB staging non-admin berbeda**
+> (Q-PP17; sampai tersedia, jalankan dengan satu akun admin dan catat "tertahan"). Teks "Planner A / Kepala gudang B / Orang C" kini berarti
+> **akun ESB** A, B, C, bukan akun Odoo.
 **Semua langkah dijalankan terhadap ESB STAGING** (banner kuning/merah "ESB STAGING" harus tampil di setiap halaman
 Produksi). Skenario ini **belum pernah dijalankan di browser** (QA hanya membaca kode); catat setiap selisih di kolom Hasil.
 
@@ -12,10 +19,12 @@ produk/ID dengan data staging yang sebenarnya, tetapi **hitung ulang angka yang 
 
 - [ ] `INSIGHT_PRODPLAN_ENABLED=true`, `PRODPLAN_ENABLED=true`, `PRODPLAN_WRITE_ENABLED=true` (hanya untuk bagian 8-9; bagian 1-7
       cukup `false`), `esb_env = staging`. Stack prodplan + Insight berjalan.
-- [ ] Tiga akun Odoo, masing-masing satu orang berbeda:
-      **Planner A** (grup "Insight: Production planner CK"), **Kepala gudang B** (grup "Insight: Kepala gudang (persetujuan transfer)"),
-      **Orang C** yang memegang **kedua** grup. Tidak satupun boleh punya cabang pada "Cabang ESB dikelola" (kepala toko ber-cabang
-      kehilangan peran produksi).
+- [ ] `PRODPLAN_ESB_COMPANY_CODES` terisi dengan `companyCode` ESB staging; `PRODPLAN_ODOO_PROVISION_ENABLED=true` + overlay `prodplan-odoo`
+      hanya untuk skenario 12.12 (tumpukan lokal dev/stg, **bukan** production).
+- [ ] Akun ESB staging, masing-masing satu orang berbeda (**[AKUN-2]** bila belum ada selain admin):
+      **Planner A** (hak ESB: Simple Manufacturing tambah, BOM/Stock List/Purchase Request baca), **Kepala gudang B** (hak ESB: Simple Transfer +
+      Goods Transfer Request tambah, Stock List), **Orang C** yang memegang **kedua** set hak (akun admin staging memenuhi ini).
+      Satu akun **D** tanpa hak modul tersebut, dan satu akun **E** yang hanya memegang cabang di luar Central Kitchen.
 - [ ] Akun staging ESB: ada BOM Assembly untuk dua produk jadi (sebut **FIN-A** 45 ml susu/pcs, **FIN-B** 30 ml susu/pcs), BOM bertingkat
       (**FIN-C** memakai WIP **WIP-D**), dan setidaknya satu produk **tanpa** BOM Assembly. Stok susu di lokasi produksi = 700 ML;
       lokasi sumber satu cabang sama punya >= 1.000 ML, cabang lain punya >= 1.000 ML.
@@ -23,13 +32,14 @@ produk/ID dengan data staging yang sebenarnya, tetapi **hitung ulang angka yang 
 
 ## 1. Akses dan peran
 
-- [ ] **Planner A masuk.** Given login Odoo sebagai A; When klik menu **Dashboard Insight**, lalu sidebar grup **Produksi**; Then terlihat
-      "Rencana produksi", tombol **Buat rencana** dan **Kemasan utuh**; peran di bilah atas = Planner CK; banner lingkungan ESB tampil.
+- [ ] **Planner A masuk.** Given halaman `/produksi/masuk` (tanpa login Odoo); When A mengisi username + password ESB dan **Masuk**; Then diarahkan ke
+      `/produksi`: terlihat "Rencana produksi", tombol **Buat rencana** dan **Kemasan utuh**; bilah atas menampilkan nama lengkap A (dari ESB), peran
+      Planner CK, banner ESB STAGING, sisa waktu sesi (<= 60 menit) dan tombol **Keluar**; **tidak ada** tautan ke halaman Insight lain.
 - [ ] **Kepala gudang B masuk.** Given login sebagai B; When membuka Produksi; Then daftar rencana tampil **tanpa** tombol "Buat rencana";
-      halaman Kemasan utuh hanya baca (tidak ada "Tambah aturan kemasan").
-- [ ] **Negatif: pengguna tanpa grup.** Given akun Odoo biasa tanpa kedua grup; When mencoba membuka `/produksi` langsung; Then diarahkan ke
-      halaman "tidak berwenang"; menu Produksi tidak ada di sidebar.
-- [ ] **Negatif: flag mati.** Given `INSIGHT_PRODPLAN_ENABLED=false`; When A membuka `/produksi`; Then halaman "belum aktif", bukan galat teknis.
+      halaman Kemasan utuh hanya baca (tidak ada "Tambah aturan kemasan"). **[AKUN-2]**
+- [ ] **Negatif: pengguna tanpa izin ESB.** Given akun D (tanpa hak modul); When login; Then kembali ke halaman masuk dengan pesan
+      "Akun ESB ini tidak memiliki izin modul Produksi."; tidak ada sesi (membuka `/produksi` langsung -> halaman masuk).
+- [ ] **Negatif: flag mati.** Given `INSIGHT_PRODPLAN_ENABLED=false`; When membuka `/produksi` atau `/produksi/masuk`; Then halaman "belum aktif", bukan galat teknis.
 
 ## 2. Aturan kemasan utuh (Planner)
 
@@ -89,14 +99,18 @@ produk/ID dengan data staging yang sebenarnya, tetapi **hitung ulang angka yang 
       (dibulatkan ke kemasan utuh, tidak ada dari lokasi 9 yang hanya 400). Kedua status **Menunggu keputusan**.
 - [ ] **Bahan tanpa kemasan.** Tepung (KG) butuh 12,5, stok produksi 4, lokasi 8 punya 6, cabang lain 10: transfer 6 dari lokasi 8 dan 2,5 dari cabang lain; **kekurangan 0**.
 - [ ] **Kekurangan tidak tertutup.** Sumber total kurang dari kebutuhan; Then baris kebutuhan merah "Kurang X", banner "Ada kekurangan bahan yang belum tertutup transfer"; menyimpan dan mengajukan tetap bisa.
-- [ ] **Negatif: tanpa lokasi sumber.** Brand tanpa sumber terkonfigurasi: tab Transfer = "Tidak ada usulan transfer..." dengan alasan.
+- [ ] **Negatif: tanpa lokasi sumber.** Pemicu hitung hanya memegang cabang Central Kitchen (sumber transfer kini = lokasi dari cabang milik **pemicu hitung**,
+      bukan konfigurasi brand): tab Transfer = "Tidak ada usulan transfer..." dengan alasan.
+- [ ] **Sumber mengikuti pemicu.** Given dua akun dengan daftar cabang berbeda; When masing-masing menghitung rencana yang sama; Then usulan transfer hanya memuat lokasi
+      cabang milik pemicu itu (tidak ada lokasi cabang yang tidak ia pegang). **[AKUN-2]**
 
 ## 7. Pengajuan dan persetujuan dua orang
 
 - [ ] **Ajukan.** Given hasil hitung **Terbaru** (kurang dari 30 menit sejak hitung); When A klik **Ajukan untuk persetujuan**; Then status **Diajukan**; tombol edit/hitung hilang.
 - [ ] **Negatif: hasil hitung usang.** Setelah mengubah permintaan, **Ajukan** nonaktif dengan alasan "Hitung kebutuhan lebih dulu"; bila sudah > 30 menit sejak hitung, ajukan ditolak "Data stok terlalu lama. Hitung ulang...".
-- [ ] **Pemisahan tugas.** Given rencana diajukan oleh A; When **A sendiri** membuka rencana (A tidak punya grup gudang) atau **Orang C** (pembuat/pengaju) membuka;
-      Then tombol Setujui nonaktif dengan alasan "Anda pembuat/pengaju rencana ini; pemisahan tugas melarang..."; mencoba lewat URL/aksi tetap ditolak server.
+- [ ] **Pemisahan tugas.** Given rencana dibuat dan diajukan oleh **Orang C** (memegang hak planner **dan** gudang); When **C sendiri** membuka rencana;
+      Then tombol Setujui nonaktif dengan alasan "Anda pembuat/pengaju rencana ini; pemisahan tugas melarang..."; mencoba lewat URL/aksi tetap ditolak server
+      (403 "Pemisahan tugas..."). Given akun **B** (lain) login; Then Setujui aktif. **[AKUN-2]** untuk bagian B; bagian C sendiri bisa dengan akun admin.
 - [ ] **Persetujuan transfer.** Login B; tab **Transfer**; **Setujui transfer** untuk transfer sederhana; **Tolak transfer** untuk transfer lain tanpa alasan -> wajib isi alasan; isi alasan -> status **Ditolak** dengan nama pemutus + alasan.
 - [ ] **Negatif: setujui rencana sebelum semua transfer diputuskan.** **Setujui rencana** nonaktif: "Masih N usulan transfer belum disetujui atau ditolak".
 - [ ] **Setujui rencana.** Setelah semua transfer diputuskan, B **Setujui rencana**; Then status **Disetujui**, linimasa mencatat Diajukan oleh A, Disetujui oleh B.
@@ -136,11 +150,53 @@ Prasyarat: rencana **Disetujui**, `PRODPLAN_WRITE_ENABLED=true`, tanggal produks
 
 - [ ] Setiap status memakai kata + warna (tidak hanya warna); setiap tombol nonaktif menampilkan alasan terlihat.
 - [ ] Pesan galat selalu berbahasa Indonesia, tanpa SQL, URL ESB, atau tumpukan galat.
-- [ ] Setelah 2 jam sesi berakhir: aksi berikutnya meminta membuka ulang Insight dari Odoo.
+- [ ] Setelah sesi ESB berakhir (maks. 1 jam): aksi berikutnya meminta masuk lagi di `/produksi/masuk` (lihat 12.4); tidak ada lagi sesi Odoo 2 jam.
+- [ ] Nama pengguna ESB lengkap hanya tampil sebagai pembuat/pengaju/penyetuju/pemutus transfer; username dan password ESB tidak tampil di layar, URL, maupun pesan galat.
 - [ ] Setelah pembatalan/perubahan, daftar `/produksi` menampilkan status terbaru; filter brand, tanggal, status bekerja; halaman 51+ rencana menampilkan "Berikutnya".
 - [ ] Tidak ada nomor HP/PII pada layar; nama pengguna hanya pembuat/pengaju/penyetuju.
 
-## 11. Hasil
+## 12. Login per pengguna ESB (G66b, kontrak §30.17)
+
+Semua terhadap ESB STAGING. Pesan galat login **tidak boleh** membedakan "user tidak ada" dan "password salah". Jangan menyimpan password uji di catatan UAT.
+
+- [ ] **12.1 Login benar.** Given A di `/produksi/masuk` (banner ESB STAGING tampil, kolom username `autocomplete=username`, password bertipe password);
+      When isi username (huruf besar/kecil bebas) + password benar; Then **303** ke `/produksi`, ada cookie `__Host-epp` (HttpOnly, Secure, SameSite=Strict, tanpa Domain);
+      cookie `__Host-eis` (Insight Odoo) tidak berubah; password tidak muncul di URL/riwayat peramban/respons.
+- [ ] **12.2 Password salah.** When username benar + password salah; Then kembali ke halaman masuk dengan "Username atau password ESB salah."; username tidak terisi ulang;
+      tidak ada cookie `__Host-epp`. Ulangi dengan username yang tidak ada: pesan **identik**.
+- [ ] **12.3 Terkunci.** When 5 kali berturut-turut password salah untuk username yang sama dalam 15 menit; Then percobaan ke-6 (bahkan dengan password benar)
+      -> "Terlalu banyak percobaan masuk. Coba lagi dalam 15 menit."; verifikasi ke admin ESB bahwa **tidak ada** panggilan login ke ESB untuk percobaan ke-6 (log ESB / log prodplan
+      `pp_login result=login_locked`); setelah 15 menit login benar berhasil dan hitungan gagal ter-reset. Negatif tambahan: 11 percobaan dari satu IP dalam 15 menit -> pesan yang sama (batas IP insight-web).
+- [ ] **12.4 Sesi 1 jam.** Given A sudah login; Then sisa waktu di bilah atas turun dari <= 60 menit; When sesi habis (tunggu 60 menit, atau minta developer mengosongkan sesi prodplan / restart
+      `prodplan`); Then halaman berikutnya mengalihkan ke `/produksi/masuk` dengan "Sesi ESB berakhir (maksimal 1 jam). Silakan masuk lagi." dan cookie dihapus; tidak ada galat teknis.
+- [ ] **12.5 Kedaluwarsa di tengah aksi + masuk lagi.** Given A sedang mengetik permintaan produksi lalu sesi habis; When klik **Simpan permintaan**; Then pesan "Sesi ESB berakhir..." dengan tautan
+      **masuk lagi** (tab baru); setelah masuk lagi dan memuat ulang rencana, perubahan yang belum tersimpan **tidak** ada (catat: isian harus diketik ulang) dan rencana tidak rusak.
+- [ ] **12.6 Dua akun untuk pemisahan tugas. [AKUN-2]** Given A (planner) membuat + mengajukan rencana; When **B** (akun ESB lain, kepala gudang) login di peramban/profil lain dan menyetujui transfer + rencana;
+      Then berhasil; linimasa menampilkan nama lengkap A (pengaju) dan B (penyetuju) dari ESB. Negatif: **C** (pembuat) mencoba menyetujui -> "Pemisahan tugas...". Dua sesi berbeda
+      berjalan bersamaan tanpa saling mengganggu (logout A tidak mengeluarkan B).
+- [ ] **12.7 Posting tertunda `needs_login` + lanjutkan. [AKUN-2 disarankan]** Given rencana Disetujui, `PRODPLAN_WRITE_ENABLED=true`; When A memposting transfer lalu sesi A berakhir/di-logout **sebelum** worker
+      mengirim (atau developer mengosongkan sesi); Then baris dokumen "Berhenti: sesi ESB berakhir, perlu masuk lagi", rencana "Perlu perhatian", pesan "Posting berhenti karena sesi ESB berakhir", **tidak ada**
+      dokumen baru di ESB. When A masuk lagi dan klik **Lanjutkan posting**; Then baris berjalan sampai Terkonfirmasi; **tepat satu** dokumen di ESB per baris (verifikasi ke admin ESB). Negatif: bila dokumen
+      mungkin sudah dibuat sebelum sesi putus, **akun B** (bukan pengirim awal) klik Lanjutkan posting -> ditolak "Hanya pengguna yang sama yang boleh melanjutkan..."; A bisa melanjutkan (dicocokkan lewat marker, tanpa dokumen ganda).
+      Negatif: klik Lanjutkan posting saat tidak ada yang tertunda -> "Tidak ada posting yang perlu dilanjutkan."; **Batalkan rencana** saat ada baris tertunda yang mungkin sudah tercipta -> ditolak "tidak sesuai status".
+- [ ] **12.8 Akun tanpa izin ESB / perusahaan salah.** Given D (tanpa hak modul): ditolak "Akun ESB ini tidak memiliki izin modul Produksi." (lihat bagian 1). Given akun ESB milik brand/perusahaan lain
+      (bila ada di staging) -> pesan yang sama. Given akun ESB nonaktif -> "Username atau password ESB salah.". Admin ESB memastikan sesi ESB yang terbentuk sementara di-logout (tidak ada token menggantung).
+- [ ] **12.9 Cabang di luar izin.** Given akun E hanya memegang cabang non-CK, dan akun F memegang cabang CK berbeda dari rencana milik A (bila ada); Then F **tidak melihat** rencana A di daftar dan membuka tautannya
+      langsung -> "Data tidak ditemukan"; E tidak punya pilihan cabang CK di **Buat rencana**; mencoba membuat rencana di cabang yang tidak dipegang (ubah isian lewat alat pengembang) -> "Cabang atau lokasi produksi tidak termasuk daftar Central Kitchen
+      yang diizinkan."; menyetujui transfer yang cabang asal/tujuannya tidak dipegang -> "Akun ESB Anda tidak memegang cabang yang diperlukan...". Posting dengan akun yang tidak punya hak "tambah" dokumen
+      terkait di ESB -> "Akun ESB Anda tidak punya hak akses dokumen yang diperlukan...".
+- [ ] **12.10 Keluar dan batas sesi.** Given A login; When klik **Keluar**; Then kembali ke halaman masuk, cookie `__Host-epp` terhapus; tombol Back/URL `/produksi` -> halaman masuk; admin ESB memastikan token sesi itu
+      sudah di-logout. Given prodplan dimatikan saat Keluar: tetap kembali ke halaman masuk (galat diabaikan). Given A login dari empat peramban: sesi tertua dikeluarkan (batas 3 sesi per akun) dan meminta masuk lagi.
+- [ ] **12.11 Halaman Insight lain tidak terbuka dengan sesi ESB.** Given A login ke Produksi **tanpa** sesi Odoo; When membuka `/`, `/fnb/exec`, `/sm/...`, `/visitors`, atau ekspor/route data; Then diarahkan ke login Odoo/SSO (bukan data);
+      di bilah Produksi tidak ada tautan ke halaman itu. Sebaliknya: pengguna Insight ber-peran produksi di Odoo **tanpa** login ESB membuka `/produksi` -> halaman masuk ESB (peran Odoo tidak memberi akses).
+- [ ] **12.12 Duplikasi ke Odoo -> user arsip. (butuh tumpukan lokal + provisioning aktif)** Given `PRODPLAN_ODOO_PROVISION_ENABLED=true`; When A login sukses; Then dalam beberapa detik di Odoo (Superadmin) muncul
+      **Identitas ESB** untuk A (akun `pb`, username huruf kecil) dengan user Odoo **terarsip**, login berformat `esb:pb:<username>`, tanpa password/email, grup hanya Internal User (tanpa grup Insight/PP), cermin peran PP + cabang terisi,
+      PT dari cabang; login kedua A **tidak** membuat user kedua dan memperbarui "Login ESB terakhir". Negatif: user Odoo biasa dengan login yang sama dengan format shadow -> provisioning ditolak (login tetap berhasil di Produksi);
+      matikan Odoo/gateway -> login Produksi tetap berhasil, identitas menyusul pada login berikutnya; tidak ada password/token di log prodplan, gateway, maupun Odoo (periksa).
+- [ ] **12.13 Produksi ESB production tetap terkunci.** Given `esb_env=production`; Then banner "ESB PRODUCTION"; login dengan akun admin hanya bisa membaca (GET); `PRODPLAN_WRITE_ENABLED=true` pada production membuat prodplan **tidak start**
+      (konstanta pengunci L-250); tidak ada tombol posting yang berhasil menulis ke ESB production.
+
+## 13. Hasil
 
 | Bagian | Lulus | Gagal | Catatan | Penguji / tanggal |
 |---|---|---|---|---|
@@ -153,3 +209,5 @@ Prasyarat: rencana **Disetujui**, `PRODPLAN_WRITE_ENABLED=true`, tanggal produks
 | 7 Persetujuan dua orang | | | | |
 | 8 Posting staging | | | | |
 | 9 Pembatalan | | | | |
+| 12 Login per pengguna ESB (12.1-12.13) | | | | |
+| 12.x bertanda **[AKUN-2]** (12.6, 12.7 sebagian, 7 SoD, 6 sumber mengikuti pemicu) | | | tertahan sampai akun ESB staging kedua (Q-PP17) | |

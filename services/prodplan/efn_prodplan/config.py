@@ -4,7 +4,12 @@
 - Base URL ESB hanya salah satu dari dua nilai di `ESB_BASE_URLS`; nilai lain -> `ConfigError` (exit 2).
 - L-250: tulis ke ESB production terkunci konstanta kode `PROD_WRITE_UNLOCKED` (BUKAN env). Mengubahnya = PR terpisah
   dengan review security setelah ADR-051 Accepted + Q-PP1.
-- Password ESB/PG dan kunci asersi hanya dari file `/run/secrets/*`; tidak pernah masuk repr/log/pesan exception.
+- Password PG, kunci asersi, dan API key provisioning Odoo hanya dari file `/run/secrets/*`; tidak pernah masuk
+  repr/log/pesan exception.
+- §30.17 (amandemen A1 ADR-051): TIDAK ada lagi akun service ESB (`PRODPLAN_ESB_USER_<BRAND>`,
+  `PRODPLAN_ESB_PASSWORD_<BRAND>_FILE`) maupun `PRODPLAN_SOURCE_LOCATIONS`; semua panggilan ESB memakai token pengguna.
+  Baru: `PRODPLAN_ESB_COMPANY_CODES`, aturan peran `PRODPLAN_ESB_ROLE_*`, `PRODPLAN_ESB_DOC_ACCESS`, provisioning Odoo
+  (`PRODPLAN_ODOO_*`, default mati).
 """
 
 import os
@@ -25,17 +30,11 @@ DEFAULT_BASE_URL = "https://stg7.esb.co.id/core-stg"
 KNOWN_BRANDS = ("pb", "wtz", "bacha", "imd", "cup")
 # Kode PT yang disimpan di kolom `company_code` per brand.
 BRAND_COMPANY: Mapping[str, str] = {"pb": "PB", "wtz": "WTZ", "bacha": "BCF", "imd": "IMD", "cup": "CUP"}
-# Kode PT di klaim `codes` yang memberi akses ke brand (Bacha punya dua PT).
-BRAND_CODES: Mapping[str, frozenset[str]] = {
-    "pb": frozenset({"PB"}),
-    "wtz": frozenset({"WTZ"}),
-    "bacha": frozenset({"BCF", "BCR"}),
-    "imd": frozenset({"IMD"}),
-    "cup": frozenset({"CUP"}),
-}
 MFG_MODES = ("actual", "standard")
+ODOO_RPC_URL = "https://odoo-rpc-gateway:8443"  # §30.17.13: nilai lain -> exit 2
 _PLACEHOLDERS = frozenset({"disabled", "changeme", "change-me", "placeholder", "xxx", "todo", "password"})
 _HEX_RE = re.compile(r"^[0-9a-fA-F]{64,}$")
+_COMPANY_CODE_RE = re.compile(r"^[A-Za-z0-9_.-]{1,32}$")
 
 
 class ConfigError(RuntimeError):
@@ -166,23 +165,68 @@ def parse_date_window(text: str) -> tuple[int, int]:
     return low, high
 
 
+def parse_company_codes(text: str, brands: tuple[str, ...]) -> dict[str, str]:
+    """`pb=<companyCode ESB>[;wtz=...]` (pemisah `;` atau `,`) -> {brand: companyCode}. Wajib untuk setiap brand aktif;
+    kode yang sama untuk dua brand ditolak (login harus memetakan ke tepat satu brand)."""
+    out: dict[str, str] = {}
+    for raw in text.replace(",", ";").split(";"):
+        item = raw.strip()
+        if not item:
+            continue
+        brand, sep, code = (part.strip() for part in item.partition("="))
+        brand = brand.lower()
+        if not sep or brand not in KNOWN_BRANDS or brand in out or not _COMPANY_CODE_RE.fullmatch(code):
+            raise ConfigError("invalid_company_codes", "PRODPLAN_ESB_COMPANY_CODES format wajib brand=companyCode")
+        out[brand] = code
+    active = {b: c for b, c in out.items() if b in brands}
+    if any(b not in active for b in brands):
+        raise ConfigError("esb_company_code_missing", "PRODPLAN_ESB_COMPANY_CODES wajib memuat setiap brand aktif")
+    if len(set(active.values())) != len(active):
+        raise ConfigError("invalid_company_codes", "PRODPLAN_ESB_COMPANY_CODES: companyCode ganda")
+    return active
+
+
 @dataclass(frozen=True)
 class BrandConfig:
     key: str
     company_code: str
-    user: str = field(repr=False)
-    password: str = field(repr=False)
+    esb_company_code: str = ""  # `result.companyCode` login ESB untuk brand ini (§30.17.3 langkah 4)
     ck: Mapping[int, tuple[int, ...]] = field(default_factory=dict)
-    sources: Mapping[int, tuple[int, ...]] = field(default_factory=dict)
-
-    def __repr__(self) -> str:
-        return f"BrandConfig(key={self.key!r}, company_code={self.company_code!r}, user=***)"
 
     def is_ck(self, branch_id: int, location_id: int) -> bool:
         return location_id in self.ck.get(branch_id, ())
 
-    def source_locations(self) -> list[tuple[int, int]]:
-        return [(br, loc) for br in sorted(self.sources) for loc in self.sources[br]]
+
+@dataclass(frozen=True)
+class OdooProvisionSettings:
+    """§30.17.11. `enabled=False` -> tidak ada antrean/koneksi; file secret/sertifikat tidak dibaca."""
+
+    enabled: bool = False
+    url: str = ODOO_RPC_URL
+    api_key: str = field(default="", repr=False)
+    ca_file: str = "/run/secrets/efn_ca_crt"
+    cert_file: str = "/run/secrets/tls_prodplan_odoo_crt"
+    key_file: str = "/run/secrets/tls_prodplan_odoo_key"
+
+    @classmethod
+    def from_env(cls, env: Mapping[str, str]) -> Self:
+        url = _str(env, "PRODPLAN_ODOO_RPC_URL", ODOO_RPC_URL).rstrip("/")
+        if url != ODOO_RPC_URL:
+            raise ConfigError("odoo_rpc_url", "PRODPLAN_ODOO_RPC_URL wajib https://odoo-rpc-gateway:8443")
+        if not _flag(env, "PRODPLAN_ODOO_PROVISION_ENABLED"):
+            return cls(enabled=False, url=url)
+        key_path = _str(env, "PRODPLAN_ODOO_API_KEY_FILE", "/run/secrets/odoo_api_key_esb_provisioner")
+        api_key = read_secret_file(key_path, "PRODPLAN_ODOO_API_KEY")
+        if api_key.lower() in _PLACEHOLDERS:
+            raise ConfigError("odoo_api_key_placeholder", "PRODPLAN_ODOO_API_KEY: masih placeholder")
+        files = {
+            "ca_file": _str(env, "PRODPLAN_ODOO_CA_FILE", "/run/secrets/efn_ca_crt"),
+            "cert_file": _str(env, "PRODPLAN_ODOO_CLIENT_CERT_FILE", "/run/secrets/tls_prodplan_odoo_crt"),
+            "key_file": _str(env, "PRODPLAN_ODOO_CLIENT_KEY_FILE", "/run/secrets/tls_prodplan_odoo_key"),
+        }
+        for name, path in files.items():
+            read_secret_file(path, f"PRODPLAN_ODOO_{name.upper()}")  # hanya cek terbaca; isi tidak disimpan
+        return cls(enabled=True, url=url, api_key=api_key, **files)
 
 
 @dataclass(frozen=True)
@@ -236,6 +280,10 @@ class Settings:
     outbox_poll_seconds: int = 10
     reconcile_grace_seconds: int = 300
     retention_days: int = 730
+    planner_rules: tuple[tuple[str, frozenset[str]], ...] = ()
+    warehouse_rules: tuple[tuple[str, frozenset[str]], ...] = ()
+    doc_access: Mapping[str, str] = field(default_factory=dict)
+    odoo: OdooProvisionSettings = field(default_factory=OdooProvisionSettings)
 
     def brand(self, key: str) -> BrandConfig | None:
         for cfg in self.brands:
@@ -256,29 +304,25 @@ class Settings:
         if not keys or any(k not in KNOWN_BRANDS for k in keys):
             raise ConfigError("invalid_brands", f"PRODPLAN_BRANDS wajib subset {', '.join(KNOWN_BRANDS)}")
         ck = parse_location_map(_str(e, "PRODPLAN_CK_BRANCHES", "pb:4=7"), "PRODPLAN_CK_BRANCHES", keys)
-        sources = parse_location_map(_str(e, "PRODPLAN_SOURCE_LOCATIONS", ""), "PRODPLAN_SOURCE_LOCATIONS", keys)
-        brands: list[BrandConfig] = []
-        for key in keys:
-            upper = key.upper()
-            user = _str(e, f"PRODPLAN_ESB_USER_{upper}", "")
-            if not user:
-                raise ConfigError("esb_user_missing", f"PRODPLAN_ESB_USER_{upper} wajib diisi untuk brand aktif")
-            password = read_secret_file(
-                _str(e, f"PRODPLAN_ESB_PASSWORD_{upper}_FILE", f"/run/secrets/esb_prodplan_password_{key}"),
-                f"PRODPLAN_ESB_PASSWORD_{upper}",
-            )
-            if password.lower() in _PLACEHOLDERS:
-                raise ConfigError("esb_password_placeholder", f"PRODPLAN_ESB_PASSWORD_{upper}: masih placeholder")
-            brands.append(
-                BrandConfig(
-                    key=key,
-                    company_code=BRAND_COMPANY[key],
-                    user=user,
-                    password=password,
-                    ck=ck.get(key, {}),
-                    sources=sources.get(key, {}),
-                )
-            )
+        company_codes = parse_company_codes(_str(e, "PRODPLAN_ESB_COMPANY_CODES", ""), keys)
+        brands = tuple(
+            BrandConfig(key=k, company_code=BRAND_COMPANY[k], esb_company_code=company_codes[k], ck=ck.get(k, {}))
+            for k in keys
+        )
+        # Impor lokal: `access` memakai `ConfigError` dari modul ini.
+        from efn_prodplan.access import (
+            DEFAULT_DOC_ACCESS,
+            DEFAULT_PLANNER_RULES,
+            DEFAULT_WAREHOUSE_RULES,
+            parse_doc_access,
+            parse_rules,
+        )
+
+        planner_env, warehouse_env = "PRODPLAN_ESB_ROLE_PLANNER", "PRODPLAN_ESB_ROLE_WAREHOUSE"
+        planner_rules = parse_rules(_str(e, planner_env, DEFAULT_PLANNER_RULES), planner_env)
+        warehouse_rules = parse_rules(_str(e, warehouse_env, DEFAULT_WAREHOUSE_RULES), warehouse_env)
+        doc_access = parse_doc_access(_str(e, "PRODPLAN_ESB_DOC_ACCESS", DEFAULT_DOC_ACCESS))
+        odoo = OdooProvisionSettings.from_env(e)
         key_text = read_secret_file(
             _str(e, "PRODPLAN_ASSERT_KEY_FILE", "/run/secrets/prodplan_assert_key"), "PRODPLAN_ASSERT_KEY"
         )
@@ -290,7 +334,7 @@ class Settings:
             base_url=base_url,
             esb_env=esb_env,
             mfg_mode=mfg_mode,
-            brands=tuple(brands),
+            brands=brands,
             # §30.7: kunci HMAC = byte ASCII string hex (bukan hasil decode hex).
             assert_key=key_text.encode("ascii"),
             pg=PgSettings.from_env(e),
@@ -306,4 +350,8 @@ class Settings:
             outbox_poll_seconds=_int_range(e, "PRODPLAN_OUTBOX_POLL_SECONDS", 10, 2, 300),
             reconcile_grace_seconds=_int_range(e, "PRODPLAN_RECONCILE_GRACE_SECONDS", 300, 60, 3600),
             retention_days=_int_range(e, "PRODPLAN_RETENTION_DAYS", 730, 400, 1825),
+            planner_rules=planner_rules,
+            warehouse_rules=warehouse_rules,
+            doc_access=doc_access,
+            odoo=odoo,
         )

@@ -57,17 +57,16 @@ def test_resend_after_not_found_reuses_same_body_and_marker():
 
 
 # ---------------------------------------------------------------- kirim
-def test_auth_failure_before_send_backs_off_exponentially_and_stays_pending():
+def test_auth_failure_on_post_becomes_needs_login_without_retry():
+    # §30.17.9 (menggantikan backoff login ulang akun service): 401 -> needs_login, tidak ada POST kedua.
     env = Env([row(1)])
-    env.esb.post_outcomes = [EsbAuthError("login"), EsbAuthError("login")]
+    env.esb.post_outcomes = [EsbAuthError("401"), "ST1"]
     env.worker.run_once()
     r = env.store.rows["o1"]
-    assert r["status"] == "pending" and r["last_error_code"] == "esb_auth_failed"
-    assert r["next_attempt_at"] == T0 + timedelta(seconds=30)
-    env.advance(31)
-    env.worker.run_once()
-    assert env.store.rows["o1"]["next_attempt_at"] == env.now + timedelta(seconds=60)  # percobaan ke-2
-    assert env.store.rows["o1"]["status"] == "pending"
+    assert r["status"] == "needs_login" and r["last_error_code"] == "needs_login" and r["attempts"] == 1
+    env.advance(3600)
+    assert not env.worker.run_once()
+    assert len(env.esb.posts) == 1
 
 
 def test_generic_client_error_becomes_unknown_and_is_never_reposted():
@@ -86,12 +85,11 @@ def test_generic_client_error_becomes_unknown_and_is_never_reposted():
     assert len(env.esb.posts) == 1
 
 
-def test_unknown_brand_client_defers_row_without_state_change():
+def test_brand_without_session_goes_needs_login_without_esb_call():
     env = Env([row(1, esb_brand="zzz")])
     assert env.worker.run_once()
     r = env.store.rows["o1"]
-    assert r["status"] == "pending" and r["next_attempt_at"] == T0 + timedelta(seconds=600)
-    assert env.esb.posts == []
+    assert r["status"] == "needs_login" and env.esb.posts == []
 
 
 # ---------------------------------------------------------------- konfirmasi
@@ -183,7 +181,7 @@ def test_pick_next_takes_oldest_due_plan_first_and_ignores_blocked_plan():
 
 
 def test_pick_next_delete_blocked_by_inflight_higher_rows():
-    for blocker in ("sent", "unknown", "sending", "confirmed", "delete_failed"):
+    for blocker in ("sent", "unknown", "sending", "confirmed", "delete_failed", "needs_login"):
         rows = [row(1, "delete_pending", esb_doc_number="ST1"), row(2, blocker, esb_doc_number="ST2")]
         picked = pick_next(rows, True, T0)
         assert picked is None or picked[0]["seq"] == 2, blocker  # baris 1 tidak boleh dihapus lebih dulu

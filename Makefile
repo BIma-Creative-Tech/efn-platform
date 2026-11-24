@@ -75,6 +75,8 @@ validate: env secrets
 	$(DEV) -f $(COMPOSE_DIR)/docker-compose.esb.yml -f $(COMPOSE_DIR)/docker-compose.migration.yml $(ALL_PROFILES) --profile migrate config -q
 	$(DEV) -f $(COMPOSE_DIR)/docker-compose.prodplan.yml $(ALL_PROFILES) config -q
 	$(PROD) -f $(COMPOSE_DIR)/docker-compose.prodplan.yml $(ALL_PROFILES) config -q
+	$(DEV) -f $(COMPOSE_DIR)/docker-compose.prodplan.yml -f $(COMPOSE_DIR)/docker-compose.prodplan-odoo.yml $(ALL_PROFILES) config -q
+	$(PROD) -f $(COMPOSE_DIR)/docker-compose.prodplan.yml -f $(COMPOSE_DIR)/docker-compose.prodplan-odoo.yml $(ALL_PROFILES) config -q
 
 # Image linter dipin digest (SEC-47; sama dengan job CI infra; G13: hadolint v2.14.0). Dependabot tidak membaca Makefile:
 # perbarui manual bersama ci.yml. Shellcheck: daftar file sama dengan job CI `infra`.

@@ -23,6 +23,7 @@ import {
   fmtPlace,
   fmtPpQty,
   fmtWibDateTime,
+  hasNeedsLogin,
   hasOpenShortage,
   outboxErrorLabel,
   placeHint,
@@ -124,16 +125,47 @@ export function PlanHeaderInfo({ plan }: { plan: Plan }): ReactNode {
 }
 
 /** Tombol alur sesuai status + peran + SoD. */
-export function WorkflowBar({ plan, caps, sub }: { plan: Plan; caps: PpCaps; sub: number }): ReactNode {
+/**
+ * Posting berhenti karena sesi ESB pemicu berakhir (§30.17.9): tidak ada panggilan ke ESB sampai ada pengguna yang masuk dan
+ * memilih "Lanjutkan posting" (`resume-posting`). Bila dokumen mungkin sudah tercipta oleh pengguna sebelumnya, server hanya
+ * mengizinkan pengguna yang sama (403 `resume_requires_original_user` ditampilkan apa adanya).
+ */
+export function ResumePosting({ plan, caps }: { plan: Plan; caps: PpCaps }): ReactNode {
+  if (!hasNeedsLogin(plan.outbox)) return null;
+  const may = caps.planner || caps.warehouse;
+  return (
+    <div className="notice" role="note">
+      <p>
+        <strong>Posting berhenti karena sesi ESB berakhir.</strong> Dokumen yang belum selesai tidak dikirim ke ESB sampai Anda melanjutkannya. Pastikan Anda sudah masuk dengan akun ESB yang berhak, lalu lanjutkan.
+      </p>
+      {may ? (
+        <PpAction
+          action="plan-resume-posting"
+          payload={{ id: plan.id, row_version: plan.row_version }}
+          label="Lanjutkan posting"
+          variant="primary"
+          successMessage="Posting dilanjutkan. Pantau status dokumen di tab Posting atau Riwayat."
+        />
+      ) : (
+        <p className="muted small">Peran Anda tidak boleh melanjutkan posting.</p>
+      )}
+    </div>
+  );
+}
+
+export function WorkflowBar({ plan, caps, sub }: { plan: Plan; caps: PpCaps; sub: number | null }): ReactNode {
   const base = { id: plan.id, row_version: plan.row_version };
   const undecided = undecidedTransfers(plan.transfers);
   const sod = sodBlock(plan, sub);
 
   if (plan.status === 'cancelled') {
     return (
-      <p className="muted">
-        Rencana dibatalkan{plan.cancelled_at ? ` pada ${fmtWibDateTime(plan.cancelled_at)}` : ''}.{plan.cancel_reason ? ` Alasan: ${plan.cancel_reason}` : ''}
-      </p>
+      <>
+        <p className="muted">
+          Rencana dibatalkan{plan.cancelled_at ? ` pada ${fmtWibDateTime(plan.cancelled_at)}` : ''}.{plan.cancel_reason ? ` Alasan: ${plan.cancel_reason}` : ''}
+        </p>
+        <ResumePosting plan={plan} caps={caps} />
+      </>
     );
   }
 
@@ -217,6 +249,7 @@ export function WorkflowBar({ plan, caps, sub }: { plan: Plan; caps: PpCaps; sub
         </>
       ) : null}
       {plan.status === 'posted' ? <p>Rencana sudah diposting. Pantau dokumen di tab Riwayat.</p> : null}
+      <ResumePosting plan={plan} caps={caps} />
       {cancel}
     </div>
   );

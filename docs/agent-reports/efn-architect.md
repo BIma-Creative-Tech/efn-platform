@@ -1491,3 +1491,30 @@ Q-PP1 (akun API non-admin), Q-PP2 (penyimpangan "draft di ESB" untuk produksi), 
 - Perilaku `samenet` pg_hba dengan postgres di dua network (asumsi: mencakup kedua subnet) dan aturan check-encryption yang
   perlu diubah devsecops.
 - Semua runtime (tidak ada kode yang ditulis).
+
+# G66 amandemen A1 — login per pengguna ESB + shadow user Odoo: ADR-051 §8, kontrak §30.17 (2026-11-25)
+
+## Ringkasan (untuk manajemen)
+Keputusan pemilik proyek 25 Nov dicatat: Q-PP2 diterima, Q-PP1 diganti "login per pengguna ESB", Q-PP6 = izin cabang ESB,
+tulis production dari akun admin ditahan. Modul Produksi punya halaman masuk ESB sendiri; password tidak pernah disimpan,
+token ESB (≤ 1 jam) hanya di memori `prodplan`; akun ESB bersama dihapus; login sukses dicatat sebagai user Odoo diarsipkan
+untuk migrasi. Biaya ±3 minggu-engineer, Rp0, tanpa dependency baru.
+
+## File diubah (worktree `efn-platform-pplogin`, tanpa kode)
+- `docs/decisions/ADR-051-production-planning-esb.md`: status/tanggal, judul §3.4, §8 baru (A1)
+- `docs/04_SERVICE_CONTRACTS.md`: catatan di awal §30 + §30.17 baru (30.17.1–30.17.16)
+- `docs/01_REVIEW_RISK_GAP_ANALYSIS.md` §5.15: status Q-PP1/2/6, R-S24..R-S26, R-O16, R-T24, Q-PP15..19
+- `docs/decisions/README.md` (baris 051), `docs/decisions/ADR-041-insight-web-sso-odoo.md` (catatan §3.7)
+- `docs/compliance/PDP_DATA_INVENTORY.md` v21 + §2.8.15a
+
+## Keputusan yang butuh tanda tangan klien
+Q-PP15 (refresh token), Q-PP16 (penyaringan per pengguna di ESB), Q-PP17 (akun perorangan; staging minimal 2 akun non-admin
+untuk uji SoD), Q-PP18 (lockout ESB), Q-PP19 (`authorized`, `userRoleID` admin), Q-ESBU1..6 (fit-gap G66b), DPO untuk
+§2.8.15a. Rincian teknis A1 tetap Proposed.
+
+## Belum terverifikasi
+- Kolom `/user/access` yang memuat kode `B.4` dkk. (`accessID` vs `indexAccess`) dan nama field `/branch/list/user`.
+- Apakah ESB menyaring data per pengguna (Q-PP16); arti klaim `authorized`; endpoint refresh (Q-PP15).
+- Kode akses untuk mode `standard` (`…/assembly`: B.1 atau B.4).
+- Bentuk body `/json/2` untuk `efn_esb_provision`; oktet 26 untuk `prodplan-rpc` bebas di semua branch.
+- `CLAUDE.md` belum diubah (agent tidak boleh mengubahnya; usulan kalimat di laporan ke lead).

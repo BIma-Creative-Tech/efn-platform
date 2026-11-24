@@ -3,15 +3,17 @@
  *
  * - Tujuan: sidecar ghostunnel client di loopback (`http://127.0.0.1:7443`, lib/config.ts parsePpUrl). TLS/mTLS ke
  *   `prodplan-tls` dipegang sidecar; kunci TLS tidak ada di proses Node.
- * - Setiap request membawa `X-EFN-Actor: ppa1...` yang dibuat dari SESI TERVERIFIKASI (bukan input browser), terikat
- *   method + path(+query) + hash body, umur 60 detik (lib/prodplan-token.ts).
+ * - Setiap request membawa `X-EFN-Actor: ppa2...` yang membawa `sid` (isi cookie `__Host-epp`), terikat method +
+ *   path(+query) + hash body, umur 60 detik (lib/prodplan-token.ts, §30.17.7). Identitas/peran/cabang hanya dari sesi prodplan.
  * - Timeout 15 detik (§30.12). Galat dipetakan ke pesan Indonesia tanpa detail internal (lib/prodplan-errors.ts).
- * - Tidak mengikuti redirect. Tidak mencatat body, header aktor, atau query ke log.
+ * - Tidak mengikuti redirect. Tidak mencatat body (login memuat password), header aktor, sid, atau query ke log.
  */
 import 'server-only';
+import { cache } from 'react';
 import { log } from './log';
 import { getConfig, getKey } from './runtime';
 import { mapPpError, type PpErrorBody } from './prodplan-errors';
+import { parseSessionView, type SessionView } from './prodplan-session';
 import { ACTOR_HEADER, ActorError, isValidActorPath, signActor, type ActorSession } from './prodplan-token';
 
 export const PP_TIMEOUT_MS = 15_000;
@@ -35,14 +37,14 @@ const localError = (status: number, code: string): PpResult<never> => ({ ok: fal
 /** Inti tanpa akses runtime (dapat diuji dengan fetch palsu). */
 export async function ppCall(
   session: ActorSession,
-  method: 'GET' | 'POST' | 'PUT',
+  method: 'GET' | 'POST' | 'PUT' | 'DELETE',
   path: string,
   body: Record<string, unknown> | undefined,
   deps: PpDeps,
 ): Promise<PpResult<unknown>> {
   if (!deps.baseUrl) return localError(503, 'disabled');
   if (!deps.key) {
-    log('error', 'prodplan_client', { code: 'key_missing', sub: session.sub });
+    log('error', 'prodplan_client', { code: 'key_missing' });
     return localError(503, 'disabled');
   }
   if (!isValidActorPath(path)) return localError(400, 'bad_input');
@@ -53,9 +55,9 @@ export async function ppCall(
   try {
     actor = signActor({ session, method, path, body: bodyStr, key: deps.key, nowSec: Math.floor(nowMs / 1000) });
   } catch (e) {
-    // Sesi tanpa peran PP / tanpa kode ESB: tidak pernah boleh sampai sini (lapis sebelumnya menolak); fail closed.
-    log('warn', 'prodplan_client', { code: e instanceof ActorError ? e.reason : 'actor_error', sub: session.sub });
-    return localError(403, 'forbidden');
+    // sid tidak sah / path-method tidak sah / kunci rusak: fail closed, tanpa menyebut nilai apa pun.
+    log('warn', 'prodplan_client', { code: e instanceof ActorError ? e.reason : 'actor_error' });
+    return localError(e instanceof ActorError && e.reason === 'bad_sid' ? 401 : 403, e instanceof ActorError && e.reason === 'bad_sid' ? 'session_expired' : 'forbidden');
   }
 
   const headers: Record<string, string> = { Accept: 'application/json', [ACTOR_HEADER]: actor };
@@ -84,22 +86,22 @@ export async function ppCall(
     }
     const ms = Date.now() - t0;
     if (text === null) {
-      log('warn', 'prodplan_client', { code: 'response_too_large', status: res.status, sub: session.sub, ms });
+      log('warn', 'prodplan_client', { code: 'response_too_large', status: res.status, ms });
       return localError(502, 'bad_response');
     }
     if (res.ok) {
       if (parsed === undefined) {
-        log('warn', 'prodplan_client', { code: 'bad_json', status: res.status, sub: session.sub, ms });
+        log('warn', 'prodplan_client', { code: 'bad_json', status: res.status, ms });
         return localError(502, 'bad_response');
       }
       return { ok: true, status: res.status, data: parsed };
     }
     const error = mapPpError(res.status, parsed);
-    log('info', 'prodplan_client', { method, status: res.status, code: error.code, sub: session.sub, ms });
+    log('info', 'prodplan_client', { method, status: res.status, code: error.code, ms });
     return { ok: false, status: res.status, error };
   } catch (e) {
     const aborted = e instanceof Error && e.name === 'AbortError';
-    log('warn', 'prodplan_client', { method, code: aborted ? 'timeout' : 'unreachable', sub: session.sub, ms: Date.now() - t0 });
+    log('warn', 'prodplan_client', { method, code: aborted ? 'timeout' : 'unreachable', ms: Date.now() - t0 });
     return localError(aborted ? 504 : 502, aborted ? 'timeout' : 'unreachable');
   } finally {
     clearTimeout(timer);
@@ -114,16 +116,24 @@ async function readLimited(res: Response): Promise<string | null> {
   return Buffer.byteLength(text, 'utf8') > PP_MAX_RESPONSE_BYTES ? null : text;
 }
 
-/** Pemanggil bertenaga runtime: baca konfigurasi + kunci dari file secret. */
+/** Pemanggil bertenaga runtime: baca konfigurasi + kunci dari file secret. `sid` = cookie `__Host-epp` ('' hanya login/meta). */
 export function ppRequest(
-  session: ActorSession,
-  method: 'GET' | 'POST' | 'PUT',
+  sid: string,
+  method: 'GET' | 'POST' | 'PUT' | 'DELETE',
   path: string,
   body?: Record<string, unknown>,
 ): Promise<PpResult<unknown>> {
   const cfg = getConfig();
-  return ppCall(session, method, path, body, { baseUrl: cfg.ppEnabled ? cfg.ppUrl : null, key: getKey('ppassert') });
+  return ppCall({ sid }, method, path, body, { baseUrl: cfg.ppEnabled ? cfg.ppUrl : null, key: getKey('ppassert') });
 }
+
+/** Sesi prodplan (`GET /v1/session`, tanpa panggilan ESB) -> SessionView; dedup per render. */
+export const ppSessionView = cache(async (sid: string): Promise<{ ok: true; view: SessionView } | { ok: false; status: number; error: PpErrorBody }> => {
+  const res = await ppRequest(sid, 'GET', '/v1/session');
+  if (!res.ok) return { ok: false, status: res.status, error: res.error };
+  const view = parseSessionView(res.data);
+  return view ? { ok: true, view } : { ok: false, status: 502, error: mapPpError(502, { error: { code: 'bad_response' } }) };
+});
 
 /** Pembuat query string aman (nilai kosong dibuang) untuk GET daftar. */
 export function ppQuery(params: Record<string, string | number | undefined>): string {

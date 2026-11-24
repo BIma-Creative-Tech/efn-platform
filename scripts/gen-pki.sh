@@ -46,7 +46,7 @@ APP_ENV="${APP_ENV:-dev}"
 # Loki (ruler -> Alertmanager), etl (-> loki-tls) dan metabase-provision (-> metabase-tls) (G13), api-gateway
 # (-> odoo-rpc-gateway) dan odoo-rpc-gateway (-> odoo-tls) (G17), forecast-worker (-> odoo-rpc-gateway) (G44),
 # segment-worker (-> odoo-rpc-gateway, -> api-gateway:9466) dan wa-operator (operator -> Traefik wa-admin) (G50),
-# insight-web-pp (sidecar insight-web -> prodplan-tls) (G66).
+# insight-web-pp (sidecar insight-web -> prodplan-tls) (G66), prodplan-odoo (prodplan -> odoo-rpc-gateway) (G66 A1).
 # Sumber kebenaran SAN + nameConstraints intermediate. Tambah service baru = baris di sini + 2 baris `pki` di
 # scripts/secrets.list + TERBITKAN ULANG INTERMEDIATE (nameConstraints memuat daftar ini; lihat runbook internal-pki).
 PKI_SERVICES=(
@@ -101,6 +101,11 @@ PKI_SERVICES=(
   # staging/prod: intermediate WAJIB diterbitkan ulang (runbook internal-pki#service-baru); dev/CI: CA dev dibuat ulang.
   "prodplan|server"
   "insight-web-pp|client"
+  # G66 A1 (docs/04 §30.17.11, ADR-051 §8.5): klien mTLS prodplan -> odoo-rpc-gateway (CN prodplan-odoo; haproxy.cfg acl
+  # cn_prodplan -> HANYA p_esb_identity). Tanpa listener; BEDA dari leaf server prodplan (CN klien Odoo tidak bisa
+  # menyamar sebagai server prodplan). Service baru -> staging/prod: intermediate WAJIB diterbitkan ulang (runbook
+  # internal-pki#service-baru); dev/CI: CA dev dibuat ulang. Leaf saja: `bash scripts/gen-pki.sh prodplan-odoo`.
+  "prodplan-odoo|client"
   # G50 (docs/04 §28.9, ADR-048): Mailpit DEV (SMTP implicit TLS + UI HTTPS dengan CA dev). DEV_ONLY_SERVICES: tidak
   # diterbitkan di staging/production; secret tls_mailpit_* hanya didefinisikan docker-compose.dev.yml (bukan
   # scripts/secrets.list).

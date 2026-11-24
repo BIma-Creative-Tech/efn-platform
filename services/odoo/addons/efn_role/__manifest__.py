@@ -9,7 +9,9 @@
     # SENSITIVE_GROUP_XMLIDS (opsional, dilewati bila belum terpasang). Tanpa perubahan skema/data.
     # 19.0.1.2.3 (G52, docs/04 §28.15.2): xmlid persona exec/category/dc/marketing -> efn_insight.* (grup pindah modul,
     # id sama); kpi_admin tetap efn_insight_sm. Tanpa perubahan skema/data.
-    "version": "19.0.1.2.4",
+    # 19.0.1.2.5 (G66b, docs/04 §30.17.11): + efn_esb_identity.group_esb_provisioner di TECHNICAL_GROUP_XMLIDS
+    # (opsional, dilewati bila belum terpasang). Tanpa perubahan skema/data.
+    "version": "19.0.1.2.5",
     "category": "EFN",
     "author": "Era Food and Nourishment",
     # LGPL-3. Tanpa dependency OCA/Cybrosys (ADR-031). OCA `base_user_role` (LGPL-3) hanya dipelajari sebagai
