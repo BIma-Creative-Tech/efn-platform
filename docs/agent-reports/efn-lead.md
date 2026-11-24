@@ -88,3 +88,16 @@ company_code `v_esb_movement_daily` = PT cabang asal (alternatif dua baris asal/
   efn_legacy_history), backfill purchase_line 24 bln (jendela 22:00–05:00 WIB), snapshot stock_opening tanggal hari
   ini untuk dry-run; impor nyata stok + geser cutover 17 Nov → 1 Des pada 1–2 Des.
 - Terbuka: Q-ESB25..29, Q-G65-1..7, SEC-G65-04 (DPO), ADR-042 §0b Proposed.
+
+#### G65 gladi efn-prod (24 Nov 2026, lanjutan)
+- Keputusan user: tarik data ESB di luar jendela malam (izin beban Q-ESB7 untuk gladi ini); cutover gladi digeser
+  17 Nov → 1 Des (override eksplisit `--allow-cutover-shift`, 5ac0ddc); cabang PB 39/40 (Makassar) tanpa kartu stok
+  ESB → `--stock-empty-branch` (81aa4dc).
+- Termuat nyata di efn-prod: 723 hari purchase_line, 884 `product.supplierinfo`, 11 HPP, histori pembelian 24 bulan
+  (70.128 baris; reconcile 5e 1.695 irisan ok, 0 pemblokir). Perbaikan dari gladi: kode produk opsional di arsip
+  (222 baris PO aset tetap/seragam tanpa kode, 4d27700).
+- Latihan stok 17 Nov (dry-run) ditolak validator karena data: 5 gudang damage tanpa location_map (Q-ESB25), 534 baris
+  satuan stok ESB ≠ UoM produk Odoo (EA 229, BOX 188, PACK 57, GR 55; butuh konversi per produk), 709 item cost
+  `stock_opening` dengan uom kosong (perlu dicek), 1.235 saldo negatif (default tidak dimigrasi, Q-ESB27).
+- Temuan lama (G43): `dim_esb_product.uom` kosong untuk semua produk PB → ekspor master penuh gagal PRODUCT_UOM;
+  G65 diekspor per langkah (supplierinfo, cost, legacy_purchase_line) karena master PB sudah ada sejak 22 Nov.
