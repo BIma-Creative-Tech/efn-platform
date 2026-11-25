@@ -10,7 +10,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { proxy } from '@/proxy';
 import { parseRolesV2, parseRolesV3, ppRolesOf, scopeConsistentV3 } from '@/lib/claims';
 import { collectKeyProblems, parseConfig, parsePpUrl } from '@/lib/config';
-import { PP_DENIAL_PATH, ppAccessDenial, ppCaps, ppNavActive, ppNavItems, ppRoleLabel, ppRouteDenial, isProduksiPath } from '@/lib/prodplan-access';
+import { PP_LOGIN_PATH, ppAccessDenial, ppCaps, ppNavActive, ppNavItems, ppRoleLabel, isProduksiPath } from '@/lib/prodplan-access';
 import { SESSION_COOKIE, createSessionValue, verifySessionValue } from '@/lib/session';
 import { navGroups } from '@/lib/sm-personas';
 import { verifySsoTokenV3 } from '@/lib/token';
@@ -84,7 +84,7 @@ describe('T9: peran PP => kode ESB dan tanpa cabang', () => {
   });
 });
 
-describe('ppAccessDenial / ppRouteDenial', () => {
+describe('ppAccessDenial (hanya kelayakan menu "Produksi" untuk sesi Odoo; bukan gerbang akses)', () => {
   const s = (roles: string[], over: Over = {}) => ({ v: 3, roles, codes: ['PB'], brs: [] as string[], ...over });
 
   it('flag mati -> pp-belum-aktif (didahulukan atas semua)', () => {
@@ -104,15 +104,15 @@ describe('ppAccessDenial / ppRouteDenial', () => {
     expect(ppAccessDenial(s(PP), true)).toBeNull();
     expect(ppAccessDenial(s(['pp_warehouse', 'user']), true)).toBeNull();
   });
-  it('hanya rute /produksi yang dijaga; /produksix dan /ppx bukan', () => {
+  it('pemisah jalur /produksi: /produksix dan /ppx bukan; halaman masuk bagian dari /produksi', () => {
     expect(isProduksiPath('/produksi')).toBe(true);
     expect(isProduksiPath('/produksi/kemasan')).toBe(true);
     expect(isProduksiPath('/produksi/abc?x=1'.split('?')[0])).toBe(true);
+    expect(isProduksiPath(PP_LOGIN_PATH)).toBe(true);
+    expect(PP_LOGIN_PATH).toBe('/produksi/masuk');
     expect(isProduksiPath('/produksix')).toBe(false);
     expect(isProduksiPath('/sales')).toBe(false);
-    expect(ppRouteDenial('/sales', s(['user']), false)).toBeNull();
-    expect(ppRouteDenial('/produksi/baru', s(['user']), true)).toBe('tidak-berwenang');
-    expect(PP_DENIAL_PATH['pp-belum-aktif']).toBe('/pp-belum-aktif');
+    expect(isProduksiPath('/api/prodplan/login')).toBe(false);
   });
   it('chip peran', () => {
     expect(ppRoleLabel(['pp_planner', 'user'])).toBe('Planner CK');
@@ -227,34 +227,71 @@ function cookieFor(roles: string[], over: Record<string, unknown> = {}, n = 50):
   return createSessionValue(t.payload, SESSION_KEY, Math.floor(Date.now() / 1000));
 }
 
-const req = (path: string, cookie: string): NextRequest => new NextRequest(`https://insight.test${path}`, { headers: { cookie: `${SESSION_COOKIE}=${cookie}` } });
+const SID = 'P'.repeat(43);
+const eis = (cookie: string): string => `${SESSION_COOKIE}=${cookie}`;
+const epp = (sid: string): string => `__Host-epp=${sid}`;
+const req = (path: string, ...cookies: string[]): NextRequest =>
+  new NextRequest(`https://insight.test${path}`, { headers: cookies.length > 0 ? { cookie: cookies.join('; ') } : {} });
 const rewriteOf = (res: Response): string | null => res.headers.get('x-middleware-rewrite');
+const PP_PATHS = ['/produksi', '/produksi/baru', '/produksi/kemasan', '/produksi/0b0c0a0e-0000-4000-8000-000000000000'];
 
-describe('proxy.ts: gerbang /produksi', () => {
-  it('flag mati -> rewrite /pp-belum-aktif (walau peran PP sah)', () => {
-    const res = proxy(req('/produksi', cookieFor(PP)));
-    expect(rewriteOf(res)).toContain('/pp-belum-aktif');
-    expect(res.headers.get('location')).toBeNull();
+describe('proxy.ts: gerbang /produksi (sesi ESB __Host-epp, bukan sesi Odoo)', () => {
+  it('flag mati -> rewrite /pp-belum-aktif, termasuk halaman masuk dan walau cookie sah', () => {
+    expect(rewriteOf(proxy(req('/produksi', epp(SID))))).toContain('/pp-belum-aktif');
+    expect(rewriteOf(proxy(req('/produksi/masuk')))).toContain('/pp-belum-aktif');
+    expect(rewriteOf(proxy(req('/produksi', eis(cookieFor(PP)))))).toContain('/pp-belum-aktif');
   });
 
-  it('flag aktif + peran PP -> lolos (tanpa rewrite); semua sub-rute', () => {
+  it('flag aktif: /produksi/masuk terbuka tanpa sesi apa pun (Odoo maupun ESB)', () => {
     process.env.INSIGHT_PRODPLAN_ENABLED = 'true';
     resetRuntime();
-    const c = cookieFor(PP);
-    for (const p of ['/produksi', '/produksi/baru', '/produksi/kemasan', '/produksi/0b0c0a0e-0000-4000-8000-000000000000']) {
-      expect(rewriteOf(proxy(req(p, c))), p).toBeNull();
+    const res = proxy(req('/produksi/masuk'));
+    expect(rewriteOf(res)).toBeNull();
+    expect(res.status).toBe(200);
+  });
+
+  it('flag aktif + cookie __Host-epp berbentuk sah -> lolos semua sub-rute (tanpa sesi Odoo)', () => {
+    process.env.INSIGHT_PRODPLAN_ENABLED = 'true';
+    resetRuntime();
+    for (const p of PP_PATHS) expect(rewriteOf(proxy(req(p, epp(SID)))), p).toBeNull();
+  });
+
+  it('flag aktif tanpa cookie __Host-epp atau bentuknya salah -> rewrite ke /produksi/masuk', () => {
+    process.env.INSIGHT_PRODPLAN_ENABLED = 'true';
+    resetRuntime();
+    for (const p of PP_PATHS) {
+      expect(rewriteOf(proxy(req(p))), p).toContain('/produksi/masuk');
+      expect(rewriteOf(proxy(req(p, epp('pendek')))), p).toContain('/produksi/masuk');
+      expect(rewriteOf(proxy(req(p, epp('a'.repeat(44))))), p).toContain('/produksi/masuk');
     }
   });
 
-  it('flag aktif tanpa peran PP -> rewrite /tidak-berwenang', () => {
+  it('sesi Odoo eis3 ber-peran PP TANPA __Host-epp tidak membuka /produksi', () => {
     process.env.INSIGHT_PRODPLAN_ENABLED = 'true';
     resetRuntime();
-    expect(rewriteOf(proxy(req('/produksi', cookieFor(['user'], {}, 51))))).toContain('/tidak-berwenang');
-    expect(rewriteOf(proxy(req('/produksi/kemasan', cookieFor(['exec', 'user'], {}, 52))))).toContain('/tidak-berwenang');
+    for (const p of PP_PATHS) expect(rewriteOf(proxy(req(p, eis(cookieFor(PP))))), p).toContain('/produksi/masuk');
+  });
+
+  it('__Host-epp saja TIDAK membuka halaman Insight lain (/, /fnb/*, /sm/*, dashboard): tetap /sesi-berakhir', () => {
+    process.env.INSIGHT_PRODPLAN_ENABLED = 'true';
+    resetRuntime();
+    for (const p of ['/', '/sales', '/fnb/exec', '/fnb/store', '/exec', '/store', '/forecast', '/yoy', '/glosarium']) {
+      expect(rewriteOf(proxy(req(p, epp(SID)))), p).toContain('/sesi-berakhir');
+    }
+  });
+
+  it('sesi Odoo sah + __Host-epp pada halaman lain: gerbang Odoo tidak berubah dan tidak bergantung pada cookie ESB', () => {
+    process.env.INSIGHT_PRODPLAN_ENABLED = 'true';
+    resetRuntime();
+    const c = cookieFor(['user'], {}, 54);
+    expect(rewriteOf(proxy(req('/sales', eis(c))))).toBeNull();
+    expect(rewriteOf(proxy(req('/sales', eis(c), epp(SID))))).toBeNull();
+    // sesi Odoo tanpa PP juga tidak membuka /produksi
+    expect(rewriteOf(proxy(req('/produksi', eis(c))))).toContain('/produksi/masuk');
   });
 
   it('halaman lain tidak terpengaruh flag produksi', () => {
-    expect(rewriteOf(proxy(req('/sales', cookieFor(['user'], {}, 53))))).toBeNull();
+    expect(rewriteOf(proxy(req('/sales', eis(cookieFor(['user'], {}, 53)))))).toBeNull();
   });
 
   it('halaman informasi /pp-belum-aktif publik (tidak memerlukan sesi)', () => {

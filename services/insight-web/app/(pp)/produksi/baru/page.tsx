@@ -2,7 +2,7 @@ import type { Metadata } from 'next';
 import Link from 'next/link';
 import { NewPlanForm, type CkOption } from '@/components/pp/NewPlanForm';
 import { EmptyState, PageHeader, Section } from '@/components/ui';
-import { requirePpSession } from '@/lib/pp-page';
+import { redirectIfExpired, requirePpSession } from '@/lib/pp-page';
 import { loadMeta } from '@/lib/prodplan-data';
 import { ckLabel, todayWib } from '@/lib/prodplan-format';
 
@@ -11,8 +11,9 @@ export const metadata: Metadata = { title: 'Buat rencana produksi' };
 
 /** `/produksi/baru`: hanya pp_planner (kepala gudang dialihkan ke daftar). Cabang CK dan lokasi produksi dari `meta`. */
 export default async function NewPlanPage() {
-  const { session, caps } = await requirePpSession();
-  const metaRes = await loadMeta(session);
+  const { sid, caps } = await requirePpSession();
+  const metaRes = await loadMeta(sid);
+  redirectIfExpired(metaRes);
 
   const options: CkOption[] = metaRes.ok
     ? metaRes.data.brands.flatMap((b) =>

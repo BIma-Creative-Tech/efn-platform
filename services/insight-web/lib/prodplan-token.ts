@@ -1,38 +1,35 @@
 /**
- * Asersi aktor `ppa1` insight-web -> prodplan (docs/04 §30.7, ADR-051 §2.3). Modul murni (tanpa I/O; waktu dan jti
- * disuntikkan) agar bisa diuji byte-exact.
+ * Asersi aktor `ppa2` insight-web -> prodplan (docs/04 §30.17.7, ADR-051 §8). Menggantikan `ppa1`. Modul murni (tanpa I/O;
+ * waktu dan jti disuntikkan) agar bisa diuji byte-exact.
  *
- *   header = "ppa1." + payload_b64url + "." + sig_b64url
- *   sig    = HMAC-SHA256(key = byte ASCII string hex prodplan_assert_key, msg = "ppa1." + payload_b64url)
- *   payload = JSON tanpa spasi, TEPAT 11 kunci, urutan: aud, bh, codes, exp, iat, jti, m, name, p, roles, sub
+ *   header  = "ppa2." + payload_b64url + "." + sig_b64url
+ *   sig     = HMAC-SHA256(key = byte ASCII string hex prodplan_assert_key, msg = "ppa2." + payload_b64url)
+ *   payload = JSON tanpa spasi, TEPAT 8 kunci, urutan: aud, bh, exp, iat, jti, m, p, sid
  *
- * Dibuat HANYA dari sesi yang sudah diverifikasi (lib/auth.ts) dan hanya bila sesi memuat peran PP. Browser tidak pernah
- * menerima atau mengirim token ini.
+ * Asersi TIDAK membawa identitas/peran/cabang: semuanya hanya dari sesi prodplan (di-lookup lewat `sid` = isi cookie
+ * `__Host-epp`). `sid` kosong ("") hanya sah untuk `POST /v1/session` (login) dan `GET /v1/meta` (banner lingkungan).
+ * Browser tidak pernah menerima atau mengirim token ini.
  */
 import { createHash, randomBytes } from 'node:crypto';
-import { esbCodesOf, ppRolesOf } from './claims';
 import { hmacSha256B64Url } from './hmac';
+import { SID_RE } from './prodplan-session';
 
-export const ACTOR_PREFIX = 'ppa1';
+export const ACTOR_PREFIX = 'ppa2';
 export const ACTOR_TTL_SEC = 60;
 export const ACTOR_AUD = 'prodplan';
 export const ACTOR_HEADER = 'X-EFN-Actor';
-/** Bentuk header (§30.7): total <= 2048 byte. */
-export const ACTOR_RE = /^ppa1\.[A-Za-z0-9_-]{16,1800}\.[A-Za-z0-9_-]{43}$/;
+/** Bentuk header (§30.17.7): total <= 2048 byte. */
+export const ACTOR_RE = /^ppa2\.[A-Za-z0-9_-]{16,1800}\.[A-Za-z0-9_-]{43}$/;
 export const ACTOR_MAX_BYTES = 2048;
-const NAME_MAX = 64;
 const METHODS: ReadonlySet<string> = new Set(['GET', 'POST', 'PUT', 'DELETE', 'PATCH']);
 
-/** Subset sesi terverifikasi yang dipakai membuat asersi. */
+/** Sesi yang dipakai membuat asersi: hanya `sid` ("" untuk login / meta tanpa sesi). */
 export interface ActorSession {
-  sub: number;
-  name: string;
-  codes: readonly string[];
-  roles: readonly string[];
+  sid: string;
 }
 
 export class ActorError extends Error {
-  constructor(public readonly reason: 'no_pp_role' | 'no_esb_code' | 'bad_method' | 'bad_path' | 'bad_key' | 'bad_session' | 'too_long') {
+  constructor(public readonly reason: 'bad_method' | 'bad_path' | 'bad_key' | 'bad_sid' | 'too_long') {
     super(`actor_${reason}`);
     this.name = 'ActorError';
   }
@@ -43,14 +40,9 @@ export function bodyHash(body: string): string {
   return createHash('sha256').update(body, 'utf8').digest('base64url');
 }
 
-/** 16 byte acak base64url (22 karakter). */
+/** 16 byte acak base64url (22 karakter). Dipakai sebagai `jti` asersi dan `n` body login. */
 export function newJti(): string {
   return randomBytes(16).toString('base64url');
-}
-
-/** Python `json.dumps(ensure_ascii=True)`: karakter non-ASCII -> \uXXXX (selaras dengan penanda tangan/pemverifikasi Python). */
-function asciiJson(v: unknown): string {
-  return JSON.stringify(v).replace(/[\u0080-￿]/g, (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`);
 }
 
 export interface ActorInput {
@@ -71,31 +63,30 @@ export function isValidActorPath(path: string): boolean {
   return /^\/v1\/[\x21-\x7e]*$/.test(path) && !path.includes('#') && !path.includes('..');
 }
 
-/** Payload + kunci urut tetap. Melempar ActorError bila sesi tidak berhak (bukan PP / tanpa kode ESB). */
+/** `sid` kosong hanya untuk dua panggilan tanpa sesi (§30.17.7). */
+export function sidlessAllowed(method: string, path: string): boolean {
+  return (method === 'POST' && path === '/v1/session') || (method === 'GET' && path === '/v1/meta');
+}
+
+/** Payload + kunci urut tetap. Melempar ActorError bila method/path/sid tidak sah. */
 export function buildActorPayload(i: ActorInput): string {
   const method = i.method.toUpperCase();
   if (!METHODS.has(method)) throw new ActorError('bad_method');
   if (!isValidActorPath(i.path)) throw new ActorError('bad_path');
-  if (!Number.isSafeInteger(i.session.sub) || i.session.sub < 1 || !Number.isSafeInteger(i.nowSec)) throw new ActorError('bad_session');
-  const roles = ppRolesOf(i.session.roles).slice().sort();
-  if (roles.length < 1 || roles.length > 2) throw new ActorError('no_pp_role');
-  const codes = esbCodesOf(i.session.codes).slice().sort();
-  if (codes.length < 1 || codes.length > 6) throw new ActorError('no_esb_code');
-  const name = Array.from(i.session.name).slice(0, NAME_MAX).join('');
+  if (!Number.isSafeInteger(i.nowSec)) throw new ActorError('bad_path');
+  const sid = i.session.sid;
+  if (sid === '' ? !sidlessAllowed(method, i.path) : !SID_RE.test(sid)) throw new ActorError('bad_sid');
   const jti = i.jti ?? newJti();
-  // Urutan sisipan literal = urutan kontrak (JSON.stringify mempertahankannya).
-  return asciiJson({
+  // Urutan sisipan literal = urutan kontrak (JSON.stringify mempertahankannya). Semua nilai ASCII (sid base64url, path ASCII).
+  return JSON.stringify({
     aud: ACTOR_AUD,
     bh: bodyHash(i.body),
-    codes,
     exp: i.nowSec + ACTOR_TTL_SEC,
     iat: i.nowSec,
     jti,
     m: method,
-    name,
     p: i.path,
-    roles,
-    sub: i.session.sub,
+    sid,
   });
 }
 

@@ -131,7 +131,7 @@ function buildDemand(input: Input): BuildResult {
     seen.add(key);
     const line: Record<string, unknown> = { product_detail_id: pd, bom_id: bom, qty, source };
     if (source === 'pr' && Array.isArray(raw.pr_nums)) {
-      const nums = (raw.pr_nums as unknown[]).filter((x): x is string => typeof x === 'string' && /^[A-Za-z0-9 ._/-]{1,40}$/.test(x)).slice(0, 100);
+      const nums = (raw.pr_nums as unknown[]).filter((x): x is string => typeof x === 'string' && /^[A-Za-z0-9 ._/-]{1,40}$/.test(x)).slice(0, 50); // prodplan menolak > 50 nomor PR per baris (service.put_demand)
       if (nums.length > 0) line.pr_nums = nums;
     }
     lines.push(line);
@@ -237,6 +237,8 @@ export const ACTIONS: Readonly<Record<string, ActionSpec>> = {
   'plan-return': { role: 'R', build: (i) => withVersion(i, '/return-to-draft', reasonField(i, true)) },
   'plan-post': { role: 'R', build: buildPost },
   'plan-cancel': { role: 'P', build: (i) => withVersion(i, '/cancel', reasonField(i, true)) },
+  // §30.17.9: lanjutkan posting yang berhenti (`needs_login`) dengan token pemanggil; hak dokumen/cabang dicek server.
+  'plan-resume-posting': { role: 'R', build: (i) => withVersion(i, '/resume-posting') },
   'outbox-resend': {
     role: 'P',
     build: (i) => {

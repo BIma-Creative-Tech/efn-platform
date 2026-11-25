@@ -143,6 +143,14 @@ for spec in wa_unofficial_hash_key:hex32 wa_unofficial_session_key:b64key32 wa_u
   chmod 644 "$f"
 done
 
+# G66 A1 (docs/04 §30.17.10): secret esb_prodplan_password_<brand> dihapus (login ESB per pengguna). File lama TIDAK
+# dihapus otomatis (bisa berisi password admin ESB yang sama dengan esb-extract, R-S17; penghapusan = keputusan
+# operator) -> hanya peringatan. Prosedur: docs/runbooks/prodplan.md §2.1.
+for f in "${OUT_DIR}"/esb_prodplan_password_*.txt; do
+  [[ -e "$f" ]] || continue
+  echo "PERINGATAN: $f tidak dipakai lagi (docs/04 §30.17.10); hancurkan sesuai runbook prodplan.md §2.1" >&2
+done
+
 # PKI internal (docs/04 §7.1): enkripsi in transit wajib juga di dev/CI (dev = prod, tanpa fallback plaintext).
 # Dev/CI: root + intermediate DEV dibuat otomatis di secrets/pki-ca (3 tingkat seperti produksi, ADR-022 W1).
 SECRETS_DIR="$OUT_DIR" bash "${ROOT_DIR}/scripts/gen-pki.sh" leaf

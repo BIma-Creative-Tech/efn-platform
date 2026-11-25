@@ -42,7 +42,7 @@ export interface PpActionProps {
   refresh?: boolean;
 }
 
-type Msg = { kind: 'ok' | 'error'; text: string } | null;
+type Msg = { kind: 'ok' | 'error'; text: string; expired?: boolean } | null;
 type JobUi = { id: string; state: 'running' | 'done' | 'failed'; text: string; reload?: boolean } | null;
 
 function initialValues(fields: readonly PpField[] | undefined): Record<string, string | boolean> {
@@ -125,7 +125,8 @@ export function PpAction(props: PpActionProps): React.ReactNode {
     start(async () => {
       const r = await callAction(action, body);
       if (!r.ok) {
-        setMsg({ kind: 'error', text: r.message });
+        // Sesi ESB habis (§30.17.2): isian dan halaman dibiarkan; pengguna masuk lagi di tab baru lalu mengulang di sini.
+        setMsg({ kind: 'error', text: r.message, expired: r.code === 'session_expired' });
         announce(r.message);
         return;
       }
@@ -253,6 +254,15 @@ export function PpAction(props: PpActionProps): React.ReactNode {
       {msg?.kind === 'error' ? (
         <p role="alert" className="pp-msg pp-msg-error">
           <strong>Gagal:</strong> {msg.text}
+          {msg.expired ? (
+            <>
+              {' '}
+              <a href="/produksi/masuk?e=expired" target="_blank" rel="noopener">
+                Masuk lagi (tab baru)
+              </a>
+              , lalu kembali ke sini dan ulangi tindakan.
+            </>
+          ) : null}
         </p>
       ) : null}
       {msg?.kind === 'ok' && !job ? (

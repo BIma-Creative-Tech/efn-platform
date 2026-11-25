@@ -1,7 +1,9 @@
 # Inventaris Data Pribadi / RoPA (UU PDP No. 27/2022) — EFN Platform
 
 - **Status:** Draf teknis — **keputusan retensi & DPO ditetapkan pemilik proyek 10 Okt 2026** (v7); dasar pemrosesan & nomor pasal tetap wajib diverifikasi **Legal (DPO sementara)**.
-  - **v21 (2026-11-25, Gelombang 69 penjualan level struk ESB OMS, ADR-040 §6b Proposed — MENUNGGU DPO)**: §2.8.16 data struk PB tanpa member/kartu (`has_member` saja; jam & meja bukan data pribadi); baris retensi §3; Q-OMS3.
+  - **v21 (2026-11-25, G66 amandemen A1 — login per pengguna ESB, ADR-051 §8, MENUNGGU DPO)**: §2.8.15a kredensial ESB sesaat (password tidak disimpan), token ESB di memori ≤ 1 jam, tabel `prodplan.actor` (username + nama), shadow user Odoo diarsipkan (`efn.esb.identity`); retensi `docs/04` §30.17.13; pertanyaan Q-ESBU4.
+
+  - **v22 (2026-11-25, Gelombang 69 penjualan level struk ESB OMS, ADR-040 §6b Proposed — MENUNGGU DPO)**: §2.8.16 data struk PB tanpa member/kartu (`has_member` saja; jam & meja bukan data pribadi); baris retensi §3; Q-OMS3.
   - **v20 (2026-11-24, Gelombang 66 production planning ESB, ADR-051 Proposed — MENUNGGU DPO)**: §2.8.15 `efn_prodplan` (hanya uid Odoo + nama staf sebagai aktor audit; retensi 730/1825/30 hari).
   - **v19 (2026-11-20, Gelombang 50 kampanye supermarket — dibangun, OFF di production, MENUNGGU DPO)**: §2.8.12a entri tabel yang benar-benar dibangun (`member_email`, `email_outbound`, `email_unsubscribe_used`, `wa_unofficial_recipient`, `wa_unofficial_outbound`, `behavior.purchase_emitted`, `behavior.subject_erasure`, `behavior.segment_member`, inbox & voucher kampanye) + event server `purchase` (riwayat pembelian online masuk profil perilaku, L-185, SEC-G50-17); baris retensi §3 (penanda **(v19)**), termasuk DLQ `notify.wa_unofficial.dlq` (TTL 24 jam + max-length) dan `behavior.event.dlq` (7 hari) (SEC-G50-04/18). Pertanyaan DPO baru di `docs/04` §28.12: Q-SM33, Q-SM34, Q-SM38, Q-SM39.
   - **v18 (2026-11-18, Gelombang 43 fase 2, ADR-042 Accepted — MENUNGGU DPO)**: §2.8.14 **bundel migrasi ESB** (terenkripsi, retensi ≤ 90 hari setelah berita acara) dan **arsip histori ESB di Odoo** (`efn.legacy.flow.daily`, `efn.legacy.sales.daily`, `efn.legacy.sales.line`: `sales_num` = ID transaksi, bukan data pribadi) + **pelanggan B2B** ESB di `res.partner` (data badan; PIC/alamat/telepon/email dibuang); baris retensi §3; Q-P32.
@@ -614,7 +616,26 @@ status: **MENUNGGU DPO**
   data pribadi selain akun API yang dipakai. Log tidak memuat kredensial, token, maupun query string.
 - **Prasyarat production:** entri ini disetujui DPO; Q-PP1, Q-PP2, Q-PP10 terjawab.
 
-#### 2.8.16 (v21) Penjualan level struk ESB OMS — Gelombang 69 (docs/04 §33, ADR-040 §6b Proposed) — status: **MENUNGGU DPO**
+#### 2.8.15a (v21) Login per pengguna ESB + shadow user Odoo — amandemen A1 (docs/04 §30.17, ADR-051 §8) — status: **MENUNGGU DPO**
+
+Menggantikan kalimat "hanya uid Odoo + nama tampilan staf" di §2.8.15: aktor kini pengguna ESB.
+
+| Data | Lokasi | Data pribadi? | Akses | Retensi |
+|---|---|---|---|---|
+| Password ESB pengguna | memori request `insight-web` + `prodplan` (diteruskan ke ESB `POST /auth/login`) | Ya (kredensial) | proses saja | selama request; **tidak pernah** disimpan/dicatat (log, PG, Odoo, cookie) |
+| Token akses ESB (JWT: username, nama, company, `userRoleID`), peran, cabang | memori `prodplan` | Ya | proses saja; tidak ke browser/PG/log | ≤ 1 jam (`exp`), hilang saat restart/logout; `refreshToken` dibuang |
+| Cookie `__Host-epp` (id sesi acak) | browser; server hanya SHA-256 | Pseudonim | – | ≤ 1 jam |
+| `prodplan.actor`: username ESB (dinormalisasi) + nama tampilan (≤ 64) | PG `efn_prodplan` | Ya | role `efn_prodplan` | selama dirujuk audit (≤ 1825 hari); aktor tak dirujuk & tidak login > 400 hari dipurge |
+| `efn.esb.identity` + shadow `res.users`/`res.partner` (login `esb:<akun>:<username>`, nama, cabang, cermin peran) | Odoo | Ya | Superadmin / ERP manager baca | Q-ESBU4 (usulan: arsip permanen; identitas dihapus + nama dianonimkan 6 bulan pasca-cutover) |
+
+- **Tujuan & dasar (usulan):** autentikasi ke sistem klien sendiri (ESB) dengan hak masing-masing pengguna; jejak audit;
+  persiapan migrasi akun ke Odoo (kepentingan sah, hubungan kerja).
+- **Minimisasi:** payload ke Odoo tertutup (akun, username, nama, company, `role_id`, peran PP, id cabang) — tanpa password,
+  token, email, atau nomor HP. Log memakai `actor_id` dan username tersamar (`ab***z`).
+- **Pertanyaan DPO:** retensi shadow user yang tidak pernah diaktifkan (Q-ESBU4); apakah username ESB di `prodplan.actor`
+  perlu dipseudonimkan setelah cutover.
+
+#### 2.8.16 (v22) Penjualan level struk ESB OMS — Gelombang 69 (docs/04 §33, ADR-040 §6b Proposed) — status: **MENUNGGU DPO**
 - **Sumber & dasar:** ESB OMS (sistem POS klien, pengendali = PT brand), ditarik baca-saja oleh `esb-extract` untuk
   dashboard penjualan per jam/kanal dan sell-through per jam; awal brand PB saja. Hak data = Q-ESB9.
 - **Data:** struk (nomor struk/bill, jam masuk/keluar, kanal, pax, nomor meja (ID), total, diskon, pajak, promo,

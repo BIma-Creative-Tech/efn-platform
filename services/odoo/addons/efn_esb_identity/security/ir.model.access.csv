@@ -1,0 +1,3 @@
+id,name,model_id:id,group_id:id,perm_read,perm_write,perm_create,perm_unlink
+access_efn_esb_identity_erp_manager,efn.esb.identity access admin,model_efn_esb_identity,base.group_erp_manager,1,0,0,0
+access_efn_esb_identity_system,efn.esb.identity superadmin,model_efn_esb_identity,base.group_system,1,1,0,0

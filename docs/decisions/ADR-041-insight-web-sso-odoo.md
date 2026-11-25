@@ -256,6 +256,13 @@ server, lewat mTLS (sidecar client `insight-web-pp-tls`, network `insight-plan`)
 token `eit3`/sesi `eis3` (bukan persona; tanda tangan ClickHouse tidak berubah; aturan T9). Rinci di ADR-051 dan
 `docs/04` §30.7.
 
+**Catatan 25 Nov 2026 (ADR-051 amandemen A1, Proposed):** `/produksi` tidak lagi memakai sesi Odoo. Modul Produksi punya
+halaman masuk ESB sendiri (`/produksi/masuk`) dan cookie terpisah `__Host-epp` (id sesi buram dari `prodplan`) yang
+**hanya** membuka `/produksi*` dan `/api/prodplan/*`; halaman Insight lain tetap mensyaratkan sesi SSO Odoo dan tidak
+membaca cookie itu. insight-web meneruskan username+password ESB sekali ke `prodplan` (tidak menyimpannya); asersi `ppa2`
+menggantikan `ppa1`. Peran PP di `eis3` tetap ada untuk migrasi tetapi tidak memberi akses `/produksi`. Rinci `docs/04`
+§30.17.
+
 ## 4. Konsekuensi
 
 ### 4.1 Positif

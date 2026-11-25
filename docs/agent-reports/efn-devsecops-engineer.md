@@ -1,5 +1,36 @@
 # Laporan Agent: efn-devsecops-engineer
 
+## G66 A1 login per pengguna ESB (25 Nov 2026, worktree `efn-platform-pplogin`, branch `feat/prodplan-esb-login`, belum di-commit) — docs/04 §30.17, ADR-051 §8
+
+**Diubah:** `infra/compose/docker-compose.prodplan.yml` (hapus env/secret akun service ESB + `PRODPLAN_SOURCE_LOCATIONS`;
+env baru `PRODPLAN_ESB_COMPANY_CODES`, `PRODPLAN_ESB_ROLE_PLANNER/_WAREHOUSE`, `PRODPLAN_ESB_DOC_ACCESS`,
+`PRODPLAN_ODOO_PROVISION_ENABLED="false"` literal, `PRODPLAN_ODOO_RPC_URL`; `ulimits core 0`), **baru**
+`infra/compose/docker-compose.prodplan-odoo.yml` (network `prodplan-rpc` oktet 26 = {prodplan, odoo-rpc-gateway}, secret
+`odoo_api_key_esb_provisioner` + `tls_prodplan_odoo_crt/_key`, env `PRODPLAN_ODOO_*_FILE`, flag dari `.env`),
+`infra/compose/docker-compose.yml` (komentar peta oktet), `infra/compose/.env.example`, `infra/odoo-rpc-gateway/haproxy.cfg`
+(CN `prodplan-odoo` -> hanya `p_esb_identity`, body ≤ 16 KiB, backend `odoo_forecast`), `infra/odoo-rpc-gateway/README.md`,
+`infra/odoo-rpc-gateway/test-gateway.sh` (kasus prodplan-odoo, opsional bila sertifikat ada),
+`infra/observability/alert-rules.yml` (EfnProdplanLoginFailures, EfnProdplanNeedsLogin, EfnProdplanOdooProvisionFailing),
+`scripts/secrets.list`, `scripts/gen-pki.sh` (`prodplan-odoo|client`), `scripts/gen-secrets.sh` (peringatan file lama),
+`scripts/check-encryption.sh`, `.github/workflows/ci.yml`, `Makefile`, `docs/runbooks/prodplan.md` (§1.1, §2.1, §7, §11, §12).
+
+**check-encryption (aturan baru):** secret `esb_prodplan_password_*` tidak ada di render; env `PRODPLAN_ESB_USER_*` /
+`PRODPLAN_ESB_PASSWORD_*` / `PRODPLAN_SOURCE_LOCATIONS` tidak ada; set secret prodplan persis (dasar, atau dasar + 3 secret
+provisioning hanya bersama `prodplan-rpc`); `prodplan-rpc` anggota tepat {odoo-rpc-gateway, prodplan} + internal;
+`PRODPLAN_ODOO_RPC_URL` tetap; flag `"false"` tanpa overlay; env `*_FILE` overlay = secret ter-mount; render `prod*` dengan
+ESB staging + flag `true` gagal; flag default `false` di render `prod-prodplan(-odoo)`/`prod-stack`; `ulimits core=0`; haproxy
+empat ACL CN, `p_esb_identity` tepat satu path dan tidak bocor ke daftar lain, deny `cn_prodplan !p_esb_identity`, batas
+16 KiB. Render baru `dev-prodplan-odoo`, `prod-prodplan-odoo`; overlay ikut `prod-stack`/`dev-stack`. Cek SEC-180
+`PRODPLAN_ESB_USER_*` di kill switch dihapus (digantikan larangan env).
+
+**Penyimpangan:** lockout & TTL sesi TIDAK dijadikan env (kontrak §30.17.13: konstanta kode). Env `PRODPLAN_ODOO_*_FILE`
+hanya ada di overlay `prodplan-odoo` (tanpa overlay prodplan tidak melihatnya; flag dipaku false). Modul Odoo
+`RPC_ALLOWLIST` (efn_core) dan user `efn_esb_provisioner` di luar lingkup (efn-odoo-engineer).
+
+**Belum terverifikasi:** tidak ada shell/docker di sesi ini: `docker compose config`, `check-encryption.sh`, shellcheck,
+promtool, `haproxy -c`, `test-gateway.sh` belum dijalankan. Render `ulimits.core` diasumsikan `0` atau `{}` (cek menerima
+keduanya). Bentuk body `/json/2` method provisioning belum terverifikasi (kontrak).
+
 ## G69 infra ESB OMS (25 Nov 2026, worktree `efn-platform-oms`, branch `feat/esb-oms-sales`, belum di-commit) — amandemen ADR-040 §6b, docs/04 §33
 
 **Lingkup:** env OMS di overlay `esb-extract`, gerbang `check-encryption`, `.env.example`, runbook. Tidak menyentuh `services/esb-extract` / `infra/clickhouse` (data engineer, paralel).

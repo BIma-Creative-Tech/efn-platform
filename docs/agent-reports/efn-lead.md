@@ -125,6 +125,34 @@ simple-transfer via API tidak mengubah status; volume postgres baru di stack ter
 **Menunggu pemilik proyek:** Q-PP1 (akun API non-admin), Q-PP2 (terima produksi tanpa tahap draft di ESB), Q-PP3 (mode
 costing production), Q-PP6 (lokasi sumber transfer), Q-PP13, Q-PP14. Tulis ke ESB production terkunci di kode.
 
+## G66b — Login per pengguna ESB untuk modul Produksi (25 Nov 2026, branch `feat/prodplan-esb-login`)
+
+**Keputusan pemilik proyek 25 Nov:** Q-PP2 diterima; Q-PP1 diganti login per pengguna ke ESB (hanya ada akun admin);
+login ESB diduplikasi ke Odoo; POST dari akun admin ke ESB production ditahan; Q-PP6 = izin cabang pengguna di ESB;
+SSO sungguhan dan login Odoo lewat ESB ditunda. ADR-051 A1 (§8) + docs/04 §30.17 (termasuk .17 dan .18).
+
+**Lingkup:** prodplan (sesi ESB di memori, `ppa2`, peran dari `/user/access`, cabang dari `/branch/list/user`, outbox
+memakai token pemicu, `needs_login`, tanpa akun service), insight-web (`/produksi/masuk`, cookie `__Host-epp`),
+modul Odoo baru `efn_esb_identity` (shadow user arsip), overlay `docker-compose.prodplan-odoo.yml`, migrasi `24-*`.
+
+**Terverifikasi (dijalankan lead):** ruff + pytest prodplan; insight-web lint/typecheck/1.159 test/build; Odoo
+`efn_core,efn_role,efn_insight,efn_esb_identity` 285 test 0 gagal; `check-encryption.sh` OK; migrasi `24-*` di
+PostgreSQL nyata (volume baru); E2E nyata ke ESB staging lewat stack terisolasi `efn-pp`: login, peran, 20 cabang,
+cabang asing ditolak, rencana, hitung, submit, `sod_violation`, logout, alur web lengkap, lockout per sumber; log
+tanpa password/token/username.
+
+**Belum terverifikasi:** approve/posting dua akun + `needs_login`/`resume-posting` (butuh akun staging kedua, Q-PP17);
+provisioning ke Odoo nyata lewat gateway; isolasi cookie terhadap halaman Insight lain (unit test saja); browser
+sungguhan; migrasi `24-*` di atas data lama; ESB production.
+
+**Pelajaran:** ESB mengirim `flagActive` sebagai int 1 (bukan boolean) — semua login ditolak sampai diperbaiki, hanya
+tertangkap oleh uji staging; `SessionStore` ber-`__len__` membuat `x or default` salah di test; Git Bash mengubah
+`--addons-path=/mnt/...` (pakai `MSYS_NO_PATHCONV=1`) sehingga test Odoo "0 tests" palsu; sidecar ghostunnel harus
+di-restart setelah prodplan di-restart.
+
+**Menunggu pemilik proyek:** akun ESB staging kedua (Q-PP17); penerimaan risiko credential relay (SEC-240) sebelum
+login ke ESB production; Q-PP3, Q-PP13..16, Q-ESBU1..6.
+
 ## G69 — ESB OMS: penjualan level struk untuk Insight (25 Nov 2026, branch `feat/esb-oms-sales`)
 
 **Permintaan pemilik proyek:** manfaatkan API ESB OMS (akses akun PB baru dibuka) untuk dashboard, fokus PB: penjualan per

@@ -77,6 +77,21 @@ terkunci** (L-250 terbukti tidak bisa dilewati lewat env/konfigurasi/redirect).
   cancel/claim; SEC-231 qty BOM ≤ 0 lolos ke payload. Info: SEC-232 kunci `details` tidak cocok; SEC-233 hardening.
 - Belum terverifikasi: perilaku nyata ESB (page size, filter `additionalInfo`, qty negatif), `gen-pki.sh`, komponen UI PP; test tidak dijalankan.
 
+## 2026-11-25 — Review G66b login per pengguna ESB (`feat/prodplan-esb-login`, worktree efn-platform-pplogin)
+0 Critical / 0 High / 1 Medium / 5 Low / 2 Info. Laporan: `docs/reviews/SECURITY_REVIEW_2026-11-25_prodplan-esb-login.md`
+(SEC-234..241). **Verdict: boleh merge ke staging** selama `PROD_WRITE_UNLOCKED=False` dan provisioning Odoo OFF di production.
+Kontrol utama terverifikasi: password tidak masuk log/PG/metrik/cookie/URL, `refreshToken` dibuang, nonce di `bh`, sid 256 bit
+(hanya hash yang disimpan), cookie `__Host-epp` terpisah dari sesi Odoo, `ppa2` tanpa sid hanya untuk login/meta, tidak ada
+jalur token pengguna A dipakai untuk aksi B, shadow user Odoo tidak bisa login.
+- **SEC-234 (Medium):** lockout 5/15 menit per username tanpa memandang sumber (`session.py:271-307,508-517`) → orang dalam
+  bisa mengunci planner/kepala gudang tertentu terus-menerus. Saran: lockout per (username, IP) + batas global longgar + alert.
+- Low: SEC-235 import PR tanpa batas cabang sesi (PLAUSIBLE); SEC-236 sesi yatim memegang token (timeout 15 vs 30+30 dtk,
+  `/expired` GET, login ulang); SEC-237 aktor = username lowercase (PLAUSIBLE); SEC-238 provisioning percaya penuh pada API
+  key; SEC-239 masking username pendek.
+- Info: SEC-240 risiko residual credential relay (untuk DPO/manajemen); SEC-241 hardening (`HttpResponse` repr, cancel tanpa
+  cek cabang, memori limiter).
+- Belum diperiksa: `components/pp/*` penuh, sisa `store.py`, `check-encryption.sh`, `gen-secrets.sh`, test; perilaku ESB
+  (scoping cabang PR, case-sensitivity username, lockout/IP ESB, cakupan `/auth/logout`); alur dua orang hanya statis.
 ## 22 Nov 2026 — review pra-merge `feat/esb-daily-aggregates` (a57c1a1)
 
 Laporan lengkap: `docs/reviews/SECURITY_REVIEW_2026-11-22_esb-aggregates.md`. **Verdict: boleh merge ke dev** (tanpa Critical/High);

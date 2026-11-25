@@ -1,6 +1,7 @@
 """Akses PostgreSQL `efn_prodplan` (docs/04 §30.6). Driver resmi psycopg 3, TLS `verify-full` dengan CA internal.
 
 - Role aplikasi `efn_prodplan` hanya DML (tanpa DDL): skema dibuat migrasi `infra/postgres/init/23-prodplan-g66.sql`
+  + `24-prodplan-esb-login.sql` (§30.17.8: `prodplan.actor`, `outbox.run_as_sub`, status `needs_login`)
   (superuser + `SET ROLE efn_prodplan_owner`, dijalankan `deploy.sh`) = satu-satunya sumber DDL; aplikasi tidak migrasi.
 - Satu koneksi per unit kerja (volume rendah, replika 1) -> tanpa pool/dependency tambahan.
 - `OutboxStore` / `JobStore` = antarmuka yang dipakai worker; test memakai implementasi palsu di memori.
@@ -186,7 +187,7 @@ class PgOutboxStore:
             return tx.all(
                 "SELECT o.id, o.company_code, o.esb_brand, o.esb_env, o.plan_id, o.seq, o.phase, o.doc_kind,"
                 " o.marker, o.request_body, o.status, o.attempts, o.esb_doc_number, o.next_attempt_at, o.sent_at,"
-                " o.last_error_code,"
+                " o.last_error_code, o.created_by_sub, o.run_as_sub,"
                 " p.production_date, p.branch_id, p.production_location_id"
                 " FROM prodplan.outbox o JOIN prodplan.plan p ON p.id = o.plan_id"
                 " WHERE o.esb_env = %(env)s AND o.plan_id IN ("
@@ -265,6 +266,39 @@ class PgOutboxStore:
         return {r["status"]: int(r["n"]) for r in rows}, float((oldest or {}).get("age") or 0)
 
 
+class PgActorStore:
+    """`prodplan.actor` (§30.17.8): satu baris per (esb_env, esb_brand, username_norm); id = `*_sub` di semua tabel."""
+
+    def __init__(self, db: Database) -> None:
+        self._db = db
+
+    def upsert(self, esb_env: str, esb_brand: str, username_norm: str, display_name: str) -> int:
+        with self._db.tx() as tx:
+            row = tx.one(
+                "INSERT INTO prodplan.actor (esb_env, esb_brand, username_norm, display_name) VALUES (%s,%s,%s,%s)"
+                " ON CONFLICT (esb_env, esb_brand, username_norm)"
+                " DO UPDATE SET display_name = EXCLUDED.display_name, last_login_at = now() RETURNING id",
+                (esb_env, esb_brand, username_norm, display_name[:64]),
+            )
+        assert row is not None
+        return int(row["id"])
+
+
+# §30.17.13: aktor yang tidak dirujuk tabel mana pun dan `last_login_at` > 400 hari dihapus purge harian.
+PURGE_ACTORS_SQL = (
+    "DELETE FROM prodplan.actor a WHERE a.last_login_at < now() - interval '400 days'"
+    " AND NOT EXISTS (SELECT 1 FROM prodplan.plan p WHERE a.id IN"
+    " (p.created_by_sub, p.submitted_by_sub, p.approved_by_sub, p.posted_by_sub, p.cancelled_by_sub))"
+    " AND NOT EXISTS (SELECT 1 FROM prodplan.plan_demand d WHERE d.created_by_sub = a.id)"
+    " AND NOT EXISTS (SELECT 1 FROM prodplan.plan_suggestion s WHERE s.decided_by_sub = a.id)"
+    " AND NOT EXISTS (SELECT 1 FROM prodplan.plan_transfer t WHERE t.decided_by_sub = a.id)"
+    " AND NOT EXISTS (SELECT 1 FROM prodplan.job j WHERE j.requested_by_sub = a.id)"
+    " AND NOT EXISTS (SELECT 1 FROM prodplan.outbox o WHERE a.id IN (o.created_by_sub, o.run_as_sub))"
+    " AND NOT EXISTS (SELECT 1 FROM prodplan.audit_event e WHERE e.actor_sub = a.id)"
+    " AND NOT EXISTS (SELECT 1 FROM prodplan.pack_rule r WHERE a.id IN (r.created_by_sub, r.updated_by_sub))"
+)
+
+
 class JobStore(Protocol):
     def recover_running(self) -> int: ...
 
@@ -327,4 +361,5 @@ def purge(db: Database, retention_days: int) -> dict[str, int]:
             " AND NOT EXISTS (SELECT 1 FROM prodplan.outbox o WHERE o.plan_id = p.id)",
             (retention_days,),
         )
+        out["actor"] = tx.exec(PURGE_ACTORS_SQL)
     return out

@@ -1,6 +1,7 @@
 /**
  * Pemuat data halaman Production Order (server-only): semua data lewat API prodplan (lib/prodplan-client.ts), tidak pernah
  * ClickHouse/PostgreSQL/ESB. Setiap pemuat mengembalikan `PpLoad<T>`: data atau galat siap tampil (pesan Indonesia).
+ * Parameter `sid` = isi cookie `__Host-epp` (§30.17); prodplan memakai token ESB milik pengguna itu.
  */
 import 'server-only';
 import { cache } from 'react';
@@ -22,7 +23,6 @@ import {
   type PostPreview,
   type PpMeta,
 } from './prodplan-types';
-import type { Session } from './session';
 
 export type PpLoad<T> = { ok: true; data: T } | { ok: false; error: PpErrorBody };
 
@@ -34,14 +34,11 @@ function lift<T>(res: PpResult<unknown>, parse: (raw: unknown) => T | null): PpL
   return v === null ? badResponse() : { ok: true, data: v };
 }
 
-/** Meta dimuat sekali per request render (layout + halaman memakai hasil yang sama). Kunci cache = sub. */
-const metaCached = cache(async (sub: number, name: string, codes: string, roles: string): Promise<PpLoad<PpMeta>> => {
-  const session = { sub, name, codes: codes.split(',').filter(Boolean), roles: roles.split(',').filter(Boolean) };
-  return lift(await ppRequest(session, 'GET', '/v1/meta'), parseMeta);
-});
+/** Meta dimuat sekali per request render (layout + halaman memakai hasil yang sama). Kunci cache = sid. */
+const metaCached = cache(async (sid: string): Promise<PpLoad<PpMeta>> => lift(await ppRequest(sid, 'GET', '/v1/meta'), parseMeta));
 
-export function loadMeta(s: Session): Promise<PpLoad<PpMeta>> {
-  return metaCached(s.sub, s.name, s.codes.join(','), s.roles.join(','));
+export function loadMeta(sid: string): Promise<PpLoad<PpMeta>> {
+  return metaCached(sid);
 }
 
 export interface PlanListQuery {
@@ -53,25 +50,25 @@ export interface PlanListQuery {
   offset?: number;
 }
 
-export async function loadPlans(s: Session, q: PlanListQuery): Promise<PpLoad<{ items: PlanSummary[]; count: number }>> {
+export async function loadPlans(sid: string, q: PlanListQuery): Promise<PpLoad<{ items: PlanSummary[]; count: number }>> {
   const qs = ppQuery({ brand: q.brand, from: q.from, to: q.to, status: q.status, limit: q.limit ?? 50, offset: q.offset ?? 0 });
-  return lift(await ppRequest(s, 'GET', `/v1/plans${qs}`), (raw) => parsePlanList(raw));
+  return lift(await ppRequest(sid, 'GET', `/v1/plans${qs}`), (raw) => parsePlanList(raw));
 }
 
-export async function loadPlan(s: Session, id: string): Promise<PpLoad<Plan>> {
+export async function loadPlan(sid: string, id: string): Promise<PpLoad<Plan>> {
   if (!UUID_RE.test(id)) return { ok: false, error: mapPpError(404, { error: { code: 'not_found' } }) };
-  return lift(await ppRequest(s, 'GET', `/v1/plans/${id}`), parsePlan);
+  return lift(await ppRequest(sid, 'GET', `/v1/plans/${id}`), parsePlan);
 }
 
-export async function loadPreview(s: Session, id: string, phase: PostPhase): Promise<PpLoad<PostPreview>> {
+export async function loadPreview(sid: string, id: string, phase: PostPhase): Promise<PpLoad<PostPreview>> {
   if (!UUID_RE.test(id)) return { ok: false, error: mapPpError(404, { error: { code: 'not_found' } }) };
-  return lift(await ppRequest(s, 'GET', `/v1/plans/${id}/post-preview${ppQuery({ phase })}`), parsePreview);
+  return lift(await ppRequest(sid, 'GET', `/v1/plans/${id}/post-preview${ppQuery({ phase })}`), parsePreview);
 }
 
-export async function loadBoms(s: Session, brand: string, q: string): Promise<PpLoad<BomItem[]>> {
-  return lift(await ppRequest(s, 'GET', `/v1/boms${ppQuery({ brand, q, limit: BOM_LIMIT })}`), (raw) => parseBoms(raw));
+export async function loadBoms(sid: string, brand: string, q: string): Promise<PpLoad<BomItem[]>> {
+  return lift(await ppRequest(sid, 'GET', `/v1/boms${ppQuery({ brand, q, limit: BOM_LIMIT })}`), (raw) => parseBoms(raw));
 }
 
-export async function loadPackRules(s: Session, brand: string): Promise<PpLoad<PackRule[]>> {
-  return lift(await ppRequest(s, 'GET', `/v1/pack-rules${ppQuery({ brand })}`), (raw) => parsePackRules(raw));
+export async function loadPackRules(sid: string, brand: string): Promise<PpLoad<PackRule[]>> {
+  return lift(await ppRequest(sid, 'GET', `/v1/pack-rules${ppQuery({ brand })}`), (raw) => parsePackRules(raw));
 }

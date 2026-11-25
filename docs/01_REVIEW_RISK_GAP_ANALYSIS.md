@@ -416,6 +416,30 @@ Usulan risiko baru (belum masuk tabel §4):
 Pertanyaan terbuka klien **Q-PP1..Q-PP14**: `docs/04` §30.14 + §30.16 (paling menentukan: Q-PP1 akun API non-admin, Q-PP2
 penerimaan "produksi tanpa tahap draft", Q-PP3 mode costing PB production, Q-PP4 sumber pesanan outlet).
 
+**Keputusan pemilik proyek 25 Nov 2026 (ADR-051 amandemen A1 §8, `docs/04` §30.17):**
+- ~~**Q-PP1** akun API non-admin~~ **Diganti:** login per pengguna ke ESB (token pengguna untuk semua baca/tulis; akun
+  service dihapus). Syarat membuka tulis production kini = akun ESB **perorangan non-admin** per planner/kepala gudang + PR
+  terpisah (Q-PP17); semua POST/DELETE akun admin ke production ditahan.
+- ~~**Q-PP2** produksi tanpa draft~~ **Diterima:** gerbang = SoD dua orang di aplikasi.
+- ~~**Q-PP6** daftar lokasi sumber~~ **Terjawab:** mengikuti izin cabang pengguna di ESB (`/branch/list/user`), tanpa
+  daftar terpisah.
+- Login ESB yang berhasil diduplikasi ke Odoo sebagai shadow user diarsipkan (rancangan fit-gap G66b; Q-ESBU1..Q-ESBU6).
+
+Usulan risiko baru (belum masuk tabel §4):
+- **R-S24** Perantara kredensial: password ESB pengguna terlihat sesaat oleh insight-web & prodplan. Mitigasi: TLS semua hop,
+  tidak pernah disimpan/dicatat (test), nonce di body login, batas laju per IP + lockout per username, review security.
+- **R-S25** Token ESB pengguna (ESB terjangkau internet) bocor dari prodplan. Mitigasi: hanya memori, ≤ 1 jam, tidak ke
+  browser/PG/log, cookie buram + hash di server, logout ESB, tanpa core dump.
+- **R-S26** Provisioning JIT membuat akun Odoo yang disalahgunakan. Mitigasi: user diarsipkan tanpa password/email/grup PP,
+  aktivasi manual Superadmin, bot non-admin satu method lewat L7 gateway, flag default `false`.
+- **R-O16** Token ESB 1 jam tanpa refresh → posting/job terhenti. Mitigasi: `needs_login` tanpa POST ganda, "Lanjutkan
+  posting", cek sisa umur token sebelum tulis, alert (Q-PP15).
+- **R-T24** Asumsi "data tersaring izin ESB" salah atau cache mencampur data antar-pengguna. Mitigasi: pembatasan cabang di
+  aplikasi, cache per aktor, uji akun non-admin sebelum production (Q-PP16).
+
+Pertanyaan baru **Q-PP15..Q-PP19** (`docs/04` §30.17.14): refresh token ESB, penyaringan per pengguna, akun perorangan
+(staging minimal dua akun non-admin untuk uji SoD), lockout ESB, arti `authorized`/`userRoleID` admin.
+
 ---
 
 ## 6. ARSITEKTUR TARGET (KONSOLIDASI)

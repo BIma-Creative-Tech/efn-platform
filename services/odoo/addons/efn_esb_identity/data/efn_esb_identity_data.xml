@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- G66b (docs/04 §30.17.11). noupdate: user teknis dan cron boleh disesuaikan admin tanpa ditimpa upgrade.
+     User teknis: pola user teknis kanal online (efn_setup_online) / forecast: Internal User + satu grup teknis, satu
+     company, TANPA password dan TANPA API key di data. API key dibuat Superadmin lewat runbook API key (rotasi 30 hari),
+     disimpan sebagai secret Docker `odoo_api_key_esb_provisioner` (mount hanya ke prodplan). -->
+<odoo noupdate="1">
+    <record id="user_esb_provisioner" model="res.users">
+        <field name="name">Provisioning identitas ESB (user teknis prodplan)</field>
+        <field name="login">efn_esb_provisioner</field>
+        <field name="company_id" ref="base.main_company"/>
+        <field name="company_ids" eval="[Command.set([ref('base.main_company')])]"/>
+        <field name="group_ids" eval="[Command.set([ref('base.group_user'), ref('group_esb_provisioner')])]"/>
+    </record>
+
+    <!-- 01:15 Asia/Jakarta (= 18:15 UTC; nextcall disimpan UTC): shadow tanpa login ESB > 90 hari -> revoked. -->
+    <record id="ir_cron_efn_esb_identity_stale" model="ir.cron">
+        <field name="name">EFN Identitas ESB: tandai shadow tanpa login 90 hari</field>
+        <field name="model_id" ref="model_efn_esb_identity"/>
+        <field name="state">code</field>
+        <field name="code">model._cron_efn_esb_mark_stale()</field>
+        <field name="user_id" ref="base.user_root"/>
+        <field name="interval_number">1</field>
+        <field name="interval_type">days</field>
+        <field name="nextcall" eval="DateTime.now().strftime('%Y-%m-%d 18:15:00')"/>
+        <field name="active" eval="True"/>
+    </record>
+</odoo>

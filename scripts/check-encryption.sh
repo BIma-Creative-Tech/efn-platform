@@ -64,14 +64,20 @@
 #           8443 + CA internal, env *_FILE tanpa secret ter-mount; overlay migration menambah network ke odoo atau
 #           me-mount kode migrasi read-write (render prod-esb-migrate, prod-migration)
 #   - (G66) secret prodplan di luar service §30.2 (pg_password_prodplan -> postgres+prodplan; prodplan_assert_key ->
-#           insight-web+prodplan; esb_prodplan_password_* -> prodplan; tls_prodplan_* -> prodplan-tls; tls_insight_web_pp_*
-#           -> insight-web-pp-tls) atau set secret per service tidak persis; env *_FILE tidak cocok; network prodplan-db
+#           insight-web+prodplan; tls_prodplan_* -> prodplan-tls; tls_insight_web_pp_* -> insight-web-pp-tls;
+#           A1: odoo_api_key_esb_provisioner + tls_prodplan_odoo_* -> prodplan) atau set secret per service tidak persis;
+#           A1 §30.17.10: secret esb_prodplan_password_* / env PRODPLAN_ESB_USER_* / PRODPLAN_ESB_PASSWORD_* /
+#           PRODPLAN_SOURCE_LOCATIONS masih ada; A1 §30.17.11: network prodplan-rpc selain persis {odoo-rpc-gateway,
+#           prodplan}, PRODPLAN_ODOO_RPC_URL bukan https://odoo-rpc-gateway:8443, PRODPLAN_ODOO_PROVISION_ENABLED bukan
+#           "false" tanpa overlay prodplan-odoo / bukan default false di render prod-prodplan-odoo, render production dengan
+#           ESB staging + provisioning true, prodplan tanpa ulimits core=0 (§30.17.4), ACL haproxy CN prodplan-odoo
+#           selain p_esb_identity; env *_FILE tidak cocok; network prodplan-db
 #           selain persis {postgres, prodplan}, insight-plan selain insight-web/prodplan/prometheus, egress-prodplan selain
 #           prodplan atau tanpa enable_icc=false; prodplan di network lain, root, tanpa read_only/cap_drop ALL, dengan
 #           port/label Traefik, PG_SSLROOTCERT bukan CA internal, PRODPLAN_ESB_BASE_URL di luar dua URL ESB; sidecar
 #           prodplan-tls/insight-web-pp-tls bukan namespace yang benar, CN/listen/target tidak persis; insight-web
 #           PRODPLAN_URL bukan http://127.0.0.1:7443; PRODPLAN_ENABLED / PRODPLAN_WRITE_ENABLED / INSIGHT_PRODPLAN_ENABLED
-#           bukan default false di render prod-prodplan; PRODPLAN_ESB_USER_* berisi nilai dari file repo (SEC-180)
+#           bukan default false di render prod-prodplan
 #   - (SEC-215/SEC-223) clickhouse-init tanpa CH_FORECAST_READER_HOST_CIDR /24../32 atau != subnet ipam forecast-ch;
 #           user efn_forecast_reader tidak dibuat dengan HOST IP; pagar allowlist objek efn_forecast hilang; pagar
 #           definisi view efn_forecast (SQL SECURITY DEFINER + definer) hilang; pola sama untuk efn_segment_reader
@@ -767,20 +773,28 @@ check_compose() {
   #      (a) secret least privilege + set mount persis per service
   for gsec in "pg_password_prodplan:postgres,prodplan" "prodplan_assert_key:insight-web,prodplan" \
               "tls_prodplan_crt:prodplan-tls" "tls_prodplan_key:prodplan-tls" \
-              "tls_insight_web_pp_crt:insight-web-pp-tls" "tls_insight_web_pp_key:insight-web-pp-tls"; do
+              "tls_insight_web_pp_crt:insight-web-pp-tls" "tls_insight_web_pp_key:insight-web-pp-tls" \
+              "odoo_api_key_esb_provisioner:prodplan" "tls_prodplan_odoo_crt:prodplan" "tls_prodplan_odoo_key:prodplan"; do
     gok="${gsec#*:}"
     jq -e --arg s "${gsec%%:*}" --arg ok "$gok" '
         [.services | to_entries[] | select([.value.secrets[]? | (.source // .)] | index($s) != null) | .key]
         - ($ok | split(",")) | length == 0' <<< "$json" > /dev/null \
-      || err "[$label] secret ${gsec%%:*} di-mount ke service selain ${gok} (least privilege, docs/04 §30.2)"
+      || err "[$label] secret ${gsec%%:*} di-mount ke service selain ${gok} (least privilege, docs/04 §30.2/§30.17.11)"
   done
-  jq -e '[.services | to_entries[] | select([.value.secrets[]? | (.source // .) | startswith("esb_prodplan_password_")] | any)
-          | .key] - ["prodplan"] | length == 0' <<< "$json" > /dev/null \
-    || err "[$label] secret esb_prodplan_password_* di-mount ke service selain prodplan (docs/04 §30.2)"
+  # A1 §30.17.10: akun service ESB prodplan dihapus -> secret password ESB prodplan tidak boleh ada di render mana pun
+  jq -e '[(.secrets // {} | keys[]), (.services[] | .secrets[]? | (.source // .))]
+         | map(select(startswith("esb_prodplan_password_"))) | length == 0' <<< "$json" > /dev/null \
+    || err "[$label] secret esb_prodplan_password_* masih ada (dihapus: login ESB per pengguna, docs/04 §30.17.10)"
+  # Set secret prodplan persis: dasar (overlay prodplan) ATAU dasar + jalur provisioning (overlay prodplan-odoo);
+  # jalur provisioning (API key + sertifikat klien) <=> network prodplan-rpc.
   jq -e '(.services.prodplan // null) as $w | $w == null
-         or (([$w.secrets[]? | (.source // .)] | map(select(startswith("esb_prodplan_password_") | not)) | sort)
-             == ["efn_ca_crt", "pg_password_prodplan", "prodplan_assert_key"])' <<< "$json" > /dev/null \
-    || err "[$label] prodplan: secret wajib persis pg_password_prodplan, prodplan_assert_key, efn_ca_crt (+ esb_prodplan_password_<brand>) (docs/04 §30.2)"
+         or ((([$w.secrets[]? | (.source // .)] | sort) as $s
+              | $s == ["efn_ca_crt", "pg_password_prodplan", "prodplan_assert_key"]
+                or $s == ["efn_ca_crt", "odoo_api_key_esb_provisioner", "pg_password_prodplan", "prodplan_assert_key",
+                          "tls_prodplan_odoo_crt", "tls_prodplan_odoo_key"])
+             and ((([$w.secrets[]? | (.source // .)] | index("odoo_api_key_esb_provisioner")) != null)
+                  == (($w.networks // {}) | has("prodplan-rpc"))))' <<< "$json" > /dev/null \
+    || err "[$label] prodplan: secret wajib persis pg_password_prodplan, prodplan_assert_key, efn_ca_crt (+ odoo_api_key_esb_provisioner, tls_prodplan_odoo_crt/_key HANYA bersama network prodplan-rpc, overlay prodplan-odoo) (docs/04 §30.2/§30.17.11)"
   for spec in "prodplan-tls:efn_ca_crt,tls_prodplan_crt,tls_prodplan_key" \
               "insight-web-pp-tls:efn_ca_crt,tls_insight_web_pp_crt,tls_insight_web_pp_key"; do
     jq -e --arg svc "${spec%%:*}" --arg want "${spec#*:}" '(.services[$svc] // null) as $w | $w == null
@@ -797,15 +811,44 @@ check_compose() {
             and ((.services[$svc].environment // {})[$e] == ("/run/secrets/" + $s)))' <<< "$json" > /dev/null \
       || err "[$label] ${svc}: secret ${s} tidak di-mount atau ${e} != /run/secrets/${s} (docs/04 §30.3)"
   done
-  while IFS=$'\t' read -r key val mounted; do
-    [[ -z "$key" ]] && continue
-    [[ "$val" == "/run/secrets/esb_prodplan_password_${key,,}" && "$mounted" == 1 ]] \
-      || err "[$label] prodplan PRODPLAN_ESB_PASSWORD_${key}_FILE=${val} tidak cocok dengan secret ter-mount esb_prodplan_password_${key,,}"
-  done < <(jq -r '.services.prodplan // {} | [.secrets[]? | (.source // .)] as $m
-      | (.environment // {}) | to_entries[] | select(.key | test("^PRODPLAN_ESB_PASSWORD_[A-Z0-9]+_FILE$"))
-      | (.key | capture("^PRODPLAN_ESB_PASSWORD_(?<k>[A-Z0-9]+)_FILE$") | .k) as $k
-      | [$k, (.value // ""), (if ($m | index("esb_prodplan_password_" + ($k | ascii_downcase))) != null then "1" else "0" end)]
-      | @tsv' <<< "$json")
+  # A1 §30.17.10/§30.17.13: env akun service lama dan PRODPLAN_SOURCE_LOCATIONS dihapus (nilai apa pun, termasuk kosong)
+  jq -e '(.services.prodplan.environment // {}) | keys
+         | map(select(test("^PRODPLAN_ESB_(USER|PASSWORD)_") or . == "PRODPLAN_SOURCE_LOCATIONS")) | length == 0' \
+      <<< "$json" > /dev/null \
+    || err "[$label] prodplan: env PRODPLAN_ESB_USER_* / PRODPLAN_ESB_PASSWORD_* / PRODPLAN_SOURCE_LOCATIONS dihapus (docs/04 §30.17.10/§30.17.13)"
+  # A1 §30.17.11/§30.17.13: jalur provisioning -> Odoo. URL tetap (TLS ke filter L7, bukan Odoo langsung); flag boolean;
+  # tanpa overlay prodplan-odoo (tanpa network prodplan-rpc) flag wajib "false"; dengan overlay env *_FILE = secret
+  # ter-mount + CA internal.
+  jq -e '(.services.prodplan // null) as $w | $w == null
+         or (((($w.environment // {}).PRODPLAN_ODOO_RPC_URL // "") == "https://odoo-rpc-gateway:8443")
+             and ((($w.environment // {}).PRODPLAN_ODOO_PROVISION_ENABLED // "") | tostring | test("^(true|false)$"))
+             and ((($w.networks // {}) | has("prodplan-rpc"))
+                  or ((($w.environment // {}).PRODPLAN_ODOO_PROVISION_ENABLED // "") | tostring) == "false"))' \
+      <<< "$json" > /dev/null \
+    || err "[$label] prodplan: PRODPLAN_ODOO_RPC_URL wajib https://odoo-rpc-gateway:8443, PRODPLAN_ODOO_PROVISION_ENABLED boolean dan \"false\" tanpa overlay docker-compose.prodplan-odoo.yml (docs/04 §30.17.11)"
+  for spec in PRODPLAN_ODOO_API_KEY_FILE:odoo_api_key_esb_provisioner PRODPLAN_ODOO_CLIENT_CERT_FILE:tls_prodplan_odoo_crt \
+              PRODPLAN_ODOO_CLIENT_KEY_FILE:tls_prodplan_odoo_key PRODPLAN_ODOO_CA_FILE:efn_ca_crt; do
+    jq -e --arg e "${spec%%:*}" --arg s "${spec#*:}" '(.services.prodplan // null) as $w | $w == null
+        or ((($w.networks // {}) | has("prodplan-rpc")) | not)
+        or (([$w.secrets[]? | (.source // .)] | index($s) != null)
+            and (($w.environment // {})[$e] == ("/run/secrets/" + $s)))' <<< "$json" > /dev/null \
+      || err "[$label] prodplan: overlay prodplan-odoo wajib ${spec%%:*}=/run/secrets/${spec#*:} dengan secret ter-mount (docs/04 §30.17.13)"
+  done
+  # A1 §30.17.11: provisioning dari ESB staging hanya ke stack lokal dev/stg/gladi -> render production (kind prod*)
+  # dengan base URL ESB staging + flag provisioning true = gagal (identitas staging bocor ke Odoo production).
+  if [[ "$kind" == prod* ]]; then
+    jq -e '(.services.prodplan // null) as $w | $w == null
+           or ((((($w.environment // {}).PRODPLAN_ESB_BASE_URL // "") == "https://stg7.esb.co.id/core-stg")
+                and (((($w.environment // {}).PRODPLAN_ODOO_PROVISION_ENABLED // "") | tostring) == "true")) | not)' \
+        <<< "$json" > /dev/null \
+      || err "[$label] prodplan: render production dengan PRODPLAN_ESB_BASE_URL staging + PRODPLAN_ODOO_PROVISION_ENABLED=true dilarang (docs/04 §30.17.11)"
+  fi
+  # §30.17.4 (R-S25): token ESB di memori proses -> tanpa core dump (compose merender core 0 sebagai 0 atau {})
+  jq -e '(.services.prodplan // null) as $w | $w == null
+         or ((($w.ulimits // {}).core // null) as $c
+             | $c != null and ($c == 0 or (($c | type) == "object" and ($c.soft // 0) == 0 and ($c.hard // 0) == 0
+                                           and ($c.single // 0) == 0)))' <<< "$json" > /dev/null \
+    || err "[$label] prodplan: ulimits core wajib 0 (tanpa core dump; token ESB pengguna di memori, docs/04 §30.17.4)"
   jq -e '(.services["insight-web"] // null) as $w | $w == null
          or ((([$w.secrets[]? | (.source // .)] | index("prodplan_assert_key")) == null)
              and (($w.environment // {}) | has("PRODPLAN_URL") | not))
@@ -819,14 +862,19 @@ check_compose() {
          or ([.services | to_entries[] | select((.value.networks // {}) | has("prodplan-db")) | .key] | sort)
             == ["postgres", "prodplan"]' <<< "$json" > /dev/null \
     || err "[$label] network prodplan-db wajib beranggota persis postgres + prodplan (pg_hba samenet, L-252)"
+  # A1 §30.17.11/§30.17.15: prodplan-rpc beranggota tepat {odoo-rpc-gateway, prodplan}
+  jq -e '(.networks["prodplan-rpc"] // null) == null
+         or ([.services | to_entries[] | select((.value.networks // {}) | has("prodplan-rpc")) | .key] | sort)
+            == ["odoo-rpc-gateway", "prodplan"]' <<< "$json" > /dev/null \
+    || err "[$label] network prodplan-rpc wajib beranggota persis odoo-rpc-gateway + prodplan (docs/04 §30.17.11)"
   for spec in "insight-plan:insight-web,prodplan,prometheus" "egress-prodplan:prodplan"; do
     jq -e --arg n "${spec%%:*}" --arg ok "${spec#*:}" '[.services | to_entries[] | select((.value.networks // {}) | has($n)) | .key]
            - ($ok | split(",")) | length == 0' <<< "$json" > /dev/null \
       || err "[$label] network ${spec%%:*} dipakai service selain ${spec#*:} (docs/04 §30.1)"
   done
-  for spec in prodplan-db insight-plan; do
+  for spec in prodplan-db insight-plan prodplan-rpc; do
     jq -e --arg n "$spec" '(.networks[$n] // null) as $x | $x == null or ($x.internal == true)' <<< "$json" > /dev/null \
-      || err "[$label] network ${spec} wajib internal: true (docs/04 §30.1)"
+      || err "[$label] network ${spec} wajib internal: true (docs/04 §30.1/§30.17.11)"
   done
   jq -e '(.networks["egress-prodplan"] // null) as $n | $n == null
          or ((($n.driver_opts // {})["com.docker.network.bridge.enable_icc"] // "" | tostring) == "false")' \
@@ -834,7 +882,9 @@ check_compose() {
     || err "[$label] network egress-prodplan wajib driver_opts com.docker.network.bridge.enable_icc=\"false\" (pola SEC-183)"
   #      (d) hardening + tujuan prodplan
   jq -e '(.services.prodplan // null) as $w | $w == null
-         or (((($w.networks // {}) | keys | sort) == ["egress-prodplan", "insight-plan", "prodplan-db"])
+         or (((($w.networks // {}) | keys | sort)
+              | IN(["egress-prodplan", "insight-plan", "prodplan-db"],
+                   ["egress-prodplan", "insight-plan", "prodplan-db", "prodplan-rpc"]))
              and ($w.read_only == true)
              and ((($w.cap_drop // []) | index("ALL")) != null)
              and ((($w.cap_add // []) | length) == 0)
@@ -848,7 +898,7 @@ check_compose() {
              and ((($w.environment // {}).PRODPLAN_ENABLED // "") | tostring | test("^(true|false)$"))
              and ((($w.environment // {}).PRODPLAN_WRITE_ENABLED // "") | tostring | test("^(true|false)$")))' \
       <<< "$json" > /dev/null \
-    || err "[$label] prodplan: wajib hanya network prodplan-db+insight-plan+egress-prodplan, read_only, cap_drop ALL tanpa cap_add, tanpa port/Traefik, profil data, user non-root uid, PG_SSLMODE verify-full, PRODPLAN_ESB_BASE_URL salah satu dari dua URL ESB, flag boolean (docs/04 §30.1/§30.3)"
+    || err "[$label] prodplan: wajib hanya network prodplan-db+insight-plan+egress-prodplan (+prodplan-rpc overlay prodplan-odoo), read_only, cap_drop ALL tanpa cap_add, tanpa port/Traefik, profil data, user non-root uid, PG_SSLMODE verify-full, PRODPLAN_ESB_BASE_URL salah satu dari dua URL ESB, flag boolean (docs/04 §30.1/§30.3)"
   #      (e) sidecar: namespace benar, CN/listen/target persis (tanpa --disable-authentication sudah dicek langkah 3)
   jq -e '(.services["prodplan-tls"] // null) as $t | $t == null
          or (($t.network_mode == "service:prodplan")
@@ -1013,24 +1063,21 @@ check_compose() {
   fi
 
   # 11) G66 (docs/04 §30.3/§30.15): kill switch prodplan default MATI di render prod + overlay (aktivasi lewat .env/config)
-  if [[ "$label" == prod-prodplan || "$label" == prod-stack ]]; then
+  #     A1 (§30.17.11/§30.17.15): render prod-prodplan-odoo / prod-stack juga PRODPLAN_ODOO_PROVISION_ENABLED=false
+  #     (env akun service lama sudah ditolak di 6b7 untuk semua render, menggantikan cek SEC-180 PRODPLAN_ESB_USER_*).
+  if [[ "$label" == prod-prodplan || "$label" == prod-prodplan-odoo || "$label" == prod-stack ]]; then
     jq -e '.services.prodplan != null and .services["prodplan-tls"] != null and .services["insight-web-pp-tls"] != null' \
         <<< "$json" > /dev/null \
       || err "[$label] prodplan/prodplan-tls/insight-web-pp-tls tidak ter-render (overlay docker-compose.prodplan.yml / profil data)"
-    for ks in prodplan:PRODPLAN_ENABLED prodplan:PRODPLAN_WRITE_ENABLED insight-web:INSIGHT_PRODPLAN_ENABLED; do
+    for ks in prodplan:PRODPLAN_ENABLED prodplan:PRODPLAN_WRITE_ENABLED insight-web:INSIGHT_PRODPLAN_ENABLED \
+              prodplan:PRODPLAN_ODOO_PROVISION_ENABLED; do
       jq -e --arg s "${ks%%:*}" --arg k "${ks#*:}" '(.services[$s].environment[$k] // "") == "false"' <<< "$json" > /dev/null \
-        || err "[$label] ${ks%%:*}: ${ks#*:} harus diteruskan dengan default false di render prod (docs/04 §30.3)"
+        || err "[$label] ${ks%%:*}: ${ks#*:} harus diteruskan dengan default false di render prod (docs/04 §30.3/§30.17.11)"
     done
-    # SEC-180: pola esb-extract (CI = render dari isi repo -> wajib kosong; lokal hanya info)
-    if ! jq -e '[(.services.prodplan.environment // {}) | to_entries[]
-                 | select(.key | test("^PRODPLAN_ESB_USER_")) | select(((.value // "") | tostring) != "")] | length == 0' \
-         <<< "$json" > /dev/null; then
-      if [[ -n "${CI:-}" ]]; then
-        err "[$label] prodplan: PRODPLAN_ESB_USER_* ter-render berisi nilai dari file repo (SEC-180: username ESB hanya di .env lokal/config rilis)"
-      else
-        echo "check-encryption: [$label] info: PRODPLAN_ESB_USER_* berisi nilai (dari .env lokal; pastikan tidak ada di file repo)"
-      fi
-    fi
+  fi
+  if [[ "$label" == prod-prodplan-odoo || "$label" == prod-stack ]]; then
+    jq -e '.networks["prodplan-rpc"] != null' <<< "$json" > /dev/null \
+      || err "[$label] network prodplan-rpc tidak ter-render (overlay docker-compose.prodplan-odoo.yml)"
   fi
 
   check_stack_identity "$label" "$json"
@@ -1174,15 +1221,30 @@ check_files() {
     || err "infra/odoo-rpc-gateway/haproxy.cfg: listener :8443 tanpa ssl + 'ca-file ... verify required' (mTLS)"
   grep -qE '^[[:space:]]*acl[[:space:]]+cn_bff[[:space:]]+ssl_c_s_dn\(CN\)[[:space:]]+-m[[:space:]]+str[[:space:]]+api-gateway$' "$hap" \
     || err "infra/odoo-rpc-gateway/haproxy.cfg: allowlist CN klien harus persis api-gateway"
-  # G44 (docs/04 §28.2) + G50 (§28.7): hanya tiga ACL CN (cn_bff = api-gateway, cn_forecast = forecast-worker,
-  # cn_segment = segment-worker), semuanya `-m str` (persis, bukan sub/beg/reg); CN lain = perubahan kontrak.
+  # G44 (docs/04 §28.2) + G50 (§28.7) + G66 A1 (§30.17.11): hanya empat ACL CN (cn_bff = api-gateway, cn_forecast =
+  # forecast-worker, cn_segment = segment-worker, cn_prodplan = prodplan-odoo), semuanya `-m str` (persis, bukan
+  # sub/beg/reg); CN lain = perubahan kontrak.
   local cn_acls
   cn_acls=$(grep -E '^[[:space:]]*acl[[:space:]]+[a-z_]+[[:space:]]+ssl_c_s_dn\(CN\)' "$hap" \
             | sed -E 's/^[[:space:]]*acl[[:space:]]+//; s/[[:space:]]+/ /g' | sort)
-  [[ "$cn_acls" == "$(printf '%s\n%s\n%s' 'cn_bff ssl_c_s_dn(CN) -m str api-gateway' \
+  [[ "$cn_acls" == "$(printf '%s\n%s\n%s\n%s' 'cn_bff ssl_c_s_dn(CN) -m str api-gateway' \
                        'cn_forecast ssl_c_s_dn(CN) -m str forecast-worker' \
-                       'cn_segment ssl_c_s_dn(CN) -m str segment-worker' | sort)" ]] \
-    || err "infra/odoo-rpc-gateway/haproxy.cfg: ACL CN klien hanya cn_bff=api-gateway, cn_forecast=forecast-worker, cn_segment=segment-worker (-m str), ditemukan: ${cn_acls//$'\n'/; }"
+                       'cn_segment ssl_c_s_dn(CN) -m str segment-worker' \
+                       'cn_prodplan ssl_c_s_dn(CN) -m str prodplan-odoo' | sort)" ]] \
+    || err "infra/odoo-rpc-gateway/haproxy.cfg: ACL CN klien hanya cn_bff=api-gateway, cn_forecast=forecast-worker, cn_segment=segment-worker, cn_prodplan=prodplan-odoo (-m str), ditemukan: ${cn_acls//$'\n'/; }"
+  # G66 A1 (§30.17.11/§30.17.15): CN prodplan-odoo HANYA p_esb_identity (satu path persis); path itu tidak di daftar lain;
+  # aturan deny path memuat `cn_prodplan !p_esb_identity`; batas body 16 KiB untuk CN itu.
+  { [[ "$(grep -cE '^[[:space:]]*acl[[:space:]]+p_esb_identity[[:space:]]' "$hap" || true)" == 1 ]] \
+      && grep -qE '^[[:space:]]*acl[[:space:]]+p_esb_identity[[:space:]]+path[[:space:]]+-m[[:space:]]+str[[:space:]]+/json/2/efn\.esb\.identity/efn_esb_provision$' "$hap"; } \
+    || err "infra/odoo-rpc-gateway/haproxy.cfg: p_esb_identity wajib tepat satu baris /json/2/efn.esb.identity/efn_esb_provision"
+  if grep -qE '^[[:space:]]*acl[[:space:]]+p_(allowed|forecast|segment|big_body)[[:space:]].*efn\.esb\.identity' "$hap"; then
+    err "infra/odoo-rpc-gateway/haproxy.cfg: path efn.esb.identity bocor ke CN lain (hanya p_esb_identity / CN prodplan-odoo)"
+  fi
+  grep -qE '^[[:space:]]*http-request[[:space:]]+deny[[:space:]].*\|\|[[:space:]]+cn_prodplan[[:space:]]+!p_esb_identity([[:space:]]|$)' "$hap" \
+    || err "infra/odoo-rpc-gateway/haproxy.cfg: aturan deny path tanpa 'cn_prodplan !p_esb_identity' (CN prodplan-odoo wajib dibatasi satu path)"
+  { grep -qE '^[[:space:]]*acl[[:space:]]+h_cl_pp_big[[:space:]]+req\.hdr_val\(content-length\)[[:space:]]+gt[[:space:]]+16384$' "$hap" \
+      && grep -qE '^[[:space:]]*http-request[[:space:]]+deny[[:space:]]+deny_status[[:space:]]+413[[:space:]].*cn_prodplan[[:space:]]+h_cl_pp_big' "$hap"; } \
+    || err "infra/odoo-rpc-gateway/haproxy.cfg: batas body CN prodplan-odoo 16 KiB (h_cl_pp_big) hilang (docs/04 §30.17.11)"
   # G50: path kampanye per CN - proposal_upsert HANYA di p_segment; claim/ack HANYA di p_allowed (BFF)
   grep -qE '^[[:space:]]*acl[[:space:]]+p_segment[[:space:]]+path[[:space:]]+-m[[:space:]]+str[[:space:]]+/json/2/efn\.campaign/efn_campaign_proposal_upsert$' "$hap" \
     || err "infra/odoo-rpc-gateway/haproxy.cfg: p_segment wajib persis /json/2/efn.campaign/efn_campaign_proposal_upsert"
@@ -1249,7 +1311,7 @@ check_stack_files() {
   grep -qE '^[[:space:]]+network:[[:space:]]*"@EFN_STACK@_internal"[[:space:]]*$' "$tf" \
     || err "infra/traefik/traefik.yml: providers.docker.network wajib \"@EFN_STACK@_internal\" (K25-06)"
   local body
-  local net_re='efn_(internal|edge|data|egress|cache|socket-proxy|objstore|insight-[a-z]+|login-ingress|esb|egress-esb|forecast-[a-z]+|segment-[a-z]+|rmq|wa-[a-z]+|mail|prodplan-db|egress-prodplan)([^a-z_-]|$)'
+  local net_re='efn_(internal|edge|data|egress|cache|socket-proxy|objstore|insight-[a-z]+|login-ingress|esb|egress-esb|forecast-[a-z]+|segment-[a-z]+|rmq|wa-[a-z]+|mail|prodplan-db|prodplan-rpc|egress-prodplan)([^a-z_-]|$)'
   body="$(grep -vE "$COMMENT_RE" "$tf" || true)"
   if grep -qE "$net_re" <<< "$body"; then
     err "infra/traefik/traefik.yml: nama network tetap efn_* (pakai @EFN_STACK@_<network>)"
@@ -1369,17 +1431,23 @@ case "$MODE" in
     # G66 (docs/04 §30.15): overlay prodplan (postgres + network prodplan-db, insight-web + sidecar klien, egress ESB)
     check_compose dev-prodplan -f docker-compose.yml -f docker-compose.dev.yml -f docker-compose.prodplan.yml
     check_compose prod-prodplan -f docker-compose.yml -f docker-compose.prod.yml -f docker-compose.prodplan.yml
+    # G66 A1 (docs/04 §30.17.11): + overlay provisioning Odoo (network prodplan-rpc, API key + mTLS CN prodplan-odoo)
+    check_compose dev-prodplan-odoo -f docker-compose.yml -f docker-compose.dev.yml -f docker-compose.prodplan.yml \
+      -f docker-compose.prodplan-odoo.yml
+    check_compose prod-prodplan-odoo -f docker-compose.yml -f docker-compose.prod.yml -f docker-compose.prodplan.yml \
+      -f docker-compose.prodplan-odoo.yml
     # K25-06 (docs/runbooks/multi-env-local.md): stack bernama lain + subnet lain (gladi prod lokal di host yang rentang
     # 172.16-31-nya dipakai project lain) wajib lolos SEMUA aturan di atas + identitas stack. Overlay esb, forecast,
-    # segment, wa-unofficial, prodplan (+ mail di dev) ikut agar semua network (oktet 0..25) ter-render.
+    # segment, wa-unofficial, prodplan, prodplan-odoo (+ mail di dev) ikut agar semua network (oktet 0..26) ter-render.
     CC_STACK=efn-prod CC_BASE=10.250
     check_compose prod-stack -f docker-compose.yml -f docker-compose.prod.yml -f docker-compose.local-edge.yml \
       -f docker-compose.esb.yml -f docker-compose.forecast.yml -f docker-compose.segment.yml \
-      -f docker-compose.wa-unofficial.yml -f docker-compose.prodplan.yml --profile wa-unofficial
+      -f docker-compose.wa-unofficial.yml -f docker-compose.prodplan.yml -f docker-compose.prodplan-odoo.yml \
+      --profile wa-unofficial
     CC_STACK=efn-dev CC_BASE=10.252
     check_compose dev-stack -f docker-compose.yml -f docker-compose.dev.yml -f docker-compose.forecast.yml \
       -f docker-compose.segment.yml -f docker-compose.wa-unofficial.yml -f docker-compose.prodplan.yml \
-      --profile wa-unofficial
+      -f docker-compose.prodplan-odoo.yml --profile wa-unofficial
     CC_STACK="" CC_BASE=""
     check_files
     ;;

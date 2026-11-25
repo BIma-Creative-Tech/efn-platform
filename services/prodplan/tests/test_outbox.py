@@ -29,6 +29,8 @@ def row(seq, status="pending", kind="simple_transfer", **kw):
         "production_date": date(2026, 11, 25),
         "branch_id": 4,
         "production_location_id": 7,
+        "created_by_sub": 1,
+        "run_as_sub": None,
     }
     base.update(kw)
     return base
@@ -114,18 +116,26 @@ class FakeEsb:
 
 
 class Env:
-    def __init__(self, rows, write=True):
+    """`logged_in` = aktor yang punya sesi hidup (token); `client_calls` = (actor_id, brand, min_remaining)."""
+
+    def __init__(self, rows, write=True, logged_in=(1,)):
         self.now = T0
         self.store = FakeStore(rows, lambda: self.now)
         self.esb = FakeEsb()
+        self.logged_in = set(logged_in)
+        self.client_calls = []
         self.worker = OutboxWorker(
             self.store,
-            {"pb": self.esb},
+            self.client_for,
             esb_env="staging",
             write_enabled=write,
             reconcile_grace_seconds=300,
             clock=lambda: self.now,
         )
+
+    def client_for(self, actor_id, brand, min_remaining):
+        self.client_calls.append((actor_id, brand, min_remaining))
+        return self.esb if actor_id in self.logged_in and brand == "pb" else None
 
     def advance(self, seconds):
         self.now = self.now + timedelta(seconds=seconds)

@@ -55,10 +55,12 @@ CONTROL_PARAM_KEYS = (SENSITIVE_PARAM,)
 XMLID_RE = re.compile(r"^[A-Za-z0-9_]+\.[A-Za-z0-9_]+$")
 # Akun non-jabatan (docs/08 §12.2b): tidak boleh diberi peran. Opsional (modul pemilik mungkin belum terpasang).
 # E-47d (G22, L-74): + user teknis QR ponsel per PT F&B (efn_pos_bff_order).
+# G66b (docs/04 §30.17.11, ADR-051 A1): + user teknis provisioning identitas ESB (prodplan).
 TECHNICAL_GROUP_XMLIDS = (
     "efn_online_order.group_online_channel",
     "efn_pos_kds.group_kds_device",
     "efn_pos_bff_order.group_qr_bff",
+    "efn_esb_identity.group_esb_provisioner",
 )
 # Grup penanda modul ini (tanpa ACL, tanpa implied_ids) -> selalu termasuk himpunan terkelola.
 MARKER_GROUP_XMLIDS = ("efn_role.group_role_cashier", "efn_role.group_refund_approver")

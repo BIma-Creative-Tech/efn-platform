@@ -53,7 +53,7 @@ def test_production_marker_found_on_page_two():
         esb.docs[r["simpleManufacturingNum"]] = {"simpleManufacturingDetails": [{"notes": "pp:ffffffffffff"}]}
     target = esb.all_rows[120]["simpleManufacturingNum"]
     esb.docs[target] = {"simpleManufacturingDetails": [{"additionalInfo": "pp:000000000001"}], "statusID": 3}
-    env.worker._clients = {"pb": esb}
+    env.esb = esb
     env.advance(400)  # lewat grace: dulu = failed palsu karena hanya halaman 1 dibaca
     env.worker.run_once()
     r = env.store.rows["o1"]
@@ -76,7 +76,7 @@ def test_page_limit_or_esb_error_keeps_unknown_never_failed():
             raise EsbError("down")
 
     env = Env([row(1, "unknown", sent_at=T0)])
-    env.worker._clients = {"pb": Down()}
+    env.esb = Down()
     env.advance(400)
     env.worker.run_once()
     r = env.store.rows["o1"]
@@ -270,12 +270,19 @@ def test_job_error_codes_single_registry():
 
 
 # ---------------------------------------------------------------- /v1/boms
-def _svc(clients=None, names=None):
+def _svc(client=None, names=None):
     settings = SimpleNamespace(brands=[SimpleNamespace(key="pb")], mfg_mode="actual")
-    return Service(settings, None, clients or {}, lambda: T0, names=names)  # type: ignore[arg-type]
+    return Service(settings, None, lambda _actor: client, lambda: T0, names=names)  # type: ignore[arg-type]
 
 
-ACTOR = Actor(sub=7, name="Uji", roles=frozenset({"pp_planner"}), codes=frozenset({"PB"}))
+ACTOR = Actor(
+    sub=7,
+    name="Uji",
+    roles=frozenset({"pp_planner"}),
+    brand="pb",
+    branch_ids=frozenset({4, 13}),
+    branch_names={4: "CK Rekaan", 13: "WH Prod"},
+)
 
 
 @pytest.mark.parametrize(
@@ -307,7 +314,7 @@ class NamesClient:
         if self.fail:
             raise EsbError("down")
         assert path == "/branch/list/user"
-        return [{"branchID": 4, "branchName": "CK Paris Baguette"}, {"branchID": "13", "branchName": "WH Prod"}]
+        return [{"branchID": 4, "branchName": "CK Rekaan"}, {"branchID": "13", "branchName": "WH Prod"}]
 
     def get(self, path, params=None):
         self.calls += 1
@@ -324,7 +331,7 @@ def test_names_cached_and_failures_are_none():
     assert cache.branch_name("pb", client, 13) == "WH Prod"
     assert cache.location_name("pb", client, 4, 7) == "CK - Kitchen"
     calls = client.calls
-    assert cache.branch_name("pb", client, 4) == "CK Paris Baguette" and client.calls == calls
+    assert cache.branch_name("pb", client, 4) == "CK Rekaan" and client.calls == calls
     down = NamesClient(fail=True)
     broken = NameCache(clock=lambda: now[0])
     assert broken.branch_name("pb", down, 4) is None and broken.location_name("pb", down, 4, 7) is None
@@ -336,9 +343,11 @@ def test_names_cached_and_failures_are_none():
 
 
 def test_service_names_places_and_allowlist():
-    svc = _svc({"pb": NamesClient()})
-    place = svc._name_place("pb", {"branch_id": 4, "location_id": 8})
-    assert place["branch_name"] == "CK Paris Baguette" and place["location_name"] == "CK - Gudang"
+    svc = _svc(NamesClient())
+    place = svc._name_place(ACTOR, {"branch_id": 4, "location_id": 8})
+    # nama cabang dari sesi (login), nama lokasi dari GET bertoken pemanggil
+    assert place["branch_name"] == "CK Rekaan" and place["location_name"] == "CK - Gudang"
     assert place["branch_id"] == 4 and place["location_id"] == 8
-    assert _svc()._name_place("pb", {"branch_id": 4, "location_id": 8})["branch_name"] is None
+    other = _svc()._name_place(ACTOR, {"branch_id": 99, "location_id": 8})
+    assert other["branch_name"] is None and other["location_name"] is None
     assert classify_call("GET", "/branch/list/user", mfg_mode="actual", allow_write=False) == "/branch/list/user"

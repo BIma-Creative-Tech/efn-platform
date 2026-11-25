@@ -3674,3 +3674,39 @@ Kontrak `docs/04` §30.7 (L-251), ADR-051 (Proposed), ADR-041 §3.7. Worktree `e
 - Interop byte-exact token ber-PP dengan insight-web `lib/claims.ts` (belum ada vektor bersama).
 - Apakah grup PP perlu masuk `efn_role` `SENSITIVE_GROUP_XMLIDS` / `efn_audit` — di luar area file saya; usul lead
   memutuskan (planner dapat memposting ke ESB = sensitif).
+
+---
+
+# G66b — `efn_esb_identity` 19.0.1.0.0: shadow user JIT dari login ESB (25 Nov 2026)
+
+Kontrak `docs/04` §30.17.11, ADR-051 §8 (A1, Proposed), fit-gap `efn-odoo-functional` "G66b". Worktree
+`efn-platform-pplogin`, branch `feat/prodplan-esb-login`.
+
+## File
+- Baru `services/odoo/addons/efn_esb_identity/`: `__manifest__.py`, `__init__.py`, `README.md`,
+  `models/efn_esb_identity.py` (model + `efn_esb_provision` + cron + `action_efn_activate`),
+  `security/efn_esb_identity_security.xml` (privilege, `group_esb_provisioner`, record rule),
+  `security/ir.model.access.csv`, `data/efn_esb_identity_data.xml` (user teknis `efn_esb_provisioner`, cron;
+  noupdate), `views/efn_esb_identity_views.xml` (menu Settings > Users & Companies), `tests/test_esb_identity.py`
+  (19 test, tag `efn`).
+- `efn_role` 19.0.1.2.5: `role_policy.TECHNICAL_GROUP_XMLIDS` + `efn_esb_identity.group_esb_provisioner`;
+  `__manifest__.py`, `README.md`. Test efn_role yang ada sudah mengiterasi daftar itu (tanpa perubahan).
+
+## Penyimpangan dari fit-gap (kontrak §30.17.11 tidak mengatur)
+- ACL provisioner **tanpa baca** (fit-gap: read): metode memakai sudo; baca hanya membuka enumerasi username.
+- Superadmin: read + write, tanpa create/unlink (identitas tidak pernah dibuat manual / dihapus).
+- Selama `state != activated`, provisioning menegakkan ulang invarian (arsip, grup, PT, nama) → unarchive manual
+  sebelum aktivasi dibatalkan. `revoked` + login baru → `shadow`.
+- Aktivasi hanya memindah state setelah cek login bukan `esb:` + email terisi; unarchive tetap UI standar.
+- `company_code` hanya pengecekan silang (log peringatan), `role_id`/`company_code` boleh `null`, `full_name` kosong
+  → username. Bacha 2 PT → `base.group_multi_company` ikut di grup eksplisit (perilaku CE).
+
+## Belum diverifikasi
+- Test belum dijalankan di Odoo 19 nyata (tanpa shell); ruff check/format belum dijalankan (baris dihitung manual).
+- [V] json2 19.0: kwargs body → `func(records, **kwargs)`, kunci asing → 422 (`signature.bind`); `authenticate(self,
+  credential, user_agent_env)` model method; `group_ids` default `_default_groups`; `login_date` related log.
+- [B] UserError→422 / AccessError→403 untuk metode ini lewat HTTP; partner ikut arsip saat create; review akses
+  efn_role atas user arsip; log audit `res.users` memuat login `esb:<akun>:<username>`.
+- Wajib ditambahkan lead (di luar lingkup): `efn_core/tests/test_rpc_surface.py` `RPC_ALLOWLIST` untuk
+  `efn_esb_provision` + `action_efn_activate` (tanpa itu test SEC-58 gagal); `efn_esb_identity` di
+  `EFN_TEST_MODULES` `.github/workflows/ci.yml`.

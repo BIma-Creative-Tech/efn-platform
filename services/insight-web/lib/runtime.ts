@@ -8,7 +8,7 @@ import { parseConfig, type InsightConfig } from './config';
 import { parseKey } from './hmac';
 import { JtiCache } from './jti-cache';
 import { RateLimiter } from './rate-limit';
-import { createExportLimiter, createPageQueryLimiter, createPpMutationLimiter, createPpReadLimiter } from './user-limits';
+import { createExportLimiter, createPageQueryLimiter, createPpLoginLimiter, createPpMutationLimiter, createPpReadLimiter } from './user-limits';
 
 export function readFileOrNull(path: string): string | null {
   try {
@@ -28,6 +28,7 @@ interface RuntimeState {
   exportLimiter: RateLimiter;
   ppMutationLimiter: RateLimiter;
   ppReadLimiter: RateLimiter;
+  ppLoginLimiter: RateLimiter;
 }
 
 const g = globalThis as unknown as { __insightRuntime?: RuntimeState };
@@ -44,6 +45,7 @@ function state(): RuntimeState {
       exportLimiter: createExportLimiter(),
       ppMutationLimiter: createPpMutationLimiter(),
       ppReadLimiter: createPpReadLimiter(),
+      ppLoginLimiter: createPpLoginLimiter(),
     };
   }
   return g.__insightRuntime;
@@ -101,4 +103,8 @@ export function getPpMutationLimiter(): RateLimiter {
 
 export function getPpReadLimiter(): RateLimiter {
   return state().ppReadLimiter;
+}
+
+export function getPpLoginLimiter(): RateLimiter {
+  return state().ppLoginLimiter;
 }
