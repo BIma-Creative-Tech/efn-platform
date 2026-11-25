@@ -7,8 +7,11 @@
     <record id="user_esb_provisioner" model="res.users">
         <field name="name">Provisioning identitas ESB (user teknis prodplan)</field>
         <field name="login">efn_esb_provisioner</field>
-        <field name="company_id" ref="base.main_company"/>
-        <field name="company_ids" eval="[Command.set([ref('base.main_company')])]"/>
+        <!-- Company AKTIF dengan id terkecil, bukan base.main_company: di DB EFN company bawaan bisa diarsipkan
+             ("EFN Sistem (tidak dipakai)") dan user dengan company arsip gagal dibuat. Provisioning memakai sudo,
+             jadi company user teknis tidak membatasi PT shadow user. -->
+        <field name="company_id" model="res.company" eval="obj().search([], order='id', limit=1).id"/>
+        <field name="company_ids" model="res.company" eval="[Command.set(obj().search([], order='id', limit=1).ids)]"/>
         <field name="group_ids" eval="[Command.set([ref('base.group_user'), ref('group_esb_provisioner')])]"/>
     </record>
 

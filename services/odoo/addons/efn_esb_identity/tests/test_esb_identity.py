@@ -237,6 +237,36 @@ class TestEsbIdentity(TransactionCase):
         with self.assertRaises(AccessError):
             self.Identity.with_user(tech).search_read([], ["esb_username"])
 
+    def test_09a_technical_user_data_with_archived_main_company(self):
+        """Regresi efn-prod 25 Nov 2026: base.main_company diarsipkan -> install gagal (company tidak diizinkan)."""
+        from odoo.tools import convert_file  # noqa: PLC0415
+
+        main = self.env.ref("base.main_company")
+        other = self.env["res.company"].search([("id", "!=", main.id)], order="id", limit=1)
+        if not other:
+            other = self.env["res.company"].create({"name": "PT Uji Aktif"})
+        old = self.env.ref("efn_esb_identity.user_esb_provisioner")
+        old.login = "efn_esb_provisioner_lama"
+        self.env["ir.model.data"].search(
+            [("module", "=", "efn_esb_identity"), ("name", "=", "user_esb_provisioner")]
+        ).unlink()
+        self.env.user.company_ids |= other
+        self.env.user.company_id = other
+        # Tiru kondisi DB EFN apa adanya (company bawaan arsip); ORM menolak arsip selama user lain memakainya.
+        self.env.flush_all()
+        self.env.cr.execute("UPDATE res_company SET active = FALSE WHERE id = %s", [main.id])
+        self.env.invalidate_all()
+
+        convert_file(self.env, "efn_esb_identity", "data/efn_esb_identity_data.xml", {}, mode="init", noupdate=True)
+
+        tech = self.env.ref("efn_esb_identity.user_esb_provisioner")
+        self.assertNotEqual(tech, old)
+        first_active = self.env["res.company"].search([], order="id", limit=1)
+        self.assertEqual(tech.company_id, first_active)
+        self.assertEqual(tech.company_ids, first_active)
+        self.assertTrue(tech.company_id.active)
+        self.assertEqual(set(tech.group_ids.ids), {self.group_user.id, self.group_prov.id})
+
     # ================================================================== bentrok / company
     def test_10_login_conflict_with_existing_user_rejected(self):
         existing = self.env["res.users"].create({"name": "User Asli Uji", "login": "esb:pb:uji.konflik"})
