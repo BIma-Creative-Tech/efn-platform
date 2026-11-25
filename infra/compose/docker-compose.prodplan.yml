@@ -132,7 +132,7 @@ services:
   # Sidecar TLS server (§30.1). Pola insight-web-tls; anchor x-ghostunnel base tidak berlaku lintas file -> nilai
   # hardening + image digest disalin persis dari docker-compose.yml (perbarui bersama).
   prodplan-tls:
-    image: ghostunnel/ghostunnel:v1.11.3-alpine@sha256:2599b8a04bae16d70a4209495618dea61b46a00a9a05fcf74da282688ad3517f
+    image: ghostunnel/ghostunnel:v1.11.5-alpine@sha256:65c4e34ec0ee0f30ea1f72b7411ec70a91c32fc50f067a8466ad2adb1e7420f2
     profiles: ["data"]
     restart: unless-stopped
     logging:
@@ -178,7 +178,7 @@ services:
   # Sidecar TLS client di namespace insight-web (§30.1): insight-web -> http://127.0.0.1:7443 -> mTLS ke prodplan:8443
   # (leaf CN insight-web-pp, EKU clientAuth; server diverifikasi CN prodplan). Pola ocr-worker-metrics-bridge.
   insight-web-pp-tls:
-    image: ghostunnel/ghostunnel:v1.11.3-alpine@sha256:2599b8a04bae16d70a4209495618dea61b46a00a9a05fcf74da282688ad3517f
+    image: ghostunnel/ghostunnel:v1.11.5-alpine@sha256:65c4e34ec0ee0f30ea1f72b7411ec70a91c32fc50f067a8466ad2adb1e7420f2
     profiles: ["data"]
     restart: unless-stopped
     logging:
