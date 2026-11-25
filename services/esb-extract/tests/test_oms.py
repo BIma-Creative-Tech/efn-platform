@@ -51,11 +51,13 @@ from efn_esb.oms_runner import (
     E_SALES,
     OmsContext,
     OmsPageLimit,
+    OmsParseError,
     extract_sales_slice,
     fetch_sales_head,
     oms_cycle,
     plan_days,
     pull_branches,
+    pull_day,
 )
 from efn_esb.oms_transform import (
     OMS_TABLES,
@@ -63,6 +65,7 @@ from efn_esb.oms_transform import (
     BomLine,
     SliceKey,
     build_menu_fin,
+    parse_day,
     prepare_bill,
     strict_int,
     transform_bills,
@@ -252,7 +255,10 @@ class FakeApi:
         self.log.append((path, dict(body or {}), page))
         if path == P_VISIT_PURPOSE:
             return {"data": [{"visitPurposeID": "1", "visitPurposeName": "Dine In", "flagDineIn": "1"}]}
+        if path == P_BRANCH:
+            return [{"branchCode": "BR02"}, {"branchCode": "BR01"}, {"branchCode": ""}]
         if path == P_PAYMENT_METHOD:
+            assert body == {"filterBranchCode": "BR01"}  # API menolak body kosong; kode cabang terkecil
             return [
                 {
                     "paymentMethodTypeID": "1",
@@ -261,7 +267,7 @@ class FakeApi:
                 }
             ]
         if path == P_BRANCH_SUMMARY:
-            day = (body or {})["filterSalesDateFrom"]
+            day = date.fromisoformat((body or {})["filterSalesDateFrom"]).strftime("%d-%m-%Y")  # format nyata
             return [{"salesDate": day, "branchCode": "BR01", "billTotal": "2", "paxTotal": "4", "subtotal": "25000.00",
                      "discountTotal": "0", "scTotal": "0", "taxTotal": "0", "grandTotal": "25000.00"}]  # fmt: skip
         if path == P_SALES_HEAD:
@@ -885,3 +891,37 @@ def test_insight_wrappers_and_row_policy_classes() -> None:
         assert f"efn_insight.{helper} " not in ACCESS
     assert "efn_esb.raw_doc" not in re.sub(r"--[^\n]*", "", ACCESS)
     assert "fact_esb_oms_bill_payment" not in ACCESS
+
+
+# ---------------------------------------------------------------- perbaikan data nyata 25 Nov 2026
+def test_parse_day_accepts_summary_and_iso_formats() -> None:
+    assert parse_day("24-11-2026") == date(2026, 11, 24)  # sales-branch-summary
+    assert parse_day("2026-11-24") == date(2026, 11, 24)  # sales-head
+    assert parse_day("2026-11-24T08:00:00+07:00") == date(2026, 11, 24)
+    for bad in ("", None, "24/11/2026", "31-02-2026", "x"):
+        assert parse_day(bad) is None
+
+
+def test_branch_daily_from_real_summary_format() -> None:
+    rows = [{"salesDate": "24-11-2026", "branchCode": "BR01", "paxTotal": "4", "billTotal": "2",
+             "subtotal": "25000.0000", "discountTotal": "0", "scTotal": "0", "taxTotal": "0",
+             "grandTotal": "25000.0000"}]  # fmt: skip
+    by_day = transform_branch_daily(rows, "pb", lambda _b: "PB", {"BR01": 7}, VERSION)
+    assert list(by_day) == [date(2026, 11, 24)] and len(by_day[date(2026, 11, 24)]) == 1
+
+
+def test_unreadable_summary_never_marks_day_final() -> None:
+    """Regresi efn-prod 25 Nov 2026: tanggal tak terbaca -> dulu 0 baris + hari ditandai final (data hilang)."""
+
+    class Api(FakeApi):
+        def post(self, path: str, body: Mapping[str, Any] | None = None, page: int | None = None) -> Any:
+            if path == P_BRANCH_SUMMARY:
+                return [{"salesDate": "24/11/2026", "branchCode": "BR01", "billTotal": "1"}]
+            return super().post(path, body, page)
+
+    store = FakeStore()
+    ctx = OmsContext(EsbSettings(enabled=True, brands=(CFG,)), OmsSettings(enabled=True), CFG, Api([]), store,
+                     threading.Event())  # fmt: skip
+    with pytest.raises(OmsParseError):
+        pull_day(ctx, DAY, True, datetime(2026, 1, 6, 4, 0, tzinfo=UTC))
+    assert not [r for r in store.written_checkpoints() if E_DAY in r]

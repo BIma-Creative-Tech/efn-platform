@@ -59,7 +59,7 @@ BRANCH_CODE = "filterBranchCode"
 BODY_KEYS: dict[str, frozenset[str]] = {
     P_BRANCH: frozenset(),
     P_VISIT_PURPOSE: frozenset(),
-    P_PAYMENT_METHOD: frozenset(),
+    P_PAYMENT_METHOD: frozenset({BRANCH_CODE}),  # API menolak body kosong (data nyata 25 Nov 2026)
     P_BRANCH_SUMMARY: frozenset({DATE_FROM, DATE_TO}),
     P_SALES_HEAD: frozenset({DATE_FROM, DATE_TO, BRANCH_CODE}),
 }

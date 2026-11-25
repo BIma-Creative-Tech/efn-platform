@@ -428,6 +428,18 @@ def transform_bills(bills: Iterable[OmsBill], key: SliceKey) -> OmsTables:
     return out
 
 
+def parse_day(value: Any) -> date | None:
+    """Tanggal OMS: `sales-branch-summary` memakai `DD-MM-YYYY` (terverifikasi data nyata 25 Nov 2026), `sales-head`
+    memakai ISO `YYYY-MM-DD`. Bentuk lain -> None (baris dibuang, dihitung pemanggil)."""
+    raw = text(value, 32)[:10]
+    for fmt in ("%Y-%m-%d", "%d-%m-%Y"):
+        try:
+            return datetime.strptime(raw, fmt).date()
+        except ValueError:
+            continue
+    return None
+
+
 def transform_branch_daily(
     rows: Iterable[Mapping[str, Any]],
     brand: str,
@@ -439,12 +451,8 @@ def transform_branch_daily(
     out: dict[date, list[list[Any]]] = {}
     for row in rows:
         code = text(row.get("branchCode"), 64)
-        raw_day = text(row.get("salesDate"), 32)[:10]
-        try:
-            day = date.fromisoformat(raw_day)
-        except ValueError:
-            continue
-        if not code:
+        day = parse_day(row.get("salesDate"))
+        if day is None or not code:
             continue
         branch_id = branch_ids.get(code, 0)
         out.setdefault(day, []).append(

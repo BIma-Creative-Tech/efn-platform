@@ -37,6 +37,7 @@ from efn_esb.oms_http import (
     BRANCH_CODE,
     DATE_FROM,
     DATE_TO,
+    P_BRANCH,
     P_BRANCH_SUMMARY,
     P_PAYMENT_METHOD,
     P_SALES_HEAD,
@@ -52,6 +53,7 @@ from efn_esb.oms_transform import (
     SliceKey,
     build_menu_fin,
     oms_rows,
+    parse_day,
     prepare_bill,
     strip_oms,
     transform_bills,
@@ -107,6 +109,10 @@ SELECT product_code
 FROM $mart.dim_esb_product FINAL
 WHERE brand = {brand:String} AND is_fin = 1
 """
+
+
+class OmsParseError(RuntimeError):
+    """Respons OMS terbaca tetapi bentuknya tidak dikenal -> siklus error, hari tidak ditandai final."""
 
 
 class OmsPageLimit(PagingError):
@@ -239,10 +245,14 @@ def _summary_slices(ctx: OmsContext, start: date, end: date) -> dict[date, list[
     result = ctx.api.post(P_BRANCH_SUMMARY, {DATE_FROM: start.isoformat(), DATE_TO: end.isoformat()})
     rows = [strip_oms(row) for row in oms_rows(result)]
     by_day = transform_branch_daily(rows, ctx.cfg.key, ctx.cfg.company_for, ctx.branch_ids, version)
+    dropped = len(rows) - sum(len(v) for v in by_day.values())
+    if dropped:
+        # Baris ringkasan yang tak terbaca (tanggal/kode) -> JANGAN lanjut menandai hari final dengan data kosong.
+        raise OmsParseError(f"sales-branch-summary: {dropped} dari {len(rows)} baris tak terbaca (format tanggal/kode)")
     fetched = datetime.now(UTC)
     for day in date_range(start, end):
         day_rows = by_day.get(day, [])
-        raw_day = [r for r in rows if str(r.get("salesDate") or "")[:10] == day.isoformat()]
+        raw_day = [r for r in rows if parse_day(r.get("salesDate")) == day]
         result_slice = OmsSlice(SliceTask(day, E_DAILY, BRAND_SCOPE), version, calls=1 if day == end else 0)
         result_slice.tables = {"fact_esb_oms_branch_daily": day_rows}
         result_slice.raw.append(RawDoc(EP_SUMMARY, day.isoformat(), day, raw_day))
@@ -329,9 +339,13 @@ def run_master(ctx: OmsContext, today: date) -> Outcome:
     """Visit purpose + payment method (snapshot harian, entitas `oms_master`)."""
     version = version_now()
     visits = [strip_oms(r) for r in oms_rows(ctx.api.post(P_VISIT_PURPOSE, {}))]
-    methods = strip_oms(ctx.api.post(P_PAYMENT_METHOD, {}))
+    branches = sorted(str(r.get("branchCode") or "") for r in oms_rows(ctx.api.post(P_BRANCH, {})))
+    codes = [c for c in branches if c]
+    if not codes:
+        raise OmsParseError("get-branch: tidak ada branchCode (metode bayar butuh filterBranchCode)")
+    methods = strip_oms(ctx.api.post(P_PAYMENT_METHOD, {BRANCH_CODE: codes[0]}))
     cfg = ctx.cfg
-    result = OmsSlice(SliceTask(today, E_MASTER, BRAND_SCOPE), version, calls=2)
+    result = OmsSlice(SliceTask(today, E_MASTER, BRAND_SCOPE), version, calls=3)
     result.tables = {
         "dim_esb_oms_visit_purpose": transform_visit_purposes(visits, cfg.key, cfg.company_code, version),
         "dim_esb_oms_payment_method": transform_payment_methods(methods, cfg.key, cfg.company_code, version),
