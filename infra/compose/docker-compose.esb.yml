@@ -99,6 +99,8 @@ services:
       ESB_BACKFILL_INCLUDE_INACTIVE: ${ESB_BACKFILL_INCLUDE_INACTIVE:-true}
       ESB_HTTP_TIMEOUT_SECONDS: ${ESB_HTTP_TIMEOUT_SECONDS:-60}
       ESB_MAX_PAGES: ${ESB_MAX_PAGES:-500}
+      # G68 (docs/04 §32.2): jendela refresh harian laba rugi (bulan; 1..12, di luar -> 2).
+      ESB_PL_REFRESH_MONTHS: ${ESB_PL_REFRESH_MONTHS:-2}
       ESB_COMPANY_BACHA: ${ESB_COMPANY_BACHA:-BCF}
       # G67 margin bahan (docs/04 §31.2): kosong = fitur mati; brand wajib di ESB_BRANDS + purchase_line di ESB_ENTITIES.
       ESB_MARGIN_BRANDS: ${ESB_MARGIN_BRANDS:-}

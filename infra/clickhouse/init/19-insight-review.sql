@@ -101,6 +101,8 @@ LEFT JOIN (SELECT brand, product_code, product_name, category FROM efn_dwh.dim_e
 --   days = jumlah hari unik dengan minimal satu slice selesai (per toko: cukup satu cabang PT itu); hari bolong di
 --   tengah rentang terlihat dari days < dateDiff('day', first_day, last_day) + 1.
 -- Brand tanpa cabang terdaftar -> tidak ada baris (fail closed).
+-- G68 (docs/04 §32.4): + item_journal, transfer_request, delivery_ref (per brand '*'). profit_loss TIDAK (slice tahun;
+-- cakupannya = min/max period_month di v_esb_pl_monthly).
 CREATE OR REPLACE VIEW efn_dwh.v_esb_coverage AS
 SELECT
     a.brand AS brand, CAST(a.c_code, 'String') AS company_code, CAST(a.entity, 'String') AS entity,
@@ -114,14 +116,16 @@ FROM
         SELECT k.brand AS brand, p.company_code AS c_code, k.entity AS entity, k.day AS day
         FROM (SELECT brand, entity, day FROM efn_esb.extract_checkpoint FINAL
               WHERE status = 'done' AND scope_key = '*'
-                AND entity IN ('sales', 'payment', 'production', 'delivery', 'transfer', 'fin_sold')) AS k
+                AND entity IN ('sales', 'payment', 'production', 'delivery', 'transfer', 'fin_sold', 'item_journal',
+                               'transfer_request', 'delivery_ref')) AS k
         INNER JOIN (SELECT DISTINCT brand, company_code FROM efn_dwh.dim_esb_branch FINAL WHERE company_code != '') AS p
             ON p.brand = k.brand
         UNION ALL
         SELECT k.brand AS brand, s.company_code AS c_code, k.entity AS entity, k.day AS day
         FROM (SELECT brand, entity, scope_key, day FROM efn_esb.extract_checkpoint FINAL
               WHERE status = 'done' AND scope_key != '*'
-                AND entity IN ('sales', 'payment', 'production', 'delivery', 'transfer', 'fin_sold')) AS k
+                AND entity IN ('sales', 'payment', 'production', 'delivery', 'transfer', 'fin_sold', 'item_journal',
+                               'transfer_request', 'delivery_ref')) AS k
         INNER JOIN (SELECT brand, toString(branch_id) AS scope_key, company_code FROM efn_dwh.dim_esb_branch FINAL
                     WHERE company_code != '') AS s
             ON s.brand = k.brand AND s.scope_key = k.scope_key

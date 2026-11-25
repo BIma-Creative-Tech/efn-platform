@@ -41,6 +41,7 @@ from efn_esb.transform import (
     transform_stock,
     transform_suppliers,
 )
+from efn_esb.transform_g68 import transform_delivery_ref
 
 MASTER_LIMIT = 100
 REPORT_LIMIT = 20  # sales-menu-cogs(-detail): limit tetap 20 (> 20 -> HTTP 400 di -detail)
@@ -64,6 +65,9 @@ class SliceResult:
     bom_ratios: dict[int, BomRatio] = field(default_factory=dict)
     aliases: dict[str, str] = field(default_factory=dict)
     calls: int = 0
+    # G68: checkpoint entitas turunan (mis. `delivery_ref` dari slice `delivery`), ditulis SETELAH checkpoint utama
+    # dengan versi slice yang sama: (task turunan, jumlah baris).
+    derived: list[tuple[SliceTask, int]] = field(default_factory=list)
 
     @property
     def rows(self) -> int:
@@ -86,6 +90,10 @@ class BrandRuntime:
     suppliers: list[tuple[int, str, str]] = field(default_factory=list)
     # G65: master dipaksa paling banyak sekali per proses bila supplier_id belum terisi (lihat runner.prepare_brand).
     master_forced_for_ids: bool = False
+    # G68: `delivery` ikut menulis `fact_esb_delivery_ref_line` + checkpoint `delivery_ref` (ESB_ENTITIES/--entity).
+    delivery_ref: bool = False
+    # G68: {productID: productCode} dari dim_esb_product_id (store) + slice transfer_request proses ini.
+    product_ids: dict[int, str] = field(default_factory=dict)
     lock: threading.Lock = field(default_factory=threading.Lock)
 
     @property
@@ -95,6 +103,11 @@ class BrandRuntime:
     def stores(self, include_inactive: bool | None = None) -> list[int]:
         inactive = self.include_inactive if include_inactive is None else include_inactive
         return sorted(row[2] for row in self.branch_rows if row[6] == 1 and (inactive or row[7] == 1))
+
+    def pl_branches(self, include_inactive: bool | None = None) -> list[int]:
+        """G68 profit_loss: SEMUA tipe cabang (toko, CK, gudang, head office), aktif (+ nonaktif bila diminta)."""
+        inactive = self.include_inactive if include_inactive is None else include_inactive
+        return sorted({int(row[2]) for row in self.branch_rows if int(row[2]) > 0 and (inactive or row[7] == 1)})
 
     def ratio_snapshot(self) -> dict[int, BomRatio]:
         with self.lock:
@@ -279,6 +292,10 @@ def extract_delivery(rt: BrandRuntime, task: SliceTask, version: datetime, get: 
         "fact_esb_delivery": transform_goods_delivery(details, cfg.key, cfg.company_for, task.day, version),
         "dim_esb_product_alias": alias_rows(result.aliases, cfg.key, cfg.company_code, version),
     }
+    if rt.delivery_ref:  # G68 §32.1.4: detail yang sama, tanpa GET tambahan; checkpoint sendiri setelah `delivery`
+        refs = transform_delivery_ref(details, cfg.key, cfg.company_for, task.day, version)
+        result.tables["fact_esb_delivery_ref_line"] = refs
+        result.derived.append((SliceTask(task.day, "delivery_ref", task.scope), len(refs)))
     return result
 
 
@@ -316,14 +333,18 @@ EXTRACTORS: dict[str, Extractor] = {
 
 
 def extractor_for(entity: str) -> Extractor:
-    """Extractor G41, G65 (`efn_esb.extract_g65`) atau entitas migrasi G43 (`efn_esb.extract_mig`); import tertunda
-    untuk menghindari import melingkar."""
+    """Extractor G41, G65 (`efn_esb.extract_g65`), G68 (`efn_esb.extract_g68`) atau entitas migrasi G43
+    (`efn_esb.extract_mig`); import tertunda untuk menghindari import melingkar."""
     if entity in EXTRACTORS:
         return EXTRACTORS[entity]
     from efn_esb.extract_g65 import G65_EXTRACTORS
 
     if entity in G65_EXTRACTORS:
         return G65_EXTRACTORS[entity]
+    from efn_esb.extract_g68 import G68_EXTRACTORS
+
+    if entity in G68_EXTRACTORS:
+        return G68_EXTRACTORS[entity]
     from efn_esb.extract_mig import MIG_EXTRACTORS
 
     return MIG_EXTRACTORS[entity]

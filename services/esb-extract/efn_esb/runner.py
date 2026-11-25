@@ -23,7 +23,7 @@ from datetime import UTC, date, datetime, timedelta
 from typing import Any, Protocol
 
 from efn_esb.aggregates import TRIGGER_ENTITIES, RefreshResult, RefreshStore, error_label, refresh_all
-from efn_esb.config import DAILY_ENTITIES, EsbSettings, MarginSettings
+from efn_esb.config import DAILY_ENTITIES, DELIVERY_REF_ENTITY, PL_ENTITY, EsbSettings, MarginSettings
 from efn_esb.extract import BrandRuntime, SliceResult, run_slice
 from efn_esb.heartbeat import heartbeat_line
 from efn_esb.http import CallBudgetExceeded, EsbAuthError
@@ -36,9 +36,13 @@ from efn_esb.planning import (
     date_range,
     in_window,
     incremental_tasks,
+    pl_backfill_tasks,
+    pl_refresh_years,
+    pl_run_tasks,
     snapshot_due,
     snapshot_tasks,
     wib_today,
+    year_start,
 )
 from efn_esb.records import (
     BOM_RATIO_COLUMNS,
@@ -53,13 +57,28 @@ from efn_esb.records import (
 )
 from efn_esb.transform import DIM_SUPPLIER_COLUMNS, MART_TABLES, BomRatio
 from efn_esb.transform_g65 import G65_TABLES
+from efn_esb.transform_g68 import (
+    DIM_PRODUCT_ID_COLUMNS,
+    G68_TABLES,
+    RawMissing,
+    delivery_details_from_raw,
+    raw_delivery_nums,
+    transform_delivery_ref,
+)
 from efn_esb.transform_mig import MIG_TABLES
 
 log = logging.getLogger("efn_esb.runner")
-# Tabel mart G41 + tabel migrasi G43 (14-g43-migration.sql) + G65 (23-g65-esb-purchase-stock.sql).
-ALL_TABLES: dict[str, tuple[str, ...]] = {**MART_TABLES, **MIG_TABLES, **G65_TABLES}
+# Tabel mart G41 + migrasi G43 (14-g43-migration.sql) + G65 (23-g65-…sql) + G68 (25-g68-esb-pl-waste-fillrate.sql).
+ALL_TABLES: dict[str, tuple[str, ...]] = {**MART_TABLES, **MIG_TABLES, **G65_TABLES, **G68_TABLES}
 # G65: entitas yang memetakan supplier lewat dim_esb_supplier.supplier_id (docs/04 §27.13.1).
 SUPPLIER_ID_ENTITIES = frozenset({"purchase_line"})
+# G68: entitas yang memetakan productID -> productCode lewat dim_esb_product_id (docs/04 §32.1.3).
+PRODUCT_ID_ENTITIES = frozenset({"transfer_request"})
+_PID = DIM_PRODUCT_ID_COLUMNS.index("product_id")
+_PCODE = DIM_PRODUCT_ID_COLUMNS.index("product_code")
+# Raw goods-delivery G41 (extract.extract_delivery) yang dibaca ulang mode retransform.
+GD_LIST_ENDPOINT = "inventory/goods-delivery"
+GD_DETAIL_ENDPOINT = "inventory/goods-delivery/{num}"
 _SUP_ID = DIM_SUPPLIER_COLUMNS.index("supplier_id")
 _SUP_CODE = DIM_SUPPLIER_COLUMNS.index("supplier_code")
 _SUP_NAME = DIM_SUPPLIER_COLUMNS.index("supplier_name")
@@ -83,6 +102,10 @@ class Store(Protocol):
     def load_bom_ratios(self, brand: str) -> dict[int, BomRatio]: ...
 
     def load_suppliers(self, brand: str) -> list[tuple[int, str, str]]: ...
+
+    def load_product_ids(self, brand: str) -> dict[int, str]: ...
+
+    def load_raw(self, brand: str, endpoint: str, doc_keys: Sequence[str]) -> dict[str, tuple[date, Any]]: ...
 
 
 class Budgeted(Protocol):
@@ -133,12 +156,20 @@ def write_slice(store: Store, brand: str, result: SliceResult, fetched_at: datet
         CHECKPOINT_COLUMNS,
         [checkpoint_row(brand, result.task, result.version, result.rows, result.calls)],
     )
+    if result.derived:  # G68: checkpoint entitas turunan (delivery_ref) SETELAH checkpoint utama, versi sama
+        store.insert_control(
+            "extract_checkpoint",
+            CHECKPOINT_COLUMNS,
+            [checkpoint_row(brand, task, result.version, rows, 0) for task, rows in result.derived],
+        )
 
 
 def _absorb(rt: BrandRuntime, result: SliceResult) -> None:
     """Alias/cabang hasil slice -> status runtime (untuk slice berikutnya di proses yang sama)."""
     with rt.lock:
         rt.aliases.update(result.aliases)
+        for row in result.tables.get("dim_esb_product_id", []):  # G68: pemetaan productID dari slice GTR
+            rt.product_ids[int(row[_PID])] = str(row[_PCODE])
     if result.task.entity == "branch":
         rt.branch_rows = result.tables.get("dim_esb_branch", [])
     if result.task.entity == "master":
@@ -234,14 +265,20 @@ def prepare_brand(
     stop: threading.Event,
     force_master: bool = False,
     need_supplier_ids: bool = False,
+    need_product_ids: bool = False,
 ) -> Outcome:
     """Cabang (setiap run, dibutuhkan daftar toko) + alias & rasio dari ClickHouse + master bila jatuh tempo.
 
     G65 `need_supplier_ids` (entitas `purchase_line` aktif): supplier dimuat dari dim_esb_supplier; bila belum ada satu
     pun `supplier_id` > 0 (kolom baru, master belum jalan sejak deploy) master dipaksa SEKALI per proses agar join
-    header PO -> kode supplier tidak jatuh ke fallback nama."""
+    header PO -> kode supplier tidak jatuh ke fallback nama.
+    G68 `need_product_ids` (entitas `transfer_request` aktif): pemetaan productID -> kode dari dim_esb_product_id."""
     rt.aliases = store.load_aliases(rt.cfg.key)
     rt.ratios = store.load_bom_ratios(rt.cfg.key)
+    if need_product_ids:
+        product_ids = store.load_product_ids(rt.cfg.key)
+        with rt.lock:
+            rt.product_ids = product_ids
     if need_supplier_ids:
         suppliers = store.load_suppliers(rt.cfg.key)
         with rt.lock:
@@ -257,8 +294,8 @@ def prepare_brand(
     return outcome
 
 
-def _finish(run: RunRecord, client: Budgeted, outcome: Outcome, store: Store, started: float) -> RunRecord:
-    run.calls = client.calls
+def _finish(run: RunRecord, calls: int, outcome: Outcome, store: Store, started: float) -> RunRecord:
+    run.calls = calls
     run.rows, run.errors, run.slices = outcome.rows, outcome.errors, outcome.slices
     run.status = outcome.status() if run.status == "ok" else run.status
     finished = datetime.now(UTC)
@@ -280,7 +317,8 @@ def run_cycle(
     stop: threading.Event,
     on_written: Callable[[SliceResult], None] | None = None,
 ) -> RunRecord:
-    """Satu siklus incremental satu brand: cabang, master harian, H-1 + koreksi H-7 + gap fill."""
+    """Satu siklus incremental satu brand: cabang, master harian, H-1 + koreksi H-7 + gap fill.
+    G68: + slice tahun `profit_loss` (sekali/hari, `planning.pl_run_tasks`) bila tercantum di ESB_ENTITIES."""
     started = time.monotonic()
     run = RunRecord(rt.cfg.key, "run", datetime.now(UTC), uuid.uuid4())
     outcome = Outcome()
@@ -288,10 +326,18 @@ def run_cycle(
     try:
         today = wib_today(now)
         lookback = max(max(settings.correction_days), settings.gap_fill_days) + 1
-        checkpoints = store.checkpoints(rt.cfg.key, today - timedelta(days=lookback))
+        since = today - timedelta(days=lookback)
+        with_pl = PL_ENTITY in settings.entities
+        if with_pl:  # slice P&L bertanggal 1 Januari tahun refresh
+            since = min(since, year_start(min(pl_refresh_years(today, settings.pl_refresh_months))))
+        checkpoints = store.checkpoints(rt.cfg.key, since)
         entities = [e for e in settings.entities if e in DAILY_ENTITIES]
+        rt.delivery_ref = DELIVERY_REF_ENTITY in settings.entities and "delivery" in entities
         need_ids = bool(SUPPLIER_ID_ENTITIES & set(entities))
-        outcome = prepare_brand(rt, store, client.get, today, checkpoints, stop, need_supplier_ids=need_ids)
+        need_pids = bool(PRODUCT_ID_ENTITIES & set(entities))
+        outcome = prepare_brand(
+            rt, store, client.get, today, checkpoints, stop, need_supplier_ids=need_ids, need_product_ids=need_pids
+        )
         if outcome.slices and not (outcome.auth or outcome.budget):
             tasks = incremental_tasks(
                 entities,
@@ -302,13 +348,21 @@ def run_cycle(
                 settings.gap_fill_days,
                 settings.sales_ready_hour,
             )
+            if with_pl:
+                tasks += pl_run_tasks(
+                    rt.pl_branches(include_inactive=False),
+                    now,
+                    checkpoints,
+                    settings.pl_refresh_months,
+                    settings.sales_ready_hour,
+                )
             outcome.merge(execute(tasks, rt, store, client.get, settings.workers, stop, on_written=on_written))
         elif not outcome.slices and not (outcome.auth or outcome.budget):
             run.status = "error"
     except Exception as exc:  # brand gagal tidak menghentikan brand lain
         log.error("brand=%s run gagal error=%s", rt.cfg.key, type(exc).__name__)
         run.status = "error"
-    return _finish(run, client, outcome, store, started)
+    return _finish(run, client.calls, outcome, store, started)
 
 
 class AuthBreaker:
@@ -498,7 +552,9 @@ def run_backfill(
     on_written: Callable[[SliceResult], None] | None = None,
 ) -> RunRecord:
     """Backfill resumable satu brand. Di luar `ESB_BACKFILL_WINDOW` (WIB) berhenti di batas slice berikutnya
-    (`status=window_closed`); jalankan ulang perintah yang sama untuk melanjutkan."""
+    (`status=window_closed`); jalankan ulang perintah yang sama untuk melanjutkan.
+    G68: `profit_loss` = slice tahun yang beririsan [start, end] x semua cabang (+ nonaktif bila
+    ESB_BACKFILL_INCLUDE_INACTIVE) + total brand; `delivery_ref` hanya bersama `delivery` (turunan, tanpa GET)."""
     started = time.monotonic()
     run = RunRecord(rt.cfg.key, "backfill", datetime.now(UTC), uuid.uuid4())
     outcome = Outcome()
@@ -512,14 +568,21 @@ def run_backfill(
         if not ignore_window and not gate():
             log.warning("brand=%s backfill di luar ESB_BACKFILL_WINDOW; tidak ada panggilan", rt.cfg.key)
             outcome.window_closed = True
-            return _finish(run, client, outcome, store, started)
+            return _finish(run, client.calls, outcome, store, started)
         today = wib_today(now_fn())
-        checkpoints = store.checkpoints(rt.cfg.key, min(start, today))
+        with_pl = PL_ENTITY in entities
+        checkpoints = store.checkpoints(rt.cfg.key, min(year_start(start.year) if with_pl else start, today))
         daily = [e for e in entities if e in DAILY_ENTITIES]
+        rt.delivery_ref = DELIVERY_REF_ENTITY in entities and "delivery" in daily
         need_ids = bool(SUPPLIER_ID_ENTITIES & set(daily))
-        outcome = prepare_brand(rt, store, client.get, today, checkpoints, stop, need_supplier_ids=need_ids)
+        need_pids = bool(PRODUCT_ID_ENTITIES & set(daily))
+        outcome = prepare_brand(
+            rt, store, client.get, today, checkpoints, stop, need_supplier_ids=need_ids, need_product_ids=need_pids
+        )
         if outcome.slices and not (outcome.auth or outcome.budget):
             tasks = backfill_tasks(daily, date_range(start, end), rt.stores(), checkpoints, force)
+            if with_pl:
+                tasks += pl_backfill_tasks(rt.pl_branches(), start, end, checkpoints, force)
             log.info("brand=%s backfill slices=%d (%s..%s)", rt.cfg.key, len(tasks), start, end)
             outcome.merge(
                 execute(
@@ -538,7 +601,7 @@ def run_backfill(
     except Exception as exc:
         log.error("brand=%s backfill gagal error=%s", rt.cfg.key, type(exc).__name__)
         run.status = "error"
-    return _finish(run, client, outcome, store, started)
+    return _finish(run, client.calls, outcome, store, started)
 
 
 def run_snapshot(
@@ -574,4 +637,56 @@ def run_snapshot(
     except Exception as exc:
         log.error("brand=%s snapshot gagal error=%s", rt.cfg.key, type(exc).__name__)
         run.status = "error"
-    return _finish(run, client, outcome, store, started)
+    return _finish(run, client.calls, outcome, store, started)
+
+
+def run_retransform(
+    rt: BrandRuntime,
+    store: Store,
+    start: date,
+    end: date,
+    stop: threading.Event,
+    *,
+    clock: Callable[[], datetime] = version_now,
+) -> tuple[RunRecord, list[date]]:
+    """G68 §32.1.4: isi ulang `fact_esb_delivery_ref_line` dari raw_doc goods-delivery G41 TANPA panggilan/login ESB.
+
+    Per hari D: list raw (`doc_key=D`) -> nomor dokumen -> detail raw (`doc_key=<nomor>`, wajib `doc_date=D`). Lengkap
+    -> slice versi baru (tabel + checkpoint `delivery_ref`, tanpa raw baru). Tidak lengkap -> slice TIDAK ditulis,
+    log `reason=raw_missing`, hari dikembalikan agar ditarik ulang lewat `backfill --entity delivery,delivery_ref
+    --force` di jendela malam. Boleh di luar ESB_BACKFILL_WINDOW (tanpa beban ESB). Mode extract_run `retransform`."""
+    started = time.monotonic()
+    cfg = rt.cfg
+    run = RunRecord(cfg.key, "retransform", datetime.now(UTC), uuid.uuid4())
+    outcome = Outcome()
+    missing_days: list[date] = []
+    try:
+        for day in date_range(start, end):
+            if stop.is_set():
+                break
+            listed = store.load_raw(cfg.key, GD_LIST_ENDPOINT, [day.isoformat()]).get(day.isoformat())
+            payload = listed[1] if listed is not None else None
+            details = store.load_raw(cfg.key, GD_DETAIL_ENDPOINT, raw_delivery_nums(payload))
+            try:
+                docs = delivery_details_from_raw(day, payload, details)
+            except RawMissing as exc:
+                outcome.errors += 1
+                missing_days.append(day)
+                log.warning(
+                    "brand=%s entity=delivery_ref day=%s status=error reason=raw_missing docs=%d",
+                    cfg.key,
+                    day,
+                    len(exc.missing),
+                )
+                continue
+            version = clock()
+            rows = transform_delivery_ref(docs, cfg.key, cfg.company_for, day, version)
+            task = SliceTask(day, DELIVERY_REF_ENTITY, BRAND_SCOPE)
+            write_slice(store, cfg.key, SliceResult(task, version, tables={"fact_esb_delivery_ref_line": rows}),
+                        datetime.now(UTC))  # fmt: skip
+            outcome.slices += 1
+            outcome.rows += len(rows)
+    except Exception as exc:
+        log.error("brand=%s retransform gagal error=%s", cfg.key, type(exc).__name__)
+        run.status = "error"
+    return _finish(run, 0, outcome, store, started), missing_days

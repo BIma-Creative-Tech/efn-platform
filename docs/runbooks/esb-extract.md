@@ -145,6 +145,80 @@ Prasyarat: `clickhouse-init` sudah dijalankan ulang dengan `23-g65-esb-purchase-
    ```
    `v_esb_g65_quality` hanya terbaca admin/`efn_mig` (tabel G65 tidak di-grant ke Metabase/Insight, L-258).
 
+### 5b. G68 — laba rugi outlet, waste & pemakaian internal, fill rate (PB, docs/04 §32)
+
+(Semula G67 / §31; dinomori ulang G68 saat merge #165 — "G67" = margin bahan, §6b.) Prasyarat: `clickhouse-init`
+dijalankan ulang dengan `25-g68-esb-pl-waste-fillrate.sql` + access terbaru (5 tabel, view `v_esb_*` G68, grant
+`esb_writer`/`efn_insight_definer`, policy ESB = 25 termasuk 3 view margin bahan). Semua GET (tanpa tulis ESB, tanpa
+`services/prodplan`). Entitas opt-in: default `ESB_ENTITIES` tidak berubah. Satu brand per proses (aturan §5 berlaku);
+selama backfill PB berjalan, keluarkan `pb` dari loop `run` atau turunkan `ESB_RATE_PER_SEC` keduanya ke `1.0`.
+
+Rentang 24 bulan PB: `--from 2024-12-01 --to <kemarin WIB>` (`--to` wajib < hari ini). Urutan (§32.1.6):
+
+| Malam | Perintah | GET ≈ | Durasi ≈ |
+|---|---|---|---|
+| 0 (kapan saja, tanpa ESB) | `retransform --entity delivery_ref` 24 bulan | 0 | menit |
+| 1 | `backfill --entity profit_loss` lalu `--entity item_journal` | 126 + 16 rb | ±2,5 jam |
+| 1–2 | `backfill --entity transfer_request` (resumable, lanjut malam berikut) | 45 rb | ±6,2 jam |
+| 2 | `backfill --entity delivery --entity delivery_ref --force` hanya hari `raw_missing` | kecil | — |
+
+```bash
+# Malam 0: isi fact_esb_delivery_ref_line dari raw_doc goods-delivery G41 -- TANPA login/panggilan ESB, boleh di luar
+# jendela. Keluaran mencetak hari raw_missing (nomor dokumen dipakai ulang ESB / detail hilang) -> malam 2.
+$DC run --rm esb-extract \
+  python -m efn_esb retransform --brand pb --entity delivery_ref --from 2024-12-01 --to <kemarin>
+
+# Malam 1 (22:00-05:00 WIB): P&L per cabang x tahun (semua tipe cabang + nonaktif bila
+# ESB_BACKFILL_INCLUDE_INACTIVE=true) + total brand, lalu jurnal item (detail per dokumen).
+# PENTING (satu proses per brand, §5): tiga perintah `run -d` di bawah JANGAN berjalan bersamaan -- masing-masing punya token
+# bucket sendiri sehingga beban ke ESB berlipat. Jalankan SATU per satu; mulai berikutnya setelah `docker ps` tidak lagi
+# menampilkan container sebelumnya (log: `backfill brand=pb status=ok`). Alternatif: satu proses dengan beberapa
+# `--entity` (mis. `--entity profit_loss --entity item_journal`).
+$DC run -d --name efn-esb-backfill-pb-pl esb-extract \
+  python -m efn_esb backfill --brand pb --from 2024-12-01 --to <kemarin> --entity profit_loss
+$DC run -d --name efn-esb-backfill-pb-ij esb-extract \
+  python -m efn_esb backfill --brand pb --from 2024-12-01 --to <kemarin> --entity item_journal
+
+# Malam 1-2: transfer request (±45 rb GET). Berhenti sendiri saat jendela tutup (status=window_closed); jalankan ulang
+# perintah yang SAMA malam berikutnya (slice ber-checkpoint dilewati).
+$DC run -d --name efn-esb-backfill-pb-gtr esb-extract \
+  python -m efn_esb backfill --brand pb --from 2024-12-01 --to <kemarin> --entity transfer_request
+
+# Malam 2: hanya hari raw_missing dari malam 0 (satu perintah per rentang hari).
+$DC run --rm esb-extract python -m efn_esb backfill --brand pb --from <hari> --to <hari> \
+  --entity delivery --entity delivery_ref --force
+```
+
+`delivery_ref` tanpa `delivery` ditolak `backfill` (exit 2): itu turunan tanpa GET sendiri; isi dari raw lewat
+`retransform`. `retransform` entitas lain → exit 2 "tidak didukung".
+
+Sebelum mengaktifkan `delivery_ref` harian, ulangi `retransform --entity delivery_ref` untuk rentang malam 0 sampai kemarin
+(hari setelah malam 0 tidak punya checkpoint `delivery_ref`; gap-fill harian hanya melihat checkpoint `delivery`, dan hari tanpa
+checkpoint dibaca fill rate sebagai "tidak ada kiriman" sehingga rasio terlihat terlalu rendah).
+
+Sesudah backfill, harian: tambahkan `profit_loss,item_journal,transfer_request,delivery_ref` ke `ESB_ENTITIES`
+(beban PB ±210 GET/hari). `profit_loss` ditarik sekali/hari setelah `ESB_SALES_READY_HOUR_WIB` untuk tahun yang memuat
+`ESB_PL_REFRESH_MONTHS` (default 2) bulan terakhir. Jadwal ulang paksa (jendela malam):
+
+- tiap awal bulan: `backfill --force` 35 hari terakhir untuk `item_journal` dan `transfer_request` (jurnal susulan/void
+  > 7 hari);
+- hari kerja ke-10 bulan berikut (penutupan buku, Q-ESB33): `backfill --force --entity profit_loss` dengan `--from`
+  1 Januari tahun lalu dan `--to` kemarin (±84 GET).
+
+Cek setelah backfill (laporkan ke lead untuk mengisi konstanta status, §32.13):
+
+```sql
+SELECT * FROM efn_dwh.v_esb_g68_quality ORDER BY check_name, item;   -- admin/lead saja
+SELECT status_id, status_name, count() FROM efn_dwh.fact_esb_transfer_request_line FINAL WHERE brand = 'pb'
+GROUP BY status_id, status_name ORDER BY count() DESC;                 -- isi GTR_COUNTED_STATUS (sementara 3, 6)
+SELECT status_name, count() FROM efn_dwh.fact_esb_item_journal_line FINAL WHERE brand = 'pb'
+GROUP BY status_name ORDER BY count() DESC;                            -- isi ITEM_JOURNAL_COUNTED_STATUS
+SELECT entity, first_day, last_day, days FROM efn_dwh.v_esb_coverage WHERE brand = 'pb';
+SELECT min(period_month), max(period_month) FROM efn_dwh.v_esb_pl_monthly WHERE brand = 'pb';
+```
+
+Uji perilaku view (fixture sintetis, ClickHouse 24.8): `services/esb-extract/tests/clickhouse/g68_views_harness.sh`.
+
 ## 6. Memantau
 
 ```bash

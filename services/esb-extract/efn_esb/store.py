@@ -5,6 +5,7 @@ pengecualian tabel agregat Insight (efn_esb/aggregates.py): TRUNCATE pada `efn_d
 (REPLACE/DROP PARTITION) pada `efn_dwh.agg_esb_*`, grant per tabel. Semua nilai lewat parameter.
 """
 
+import json
 from collections.abc import Sequence
 from datetime import date, datetime
 from typing import Any
@@ -104,3 +105,23 @@ class ClickHouseStore:
             parameters={"brand": brand},
         )
         return [(int(i), str(c), str(n)) for i, c, n in result.result_rows]
+
+    def load_product_ids(self, brand: str) -> dict[int, str]:
+        """G68: {productID: productCode} versi terakhir (dim_esb_product_id, 25-g68-esb-pl-waste-fillrate.sql)."""
+        result = self._client.query(
+            f"SELECT product_id, product_code FROM {self._mart}.dim_esb_product_id FINAL "  # noqa: S608
+            "WHERE brand = {brand:String} AND product_code != ''",
+            parameters={"brand": brand},
+        )
+        return {int(p): str(c) for p, c in result.result_rows}
+
+    def load_raw(self, brand: str, endpoint: str, doc_keys: Sequence[str]) -> dict[str, tuple[date, Any]]:
+        """G68 retransform: {doc_key: (doc_date, payload JSON)} versi terakhir raw_doc (tanpa panggilan ESB)."""
+        if not doc_keys:
+            return {}
+        result = self._client.query(
+            f"SELECT doc_key, doc_date, payload FROM {self._raw}.raw_doc FINAL "  # noqa: S608
+            "WHERE brand = {brand:String} AND endpoint = {endpoint:String} AND doc_key IN {keys:Array(String)}",
+            parameters={"brand": brand, "endpoint": endpoint, "keys": list(doc_keys)},
+        )
+        return {str(k): (d, json.loads(p)) for k, d, p in result.result_rows}

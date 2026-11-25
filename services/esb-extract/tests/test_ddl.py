@@ -11,6 +11,7 @@ ROOT = Path(__file__).resolve().parents[3]
 DDL = (ROOT / "infra" / "clickhouse" / "init" / "12-g41-esb.sql").read_text(encoding="utf-8")
 DDL_G43 = (ROOT / "infra" / "clickhouse" / "init" / "14-g43-migration.sql").read_text(encoding="utf-8")
 DDL_G65 = (ROOT / "infra" / "clickhouse" / "init" / "23-g65-esb-purchase-stock.sql").read_text(encoding="utf-8")
+DDL_G68 = (ROOT / "infra" / "clickhouse" / "init" / "25-g68-esb-pl-waste-fillrate.sql").read_text(encoding="utf-8")
 # Kolom mart G41 yang ditambahkan belakangan lewat ALTER idempoten (G65: dim_esb_supplier.supplier_id).
 ALTER_ADDED = set(re.findall(r"ALTER TABLE efn_dwh\.(\w+) ADD COLUMN IF NOT EXISTS (\w+) ", DDL_G65))
 DDL_AGG = (ROOT / "infra" / "clickhouse" / "init" / "20-esb-aggregates.sql").read_text(encoding="utf-8")
@@ -110,9 +111,10 @@ def test_esb_writer_grants_match_tables_exactly() -> None:
     # SEC-188 / L-130: map_esb_odoo tidak pernah ditulis esb-extract (penulis tunggal efn_mig).
     g43 = set(re.findall(r"CREATE TABLE IF NOT EXISTS (efn_\w+\.\w+)", DDL_G43))
     g65 = set(re.findall(r"CREATE TABLE IF NOT EXISTS (efn_\w+\.\w+)", DDL_G65))
+    g68 = set(re.findall(r"CREATE TABLE IF NOT EXISTS (efn_\w+\.\w+)", DDL_G68))
     control20 = {f"efn_esb.{REFRESH_TABLE}", f"efn_esb.{LOCK_TABLE}"}
     margin24 = set(re.findall(r"CREATE TABLE IF NOT EXISTS (efn_\w+\.\w+)", DDL_MARGIN))  # G67, versi-insert
-    expected = (ddl_tables() | g43 | g65 | control20 | margin24) - {"efn_dwh.map_esb_odoo"}
+    expected = (ddl_tables() | g43 | g65 | g68 | control20 | margin24) - {"efn_dwh.map_esb_odoo"}
     assert granted("esb_writer", "SELECT, INSERT") == expected
     assert "REVOKE ALL ON efn_dwh.map_esb_odoo FROM esb_writer;" in ACCESS
     writer_lines = [line for line in ACCESS.splitlines() if "TO esb_writer" in line]

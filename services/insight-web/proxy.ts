@@ -13,6 +13,7 @@ import { authenticate } from './lib/gate';
 import { getConfig, getKey } from './lib/runtime';
 import { SESSION_COOKIE, clearCookieHeader } from './lib/session';
 import { FNB_DENIAL_PATH, fnbRouteDenial } from './lib/fnb-personas';
+import { G68_DISABLED_PATH, g68RouteDenial } from './lib/g68-access';
 import { PP_LOGIN_PATH, isProduksiPath } from './lib/prodplan-access';
 import { PP_COOKIE, isPpSid } from './lib/prodplan-session';
 import { DENIAL_PATH, smRouteDenial } from './lib/sm-personas';
@@ -24,6 +25,7 @@ const PUBLIC_PATHS = new Set([
   '/keluar',
   '/sm-belum-aktif',
   '/fnb-belum-aktif',
+  '/g68-belum-aktif',
   '/tidak-berwenang',
   '/buka-ulang',
 ]);
@@ -91,6 +93,9 @@ export function proxy(request: NextRequest): NextResponse {
     // G52 (§28.15.9): rute /fnb/* + penutupan halaman F&B lain untuk sesi ber-cabang. Tidak membaca INSIGHT_SM_ENABLED.
     const fnbDenial = fnbRouteDenial(path, auth.session, cfg.fnbEnabled);
     if (fnbDenial) return rewriteTo(request, FNB_DENIAL_PATH[fnbDenial], csp, nonce, false);
+    // G68 (§32.8): /pnl, /waste, /fill-rate butuh INSIGHT_G68_ENABLED=true (mati -> halaman "Segera"); /pnl juga persona exec.
+    const g68Denial = g68RouteDenial(path, auth.session, { g68Enabled: cfg.g68Enabled, fnbEnabled: cfg.fnbEnabled });
+    if (g68Denial) return rewriteTo(request, g68Denial === 'g68-belum-aktif' ? G68_DISABLED_PATH : FNB_DENIAL_PATH[g68Denial], csp, nonce, false);
   }
 
   const requestHeaders = new Headers(request.headers);

@@ -10,6 +10,7 @@
  * STATUS: ke-36 query dijalankan terhadap ClickHouse 24.8 oleh lead (G42, 18 Nov 2026); uji row policy per PT lulus.
  */
 import 'server-only';
+import { plKeySql } from './pnl';
 
 export type ParamName =
   | 'from'
@@ -30,6 +31,10 @@ export type ParamName =
   | 'yoy_to'
   | 'm_from'
   | 'ref_day'
+  // G68 (§32.9): akhir rentang bulan P&L (tanggal 1), kelas pemakaian item jurnal, pemasok fill rate (`brand:branch_id`)
+  | 'm_to'
+  | 'uclass'
+  | 'supplier'
   // Forecast F&B
   | 'today'
   | 'until'
@@ -55,6 +60,9 @@ export const PARAM_TYPES: Record<ParamName, ChType> = {
   yoy_to: 'Date',
   m_from: 'Date',
   ref_day: 'Date',
+  m_to: 'Date',
+  uclass: 'Array(String)',
+  supplier: 'Array(String)',
   today: 'Date',
   until: 'Date',
   dc_codes: 'Array(String)',
@@ -103,6 +111,32 @@ const YOY_DONE_PAIRS = `SELECT brand, branch_id, day FROM efn_insight.v_esb_sale
       WHERE ${PT} AND day BETWEEN {from:Date} AND {to:Date}
         AND (brand, branch_id, day - 364) IN (SELECT brand, branch_id, day FROM efn_insight.v_esb_sales_done_day WHERE ${PT} AND day BETWEEN {yoy_from:Date} AND {yoy_to:Date})`;
 const YOY_PAIR = `((brand, branch_id, if(sales_date >= {from:Date}, sales_date, sales_date + 364)) IN (${YOY_DONE_PAIRS}))`;
+
+// ---------- G68 (docs/04 §32.6/§32.10): Laba Rugi Outlet, Waste & Pemakaian Internal, Fill Rate Outlet -> CK ----------
+// P&L: baris `summary` ESB diberi kunci tetap lewat nama pos (dinormalkan: huruf kecil, hanya a-z0-9). Daftar sinonim = konstanta
+// (nama pos summary ESB belum terverifikasi [B], §32.13); pos yang tak dikenal tetap tampil di pnl_statement dengan nama aslinya.
+// Daftar sinonim satu sumber di lib/pnl.ts (PL_SYNONYMS), dipakai juga TS untuk urutan/label.
+const PL_KEY = plKeySql();
+const PL_CUR = 'period_month BETWEEN {m_from:Date} AND {m_to:Date}';
+const PL_LY = 'period_month BETWEEN {yoy_from:Date} AND {yoy_to:Date}';
+/** Jumlah `amount` pos ringkasan berkunci `key` (opsional dibatasi `cond`). */
+const PL_SUM = (key: string, cond = '1'): string => `toFloat64(sumIf(amount, ${PL_KEY} = '${key}' AND (${cond})))`;
+const PL_SUMMARY_BRANCH = "line_type = 'summary' AND scope = 'branch'";
+
+const U_RANGE = 'journal_date BETWEEN {from:Date} AND {to:Date}';
+const U_RANGE_PREV = 'journal_date BETWEEN {prev_from:Date} AND {to:Date}';
+const U_CLASS = 'has({uclass:Array(String)}, usage_class)';
+
+const F_RANGE = 'transfer_date BETWEEN {from:Date} AND {to:Date}';
+const F_RANGE_PREV = 'transfer_date BETWEEN {prev_from:Date} AND {to:Date}';
+const F_CUR = 'transfer_date >= {from:Date}';
+const F_PREV = 'transfer_date <= {prev_to:Date}';
+const F_SUPPLIER = "(empty({supplier:Array(String)}) OR has({supplier:Array(String)}, concat(brand, ':', toString(supplier_branch_id))))";
+/** Persen dari rasio dua kolom aditif (NULL bila penyebut 0). */
+const F_PCT = (num: string, den: string, cond: string): string =>
+  `if(sumIf(${den}, ${cond}) = 0, NULL, toFloat64(sumIf(${num}, ${cond})) / toFloat64(sumIf(${den}, ${cond})) * 100)`;
+const F_AVG_LEAD = (cond: string): string =>
+  `if(sumIf(lead_days_n, ${cond}) = 0, NULL, toFloat64(sumIf(lead_days_sum, ${cond})) / toFloat64(sumIf(lead_days_n, ${cond})))`;
 
 export const QUERIES = {
   // ---------- filter global ----------
@@ -1087,6 +1121,279 @@ WHERE ${CUR_OR_YOY}
 GROUP BY menu_name
 ORDER BY gross_paid_cur + pkg_gross_cur DESC
 LIMIT 3000`,
+  },
+
+  // ---------- G68: /pnl (view kelas PT; basis = angka laporan ESB; scope 'branch' = per cabang, 'brand' = total brand) ----------
+  pnl_kpi: {
+    params: ['m_from', 'm_to', 'yoy_from', 'yoy_to', 'pt', 'branch'],
+    sql: `SELECT
+    ${PL_SUM('net_sales', PL_CUR)} AS net_sales,
+    ${PL_SUM('gross_profit', PL_CUR)} AS gross_profit,
+    ${PL_SUM('opex', PL_CUR)} AS opex,
+    ${PL_SUM('ebitda', PL_CUR)} AS ebitda,
+    ${PL_SUM('net_profit', PL_CUR)} AS net_profit,
+    ${PL_SUM('net_sales', PL_LY)} AS net_sales_ly,
+    ${PL_SUM('gross_profit', PL_LY)} AS gross_profit_ly,
+    ${PL_SUM('opex', PL_LY)} AS opex_ly,
+    ${PL_SUM('ebitda', PL_LY)} AS ebitda_ly,
+    ${PL_SUM('net_profit', PL_LY)} AS net_profit_ly,
+    toUInt32(uniqExactIf(branch_id, ${PL_CUR})) AS branches,
+    toUInt32(uniqExactIf(period_month, ${PL_LY})) AS ly_months
+FROM efn_insight.v_esb_pl_monthly
+WHERE (${PL_CUR} OR ${PL_LY})
+  AND ${PL_SUMMARY_BRANCH}
+  AND ${PT}
+  AND ${BR}`,
+  },
+  pnl_trend_monthly: {
+    params: ['m_from', 'm_to', 'pt', 'branch'],
+    sql: `SELECT period_month,
+    ${PL_SUM('net_sales')} AS net_sales,
+    ${PL_SUM('gross_profit')} AS gross_profit,
+    ${PL_SUM('ebitda')} AS ebitda,
+    ${PL_SUM('net_profit')} AS net_profit,
+    max(is_partial) AS partial_month
+FROM efn_insight.v_esb_pl_monthly
+WHERE ${PL_CUR}
+  AND ${PL_SUMMARY_BRANCH}
+  AND ${PT}
+  AND ${BR}
+GROUP BY period_month
+ORDER BY period_month
+LIMIT 60`,
+  },
+  pnl_statement: {
+    // Pos ringkasan per bulan untuk dua scope; baris `brand` hanya muncul bila filter cabang kosong (branch_id brand = 0).
+    // "Tidak teralokasi ke outlet" = brand - jumlah cabang, dihitung di lib/pnl.ts.
+    params: ['m_from', 'm_to', 'pt', 'branch'],
+    sql: `SELECT period_month, scope, section, toFloat64(sum(amount)) AS amount_sum
+FROM efn_insight.v_esb_pl_monthly
+WHERE ${PL_CUR}
+  AND line_type = 'summary'
+  AND ${PT}
+  AND ${BR}
+GROUP BY period_month, scope, section
+ORDER BY period_month, section
+LIMIT 5000`,
+  },
+  pnl_branch_rank: {
+    params: ['m_from', 'm_to', 'pt', 'branch'],
+    sql: `SELECT brand, company_code, branch_id, any(branch_name) AS branch_label,
+    ${PL_SUM('net_sales')} AS net_sales,
+    ${PL_SUM('gross_profit')} AS gross_profit,
+    ${PL_SUM('ebitda')} AS ebitda,
+    ${PL_SUM('net_profit')} AS net_profit
+FROM efn_insight.v_esb_pl_monthly
+WHERE ${PL_CUR}
+  AND ${PL_SUMMARY_BRANCH}
+  AND ${PT}
+  AND ${BR}
+GROUP BY brand, company_code, branch_id
+ORDER BY net_sales DESC
+LIMIT 500`,
+  },
+  pnl_accounts: {
+    // Akun per seksi untuk periode; 50 teratas (menurut nilai mutlak) per seksi. Drill seksi = filter kolom di tabel.
+    params: ['m_from', 'm_to', 'pt', 'branch'],
+    sql: `SELECT section, account_no, any(account_name) AS account_label, toFloat64(sum(amount)) AS amount_sum
+FROM efn_insight.v_esb_pl_monthly
+WHERE ${PL_CUR}
+  AND line_type = 'account'
+  AND scope = 'branch'
+  AND ${PT}
+  AND ${BR}
+GROUP BY section, account_no
+ORDER BY section, abs(amount_sum) DESC
+LIMIT 50 BY section
+LIMIT 600`,
+  },
+
+  // ---------- G68: /waste (view kelas PT; nilai = HPP jurnal item; qty per satuan, tidak dijumlah lintas satuan) ----------
+  waste_kpi: {
+    // Waste dan pemakaian internal selalu dua KPI tetap (filter `uclass` hanya untuk tren, rincian, dan produk).
+    params: ['from', 'to', 'prev_from', 'prev_to', 'pt', 'branch'],
+    sql: `SELECT
+    toFloat64(sumIf(value_net, usage_class = 'waste' AND journal_date >= {from:Date}))        AS waste_cur,
+    toFloat64(sumIf(value_net, usage_class = 'waste' AND journal_date <= {prev_to:Date}))     AS waste_prev,
+    toFloat64(sumIf(value_net, usage_class = 'internal_use' AND journal_date >= {from:Date}))    AS internal_cur,
+    toFloat64(sumIf(value_net, usage_class = 'internal_use' AND journal_date <= {prev_to:Date})) AS internal_prev,
+    (SELECT toFloat64(sumIf(net, sales_date >= {from:Date}))
+       FROM efn_insight.v_esb_sales_branch_daily
+      WHERE ${SALES_RANGE_PREV} AND ${PT} AND ${BR}) AS net_cur,
+    (SELECT toFloat64(sumIf(net, sales_date <= {prev_to:Date}))
+       FROM efn_insight.v_esb_sales_branch_daily
+      WHERE ${SALES_RANGE_PREV} AND ${PT} AND ${BR}) AS net_prev
+FROM efn_insight.v_esb_item_usage_daily
+WHERE ${U_RANGE_PREV}
+  AND ${PT}
+  AND ${BR}`,
+  },
+  waste_trend: {
+    // weekly = 1 bila rentang > 62 hari: dikelompokkan per minggu (Senin).
+    params: ['from', 'to', 'weekly', 'pt', 'branch', 'uclass'],
+    sql: `SELECT if({weekly:UInt8} = 1, toStartOfWeek(journal_date, 1), journal_date) AS bucket, usage_class,
+       toFloat64(sum(value_net)) AS value_sum
+FROM efn_insight.v_esb_item_usage_daily
+WHERE ${U_RANGE}
+  AND ${PT}
+  AND ${BR}
+  AND ${U_CLASS}
+GROUP BY bucket, usage_class
+ORDER BY bucket, usage_class
+LIMIT 5000`,
+  },
+  waste_by_purpose: {
+    // docs = jumlah dokumen per hari x cabang x purpose (uniqExact per grup view); aman dijumlah lintas hari/cabang, tidak lintas purpose.
+    params: ['from', 'to', 'pt', 'branch', 'uclass'],
+    sql: `SELECT usage_class, purpose_name, toFloat64(sum(value_net)) AS value_sum, sum(docs) AS docs_sum
+FROM efn_insight.v_esb_item_usage_daily
+WHERE ${U_RANGE}
+  AND ${PT}
+  AND ${BR}
+  AND ${U_CLASS}
+GROUP BY usage_class, purpose_name
+ORDER BY value_sum DESC
+LIMIT 200`,
+  },
+  waste_branch_rank: {
+    // Dua sumber digabung UNION ALL lalu dijumlah per cabang: pemakaian (waste, pemakaian internal) dan penjualan bersih.
+    params: ['from', 'to', 'pt', 'branch'],
+    sql: `SELECT brand, company_code, branch_id, any(label) AS branch_label,
+       toFloat64(sum(w)) AS waste_value,
+       toFloat64(sum(i)) AS internal_value,
+       toFloat64(sum(n)) AS net_sum,
+       if(sum(n) <= 0, NULL, toFloat64(sum(w)) / toFloat64(sum(n)) * 100) AS waste_pct_net
+FROM
+(
+    SELECT brand, company_code, branch_id, branch_name AS label,
+           if(usage_class = 'waste', toFloat64(value_net), toFloat64(0)) AS w,
+           if(usage_class = 'internal_use', toFloat64(value_net), toFloat64(0)) AS i,
+           toFloat64(0) AS n
+    FROM efn_insight.v_esb_item_usage_daily
+    WHERE ${U_RANGE} AND ${PT} AND ${BR}
+    UNION ALL
+    SELECT brand, company_code, branch_id, branch_name AS label,
+           toFloat64(0) AS w, toFloat64(0) AS i, toFloat64(net) AS n
+    FROM efn_insight.v_esb_sales_branch_daily
+    WHERE ${SALES_RANGE} AND ${PT} AND ${BR}
+)
+GROUP BY brand, company_code, branch_id
+HAVING sum(w) != 0 OR sum(i) != 0
+ORDER BY waste_value DESC
+LIMIT 500`,
+  },
+  waste_top_products: {
+    // View bulanan: bulan penuh yang tersentuh rentang (awal bulan `from` s.d. `to`); qty per satuan.
+    params: ['from', 'to', 'pt', 'branch', 'uclass'],
+    sql: `SELECT brand, product_code, any(product_name) AS name_text, uom,
+       toFloat64(sum(qty_out)) AS qty_sum, toFloat64(sum(value_net)) AS value_sum
+FROM efn_insight.v_esb_item_usage_product_monthly
+WHERE month BETWEEN toStartOfMonth({from:Date}) AND {to:Date}
+  AND ${PT}
+  AND ${BR}
+  AND ${U_CLASS}
+GROUP BY brand, product_code, uom
+ORDER BY value_sum DESC
+LIMIT 50`,
+  },
+
+  // ---------- G68: /fill-rate (view kelas PT; kohort tanggal permintaan; hanya baris matang & dihitung, §32.6.1) ----------
+  fr_kpi: {
+    params: ['from', 'to', 'prev_from', 'prev_to', 'pt', 'branch', 'supplier'],
+    sql: `SELECT
+    ${F_PCT('line_ratio_sum', 'lines', F_CUR)}  AS fill_rate_line_cur,
+    ${F_PCT('line_ratio_sum', 'lines', F_PREV)} AS fill_rate_line_prev,
+    ${F_PCT('lines_full', 'lines', F_CUR)}      AS pct_lines_full_cur,
+    ${F_PCT('lines_full', 'lines', F_PREV)}     AS pct_lines_full_prev,
+    ${F_PCT('requests_full', 'requests', F_CUR)}  AS pct_requests_full_cur,
+    ${F_PCT('requests_full', 'requests', F_PREV)} AS pct_requests_full_prev,
+    ${F_AVG_LEAD(F_CUR)}  AS avg_lead_days_cur,
+    ${F_AVG_LEAD(F_PREV)} AS avg_lead_days_prev,
+    toFloat64(sumIf(lines, ${F_CUR}))  AS lines_cur,
+    toFloat64(sumIf(lines, ${F_PREV})) AS lines_prev,
+    toFloat64(sumIf(requests, ${F_CUR})) AS requests_cur,
+    toFloat64(sumIf(lines_open, ${F_CUR})) AS lines_open_cur,
+    toFloat64(sumIf(lines_uom_mismatch, ${F_CUR})) AS lines_uom_mismatch_cur
+FROM efn_insight.v_esb_fill_rate_daily
+WHERE ${F_RANGE_PREV}
+  AND ${PT}
+  AND ${BR}
+  AND ${F_SUPPLIER}`,
+  },
+  fr_trend_weekly: {
+    params: ['from', 'to', 'pt', 'branch', 'supplier'],
+    sql: `SELECT toStartOfWeek(transfer_date, 1) AS week_start,
+       if(sum(lines) = 0, NULL, toFloat64(sum(line_ratio_sum)) / toFloat64(sum(lines)) * 100) AS fill_rate_line,
+       if(sum(lines) = 0, NULL, toFloat64(sum(lines_full)) / toFloat64(sum(lines)) * 100) AS pct_lines_full,
+       toFloat64(sum(lines)) AS lines_sum
+FROM efn_insight.v_esb_fill_rate_daily
+WHERE ${F_RANGE}
+  AND ${PT}
+  AND ${BR}
+  AND ${F_SUPPLIER}
+GROUP BY week_start
+ORDER BY week_start
+LIMIT 200`,
+  },
+  fr_by_outlet: {
+    params: ['from', 'to', 'pt', 'branch', 'supplier'],
+    sql: `SELECT brand, company_code, branch_id, any(branch_name) AS branch_label,
+       toFloat64(sum(requests)) AS requests_sum,
+       toFloat64(sum(lines)) AS lines_sum,
+       if(sum(lines) = 0, NULL, toFloat64(sum(line_ratio_sum)) / toFloat64(sum(lines)) * 100) AS fill_rate_line,
+       if(sum(lines) = 0, NULL, toFloat64(sum(lines_full)) / toFloat64(sum(lines)) * 100) AS pct_lines_full,
+       toFloat64(sum(lines_zero)) AS lines_zero_sum
+FROM efn_insight.v_esb_fill_rate_daily
+WHERE ${F_RANGE}
+  AND ${PT}
+  AND ${BR}
+  AND ${F_SUPPLIER}
+GROUP BY brand, company_code, branch_id
+ORDER BY fill_rate_line ASC NULLS LAST
+LIMIT 500`,
+  },
+  fr_by_supplier: {
+    params: ['from', 'to', 'pt', 'branch', 'supplier'],
+    sql: `SELECT brand, supplier_branch_id, any(supplier_name) AS supplier_label,
+       toFloat64(sum(lines)) AS lines_sum,
+       if(sum(lines) = 0, NULL, toFloat64(sum(line_ratio_sum)) / toFloat64(sum(lines)) * 100) AS fill_rate_line,
+       if(sum(lead_days_n) = 0, NULL, toFloat64(sum(lead_days_sum)) / toFloat64(sum(lead_days_n))) AS avg_lead_days
+FROM efn_insight.v_esb_fill_rate_daily
+WHERE ${F_RANGE}
+  AND ${PT}
+  AND ${BR}
+  AND ${F_SUPPLIER}
+GROUP BY brand, supplier_branch_id
+ORDER BY fill_rate_line ASC NULLS LAST
+LIMIT 100`,
+  },
+  fr_suppliers: {
+    // (tambahan) opsi filter Pemasok: pemasok yang punya permintaan matang pada rentang/PT/cabang terpilih (tanpa filter pemasok).
+    params: ['from', 'to', 'pt', 'branch'],
+    sql: `SELECT brand, supplier_branch_id, any(supplier_name) AS supplier_label
+FROM efn_insight.v_esb_fill_rate_daily
+WHERE ${F_RANGE}
+  AND ${PT}
+  AND ${BR}
+GROUP BY brand, supplier_branch_id
+ORDER BY supplier_label
+LIMIT 200`,
+  },
+  fr_top_short_products: {
+    // View bulanan: bulan penuh yang tersentuh rentang. Fill rate qty hanya per produk x satuan (sent_capped / request_qty).
+    params: ['from', 'to', 'pt', 'branch'],
+    sql: `SELECT brand, product_code, any(product_name) AS name_text, uom,
+       toFloat64(sum(request_qty)) AS request_sum,
+       toFloat64(sum(qty_sent)) AS sent_sum,
+       if(sum(request_qty) <= 0, NULL, toFloat64(sum(sent_capped)) / toFloat64(sum(request_qty)) * 100) AS fill_rate_qty,
+       toFloat64(sum(request_qty)) - toFloat64(sum(sent_capped)) AS short_qty
+FROM efn_insight.v_esb_fill_rate_product_monthly
+WHERE month BETWEEN toStartOfMonth({from:Date}) AND {to:Date}
+  AND ${PT}
+  AND ${BR}
+GROUP BY brand, product_code, uom
+ORDER BY short_qty DESC
+LIMIT 50`,
   },
 
   // ---------- Margin bahan (/margin-bahan, G67, docs/04 §31; init/24-margin-bahan.sql) ----------

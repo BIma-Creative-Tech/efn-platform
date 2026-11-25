@@ -633,7 +633,7 @@ def test_insight_wrappers_definer_grants_and_pt_policy() -> None:
     block = POLICY_SH.split('ESB_POLICY_VIEWS="\n', 1)[1].split('\n"\n', 1)[0]
     policy = dict(line.split() for line in block.splitlines() if line.strip())
     assert all(policy[table.replace("mart_esb_", "v_esb_")] == "PT" for table in MART_TABLES)
-    assert "\nESB_POLICY_EXPECTED=20\n" in INIT_SH
+    assert "\nESB_POLICY_EXPECTED=25\n" in INIT_SH  # 20 setelah #165, + 5 view G68 (docs/04 §32.7)
 
 
 def test_margin_objects_not_granted_to_other_roles() -> None:
