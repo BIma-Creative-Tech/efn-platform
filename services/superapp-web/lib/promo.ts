@@ -62,6 +62,16 @@ function parseItem(v: unknown, popup: boolean): PromoItem | null {
   return item;
 }
 
+/**
+ * Keputusan pemilik proyek 23 Nov 2026 (menggantikan "semua brand" 27 Okt, docs/04 §18.1): promo hanya tampil di tenant
+ * yang memuat PT pemiliknya. Kode PT = prefiks id item BFF (`<company_code>-<odoo_id>`). Holding `efn` tidak memuat SMD,
+ * jadi promo supermarket hanya di tenant `supermarket` (supermarket independen). Pembatasan UI saja (L-33).
+ */
+export function promoForCompanies(feed: PromoFeed, companies: readonly string[]): PromoFeed {
+  const own = (p: PromoItem) => companies.includes(p.id.slice(0, p.id.lastIndexOf('-')));
+  return { banners: feed.banners.filter(own), popups: feed.popups.filter(own) };
+}
+
 export function parsePromoFeed(v: unknown): PromoFeed | null {
   const o = obj(v);
   if (!o || !Array.isArray(o.banners) || !Array.isArray(o.popups)) return null;

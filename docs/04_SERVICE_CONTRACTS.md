@@ -1917,7 +1917,10 @@ slide utama**; (2) pop-up promo di dalam app/web **dan** push notification; (3) 
   `push_body` (≤ 120), `push_state` (`draft|queued|sent`, readonly), `push_sent_at`.
 - Grup: `group_promo_manager` (Pengelola Promo: CRUD + tombol "Kirim push") dan `group_promo_bff` (user teknis BFF:
   tanpa ACL dokumen). Record rule `company_id in company_ids`. Semua perubahan teraudit `efn_audit` bila terpasang.
-- Satu promo = milik satu PT (company), ditampilkan untuk **semua brand** (keputusan 27 Okt). Tidak ada harga/diskon di
+- Satu promo = milik satu PT (company). ~~Ditampilkan untuk semua brand (keputusan 27 Okt).~~ **Diperbarui 23 Nov 2026
+  (keputusan pemilik proyek):** web hanya menampilkan promo milik PT tenant (prefiks id `<company_code>-`; tenant
+  `supermarket` = SMD saja, holding `efn` = GL/PB/BCR/BCF/WTZ tanpa SMD). Pembatasan UI di route `/api/promo` (L-33);
+  feed BFF dan push tetap per PT tanpa filter tenant. Tidak ada harga/diskon di
   banner: diskon nyata tetap lewat `sale_loyalty` (§11), banner hanya materi visual + tautan.
 - RPC (lewat `odoo-rpc-gateway`, path baru):
   - #22 `efn.promo.banner/efn_promo_feed(since)` → `{ banners:[...], popups:[...], server_time }`: hanya `active`,
