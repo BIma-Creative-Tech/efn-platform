@@ -272,9 +272,7 @@ def _children(item: Mapping[str, Any], out: OmsTables) -> list[tuple[str, dict[s
     return found
 
 
-def flatten_lines(
-    key: SliceKey, sales_num: str, menus: Any, out: OmsTables, rows: list[list[Any]]
-) -> None:
+def flatten_lines(key: SliceKey, sales_num: str, menus: Any, out: OmsTables, rows: list[list[Any]]) -> None:
     """salesMenus[] -> baris; packages[]/extras[] depth-first di bawah induknya (parent_line_no)."""
     if not isinstance(menus, list):
         if menus is not None:
@@ -574,9 +572,7 @@ def build_menu_fin(
             continue
         if line.product_code not in fin_codes and not is_fin(line.product_code, line.product_name):
             continue
-        acc = fin.setdefault(line.bom_id, {}).setdefault(
-            line.product_code, [line.product_name, line.uom, Decimal(0)]
-        )
+        acc = fin.setdefault(line.bom_id, {}).setdefault(line.product_code, [line.product_name, line.uom, Decimal(0)])
         acc[2] += line.qty
     keys: dict[tuple[str, str], tuple[str, int]] = {}
     for code, bom_id in by_code.items():

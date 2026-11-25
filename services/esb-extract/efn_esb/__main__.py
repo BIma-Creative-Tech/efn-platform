@@ -271,9 +271,7 @@ def _cmd_oms_probe(settings: EsbSettings, oms: OmsSettings, args: argparse.Names
     return 0
 
 
-def _cmd_oms_backfill(
-    settings: EsbSettings, oms: OmsSettings, args: argparse.Namespace, stop: threading.Event
-) -> int:
+def _cmd_oms_backfill(settings: EsbSettings, oms: OmsSettings, args: argparse.Namespace, stop: threading.Event) -> int:
     from efn_esb.oms_runner import run_oms_backfill
 
     cfg = _oms_brand(settings, oms, args.brand)
@@ -285,9 +283,7 @@ def _cmd_oms_backfill(
     store = _store(os.environ)
     client = _oms_client(settings, oms, cfg, oms.backfill_max_calls)
     run = run_oms_backfill(settings, oms, cfg, client, store, args.start, args.end, stop, force=args.force)
-    print(
-        f"oms-backfill brand={cfg.key} status={run.status} slices={run.slices} calls={run.calls} errors={run.errors}"
-    )
+    print(f"oms-backfill brand={cfg.key} status={run.status} slices={run.slices} calls={run.calls} errors={run.errors}")
     return 0 if run.status in ("ok", "window_closed", "limit") else 1
 
 

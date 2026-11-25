@@ -28,3 +28,6 @@ a28096a0d4f543563a7e865f3ba7466190a3855f:scripts/host/test-efn-deploy.sh:generic
 # G50 squash merge #117 (diperiksa efn-lead 2026-11-21): fixture yang sama (UUID palsu, test negatif) di commit squash;
 # baris kini diberi anotasi inline gitleaks:allow agar merge berikutnya tidak memunculkan fingerprint baru.
 618a3a2809692a2f840fa3184af9a7f4c5d7a3f1:services/etl/tests/test_behavior.py:generic-api-key:150
+# G69 (diperiksa efn-lead 2026-11-25): password sintetis fixture test_oms.py ("sintetis-...", bukan secret nyata) di commit
+# d006553; commit berikut menggantinya dengan nilai rendah-entropi + anotasi inline gitleaks:allow (aman setelah squash).
+d0065538293231a97f736e4d0e9afe2e2fcac3cf:services/esb-extract/tests/test_oms.py:generic-api-key:80

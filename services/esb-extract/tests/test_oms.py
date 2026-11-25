@@ -77,7 +77,7 @@ DDL26 = (CH / "init" / "26-g69-esb-oms.sql").read_text(encoding="utf-8")
 ESB_ACCESS = (CH / "access" / "esb-access.sql").read_text(encoding="utf-8")
 
 USER = "user-sintetis"
-PASSWORD = "sintetis-Rahasia-OMS-123"
+PASSWORD = "sintetis-Rahasia-123"  # gitleaks:allow (fixture palsu, sama dengan test_http.py)
 TOKEN = base64.b64encode(f"{USER}:{PASSWORD}".encode()).decode()
 DAY = date(2026, 1, 5)
 VERSION = datetime(2026, 1, 6, 0, 0, 0, 123000, tzinfo=UTC)
@@ -532,8 +532,15 @@ def test_payment_whitelist_and_substring_denylist() -> None:
             {"paymentMethodID": "1", "paymentAmount": "5", "cardNo": "x", "edcRefNo": "y", "extra": {"a": 1}},
             "bukan-objek",
         ],
-        "salesMenus": [{"menuName": "A", "approvalCode": "x", "customerEmail": "x", "loyaltyAccount": "x",
-                        "packages": [{"menuName": "B", "maskedCardNumber": "x", "verificationRef": "x"}]}],  # fmt: skip
+        "salesMenus": [
+            {
+                "menuName": "A",
+                "approvalCode": "x",
+                "customerEmail": "x",
+                "loyaltyAccount": "x",
+                "packages": [{"menuName": "B", "maskedCardNumber": "x", "verificationRef": "x"}],
+            }
+        ],  # fmt: skip
         "MemberTier": "x",
         "driverPhoneNo": "x",
     }
@@ -558,9 +565,23 @@ def test_string_numbers_to_decimal_and_int() -> None:
     assert row["is_final"] == 1 and row["_version"] == VERSION
     assert "table_name" not in row  # SEC-OMS-01
     daily = transform_branch_daily(
-        [{"salesDate": "2026-01-05", "branchCode": "BR01", "paxTotal": "4", "billTotal": "2.00", "subtotal": "1.5",
-          "discountTotal": "0", "scTotal": "0", "taxTotal": "0", "grandTotal": "25000.00"}],  # fmt: skip
-        "pb", lambda _b: "PB", {"BR01": 7}, VERSION,
+        [
+            {
+                "salesDate": "2026-01-05",
+                "branchCode": "BR01",
+                "paxTotal": "4",
+                "billTotal": "2.00",
+                "subtotal": "1.5",
+                "discountTotal": "0",
+                "scTotal": "0",
+                "taxTotal": "0",
+                "grandTotal": "25000.00",
+            }
+        ],  # fmt: skip
+        "pb",
+        lambda _b: "PB",
+        {"BR01": 7},
+        VERSION,
     )
     assert daily[DAY][0][2] == 7 and daily[DAY][0][5:8] == [4, 2, Decimal("1.50")]
 
@@ -794,9 +815,7 @@ OMS_VIEW_COLUMNS = {
         "sales_date brand company_code branch_id branch_code branch_name bills_oms grand_total_oms bills_summary "
         "grand_total_summary core_payment_amount diff_bills_pct diff_summary_pct diff_core_pct"
     ).split(),
-    "v_esb_oms_freshness": (
-        "brand company_code branch_id branch_code max_sales_ts_out_today last_finished_at"
-    ).split(),
+    "v_esb_oms_freshness": ("brand company_code branch_id branch_code max_sales_ts_out_today last_finished_at").split(),
 }
 
 
