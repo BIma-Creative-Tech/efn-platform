@@ -475,12 +475,12 @@ esac
 [ "${#INSIGHT_KEY}" -ge 64 ] || { echo "clickhouse-init: insight_scope_key terlalu pendek (min 64 hex)" >&2; exit 1; }
 [ "$INSIGHT_KEY" != "$SCOPE_KEY" ] || { echo "clickhouse-init: insight_scope_key tidak boleh sama dengan text2sql_scope_key" >&2; exit 1; }
 unset SCOPE_KEY
-# G52 (§28.15.7) + G53 + YoY 24 Nov 2026 + G67 margin bahan (§31.4, +3) + G68 (§32.7, +5): 25 policy ESB (20 kelas PT +
-# 5 kelas BR). Daftar view + predikat = access/insight-esb-policy.sh (satu
+# G52 (§28.15.7) + G53 + YoY 24 Nov 2026 + G67 margin bahan (§31.4, +3) + G68 (§32.7, +5) + G69 OMS (§33.5, +7): 32 policy
+# ESB (21 kelas PT + 11 kelas BR). Daftar view + predikat = access/insight-esb-policy.sh (satu
 # sumber, juga dimuat harness E1-E9); jumlah dikunci di sini dan di test_insight_access.py (diubah bersama). Semua view
 # efn_insight diverifikasi punya policy ke system.row_policies di bawah.
 # shellcheck disable=SC2034  # dibaca file yang di-source di bawah
-ESB_POLICY_EXPECTED=25
+ESB_POLICY_EXPECTED=32
 # shellcheck source=/dev/null  # file di-mount saat runtime (/init/access)
 . /init/access/insight-esb-policy.sh
 unset ESB_POLICY_EXPECTED

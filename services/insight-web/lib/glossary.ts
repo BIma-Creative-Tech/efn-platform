@@ -280,6 +280,42 @@ export const GLOSSARY: readonly GlossaryEntry[] = [
     read: 'Permintaan yang belum matang masih berjalan dan tidak masuk hitungan fill rate.',
     match: '(?:permintaan|baris) matang',
   },
+  {
+    id: 'kanal-oms',
+    term: 'Kanal (jenis kunjungan)',
+    full: 'Visit purpose di ESB OMS',
+    def: 'Cara tamu dilayani pada struk, misalnya makan di tempat, bawa pulang, atau pesan antar, sesuai pilihan di kasir ESB.',
+    read: 'Porsi dihitung terhadap penjualan bersih hari itu. Nama kanal mengikuti master ESB, jadi dapat berbeda antar brand.',
+    match: 'kanal \\(jenis kunjungan\\)',
+  },
+  {
+    id: 'nilai-struk',
+    term: 'Rata-rata nilai struk',
+    def: 'Penjualan bersih dibagi jumlah struk selesai pada hari itu (sebelum PB1/service).',
+    read: 'Naik berarti tiap tamu atau meja membeli lebih banyak. Bandingkan dengan item per struk untuk tahu penyebabnya: harga lebih tinggi atau jumlah item lebih banyak.',
+    match: 'rata-rata nilai struk',
+  },
+  {
+    id: 'sell-through-jam',
+    term: 'Sell-through per jam',
+    def: 'Bagian pasokan toko hari itu yang sudah terjual sampai jam tertentu, dihitung dari kumulatif terjual per jam (struk ESB OMS) dibagi pasokan.',
+    read: '"% terjual 12:00" berarti terjual sebelum pukul 12:00. Produk yang sudah terjual hampir semua sebelum sore berisiko kehabisan; yang masih banyak sisa pada jam tutup berisiko menumpuk.',
+    match: 'sell-through per jam|% terjual (?:\\d{2}:00|tutup)',
+  },
+  {
+    id: 'jam-habis',
+    term: 'Perkiraan jam habis',
+    def: 'Jam pertama saat kumulatif terjual sudah sama dengan atau melebihi pasokan hari itu. Kosong ("Tidak habis") bila pasokan tidak pernah tercapai sampai tutup.',
+    read: 'Ini perkiraan dari data penjualan, bukan stok sebenarnya: stok awal toko yang tidak tercatat membuat jam habis tampak lebih awal.',
+    match: 'jam habis',
+  },
+  {
+    id: 'tak-terpetakan',
+    term: 'Porsi tak terpetakan',
+    def: 'Bagian jumlah menu terjual yang belum bisa dihubungkan ke produk jadi (FIN) lewat resep, sehingga tidak masuk hitungan sell-through per produk.',
+    read: 'Makin besar porsinya, makin rendah angka terjual per produk dibanding kenyataan. Perbaikannya di pemetaan resep, bukan di data penjualan.',
+    match: 'tak terpetakan',
+  },
 ];
 
 const BY_ID = new Map(GLOSSARY.map((e) => [e.id, e]));

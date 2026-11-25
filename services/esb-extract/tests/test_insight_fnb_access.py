@@ -45,6 +45,16 @@ PT_VIEWS = {
     "v_esb_item_usage_product_monthly",
     "v_esb_fill_rate_daily",
     "v_esb_fill_rate_product_monthly",
+    "v_esb_oms_recon_daily",  # G69 (memuat Σ pembayaran ESB Core)
+}
+# G69 ESB OMS (26-g69-esb-oms.sql): view ber-cabang kelas BR (persona Toko F&B, §33.7).
+OMS_BR_VIEWS = {
+    "v_esb_oms_bill",
+    "v_esb_oms_hourly",
+    "v_esb_oms_menu_hourly",
+    "v_esb_oms_fin_hourly",
+    "v_esb_oms_fin_mapping_quality",
+    "v_esb_oms_freshness",
 }
 BR_VIEWS = {
     "v_esb_branch_list",
@@ -52,8 +62,8 @@ BR_VIEWS = {
     "v_esb_store_menu_daily",
     "v_esb_store_payment_daily",
     "v_esb_store_receipt_daily",
-}
-STORE_VIEWS = BR_VIEWS - {"v_esb_branch_list"}
+} | OMS_BR_VIEWS
+STORE_VIEWS = BR_VIEWS - {"v_esb_branch_list"} - OMS_BR_VIEWS
 # Kontrak kolom §28.15.8 (urutan tetap; frontend menulis query fstore_* terhadap daftar ini).
 STORE_COLUMNS = {
     "v_esb_store_sales_daily": (
@@ -175,7 +185,7 @@ def test_policy_manifest_classes() -> None:
     manifest = esb_policy_manifest()
     assert {v for v, c in manifest.items() if c == "PT"} == PT_VIEWS
     assert {v for v, c in manifest.items() if c == "BR"} == BR_VIEWS
-    assert len(PT_VIEWS) + len(BR_VIEWS) == 25
+    assert len(PT_VIEWS) + len(BR_VIEWS) == 32
     views = insight_views()
     # Kelas PT wajib untuk setiap view yang memuat cogs/mdr (Q-INS-F3).
     for name, (cols, _src) in views.items():

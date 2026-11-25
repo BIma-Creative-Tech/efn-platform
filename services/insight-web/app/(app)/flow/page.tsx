@@ -5,12 +5,14 @@ import { CkMovementCard, type GroupRow } from '@/components/CkMovementCard';
 import { CoverageNotice } from '@/components/CoverageNotice';
 import { DataTable, type TableRow } from '@/components/DataTable';
 import { FilterNotice } from '@/components/FilterNotice';
+import { SellThroughSection } from '@/components/oms/SellThroughSection';
 import { MixedScopeNote, NotApplicableSmd } from '@/components/SmdNotice';
 import { InfoTip, KpiRow, KpiTile, PageHeader, Section } from '@/components/ui';
 import { summarize, type ChartSpec, type ColorToken } from '@/lib/chart-spec';
 import { comparable, deltaGuards } from '@/lib/coverage';
 import { fmtDayShort, fmtRange } from '@/lib/format';
 import { loadCoverage, num, numOrNull, run, settle, TABLE_LOADERS } from '@/lib/loaders';
+import type { FinHourlyRaw, FreshnessRaw, QualityRaw, SupplyRaw } from '@/lib/oms-vm';
 import { pageCtx, type SearchParams } from '@/lib/page-ctx';
 import { TABLES } from '@/lib/table-defs';
 import { sellThroughStatus, STATUS_LABEL, T, type Status } from '@/lib/thresholds';
@@ -45,7 +47,10 @@ export default async function FlowPage({ searchParams }: { searchParams: SearchP
     );
   }
 
-  const [sumR, brR, dailyR, weeklyR, outR, prodR, detailR, cov, groupR, catR] = await Promise.all([
+  // G69: sell-through per jam hanya bermakna per outlet: query OMS hanya dijalankan bila tepat satu cabang terpilih; selain itu
+  // hanya kesegaran (untuk memutuskan apakah petunjuk "pilih satu outlet" relevan, yaitu OMS aktif pada cakupan ini).
+  const oneBranch = ctx.filters.branch.length === 1;
+  const [sumR, brR, dailyR, weeklyR, outR, prodR, detailR, cov, groupR, catR, omsFinR, omsSupplyR, omsQualityR, omsFreshR] = await Promise.all([
     settle(run<Summary>('flow_summary', ctx)),
     settle(run<BranchRow>('flow_by_branch', ctx)),
     settle(run<TrendRow>('flow_daily_trend', ctx, { weekly: 0 })),
@@ -56,6 +61,11 @@ export default async function FlowPage({ searchParams }: { searchParams: SearchP
     loadCoverage(ctx),
     settle(run<GroupRow>('mov_by_group', ctx)),
     settle(TABLE_LOADERS['mov-category'](ctx)),
+    // G69: sell-through per jam untuk hari terakhir periode (ESB OMS); gagal/kosong = bagian disembunyikan.
+    oneBranch ? settle(run<FinHourlyRaw>('foms_fin_hourly', ctx, { ref_day: to })) : Promise.resolve(null),
+    oneBranch ? settle(run<SupplyRaw>('foms_fin_supply', ctx, { ref_day: to })) : Promise.resolve(null),
+    oneBranch ? settle(run<QualityRaw>('foms_fin_quality', ctx, { ref_day: to })) : Promise.resolve(null),
+    oneBranch ? Promise.resolve(null) : settle(run<FreshnessRaw>('foms_freshness', ctx)),
   ]);
   // Sell-through membandingkan produksi/kirim dengan penjualan: periode lalu hanya bermakna bila produksi, pengiriman, dan penjualan FIN ada di data.
   const { pctDelta, ppDelta } = deltaGuards(comparable(cov, ['production', 'delivery', 'fin_sold'], ctx.filters, ctx.prev));
@@ -191,6 +201,8 @@ export default async function FlowPage({ searchParams }: { searchParams: SearchP
           </Block>
         </Section>
       ) : null}
+
+      <SellThroughSection day={to} oneBranch={oneBranch} freshR={omsFreshR} finR={omsFinR} supplyR={omsSupplyR} qualityR={omsQualityR} />
 
       <Section title="Cabang dan produk" id="outliers">
         <Block result={outR} title="Tabel sell-through">

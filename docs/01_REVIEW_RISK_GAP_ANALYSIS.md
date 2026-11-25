@@ -365,6 +365,12 @@ R-O12, R-O13, R-L12 (§4).
 - ~~**Q-ESB23** (PO) Urutan cutover per brand; IMD/CUP boleh migrasi master sebelum Q-ESB5?~~ **Terjawab 18 Nov 2026:** pilot = **Paris Baguette (PB)**; brand supermarket di luar G43. Sisa (urutan setelah PB, master IMD/CUP sebelum Q-ESB5) mengikuti default ADR-042 §3.6 sampai PO menyatakan lain.
 - **Q-ESB24** (Finance/DPO) Penandatangan berita acara rekonsiliasi per brand (usulan Finance + Ops brand + PO) dan retensi bundel migrasi **≤ 90 hari setelah berita acara** diterima? (R-L12)
 
+**Penjualan level struk ESB OMS (G69, ADR-040 §6c Proposed, 25 Nov 2026).** Rincian di `docs/04` §33.9. Q-ESB1 kini juga
+mencakup OMS. Risiko terkait R-S17, R-O09, R-O10, R-L01.
+- **Q-OMS1** (IT klien / PIC ESB) Token statis `core-api.esb.co.id` untuk material usage & member — di luar G69.
+- **Q-OMS2** (IT klien / vendor ESB) Izin beban intraday OMS (hari berjalan tiap 15 menit 07–23 WIB, PB)? Sampai ada, production `ESB_OMS_ENABLED=false`. (R-O10)
+- **Q-OMS3** (DPO/Finance) Retensi data struk: raw 36 bulan, mart 10 tahun (usulan, sama G41)?
+
 ### 5.13 VPS Bima Creative untuk dev & ekstraksi ESB (ADR-043, 18 Nov 2026)
 Rincian di ADR-043 §6. Tahap B (ekstraksi ESB di VPS) diblokir sampai Q-VPS1..Q-VPS4 + Q-ESB1/7/9 terjawab. Usulan
 risiko baru (belum masuk tabel §4): **R-S19** pihak ketiga memegang kredensial & data ESB, **R-S20** agen AI/akun dev

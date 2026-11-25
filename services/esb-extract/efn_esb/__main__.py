@@ -25,6 +25,13 @@
   konfigurasi tidak sah. Jadwal mingguan (snapshot `bom_detail` lalu hitung) ada di loop `run`.
 CLI selain `run`/`refresh-aggregates`/`refresh-margin` dengan `ESB_ENABLED=false` -> exit 0 dengan pesan
 "ESB dinonaktifkan".
+G69 ESB OMS (docs/04 §33, efn_esb/oms_runner.py): bila `ESB_OMS_ENABLED=true`, `run` menjalankan loop OMS di thread
+terpisah (independen dari loop Core). `ESB_OMS_ENABLED=true` dengan `ESB_ENABLED=false` (atau brand OMS di luar
+`ESB_BRANDS`) -> tidak start (exit 2, fail closed).
+- `oms-probe --brand B`: 4 panggilan OMS, cetak JUMLAH cabang/kanal/tipe pembayaran/baris ringkasan H-1 saja.
+- `oms-backfill --brand B --from D --to D [--force]`: hanya di `ESB_BACKFILL_WINDOW`; budget
+  `ESB_OMS_BACKFILL_MAX_CALLS`.
+`oms-*` dengan `ESB_OMS_ENABLED=false` -> exit 0 "ESB OMS dinonaktifkan".
 """
 
 import argparse
@@ -46,7 +53,9 @@ from efn_esb.config import (
     ClickHouseSettings,
     EsbSettings,
     MarginSettings,
+    OmsSettings,
     esb_enabled,
+    oms_enabled,
     validate_margin,
 )
 from efn_esb.extract import BRANCH_LIMIT, BrandRuntime
@@ -110,6 +119,13 @@ def _parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
     )
     margin = sub.add_parser("refresh-margin", help="G67: hitung ulang mart margin bahan (tanpa ESB)")
     margin.add_argument("--brand", choices=KNOWN_BRANDS, help="satu brand (default: semua ESB_MARGIN_BRANDS)")
+    oms_probe = sub.add_parser("oms-probe", help="G69: cek ESB OMS (jumlah saja)")
+    oms_probe.add_argument("--brand", required=True)
+    oms_backfill = sub.add_parser("oms-backfill", help="G69: backfill ESB OMS resumable satu brand")
+    oms_backfill.add_argument("--brand", required=True)
+    oms_backfill.add_argument("--from", dest="start", required=True, type=date.fromisoformat)
+    oms_backfill.add_argument("--to", dest="end", required=True, type=date.fromisoformat)
+    oms_backfill.add_argument("--force", action="store_true", help="tarik ulang slice yang sudah done")
     health = sub.add_parser("health", help="cek file heartbeat")
     health.add_argument("--max-age", type=int, default=int(os.getenv("ESB_HEALTH_MAX_AGE_SECONDS", "7800")))
     return parser.parse_args(argv)
@@ -126,6 +142,40 @@ def _client(settings: EsbSettings, cfg: BrandConfig, max_calls: int) -> EsbClien
         timeout=settings.timeout_seconds,
         max_calls=max_calls,
     )
+
+
+def _oms_client(settings: EsbSettings, oms: OmsSettings, cfg: BrandConfig, max_calls: int | None) -> Any:
+    from efn_esb.oms_http import OmsClient
+
+    return OmsClient(
+        oms.base_url,
+        cfg.user,
+        cfg.password,
+        UrllibTransport(max_response_bytes=settings.max_response_bytes),
+        TokenBucket(oms.rate_per_sec),  # bucket OMS terpisah dari Core
+        max_retries=settings.max_retries,
+        timeout=settings.timeout_seconds,
+        max_calls=max_calls,
+    )
+
+
+def _start_oms(settings: EsbSettings, oms: OmsSettings, stop: threading.Event) -> threading.Thread | None:
+    """G69: loop OMS di thread sendiri (klien HTTP + ClickHouse sendiri). Mati -> None (nol panggilan OMS)."""
+    if not oms.enabled:
+        return None
+    from efn_esb.oms_runner import oms_loop
+
+    unknown = [key for key in oms.brands if key not in {cfg.key for cfg in settings.brands}]
+    if unknown:
+        raise RuntimeError(f"ESB_OMS_BRANDS: {', '.join(unknown)} tidak ada di ESB_BRANDS")
+    thread = threading.Thread(
+        target=oms_loop,
+        args=(settings, oms, stop, lambda: _store(os.environ), lambda cfg: _oms_client(settings, oms, cfg, None)),
+        name="esb-oms",
+        daemon=True,
+    )
+    thread.start()
+    return thread
 
 
 def _stop_event() -> threading.Event:
@@ -159,7 +209,9 @@ def _cmd_run(settings: EsbSettings, stop: threading.Event) -> int:
 
     margin = MarginSettings.from_env()
     validate_margin(settings, margin)  # fail-fast saat start (brand margin wajib aktif + purchase_line)
+    oms = OmsSettings.from_env()  # G69: fail-fast bila ESB_OMS_* tidak sah
     store = _store(os.environ)
+    oms_thread = _start_oms(settings, oms, stop)
     breaker = AuthBreaker()  # SEC-186: di memori; restart proses = cabut penangguhan
     trigger = RefreshTrigger()
     schedule = MarginSchedule(margin)  # G67: mingguan, gagal tidak menghentikan ekstraksi
@@ -193,8 +245,55 @@ def _cmd_run(settings: EsbSettings, stop: threading.Event) -> int:
         if settings.run_once:
             break
         stop.wait(settings.interval_seconds)
+    if oms_thread is not None:
+        if not settings.run_once:
+            stop.set()
+        oms_thread.join(timeout=None if settings.run_once else 30)
     log.info("esb-extract berhenti")
     return 0
+
+
+def _oms_brand(settings: EsbSettings, oms: OmsSettings, brand: str) -> BrandConfig:
+    key = brand.strip().lower()
+    if key not in oms.brands:
+        raise RuntimeError(f"brand {key!r} tidak ada di ESB_OMS_BRANDS")
+    return settings.brand(key)
+
+
+def _cmd_oms_probe(settings: EsbSettings, oms: OmsSettings, args: argparse.Namespace) -> int:
+    from datetime import timedelta
+
+    from efn_esb.oms_http import P_BRANCH, P_BRANCH_SUMMARY, P_PAYMENT_METHOD, P_VISIT_PURPOSE
+    from efn_esb.oms_transform import oms_rows, transform_payment_methods
+
+    cfg = _oms_brand(settings, oms, args.brand)
+    client = _oms_client(settings, oms, cfg, 10)
+    yesterday = (wib_today(datetime.now(UTC)) - timedelta(days=1)).isoformat()
+    branches = len(oms_rows(client.post(P_BRANCH, {})))
+    visits = len(oms_rows(client.post(P_VISIT_PURPOSE, {})))
+    methods = len(transform_payment_methods(client.post(P_PAYMENT_METHOD, {}), cfg.key, "", datetime.now(UTC)))
+    summary = client.post(P_BRANCH_SUMMARY, {"filterSalesDateFrom": yesterday, "filterSalesDateTo": yesterday})
+    print(
+        f"oms-probe brand={cfg.key} status=ok cabang={branches} kanal={visits} metode_bayar={methods} "
+        f"ringkasan_h1={len(oms_rows(summary))} calls={client.calls}"
+    )
+    return 0
+
+
+def _cmd_oms_backfill(settings: EsbSettings, oms: OmsSettings, args: argparse.Namespace, stop: threading.Event) -> int:
+    from efn_esb.oms_runner import run_oms_backfill
+
+    cfg = _oms_brand(settings, oms, args.brand)
+    try:
+        validate_backfill_range(args.start, args.end, wib_today(datetime.now(UTC)))
+    except ValueError as exc:
+        print(f"oms-backfill ditolak: {exc}", file=sys.stderr)
+        return 2
+    store = _store(os.environ)
+    client = _oms_client(settings, oms, cfg, oms.backfill_max_calls)
+    run = run_oms_backfill(settings, oms, cfg, client, store, args.start, args.end, stop, force=args.force)
+    print(f"oms-backfill brand={cfg.key} status={run.status} slices={run.slices} calls={run.calls} errors={run.errors}")
+    return 0 if run.status in ("ok", "window_closed", "limit") else 1
 
 
 def _cmd_backfill(settings: EsbSettings, args: argparse.Namespace, stop: threading.Event) -> int:
@@ -389,6 +488,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _cmd_refresh_margin(args.brand)
     stop = _stop_event()
     if not esb_enabled():
+        if oms_enabled():  # §33.3: ESB_OMS_ENABLED=true mensyaratkan ESB_ENABLED=true (fail closed)
+            print("ESB_OMS_ENABLED=true mensyaratkan ESB_ENABLED=true; tidak start", file=sys.stderr)
+            return 2
         if args.cmd == "run":
             return _idle(stop, os.getenv("ESB_HEARTBEAT_FILE", "/tmp/efn-esb.heartbeat"))  # noqa: S108
         print("ESB dinonaktifkan (ESB_ENABLED=false); tidak ada panggilan")
@@ -402,6 +504,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _cmd_snapshot(settings, args, stop)
     if args.cmd == "retransform":
         return _cmd_retransform(settings, args, stop)
+    if args.cmd in ("oms-probe", "oms-backfill"):
+        oms = OmsSettings.from_env()
+        if not oms.enabled:
+            print("ESB OMS dinonaktifkan (ESB_OMS_ENABLED=false); tidak ada panggilan")
+            return 0
+        if args.cmd == "oms-probe":
+            return _cmd_oms_probe(settings, oms, args)
+        return _cmd_oms_backfill(settings, oms, args, stop)
     return _cmd_probe(settings, args)
 
 

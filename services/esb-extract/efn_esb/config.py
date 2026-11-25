@@ -361,6 +361,112 @@ def validate_margin(settings: EsbSettings, margin: MarginSettings) -> None:
         raise RuntimeError("ESB_MARGIN_BRANDS membutuhkan entitas purchase_line di ESB_ENTITIES")
 
 
+OMS_HOST = "esbcore.co.id"
+OMS_DEFAULT_BASE_URL = f"https://{OMS_HOST}"
+
+
+def oms_enabled(env: Mapping[str, str] | None = None) -> bool:
+    """G69 kill switch OMS (docs/04 §33.3), terpisah dari ESB_ENABLED."""
+    return _bool(os.environ if env is None else env, "ESB_OMS_ENABLED", False)
+
+
+def validate_oms_base_url(url: str) -> str:
+    """§33.2: wajib https, host persis esbcore.co.id, port 443, tanpa path/kredensial/query/fragment."""
+    parts = urlsplit(url)
+    if parts.scheme != "https":
+        raise TlsConfigError("ESB_OMS_BASE_URL wajib https://")
+    if parts.username or parts.password:
+        raise RuntimeError("ESB_OMS_BASE_URL tidak boleh memuat kredensial")
+    if (parts.hostname or "").lower() != OMS_HOST:
+        raise RuntimeError(f"ESB_OMS_BASE_URL wajib host {OMS_HOST}")
+    try:
+        port = parts.port
+    except ValueError:
+        raise RuntimeError("ESB_OMS_BASE_URL port tidak valid") from None
+    if port not in (None, 443):
+        raise RuntimeError("ESB_OMS_BASE_URL wajib port 443")
+    if parts.path not in ("", "/") or parts.query or parts.fragment:
+        raise RuntimeError("ESB_OMS_BASE_URL tidak boleh memuat path/query/fragment")
+    return OMS_DEFAULT_BASE_URL
+
+
+def parse_hours(text: str, env_name: str = "ESB_OMS_INTRADAY_HOURS") -> tuple[int, int]:
+    """`07-23` -> (7, 23): jam WIB [awal, akhir), 0 <= awal < akhir <= 24."""
+    start, sep, end = text.partition("-")
+    if not sep or not start.strip().isdigit() or not end.strip().isdigit():
+        raise RuntimeError(f"{env_name}: format wajib HH-HH")
+    low, high = int(start), int(end)
+    if not 0 <= low < high <= 24:
+        raise RuntimeError(f"{env_name}: wajib 0 <= awal < akhir <= 24")
+    return low, high
+
+
+@dataclass(frozen=True)
+class OmsSettings:
+    """G69 ESB OMS (docs/04 §33.3). Kredensial = `EsbSettings.brands` (secret Core yang sama, tanpa secret baru)."""
+
+    enabled: bool = False
+    brands: tuple[str, ...] = ("pb",)
+    base_url: str = OMS_DEFAULT_BASE_URL
+    rate_per_sec: float = 2.0
+    interval_seconds: int = 900
+    intraday_hours: tuple[int, int] = (7, 23)
+    correction_days: tuple[int, ...] = (1, 7)
+    max_calls_per_run: int = 5000
+    backfill_max_calls: int = 60_000
+    max_pages: int = 500
+
+    @classmethod
+    def from_env(cls, env: Mapping[str, str] | None = None) -> Self:
+        """Validasi selalu (format); syarat lintas-setting hanya bila ESB_OMS_ENABLED=true (fail closed):
+        ESB_ENABLED=true dan ESB_OMS_BRANDS ⊆ ESB_BRANDS."""
+        e: Mapping[str, str] = os.environ if env is None else env
+        enabled = oms_enabled(e)
+        brands = tuple(dict.fromkeys(item.lower() for item in _items(_str(e, "ESB_OMS_BRANDS", "pb"))))
+        if not brands or any(brand not in KNOWN_BRANDS for brand in brands):
+            raise RuntimeError(f"ESB_OMS_BRANDS: brand tidak dikenal/kosong; pilihan {', '.join(KNOWN_BRANDS)}")
+        try:
+            days = _parse_days(_str(e, "ESB_OMS_CORRECTION_DAYS", "1,7"))
+        except RuntimeError:
+            raise RuntimeError("ESB_OMS_CORRECTION_DAYS harus daftar bilangan bulat 1..31") from None
+        settings = cls(
+            enabled=enabled,
+            brands=brands,
+            base_url=validate_oms_base_url(_str(e, "ESB_OMS_BASE_URL", OMS_DEFAULT_BASE_URL)),
+            rate_per_sec=_float_range(e, "ESB_OMS_RATE_PER_SEC", 2.0, 0.1, 10.0),
+            interval_seconds=_int_range(e, "ESB_OMS_INTERVAL_SECONDS", 900, 60, 86_400),
+            intraday_hours=parse_hours(_str(e, "ESB_OMS_INTRADAY_HOURS", "07-23")),
+            correction_days=days,
+            max_calls_per_run=_int_range(e, "ESB_OMS_MAX_CALLS_PER_RUN", 5000, 1, 1_000_000),
+            backfill_max_calls=_int_range(e, "ESB_OMS_BACKFILL_MAX_CALLS", 60_000, 1, 1_000_000),
+            max_pages=_int_range(e, "ESB_OMS_MAX_PAGES", _int_range(e, "ESB_MAX_PAGES", 500, 1, 5000), 1, 5000),
+        )
+        if enabled:
+            if not esb_enabled(e):
+                raise RuntimeError("ESB_OMS_ENABLED=true mensyaratkan ESB_ENABLED=true")
+            core = {k.strip().lower() for k in _str(e, "ESB_BRANDS", "").split(",") if k.strip()}
+            missing = [brand for brand in brands if brand not in core]
+            if missing:
+                raise RuntimeError(f"ESB_OMS_BRANDS: {', '.join(missing)} tidak ada di ESB_BRANDS")
+            check_oms_prod_lock(enabled, is_production(e), _str(e, OMS_ALLOW_PRODUCTION_ENV, "false").lower() == "true")
+        return settings
+
+
+# SEC-OMS-04: di APP_ENV production (`tls.is_production`, fail closed) OMS aktif ditolak KECUALI flag eksplisit
+# `ESB_OMS_ALLOW_PRODUCTION=true`. Keputusan pemilik proyek 25 Nov 2026: efn-prod lokal = staging berdata produksi
+# (direset saat go-live) -> flag hanya di override lokal efn-prod, tidak pernah di repo (check-encryption: default
+# false). Go-live sungguhan: flag dihapus sampai Q-ESB1, Q-OMS2, Q-OMS3 + persetujuan DPO (runbook esb-extract §10).
+OMS_ALLOW_PRODUCTION_ENV = "ESB_OMS_ALLOW_PRODUCTION"
+
+
+def check_oms_prod_lock(enabled: bool, production: bool, allowed: bool) -> None:
+    if enabled and production and not allowed:
+        raise RuntimeError(
+            f"ESB_OMS_ENABLED=true ditolak di production (SEC-OMS-04): butuh {OMS_ALLOW_PRODUCTION_ENV}=true "
+            "(hanya efn-prod lokal pra-go-live) atau APP_ENV non-produksi: dev/development/local/test/ci"
+        )
+
+
 @dataclass(frozen=True)
 class ClickHouseSettings:
     host: str = "clickhouse"

@@ -114,7 +114,9 @@ def test_esb_writer_grants_match_tables_exactly() -> None:
     g68 = set(re.findall(r"CREATE TABLE IF NOT EXISTS (efn_\w+\.\w+)", DDL_G68))
     control20 = {f"efn_esb.{REFRESH_TABLE}", f"efn_esb.{LOCK_TABLE}"}
     margin24 = set(re.findall(r"CREATE TABLE IF NOT EXISTS (efn_\w+\.\w+)", DDL_MARGIN))  # G67, versi-insert
-    expected = (ddl_tables() | g43 | g65 | g68 | control20 | margin24) - {"efn_dwh.map_esb_odoo"}
+    ddl26 = (ROOT / "infra" / "clickhouse" / "init" / "26-g69-esb-oms.sql").read_text(encoding="utf-8")
+    oms26 = set(re.findall(r"CREATE TABLE IF NOT EXISTS (efn_\w+\.\w+)", ddl26))  # G69 ESB OMS
+    expected = (ddl_tables() | g43 | g65 | g68 | control20 | margin24 | oms26) - {"efn_dwh.map_esb_odoo"}
     assert granted("esb_writer", "SELECT, INSERT") == expected
     assert "REVOKE ALL ON efn_dwh.map_esb_odoo FROM esb_writer;" in ACCESS
     writer_lines = [line for line in ACCESS.splitlines() if "TO esb_writer" in line]

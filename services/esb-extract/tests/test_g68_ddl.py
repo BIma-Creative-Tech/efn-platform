@@ -325,9 +325,9 @@ def test_insight_wrappers_exact_columns_and_pt_policy() -> None:
         assert manifest[name] == "PT", name  # sesi ber-cabang -> 0 baris (§28.15.7)
     for name in INTERNAL:
         assert name not in views and name not in manifest, name  # tidak dibungkus efn_insight
-    # 12 PT dasar + 3 margin bahan (§31.4) + 5 G68 = 20 PT; + 5 BR = 25.
-    assert "\nESB_POLICY_EXPECTED=25\n" in INIT_SH
-    assert sum(1 for c in manifest.values() if c == "PT") == 20
+    # 12 PT dasar + 3 margin bahan (§31.4) + 5 G68 + 1 G69 OMS (recon) = 21 PT; + 5 BR + 6 BR G69 OMS = 32.
+    assert "\nESB_POLICY_EXPECTED=32\n" in INIT_SH
+    assert sum(1 for c in manifest.values() if c == "PT") == 21
 
 
 def test_definer_reads_g68_objects_but_quality_view_is_admin_only() -> None:

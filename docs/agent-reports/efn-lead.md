@@ -152,3 +152,38 @@ di-restart setelah prodplan di-restart.
 
 **Menunggu pemilik proyek:** akun ESB staging kedua (Q-PP17); penerimaan risiko credential relay (SEC-240) sebelum
 login ke ESB production; Q-PP3, Q-PP13..16, Q-ESBU1..6.
+
+## G69 — ESB OMS: penjualan level struk untuk Insight (25 Nov 2026, branch `feat/esb-oms-sales`)
+
+**Permintaan pemilik proyek:** manfaatkan API ESB OMS (akses akun PB baru dibuka) untuk dashboard, fokus PB: penjualan per
+jam/kanal dan produksi vs penjualan; OMS lebih baru daripada laporan Core.
+
+**Probe produksi baca-saja (25 Nov):** Basic auth dengan kredensial brand Core diterima di `https://esbcore.co.id/external/general/*`;
+wajib `User-Agent` eksplisit (Cloudflare 1010); `sales-head` 20 struk/halaman dan halaman sesudah terakhir mengulang halaman
+terakhir; rekonsiliasi satu cabang-hari vs `sales-branch-summary` selisih 0. Endpoint static token (`core-api.esb.co.id`:
+material usage, member) 401 → Q-OMS1, di luar G69. Angka/nama cabang tidak ditulis di repo.
+
+**Keputusan:**
+- ADR-040 §6c (Proposed): `esb-extract` boleh POST-baca ke OMS lewat allowlist persis 5 path; klien Core tetap GET-only;
+  `ESB_OMS_ENABLED=false` default dan hanya berlaku bila `ESB_ENABLED=true`. CLAUDE.md diperbarui.
+- PDP/PCI: member (hanya `has_member`), kartu/akun/verifikasi/voucher, catatan, staf, `tableName` dibuang sebelum raw;
+  `salesPayments[]` whitelist 9 kunci + denylist substring rekursif.
+- **Pemilik proyek 25 Nov 2026:** efn-prod lokal = staging berdata produksi, direset saat go-live → OMS boleh aktif di
+  efn-prod lewat `ESB_OMS_ALLOW_PRODUCTION=true` hanya di `prod-local.overrides` (tidak di-commit); repo/CI default `false`
+  (check-encryption). Go-live: flag dihapus sampai Q-ESB1/Q-OMS2/Q-OMS3 + DPO (runbook esb-extract §10.1 butir 4).
+- Insight `/fnb/store`: "Penjualan per jam & kanal" dengan pilihan "Hari ini (berjalan)" (`oms_day`) — data intraday tiap
+  15 menit; `/flow`: "Sell-through per jam" per satu outlet, sampai kemarin (pasokan Core baru ada keesokan hari),
+  pembanding = pasokan toko seperti halaman flow; produk dengan satuan resep non-EA tanpa persen.
+
+**Verifikasi (lead, container):** esb-extract ruff + pytest lulus; insight-web lint (0 error), typecheck, vitest 1.153 lulus,
+`next build` sukses; ClickHouse 24.8 sekali pakai: semua init SQL terpasang, 17 objek OMS di-query, uji end-to-end sintetis
+(fixture → transform asli → insert → view): void dikecualikan, agregat jam/kanal/menu benar, recon 0%, tanpa PII di raw,
+struk lewat tengah malam → jam 23. `docker compose config` overlay esb: env OMS default aman.
+
+**Belum terverifikasi:** `check-encryption.sh` lokal (jq tidak ada di host; CI), query `foms_*` terhadap view nyata dengan row
+policy, data OMS nyata (status final/void, `branchCode` OMS = Core, `packages[]`/`extras[]`, kunci menu → BOM, satuan resep),
+uji kesegaran intraday (terjadwal 25 Nov ±11:30 WIB). Review: security boleh merge (4 Low ditutup/diterima), QA (6
+ketidakcocokan dokumen/desain diperbaiki), UAT `docs/testing/UAT_G69_ESB_OMS.md`.
+
+**Berikutnya:** merge → deploy ke efn-prod (clickhouse-init + esb-extract, flag override) → backfill PB jendela malam → UAT
+pemilik bisnis; minta static token (Q-OMS1) dan izin beban intraday (Q-OMS2).
