@@ -66,7 +66,7 @@ Respons 200: `{"identity_id": <int>, "created": <bool>}` — tanpa PII.
   3. Unarchive user (standar CE), tetapkan peran lewat Penetapan Peran `efn_role` berdasarkan cermin, kirim reset
      password (`auth_signup`, butuh SMTP), wajibkan TOTP.
 - **User teknis** `efn_esb_provisioner` (data, `noupdate`): Internal User + `group_esb_provisioner`, satu company
-  (`base.main_company`), tanpa password, **tanpa API key** (dibuat Superadmin lewat runbook API key, secret
+  (company **aktif** dengan id terkecil; bukan `base.main_company` yang bisa diarsipkan, mis. di efn-prod), tanpa password, **tanpa API key** (dibuat Superadmin lewat runbook API key, secret
   `odoo_api_key_esb_provisioner`, rotasi 30 hari). Grup ini ada di `efn_role.TECHNICAL_GROUP_XMLIDS` (tidak bisa
   menjadi isi peran maupun menerima peran).
 - **Log**: `esb_provision identity=<id> uid=<id> created=<bool> state=<s> roles=<n> branches=<n>` — tanpa
