@@ -1,7 +1,7 @@
 # Security review G69: penjualan level struk ESB OMS (2026-11-25)
 
 Reviewer: efn-security-reviewer (read-only). Branch `feat/esb-oms-sales` (worktree `efn-platform-oms`) vs `origin/main`.
-Kontrak acuan: docs/04 §33, ADR-040 §6b (Proposed), brief `docs/agent-reports/g69-contract-brief.md`, dan review
+Kontrak acuan: docs/04 §33, ADR-040 §6c (Proposed), brief `docs/agent-reports/g69-contract-brief.md`, dan review
 sebelumnya: G41 SEC-18x, SEC-AG-01, G52 §28.15.7.
 
 Keterbatasan: review ini hanya membaca kode. Shell tidak tersedia, jadi `git diff`, pytest, vitest, dan

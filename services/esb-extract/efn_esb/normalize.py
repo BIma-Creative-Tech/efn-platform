@@ -137,6 +137,46 @@ STOCK_MOVEMENT_FIELDS = (
     "amountIn", "qtyOut", "amountOut", "qtyBalance", "amountBalance",
 )  # fmt: skip
 
+# G68 (docs/04 §32.1, L-110): whitelist per endpoint SEBELUM raw/mart. Dibuang: additionalInfo, createdBy, creator*,
+# editor*, authorizer*, transferDetailAssets, dan semua kunci lain di luar daftar.
+# P&L (`/report/profit-loss/month-to-month`): seksi top-level (list baris akun) + pos summaries. `description` = nama
+# akun (bukan teks bebas) -> whitelist rekursif, BUKAN redact() (pola COA_FIELDS). `area.key` = nama cabang (boleh).
+PL_SECTIONS = (
+    "sales", "discounts", "cogs", "operationalExpenses", "otherExpenses", "depreciationAmortizationExpenses",
+    "interests", "taxes",
+)  # fmt: skip
+PL_SUMMARY_POS = (
+    "sales", "discounts", "netSales", "cogs", "grossProfit", "operationalExpenses", "operationalProfitLoss",
+    "otherExpenses", "earningBeforeInterestTaxDepreciationAmortization", "depreciationAmortizationExpenses",
+    "earningBeforeInterestTax", "interests", "earningBeforeTax", "taxes", "netProfitLoss",
+)  # fmt: skip
+PL_FIELDS = frozenset(
+    {
+        "account", "description", "details", "periods", "key", "value", "area", "id", "total", "allTotal",
+        "dynamicHeaders", "totalInCurrentPeriod", "summaries", *PL_SECTIONS, *PL_SUMMARY_POS,
+    }
+)  # fmt: skip
+ITEM_JOURNAL_LIST_FIELDS = (
+    "itemJournalNum", "itemJournalDate", "branchID", "branchName", "locationID", "locationName", "statusID",
+    "statusName",
+)  # fmt: skip
+ITEM_JOURNAL_HEADER_FIELDS = (*ITEM_JOURNAL_LIST_FIELDS, "requestTemplateName")
+ITEM_JOURNAL_LINE_FIELDS = (
+    "ID", "purposeID", "purposeName", "productDetailID", "productID", "productName", "uomName", "qty", "hpp",
+)  # fmt: skip
+GTR_LIST_FIELDS = (
+    "transferNum", "transferDate", "originBranch", "destinationBranch", "statusID", "statusName",
+    "finishTransferRequest", "purchaseRequestNum",
+)  # fmt: skip
+GTR_HEADER_FIELDS = (
+    "transferNum", "transferDate", "originBranchID", "destinationBranchID", "originLocationID",
+    "destinationLocationID", "categoryTypeName", "statusID", "statusName", "bypassGoodsDelivery",
+)  # fmt: skip
+GTR_LINE_FIELDS = (
+    "productDetailID", "productCode", "productName", "productID", "uomName", "availableQty", "stockQty", "requestQty",
+    "pendingQty", "qty",
+)  # fmt: skip
+
 
 def is_pii_key(key: str) -> bool:
     lowered = key.lower()
@@ -159,6 +199,29 @@ def redact(value: Any) -> Any:
 def whitelist(row: Mapping[str, Any], fields: Iterable[str]) -> dict[str, Any]:
     """Salinan `row` hanya dengan kunci di `fields` (nilai skalar; dict/list dibuang -> tidak ada kontak bersarang)."""
     return {key: row.get(key) for key in fields if key in row and not isinstance(row.get(key), Mapping | list)}
+
+
+def whitelist_tree(value: Any, allowed: frozenset[str]) -> Any:
+    """Salinan rekursif: dict hanya dengan kunci di `allowed` (di setiap kedalaman), list diproses per elemen, skalar
+    apa adanya. Untuk laporan bersarang (P&L G68) yang kuncinya sama di banyak tingkat."""
+    if isinstance(value, Mapping):
+        return {str(k): whitelist_tree(v, allowed) for k, v in value.items() if str(k) in allowed}
+    if isinstance(value, list):
+        return [whitelist_tree(item, allowed) for item in value]
+    return value
+
+
+def whitelist_doc(
+    doc: Mapping[str, Any], header_fields: Iterable[str], line_key: str, line_fields: Iterable[str]
+) -> dict[str, Any]:
+    """Dokumen detail ESB -> header ter-whitelist + `line_key` = baris ter-whitelist (elemen bukan dict dibuang)."""
+    fields = tuple(line_fields)
+    lines = doc.get(line_key)
+    out = whitelist(doc, header_fields)
+    if not isinstance(lines, list):
+        lines = []
+    out[line_key] = [whitelist(line, fields) for line in lines if isinstance(line, Mapping)]
+    return out
 
 
 def redact_supplier(row: Mapping[str, Any]) -> dict[str, Any]:

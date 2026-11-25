@@ -1,4 +1,4 @@
--- Gelombang 69 (docs/04 §33, amandemen ADR-040 §6b -- Proposed): ESB OMS (penjualan level struk) -> ClickHouse.
+-- Gelombang 69 (docs/04 §33, amandemen ADR-040 §6c -- Proposed): ESB OMS (penjualan level struk) -> ClickHouse.
 -- Idempoten (CREATE ... IF NOT EXISTS / CREATE OR REPLACE VIEW). Dijalankan clickhouse-init.sh setiap deploy setelah
 -- 01..25 (glob /init/schema/*.sql, urutan nama) dan SEBELUM access/*.sql (wrapper efn_insight membaca view di bawah).
 -- Penulis: services/esb-extract (efn_esb/oms_runner.py, role esb_writer = SELECT + INSERT saja, tanpa DDL).

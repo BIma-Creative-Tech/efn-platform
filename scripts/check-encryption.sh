@@ -410,7 +410,7 @@ check_compose() {
       | (.key | capture("^ESB_PASSWORD_(?<k>[A-Z0-9]+)_FILE$") | .k) as $k
       | [$k, (.value // ""), (if ($m | index("esb_core_password_" + ($k | ascii_downcase))) != null then "1" else "0" end)]
       | @tsv' <<< "$json")
-  #  G69 (amandemen ADR-040 §6b, docs/04 §33): sumber kedua ESB OMS di esb-extract yang sama. ESB_OMS_BASE_URL wajib
+  #  G69 (amandemen ADR-040 §6c, docs/04 §33): sumber kedua ESB OMS di esb-extract yang sama. ESB_OMS_BASE_URL wajib
   #  PERSIS https://esbcore.co.id (host egress kedua; tanpa path, query, port, userinfo, slash akhir) dan hanya
   #  esb-extract yang memegang ESB_OMS_* (OMS memakai kredensial ESB brand; service lain tidak boleh punya jalur ini).
   #  Pemeriksaan Core di atas (ESB_BASE_URL https://services.esb.co.id/) tetap berlaku.

@@ -1492,6 +1492,51 @@ Q-PP1 (akun API non-admin), Q-PP2 (penyimpangan "draft di ESB" untuk produksi), 
   perlu diubah devsecops.
 - Semua runtime (tidak ada kode yang ditulis).
 
+---
+
+# G67 — Insight PB dari ESB: laba rugi outlet, waste & pemakaian internal, fill rate outlet → CK (2026-11-25)
+
+## Ringkasan (untuk manajemen)
+Tiga halaman Insight baru untuk Paris Baguette dari data ESB yang hanya dibaca: Laba Rugi per outlet per bulan (khusus
+Eksekutif), Waste & Pemakaian Internal, dan Fill Rate permintaan outlet ke CK. Histori 24 bulan ditarik dalam 2–3 malam
+(±61 rb GET), lalu harian (±210 GET/hari). Estimasi ±12–15,5 hari-engineer, dua engineer paralel. Tujuh definisi/akses
+menunggu klien; sampai dijawab dipakai default berlabel.
+
+## File diubah (worktree `efn-platform-g67`, tanpa kode)
+- `docs/04_SERVICE_CONTRACTS.md`: baris versi v21.6; §31 baru (§31.1–§31.14: entitas `profit_loss`, `item_journal`,
+  `transfer_request`, `delivery_ref` + mode `retransform`, env, DDL `24-g67-esb-pl-waste-fillrate.sql`, 7 view efn_dwh / 5
+  view efn_insight, rumus fill rate, grant/policy 15 → 20, rute `/pnl` `/waste` `/fill-rate`, 15 query, glosarium,
+  L-260..L-268, Q-ESB30..Q-ESB36, risiko, estimasi W-A/W-B).
+- `docs/decisions/ADR-040-integrasi-esb-core-datamart.md`: header + §6b "Amandemen G67" (Proposed).
+
+## Keputusan desain penting
+- P&L per cabang × tahun (1 GET = semua bulan s.d. M); disimpan per cabang × bulan × akun + baris summary; total brand
+  disimpan sebagai pembanding → baris "Tidak teralokasi ke outlet". Laba memakai `summaries` ESB. Whitelist PDP wajib
+  (denylist `redact()` membuang `description` = nama akun).
+- Referensi GD → GTR: tabel baru `fact_esb_delivery_ref_line` (usulan lead = ALTER `fact_esb_delivery`; ditolak karena
+  ORDER BY tidak bisa diubah, `qty_ea` mencampur kirim/terima, dan flow/agregat tidak boleh tersentuh). Diisi dari
+  `raw_doc` lewat `retransform` tanpa API; nomor dokumen yang dipakai ulang ESB → `raw_missing` → backfill paksa.
+- Fill rate baris = rata-rata `least(dikirim/diminta, 1)` (tak bersatuan); % baris penuh; % permintaan penuh; fill rate qty
+  hanya per produk-satuan; kohort tanggal permintaan; matang 7 hari; satuan beda tidak dihitung.
+- `productID` jurnal item → kode lewat `dim_esb_product_id` (dipelajari dari detail GTR), di-resolve saat query.
+- Semua view kelas PT; `/pnl` hanya exec; tanpa Metabase/text2sql.
+
+## Temuan untuk lead
+- **Nomor L bentrok:** L-250..L-258 dipakai G65 (§27.13) dan L-250..L-257 dipakai G66 (§30.15). G67 mulai L-260. Perlu
+  penomoran ulang salah satu (usul: G66 → L-270..L-277, di luar rentang G67).
+- Dua file init bernomor 23 (`23-g65-…`, `23-insight-yoy.sql`); G67 memakai 24.
+- Glosarium sudah punya `fill-rate` (definisi SMD DC); F&B memakai id baru `fill-rate-line`.
+
+## Keputusan yang butuh tanda tangan klien
+Penerimaan amandemen ADR-040 §6b; Q-ESB30 (arti purpose, PRODUCTION SUPPLIES), Q-ESB31 (fill rate resmi: requestQty vs
+qty), Q-ESB32 (status GTR, bypassGoodsDelivery), Q-ESB33 (akun P&L HO/alokasi, penutupan buku), Q-ESB34 (tanda beban,
+arti hpp), Q-ESB35 (siapa boleh melihat P&L), Q-ESB36 (kepala toko lihat waste/fill rate cabang); Q-ESB7 tetap.
+
+## Belum terverifikasi
+Struktur `summaries.details` per bulan; kelengkapan `periods`; tanda beban; Σ cabang vs total brand; filter tanggal list
+item-journal/GTR; stabilitas `ID` detail jurnal; arti `hpp`/`qty`/`bypassGoodsDelivery`; arah origin/destination GTR;
+daftar status; `referenceNumber` header vs baris; `productID` di `/product`; performa join fill rate. Semua runtime.
+
 # G66 amandemen A1 — login per pengguna ESB + shadow user Odoo: ADR-051 §8, kontrak §30.17 (2026-11-25)
 
 ## Ringkasan (untuk manajemen)
@@ -1519,7 +1564,7 @@ untuk uji SoD), Q-PP18 (lockout ESB), Q-PP19 (`authorized`, `userRoleID` admin),
 - Bentuk body `/json/2` untuk `efn_esb_provision`; oktet 26 untuk `prodplan-rpc` bebas di semua branch.
 - `CLAUDE.md` belum diubah (agent tidak boleh mengubahnya; usulan kalimat di laporan ke lead).
 
-# G69 — ESB OMS penjualan level struk: ADR-040 §6b, kontrak §33 (2026-11-25)
+# G69 — ESB OMS penjualan level struk: ADR-040 §6c, kontrak §33 (2026-11-25)
 
 ## Ringkasan (untuk manajemen)
 Data per jam/kanal/pax/promo per struk PB ditarik baca-saja dari ESB OMS (API kedua vendor ESB) untuk dashboard penjualan

@@ -100,13 +100,15 @@ services:
       ESB_BACKFILL_INCLUDE_INACTIVE: ${ESB_BACKFILL_INCLUDE_INACTIVE:-true}
       ESB_HTTP_TIMEOUT_SECONDS: ${ESB_HTTP_TIMEOUT_SECONDS:-60}
       ESB_MAX_PAGES: ${ESB_MAX_PAGES:-500}
+      # G68 (docs/04 §32.2): jendela refresh harian laba rugi (bulan; 1..12, di luar -> 2).
+      ESB_PL_REFRESH_MONTHS: ${ESB_PL_REFRESH_MONTHS:-2}
       ESB_COMPANY_BACHA: ${ESB_COMPANY_BACHA:-BCF}
       # G67 margin bahan (docs/04 §31.2): kosong = fitur mati; brand wajib di ESB_BRANDS + purchase_line di ESB_ENTITIES.
       ESB_MARGIN_BRANDS: ${ESB_MARGIN_BRANDS:-}
       ESB_MARGIN_MONTHS: ${ESB_MARGIN_MONTHS:-13}
       ESB_MARGIN_WEEKDAY: ${ESB_MARGIN_WEEKDAY:-0}
       ESB_MARGIN_HOUR_WIB: ${ESB_MARGIN_HOUR_WIB:-2}
-      # G69 (amandemen ADR-040 §6b, docs/04 §33): sumber kedua ESB OMS (penjualan level struk). Klien terpisah dari Core:
+      # G69 (amandemen ADR-040 §6c, docs/04 §33): sumber kedua ESB OMS (penjualan level struk). Klien terpisah dari Core:
       # POST-baca allowlist path persis (ditegakkan kode efn_esb + test), Basic auth dengan ESB_USER_<BRAND> + secret
       # esb_core_password_<brand> yang SAMA (tidak ada secret baru). Kill switch sendiri, terpisah dari ESB_ENABLED.
       # Runbook: docs/runbooks/esb-extract.md §10.

@@ -10,7 +10,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, time, timedelta, timezone
 
-from efn_esb.config import BRANCH_SCOPED, SNAPSHOT_BRANCH_SCOPED
+from efn_esb.config import BRANCH_SCOPED, PL_ENTITY, SNAPSHOT_BRANCH_SCOPED
 
 # Indonesia tanpa DST: offset tetap (tidak bergantung paket tzdata di image slim).
 WIB = timezone(timedelta(hours=7), "WIB")
@@ -161,6 +161,69 @@ def incremental_tasks(
             for day in incremental_days(now, finished, correction_days, gap_days, ready_hour):
                 tasks.append(SliceTask(day, entity, scope))
     return sorted(tasks, key=lambda t: (t.day, t.entity, t.scope), reverse=True)
+
+
+# ================================================================== G68 profit_loss (docs/04 §32.1.1, L-271/L-274)
+# Satu slice = (profit_loss, `<branch_id>` | '*', Y-01-01): satu GET month-to-month memberi semua bulan Januari..M tahun
+# Y. Total brand (scope '*') selalu ikut sebagai pembanding "tidak teralokasi ke outlet".
+
+
+def year_start(year: int) -> date:
+    return date(year, 1, 1)
+
+
+def pl_month(year: int, today: date) -> int:
+    """Parameter `month` GET: tahun berjalan (WIB) -> bulan ini; tahun lampau -> 12."""
+    if year > today.year:
+        raise ValueError("tahun P&L di masa depan")
+    return today.month if year == today.year else 12
+
+
+def pl_refresh_years(today: date, refresh_months: int) -> list[int]:
+    """Tahun yang memuat bulan [bulan_ini - (N-1) .. bulan_ini] (N = ESB_PL_REFRESH_MONTHS)."""
+    first = today.year * 12 + (today.month - 1) - (max(1, refresh_months) - 1)
+    return sorted({first // 12, today.year})
+
+
+def pl_scopes(branch_ids: Iterable[int]) -> list[str]:
+    return [str(b) for b in sorted({int(b) for b in branch_ids if int(b) > 0})] + [BRAND_SCOPE]
+
+
+def pl_run_tasks(
+    branch_ids: Sequence[int],
+    now: datetime,
+    checkpoints: Checkpoints,
+    refresh_months: int,
+    ready_hour: int,
+) -> list[SliceTask]:
+    """Mode `run`: sekali per hari WIB setelah `ready_hour` -- slice tahun refresh x cabang AKTIF + total brand yang
+    belum punya checkpoint selesai setelah hari ini pukul `ready_hour` WIB."""
+    local = wib_now(now)
+    today = local.date()
+    ready_at = datetime.combine(today, time(ready_hour), WIB)
+    if local < ready_at:
+        return []
+    tasks: list[SliceTask] = []
+    for year in sorted(pl_refresh_years(today, refresh_months), reverse=True):
+        for scope in pl_scopes(branch_ids):
+            last = checkpoints.get((PL_ENTITY, scope, year_start(year)))
+            if last is None or wib_now(last) < ready_at:
+                tasks.append(SliceTask(year_start(year), PL_ENTITY, scope))
+    return tasks
+
+
+def pl_backfill_tasks(
+    branch_ids: Sequence[int], start: date, end: date, done: Checkpoints, force: bool = False
+) -> list[SliceTask]:
+    """Mode `backfill`: semua tahun yang beririsan [start, end] x cabang + total brand, tahun terbaru dulu; slice yang
+    sudah `done` dilewati kecuali `force` (resumable)."""
+    tasks: list[SliceTask] = []
+    for year in range(end.year, start.year - 1, -1):
+        for scope in pl_scopes(branch_ids):
+            task = SliceTask(year_start(year), PL_ENTITY, scope)
+            if force or task.key not in done:
+                tasks.append(task)
+    return tasks
 
 
 def snapshot_tasks(entities: Iterable[str], day: date, branch_ids: Sequence[int]) -> list[SliceTask]:

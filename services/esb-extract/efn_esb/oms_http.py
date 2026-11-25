@@ -1,4 +1,4 @@
-"""Klien HTTP ESB OMS (G69, docs/04 §33, amandemen ADR-040 §6b — Proposed). Terpisah dari klien Core (`http.py`).
+"""Klien HTTP ESB OMS (G69, docs/04 §33, amandemen ADR-040 §6c — Proposed). Terpisah dari klien Core (`http.py`).
 
 Allowlist persis (dicek SEBELUM koneksi dibuka; selain ini -> `MethodNotAllowed`):
 - host persis `esbcore.co.id`, port 443, skema https; base URL tanpa path/kredensial/query;

@@ -61,6 +61,21 @@ GRANT SELECT ON efn_dwh.v_esb_store_receipt_daily TO efn_insight_definer;
 -- Insight YoY 24 Nov 2026 (init/23-insight-yoy.sql): tabel dasarnya sudah ada di daftar ini.
 GRANT SELECT ON efn_dwh.v_esb_sales_done_day TO efn_insight_definer;
 GRANT SELECT ON efn_dwh.v_esb_menu_econ_daily TO efn_insight_definer;
+-- G68 (init/25-g68-esb-pl-waste-fillrate.sql, docs/04 §32.7): lima view kelas PT + view internal yang dirujuk
+-- (v_esb_item_journal_line, v_esb_fill_rate_line; TIDAK dibungkus efn_insight) + tabel dasarnya. v_esb_g68_quality
+-- tidak di-grant (admin/lead saja).
+GRANT SELECT ON efn_dwh.v_esb_pl_monthly TO efn_insight_definer;
+GRANT SELECT ON efn_dwh.v_esb_item_usage_daily TO efn_insight_definer;
+GRANT SELECT ON efn_dwh.v_esb_item_usage_product_monthly TO efn_insight_definer;
+GRANT SELECT ON efn_dwh.v_esb_fill_rate_daily TO efn_insight_definer;
+GRANT SELECT ON efn_dwh.v_esb_fill_rate_product_monthly TO efn_insight_definer;
+GRANT SELECT ON efn_dwh.v_esb_item_journal_line TO efn_insight_definer;
+GRANT SELECT ON efn_dwh.v_esb_fill_rate_line TO efn_insight_definer;
+GRANT SELECT ON efn_dwh.fact_esb_profit_loss TO efn_insight_definer;
+GRANT SELECT ON efn_dwh.fact_esb_item_journal_line TO efn_insight_definer;
+GRANT SELECT ON efn_dwh.fact_esb_transfer_request_line TO efn_insight_definer;
+GRANT SELECT ON efn_dwh.fact_esb_delivery_ref_line TO efn_insight_definer;
+GRANT SELECT ON efn_dwh.dim_esb_product_id TO efn_insight_definer;
 GRANT SELECT ON efn_dwh.dim_esb_branch TO efn_insight_definer;
 GRANT SELECT ON efn_dwh.dim_esb_product TO efn_insight_definer;
 GRANT SELECT ON efn_dwh.dim_esb_menu TO efn_insight_definer;
@@ -239,6 +254,34 @@ FROM efn_dwh.v_esb_menu_cost_monthly;
 CREATE OR REPLACE VIEW efn_insight.v_esb_ing_group_monthly DEFINER = efn_insight_definer SQL SECURITY DEFINER AS
 SELECT brand, company_code, month, ing_group, basket_value, base_value
 FROM efn_dwh.v_esb_ing_group_monthly;
+
+-- G68 (docs/04 §32.6-§32.7, L-277): laba rugi outlet, waste & pemakaian internal, fill rate outlet -> CK. Kelas PT
+-- (sesi ber-cabang -> 0 baris). Kolom eksplisit = antarmuka insight-web (urutan & nama tetap).
+CREATE OR REPLACE VIEW efn_insight.v_esb_pl_monthly DEFINER = efn_insight_definer SQL SECURITY DEFINER AS
+SELECT period_month, brand, company_code, scope, branch_id, branch_name, line_type, section, account_no, account_key,
+       account_name, amount, is_partial
+FROM efn_dwh.v_esb_pl_monthly;
+
+CREATE OR REPLACE VIEW efn_insight.v_esb_item_usage_daily DEFINER = efn_insight_definer SQL SECURITY DEFINER AS
+SELECT journal_date, brand, company_code, branch_id, branch_name, usage_class, purpose_name, docs, lines, value_out,
+       value_in, value_net
+FROM efn_dwh.v_esb_item_usage_daily;
+
+CREATE OR REPLACE VIEW efn_insight.v_esb_item_usage_product_monthly DEFINER = efn_insight_definer SQL SECURITY DEFINER AS
+SELECT month, brand, company_code, branch_id, usage_class, purpose_name, product_code, product_name, uom, qty_out,
+       value_net
+FROM efn_dwh.v_esb_item_usage_product_monthly;
+
+CREATE OR REPLACE VIEW efn_insight.v_esb_fill_rate_daily DEFINER = efn_insight_definer SQL SECURITY DEFINER AS
+SELECT transfer_date, brand, company_code, branch_id, branch_name, supplier_branch_id, supplier_name, requests,
+       requests_full, lines, lines_full, lines_zero, line_ratio_sum, lines_uom_mismatch, lines_open, lead_days_sum,
+       lead_days_n
+FROM efn_dwh.v_esb_fill_rate_daily;
+
+CREATE OR REPLACE VIEW efn_insight.v_esb_fill_rate_product_monthly DEFINER = efn_insight_definer SQL SECURITY DEFINER AS
+SELECT month, brand, company_code, branch_id, product_code, product_name, uom, lines, request_qty, sent_capped,
+       qty_sent, qty_received
+FROM efn_dwh.v_esb_fill_rate_product_monthly;
 
 -- G69 ESB OMS (docs/04 §33.5/§33.7). Kelas BR (cabang `brs`, persona Toko F&B) untuk view ber-cabang tanpa data
 -- pembanding keuangan Core; v_esb_oms_recon_daily kelas PT (memuat Σ pembayaran ESB Core). Tanpa identitas member

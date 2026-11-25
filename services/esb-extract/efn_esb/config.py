@@ -25,9 +25,22 @@ DEFAULT_COMPANY = {"pb": "PB", "wtz": "WTZ", "bacha": "BCF", "imd": "IMD", "cup"
 ALLOWED_COMPANY_CODES = frozenset({"EFN", "GL", "PB", "BCR", "BCF", "WTZ", "FARM", "IMD", "CUP"})
 ENTITIES = (
     "branch", "master", "sales", "fin_sold", "payment", "production", "delivery", "transfer", "stock", "purchase_line",
+    "profit_loss", "item_journal", "transfer_request", "delivery_ref",
 )  # fmt: skip
 # Entitas harian (punya tanggal). `branch` & `master` = snapshot per hari jalan.
-DAILY_ENTITIES = ("sales", "fin_sold", "payment", "production", "delivery", "transfer", "stock", "purchase_line")
+# G68 (docs/04 §32.1): `item_journal`, `transfer_request` = harian per brand (opt-in). `profit_loss` BUKAN harian
+# generik (slice = cabang x TAHUN, planning.pl_*_tasks); `delivery_ref` = turunan `delivery` (tanpa slice sendiri).
+DAILY_ENTITIES = (
+    "sales", "fin_sold", "payment", "production", "delivery", "transfer", "stock", "purchase_line", "item_journal",
+    "transfer_request",
+)  # fmt: skip
+PL_ENTITY = "profit_loss"
+DELIVERY_REF_ENTITY = "delivery_ref"
+# Entitas yang diterima `backfill --entity` (harian + P&L + turunan delivery_ref).
+BACKFILL_ENTITIES = (*DAILY_ENTITIES, PL_ENTITY, DELIVERY_REF_ENTITY)
+# Mode `retransform` (tanpa API, dari raw_doc): hanya delivery_ref di G68 (§32.3).
+RETRANSFORM_ENTITIES = (DELIVERY_REF_ENTITY,)
+DEFAULT_PL_REFRESH_MONTHS = 2
 # `stock` bersyarat (§25.4): default tidak aktif sampai parameter terbukti di production.
 # `purchase_line` (G65, docs/04 §27.13.1): opt-in lewat ESB_ENTITIES / `backfill --entity`, default MATI.
 DEFAULT_ENTITIES = ("branch", "master", "sales", "fin_sold", "payment", "production", "delivery", "transfer")
@@ -167,6 +180,16 @@ def parse_entities(text: str) -> tuple[str, ...]:
     return items
 
 
+def parse_pl_refresh_months(raw: str | None) -> int:
+    """`ESB_PL_REFRESH_MONTHS` (docs/04 §32.2): 1..12; kosong, bukan bilangan bulat, atau di luar rentang -> 2
+    (kontrak: di luar -> default, bukan gagal start)."""
+    try:
+        value = int(str(raw).strip())
+    except (TypeError, ValueError):
+        return DEFAULT_PL_REFRESH_MONTHS
+    return value if 1 <= value <= 12 else DEFAULT_PL_REFRESH_MONTHS
+
+
 def _parse_days(text: str) -> tuple[int, ...]:
     try:
         days = tuple(sorted({int(part) for part in text.split(",") if part.strip()}))
@@ -190,6 +213,11 @@ class BrandConfig:
     def company_for(self, branch_id: int) -> str:
         return self.branch_company.get(branch_id, self.company_code)
 
+    @property
+    def multi_company(self) -> bool:
+        """Brand dengan cabang lebih dari satu PT (override `ESB_BRANCH_COMPANY_OVERRIDES` ke PT lain)."""
+        return any(code != self.company_code for code in self.branch_company.values())
+
 
 @dataclass(frozen=True)
 class EsbSettings:
@@ -210,6 +238,8 @@ class EsbSettings:
     backfill_window: tuple[time, time] = (time(22, 0), time(5, 0))
     backfill_include_inactive: bool = True
     entities: tuple[str, ...] = DEFAULT_ENTITIES
+    # G68: jendela refresh harian P&L (bulan berjalan + N-1 bulan sebelumnya; L-274).
+    pl_refresh_months: int = DEFAULT_PL_REFRESH_MONTHS
     run_once: bool = False
     # SEC-187: batas body respons ESB (byte).
     max_response_bytes: int = DEFAULT_MAX_RESPONSE_BYTES
@@ -283,6 +313,7 @@ class EsbSettings:
             backfill_window=parse_window(_str(e, "ESB_BACKFILL_WINDOW", "22:00-05:00")),
             backfill_include_inactive=_bool(e, "ESB_BACKFILL_INCLUDE_INACTIVE", True),
             entities=parse_entities(_str(e, "ESB_ENTITIES", ",".join(DEFAULT_ENTITIES))),
+            pl_refresh_months=parse_pl_refresh_months(e.get("ESB_PL_REFRESH_MONTHS")),
             run_once=_bool(e, "ESB_RUN_ONCE", False),
             max_response_bytes=_int_range(
                 e, "ESB_MAX_RESPONSE_BYTES", DEFAULT_MAX_RESPONSE_BYTES, MIN_MAX_RESPONSE_BYTES, MAX_MAX_RESPONSE_BYTES

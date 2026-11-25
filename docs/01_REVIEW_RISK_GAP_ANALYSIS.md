@@ -365,7 +365,7 @@ R-O12, R-O13, R-L12 (§4).
 - ~~**Q-ESB23** (PO) Urutan cutover per brand; IMD/CUP boleh migrasi master sebelum Q-ESB5?~~ **Terjawab 18 Nov 2026:** pilot = **Paris Baguette (PB)**; brand supermarket di luar G43. Sisa (urutan setelah PB, master IMD/CUP sebelum Q-ESB5) mengikuti default ADR-042 §3.6 sampai PO menyatakan lain.
 - **Q-ESB24** (Finance/DPO) Penandatangan berita acara rekonsiliasi per brand (usulan Finance + Ops brand + PO) dan retensi bundel migrasi **≤ 90 hari setelah berita acara** diterima? (R-L12)
 
-**Penjualan level struk ESB OMS (G69, ADR-040 §6b Proposed, 25 Nov 2026).** Rincian di `docs/04` §33.9. Q-ESB1 kini juga
+**Penjualan level struk ESB OMS (G69, ADR-040 §6c Proposed, 25 Nov 2026).** Rincian di `docs/04` §33.9. Q-ESB1 kini juga
 mencakup OMS. Risiko terkait R-S17, R-O09, R-O10, R-L01.
 - **Q-OMS1** (IT klien / PIC ESB) Token statis `core-api.esb.co.id` untuk material usage & member — di luar G69.
 - **Q-OMS2** (IT klien / vendor ESB) Izin beban intraday OMS (hari berjalan tiap 15 menit 07–23 WIB, PB)? Sampai ada, production `ESB_OMS_ENABLED=false`. (R-O10)

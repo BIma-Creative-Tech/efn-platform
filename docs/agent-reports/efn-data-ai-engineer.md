@@ -5,6 +5,116 @@ ADR terkait (semua `Proposed`): ADR-003, ADR-006, ADR-007, ADR-008, ADR-010, ADR
 
 **Tidak ada yang dijalankan.** Mesin penulis tidak punya Python; semua kode, test, dan SQL belum pernah dieksekusi. Validasi pertama terjadi di CI / oleh QA.
 
+## Rekonsiliasi merge #165 + penomoran ulang G67 → G68 (25 Nov 2026)
+
+Worktree `efn-platform-g67`, branch `feat/esb-insight-pl-waste-fillrate`, saat lead menjalankan `git merge origin/main`
+(5f16eb3 = PR #165 "Margin bahan", yang lebih dulu memakai label G67, docs/04 §31, `24-margin-bahan.sql`, L-259..L-264).
+**Tidak ada yang dijalankan** (tanpa shell/git): pytest, ruff, dan `git rm` file lama dikerjakan lead.
+
+- Konflik diselesaikan dengan **mempertahankan kedua fitur**: docs/04, laporan ini, `insight-access.sql`,
+  `insight-esb-policy.sh`, `clickhouse-init.sh`, `efn_esb/__main__.py`, `efn_esb/runner.py`, `tests/test_ddl.py`,
+  `tests/test_insight_access.py`, `tests/test_insight_fnb_access.py`.
+- **Jumlah policy ESB = 25** (20 kelas PT + 5 kelas BR): 12 PT dasar (G52/G53/YoY) + 3 margin bahan + 5 G68. Dikunci di
+  `clickhouse-init.sh` (`ESB_POLICY_EXPECTED=25`), `test_insight_access.py` (`ESB_POLICY_COUNT`),
+  `test_insight_fnb_access.py`, `test_margin.py` (semula 20), `test_g68_ddl.py` (PT = 20).
+- Gelombang paket W-A ini **dinomori ulang G68**: docs/04 §31 → **§32** (v21.6 → v21.7; baris v21.6 untuk margin bahan
+  ditambahkan karena #165 tidak menambah baris versi), L-260..L-268 → **L-270..L-278** (bentrok dengan L-259..L-264
+  margin bahan; L-27x belum dipakai di repo), `24-g67-…sql` → `25-g68-esb-pl-waste-fillrate.sql`, `extract_g67.py` /
+  `transform_g67.py` → `*_g68.py` (`G67_TABLES`/`G67_EXTRACTORS` → `G68_*`), test `test_g67*.py` → `test_g68*.py`,
+  harness → `g68_views_harness.sh`, view `v_esb_g67_quality` → `v_esb_g68_quality`, flag `INSIGHT_G67_ENABLED` →
+  `INSIGHT_G68_ENABLED` (compose, `deploy.sh`, `deploy-validate.sh`), SEC-G67-01 → SEC-G68-01 di kode/test. ADR-040 §6b
+  menjadi "Amandemen G68" (#165 tidak menambah amandemen). Isi bagian di bawah tidak diubah (rekaman historis; baca
+  G67/§31/L-26x sebagai G68/§32/L-27x).
+- `test_g68_ddl.py::test_init_file_renumbered_after_margin_bahan` sengaja gagal selama file lama
+  `infra/clickhouse/init/24-g67-esb-pl-waste-fillrate.sql` masih ada (DDL ganda di glob `init/*.sql`).
+
+## Gelombang 67 → 68 paket W-A — esb-extract + ClickHouse: laba rugi outlet, waste, fill rate (25 Nov 2026)
+
+> Dinomori ulang G68 saat merge #165 (lihat bagian rekonsiliasi di atas).
+
+Branch `feat/esb-insight-pl-waste-fillrate` (worktree `efn-platform-g67`). Kontrak `docs/04` §31 + ADR-040 §6b. **Tidak
+ada yang dijalankan** (tanpa shell): pytest, ruff, DDL di ClickHouse 24.8, dan harness view dijalankan lead.
+
+### File
+- Baru: `services/esb-extract/efn_esb/extract_g67.py`, `efn_esb/transform_g67.py` (murni),
+  `infra/clickhouse/init/24-g67-esb-pl-waste-fillrate.sql`, `tests/test_g67.py`, `tests/test_g67_ddl.py`,
+  `tests/clickhouse/g67_views_harness.sh`.
+- Diubah: `efn_esb/config.py` (entitas opt-in, `BACKFILL_ENTITIES`, `RETRANSFORM_ENTITIES`, `ESB_PL_REFRESH_MONTHS`),
+  `normalize.py` (whitelist G67, `whitelist_tree`, `whitelist_doc`), `planning.py` (`pl_*`), `extract.py`
+  (`SliceResult.derived`, `BrandRuntime.delivery_ref/product_ids/pl_branches`, `delivery_ref` di `extract_delivery`),
+  `runner.py` (P&L di run/backfill, checkpoint turunan, `run_retransform`, `_finish(calls)`), `store.py`
+  (`load_product_ids`, `load_raw`), `__main__.py` (`retransform`, validasi `delivery_ref`), `init/19-insight-review.sql`
+  (`v_esb_coverage` + 3 entitas), `access/esb-access.sql`, `access/insight-access.sql`, `access/insight-esb-policy.sh`,
+  `clickhouse-init.sh` (`ESB_POLICY_EXPECTED=22`), `infra/compose/docker-compose.esb.yml` (`ESB_PL_REFRESH_MONTHS`),
+  test `test_insight_access.py`, `test_insight_fnb_access.py`, `test_ddl.py`, `test_runner.py` (FakeStore), README,
+  `docs/runbooks/esb-extract.md` §5b.
+
+### Nama final (antarmuka W-B)
+Tabel: `fact_esb_profit_loss`, `fact_esb_item_journal_line`, `fact_esb_transfer_request_line`,
+`fact_esb_delivery_ref_line`, `dim_esb_product_id`. View dibungkus `efn_insight.*` (kolom = §31.6 persis, kelas PT):
+`v_esb_pl_monthly`, `v_esb_item_usage_daily`, `v_esb_item_usage_product_monthly`, `v_esb_fill_rate_daily`,
+`v_esb_fill_rate_product_monthly`. Internal: `v_esb_fill_rate_line` (kolom §31.6), `v_esb_item_journal_line` (baru),
+`v_esb_g67_quality` (admin saja). Nilai `section` baris summary = kunci pos ESB camelCase (`netSales`, `grossProfit`,
+`operationalExpenses`, `earningBeforeInterestTaxDepreciationAmortization`, `netProfitLoss`, …); `scope` = `branch|brand`.
+
+### Penyimpangan dari teks kontrak (DDL menang untuk detail)
+1. `fact_esb_profit_loss.source_lines UInt16` (tambahan): jumlah baris akun sumber yang dijumlah; dasar cek
+   `dup_account` (penjumlahan di transform menghapus jejak duplikat).
+2. View internal `v_esb_item_journal_line` (tambahan): satu tempat untuk filter versi slice, `ITEM_JOURNAL_COUNTED_STATUS`,
+   dan `multiIf` kelas purpose (dipakai dua view usage + quality). Di-grant ke definer (dirujuk), tidak dibungkus.
+3. Jumlah policy ESB **17 → 22** (kontrak menulis 15 → 20; basis di main sudah 17 karena YoY). `20-esb-aggregates.sql`
+   tidak ada di worktree ini (#164 belum termasuk) → rekonsiliasi angka saat merge.
+4. `lines_open` = baris `is_mature = 0` dengan `request_qty > 0` (semua status): kolom `v_esb_fill_rate_line` dikunci
+   kontrak tanpa status/bypass, jadi baris batal yang masih muda ikut "masih berjalan" sampai matang.
+5. `uom_mismatch` = ada GD untuk (permintaan, produk) tetapi TIDAK ada satu pun bersatuan sama. GD yang punya satuan sama
+   **dan** satuan lain → baris dihitung dengan qty satuan sama saja (yang beda satuan diabaikan, tidak dikonversi).
+6. `v_esb_g67_quality` menambah `gtr_bypass_gd` dan `gtr_product_unmapped`; `pl_sign_check` = porsi baris akun negatif
+   per seksi beban + `formula_abs_diff` (|netProfitLoss − rumus fallback §31.1.1|).
+7. `dim_esb_product_id` hanya diisi `transfer_request` (source `gtr`); `master` belum (opsional, `productID` di `/product`
+   [B]).
+
+### Asumsi skema / perilaku
+- Respons `get()` = objek `result` envelope (sama G41). P&L: seksi top-level = list baris akun; summary `details` dipakai
+  bila setiap elemen punya `periods`/`area`, jika tidak `total` untuk bulan M. Scope brand: semua `details` dijumlah,
+  prefix label tidak dicek, `area` opsional; scope cabang: prefix label dan `area.id` wajib = cabang, `area.value` wajib.
+- Konstanta sementara: `ITEM_JOURNAL_COUNTED_STATUS` = nama `authorized/finished/closed` (lower/trim);
+  `GTR_COUNTED_STATUS` = `status_id IN (3, 6)` (pola `TRANSFER_COUNTED_STATUS` G41); `GTR_ORIGIN_IS_SUPPLIER = True`.
+- `delivery_ref` ditulis hanya bila `delivery` DAN `delivery_ref` aktif; checkpoint `delivery_ref` (calls 0) setelah
+  checkpoint `delivery`, versi sama. `backfill --entity delivery_ref` tanpa `delivery` → exit 2 (arahkan ke retransform).
+- Retransform: list raw `inventory/goods-delivery` (`doc_key=D`) + detail `inventory/goods-delivery/{num}` dengan
+  `doc_date = D`; tanpa raw baru; `extract_run.mode='retransform'`, `calls=0`; exit 1 bila ada `raw_missing`.
+- P&L `run`: cabang aktif semua tipe + `*`, sekali/hari (checkpoint slice tahun selesai setelah 03:00 WIB hari ini);
+  `backfill`: semua cabang (nonaktif bila `ESB_BACKFILL_INCLUDE_INACTIVE`). `month` dihitung dari versi slice (WIB).
+- `ESB_PL_REFRESH_MONTHS` tidak valid → 2 (kontrak: tidak gagal start).
+
+### Uji (sintetis, belum dijalankan)
+`test_g67.py`: label bulan + fail closed (8 kasus detail), akun ganda, summary total-saja, scope brand, parameter GET
+(`branchIDs` tunggal, tanpa `branchIDs[]`, month 11/12), whitelist PII (raw + mart), `line_no`/`detail_id` fallback stabil,
+`value` ROUND_HALF_UP, tolak tanggal/nomor detail beda (tanpa tulis), GTR arah/PT peminta/merge/resolusi kode,
+pasangan productID ambigu, `delivery_ref` kirim/terima terpisah + referensi per baris, checkpoint turunan terakhir,
+**retransform = hasil extract & idempoten (2x)**, `raw_missing` (detail hilang, nomor dipakai ulang, list hilang),
+planning P&L run/backfill, run_cycle/run_backfill P&L, konfigurasi, CLI (exit 2, kill switch).
+`test_g67_ddl.py`: kolom/tipe/ORDER BY/PARTITION, kontrak kolom 7 view, filter versi slice, rumus fill rate, kelas
+purpose, grant positif/negatif, policy PT, `insight_reader` tanpa efn_dwh. Harness `g67_views_harness.sh`: 7 kasus wajib
+§31.6.1 (+ trans_type lain, status batal, bypass), angka daily/product, P&L versi slice + selisih brand, kelas/status
+jurnal, resolusi `ID:`, negatif row policy di kelima view (WTZ, `company_code ''`, `brs` terisi).
+
+### Putaran perbaikan (security + QA, 25 Nov 2026)
+- SEC-G67-01: `BrandConfig.multi_company` (override ke PT lain); total brand P&L brand multi-PT → `company_code=''`
+  (row policy membuang), PB tetap PT default. Test positif PB + negatif Bacha; harness: scope BCF / BCF+BCR tidak melihat
+  total brand Bacha. docs/04 §31.1.1 diselaraskan.
+- QA P2#4: `is_counted` + `r.product_code != ''` (quality `gtr_product_unmapped` sudah ada); harness TFE.
+- QA P3: `first_delivery_date` = `minIf(delivery_date, qty_sent > 0)`, NULL bila sebelum `transfer_date`; `lead_days_*`
+  hanya baris dengan `first_delivery_date` terisi; harness TF10 (GD qty 0 diabaikan → +4 hari), TF11 (GD sebelum
+  permintaan → NULL). Angka harness daily D30 `7|4|7|4|2|4.6|1|0|8|4`, produk P1 EA `6|47|34|39`.
+
+### Belum terverifikasi
+Semua **[B]** §31.13 (struktur summaries, bentuk respons total brand, tanda beban, filter tanggal list, stabilitas `ID`,
+arti `hpp`/`qty` GTR/`bypassGoodsDelivery`, arah GTR, daftar status, `referenceNumber` header vs baris, performa view fill
+rate). Belum ada uji extractor terhadap ESB nyata; backfill PB + distribusi status menunggu lead (malam). Sintaks SQL
+(ClickHouse 24.8, analyzer baru) belum dieksekusi: `makeDate`, tuple-IN dengan `if()`, `if(..., NULL)` → Nullable(Date).
+
+
 ## G66 amandemen A1 — prodplan: login per pengguna ESB (docs/04 §30.17, ADR-051 §8) (25 Nov 2026)
 
 Worktree `efn-platform-pplogin`, branch `feat/prodplan-esb-login`. **Belum dijalankan** (tanpa shell): ruff + pytest
@@ -2286,7 +2396,7 @@ ruff/pytest; E2E staging ESB; PG nyata (`test_store_integration.py` skip tanpa `
 
 ## Gelombang 69 — ESB OMS (penjualan level struk) ke ClickHouse (25 Nov 2026)
 
-docs/04 §33, amandemen ADR-040 §6b (Proposed). Worktree `efn-platform-oms`, branch `feat/esb-oms-sales`. Ditulis tanpa
+docs/04 §33, amandemen ADR-040 §6c (Proposed). Worktree `efn-platform-oms`, branch `feat/esb-oms-sales`. Ditulis tanpa
 shell: ruff/pytest dijalankan lead di container.
 
 ### File

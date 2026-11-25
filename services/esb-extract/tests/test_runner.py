@@ -62,6 +62,9 @@ class FakeStore:
         self.aliases: dict[str, str] = {"FIN ROTI": "FIN001"}
         self.ratios: dict[int, BomRatio] = {}
         self.suppliers: list[tuple[int, str, str]] = []
+        self.product_ids: dict[int, str] = {}
+        # G68 retransform: {(endpoint, doc_key): (doc_date, payload)} = isi raw_doc (versi terakhir).
+        self.raw: dict[tuple[str, str], tuple[date, Any]] = {}
 
     # Sama dengan ClickHouseStore: baris kosong tidak ditulis.
     def insert(self, table: str, columns: Sequence[str], rows: list[list[Any]]) -> None:
@@ -85,6 +88,12 @@ class FakeStore:
 
     def load_suppliers(self, brand: str) -> list[tuple[int, str, str]]:
         return list(self.suppliers)
+
+    def load_product_ids(self, brand: str) -> dict[int, str]:
+        return dict(self.product_ids)
+
+    def load_raw(self, brand: str, endpoint: str, doc_keys: Sequence[str]) -> dict[str, tuple[date, Any]]:
+        return {key: self.raw[(endpoint, key)] for key in doc_keys if (endpoint, key) in self.raw}
 
     def tables(self) -> list[str]:
         return [table for _, table, _ in self.writes]

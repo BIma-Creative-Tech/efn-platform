@@ -31,7 +31,7 @@ hanya ada di overlay `prodplan-odoo` (tanpa overlay prodplan tidak melihatnya; f
 promtool, `haproxy -c`, `test-gateway.sh` belum dijalankan. Render `ulimits.core` diasumsikan `0` atau `{}` (cek menerima
 keduanya). Bentuk body `/json/2` method provisioning belum terverifikasi (kontrak).
 
-## G69 infra ESB OMS (25 Nov 2026, worktree `efn-platform-oms`, branch `feat/esb-oms-sales`, belum di-commit) — amandemen ADR-040 §6b, docs/04 §33
+## G69 infra ESB OMS (25 Nov 2026, worktree `efn-platform-oms`, branch `feat/esb-oms-sales`, belum di-commit) — amandemen ADR-040 §6c, docs/04 §33
 
 **Lingkup:** env OMS di overlay `esb-extract`, gerbang `check-encryption`, `.env.example`, runbook. Tidak menyentuh `services/esb-extract` / `infra/clickhouse` (data engineer, paralel).
 

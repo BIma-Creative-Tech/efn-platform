@@ -21,6 +21,10 @@ export const PAGE_FILTERS: Record<string, readonly FilterKey[]> = {
   '/fnb/exec': ['date', 'pt', 'branch'],
   '/fnb/marketing': ['date', 'pt', 'branch'],
   '/fnb/store': [],
+  // G68 (§32.9): /pnl memakai bulan (mfrom/mto di halaman), jadi tanpa rentang tanggal global; /waste dan /fill-rate memakai tanggal.
+  '/pnl': ['pt', 'branch'],
+  '/waste': ['date', 'pt', 'branch'],
+  '/fill-rate': ['date', 'pt', 'branch'],
 };
 
 /**
@@ -37,14 +41,20 @@ export const DATE_NA_REASON: Record<string, string> = {
   '/margin-bahan': 'halaman ini memakai jendela bulanan tetap dari penyegaran mingguan (bukan rentang tanggal).',
   '/store': 'halaman ini memakai minggu berjalan (Senin s.d. hari ini) dibanding minggu lalu.',
   '/fnb/store': 'halaman ini memakai satu hari (pilih di halaman) dibanding hari yang sama minggu lalu.',
+  '/pnl': 'laporan laba rugi per bulan; pilih bulan awal dan akhir di halaman.',
 };
+
+/** Halaman ESB-saja di luar `/fnb/` (G68): SMD tidak boleh ditawarkan di toolbar; server menolak `pt=SMD`. */
+const ESB_ONLY_PATHS: readonly string[] = ['/pnl', '/waste', '/fill-rate'];
 
 /**
  * Halaman persona F&B (`/fnb/*`, G52) hanya memakai data ESB: SMD (dan cabang `sm:`) tidak boleh ditawarkan walau sesi exec ber-SMD;
  * server (`fnbRangePage`) memang menolak `pt=SMD` ("filter tidak valid"). Mengembalikan kode yang boleh dipilih di toolbar.
  */
 export function selectableCodes(pathname: string, sessionCodes: readonly string[]): string[] {
-  return pathname.startsWith('/fnb/') || pathname === '/margin-bahan' ? sessionCodes.filter((c) => c !== 'SMD') : [...sessionCodes];
+  return pathname.startsWith('/fnb/') || pathname === '/margin-bahan' || ESB_ONLY_PATHS.includes(pathname)
+    ? sessionCodes.filter((c) => c !== 'SMD')
+    : [...sessionCodes];
 }
 
 export function appliesTo(pathname: string, key: FilterKey, smdAllowed = false): boolean {

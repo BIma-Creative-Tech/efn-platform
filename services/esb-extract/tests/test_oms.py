@@ -879,7 +879,7 @@ def test_insight_wrappers_and_row_policy_classes() -> None:
         assert policy[name] == ("PT" if name == "v_esb_oms_recon_daily" else "BR"), name
         if policy[name] == "BR":
             assert {"brand", "branch_id", "company_code"} <= set(cols)
-    assert "\nESB_POLICY_EXPECTED=27\n" in INIT_SH
+    assert "\nESB_POLICY_EXPECTED=32\n" in INIT_SH  # 25 setelah G68 (#167) + 7 view G69 OMS
     # Pembantu tidak di-wrap; raw_doc tidak pernah di-grant.
     for helper in ("v_esb_oms_line", "v_esb_oms_menu_fin", "v_esb_oms_fin_line"):
         assert f"efn_insight.{helper} " not in ACCESS

@@ -164,7 +164,7 @@ terakhir; rekonsiliasi satu cabang-hari vs `sales-branch-summary` selisih 0. End
 material usage, member) 401 → Q-OMS1, di luar G69. Angka/nama cabang tidak ditulis di repo.
 
 **Keputusan:**
-- ADR-040 §6b (Proposed): `esb-extract` boleh POST-baca ke OMS lewat allowlist persis 5 path; klien Core tetap GET-only;
+- ADR-040 §6c (Proposed): `esb-extract` boleh POST-baca ke OMS lewat allowlist persis 5 path; klien Core tetap GET-only;
   `ESB_OMS_ENABLED=false` default dan hanya berlaku bila `ESB_ENABLED=true`. CLAUDE.md diperbarui.
 - PDP/PCI: member (hanya `has_member`), kartu/akun/verifikasi/voucher, catatan, staf, `tableName` dibuang sebelum raw;
   `salesPayments[]` whitelist 9 kunci + denylist substring rekursif.

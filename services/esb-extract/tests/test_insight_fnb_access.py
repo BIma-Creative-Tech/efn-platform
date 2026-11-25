@@ -39,6 +39,12 @@ PT_VIEWS = {
     "v_esb_ing_price_monthly",  # G67 margin bahan (24-margin-bahan.sql)
     "v_esb_menu_cost_monthly",
     "v_esb_ing_group_monthly",
+    # G68 §32.7 (25-g68-esb-pl-waste-fillrate.sql)
+    "v_esb_pl_monthly",
+    "v_esb_item_usage_daily",
+    "v_esb_item_usage_product_monthly",
+    "v_esb_fill_rate_daily",
+    "v_esb_fill_rate_product_monthly",
     "v_esb_oms_recon_daily",  # G69 (memuat Σ pembayaran ESB Core)
 }
 # G69 ESB OMS (26-g69-esb-oms.sql): view ber-cabang kelas BR (persona Toko F&B, §33.7).
@@ -179,7 +185,7 @@ def test_policy_manifest_classes() -> None:
     manifest = esb_policy_manifest()
     assert {v for v, c in manifest.items() if c == "PT"} == PT_VIEWS
     assert {v for v, c in manifest.items() if c == "BR"} == BR_VIEWS
-    assert len(PT_VIEWS) + len(BR_VIEWS) == 27
+    assert len(PT_VIEWS) + len(BR_VIEWS) == 32
     views = insight_views()
     # Kelas PT wajib untuk setiap view yang memuat cogs/mdr (Q-INS-F3).
     for name, (cols, _src) in views.items():

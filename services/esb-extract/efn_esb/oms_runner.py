@@ -427,7 +427,7 @@ def oms_cycle(
     except Exception as exc:  # brand OMS gagal tidak menghentikan loop OMS maupun Core
         log.error("brand=%s oms gagal error=%s", cfg.key, type(exc).__name__)
         run.status = "error"
-    return _finish(run, api, outcome, store, started)  # type: ignore[arg-type]
+    return _finish(run, api.calls, outcome, store, started)  # type: ignore[arg-type]
 
 
 def run_oms_backfill(
@@ -457,7 +457,7 @@ def run_oms_backfill(
         if not gate():
             log.warning("brand=%s oms-backfill di luar ESB_BACKFILL_WINDOW; tidak ada panggilan", cfg.key)
             outcome.window_closed = True
-            return _finish(run, api, outcome, store, started)  # type: ignore[arg-type]
+            return _finish(run, api.calls, outcome, store, started)  # type: ignore[arg-type]
         ctx = OmsContext(settings, oms, cfg, api, store, stop)
         ctx.checkpoints = store.checkpoints(cfg.key, start)
         ctx.branch_ids = load_branch_ids(store, cfg.key)
@@ -491,7 +491,7 @@ def run_oms_backfill(
     except Exception as exc:
         log.error("brand=%s oms-backfill gagal error=%s", cfg.key, type(exc).__name__)
         run.status = "error"
-    return _finish(run, api, outcome, store, started)  # type: ignore[arg-type]
+    return _finish(run, api.calls, outcome, store, started)  # type: ignore[arg-type]
 
 
 def oms_loop(

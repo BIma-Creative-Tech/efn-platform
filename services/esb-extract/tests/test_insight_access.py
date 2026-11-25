@@ -20,12 +20,14 @@ DDL22 = (CH / "init" / "22-g53-insight-fnb-forecast.sql").read_text(encoding="ut
 DDL23 = (CH / "init" / "23-insight-yoy.sql").read_text(encoding="utf-8")
 DDL20 = (CH / "init" / "20-esb-aggregates.sql").read_text(encoding="utf-8")
 DDL24 = (CH / "init" / "24-margin-bahan.sql").read_text(encoding="utf-8")
+DDL25 = (CH / "init" / "25-g68-esb-pl-waste-fillrate.sql").read_text(encoding="utf-8")
 ACCESS = (CH / "access" / "insight-access.sql").read_text(encoding="utf-8")
 INIT_SH = (CH / "clickhouse-init.sh").read_text(encoding="utf-8")
 ESB_POLICY_SH = (CH / "access" / "insight-esb-policy.sh").read_text(encoding="utf-8")
 DDL26 = (CH / "init" / "26-g69-esb-oms.sql").read_text(encoding="utf-8")
-# G52 §28.15.7 + G53 + YoY 24 Nov + G67 + G69 OMS: jumlah policy ESB (16 PT + 11 BR); = ESB_POLICY_EXPECTED di init.
-ESB_POLICY_COUNT = 27
+# G52 §28.15.7 + G53 + YoY 24 Nov 2026 + G67 margin bahan (+3) + G68 §32.7 (+5) + G69 OMS §33.5 (+7): jumlah
+# policy ESB (21 PT + 11 BR); sama dengan ESB_POLICY_EXPECTED di init.
+ESB_POLICY_COUNT = 32
 
 # G52: WHERE opsional satu baris (hanya v_esb_store_payment_daily: `WHERE branch_id != 0`).
 INSIGHT_VIEW_RE = re.compile(
@@ -56,6 +58,12 @@ EXPECTED_INSIGHT_VIEWS = {
     "v_esb_ing_price_monthly",  # G67 margin bahan (24-margin-bahan.sql)
     "v_esb_menu_cost_monthly",
     "v_esb_ing_group_monthly",
+    # G68 §32.6 (25-g68-esb-pl-waste-fillrate.sql), kelas PT
+    "v_esb_pl_monthly",
+    "v_esb_item_usage_daily",
+    "v_esb_item_usage_product_monthly",
+    "v_esb_fill_rate_daily",
+    "v_esb_fill_rate_product_monthly",
     "v_esb_oms_bill",  # G69 ESB OMS (26-g69-esb-oms.sql)
     "v_esb_oms_hourly",
     "v_esb_oms_menu_hourly",
@@ -101,9 +109,9 @@ def strip_comments(sql: str) -> str:
 
 
 def dwh_view_body(name: str) -> str:
-    """Badan view efn_dwh.<name> (tanpa komentar) dari 12/13/19/20/21/22/23/24/26."""
+    """Badan view efn_dwh.<name> (tanpa komentar) dari 12/13/19/20/21/22/23/24/25/26."""
     header = f"CREATE OR REPLACE VIEW efn_dwh.{name} AS"
-    for ddl in (DDL26, DDL24, DDL23, DDL22, DDL21, DDL20, DDL19, DDL13, DDL12):
+    for ddl in (DDL26, DDL25, DDL24, DDL23, DDL22, DDL21, DDL20, DDL19, DDL13, DDL12):
         if header in ddl:
             return strip_comments(ddl.split(header, 1)[1].split(";", 1)[0])
     raise AssertionError(f"view efn_dwh.{name} tidak ditemukan")
@@ -321,8 +329,13 @@ def test_movement_kind_and_item_group_rules() -> None:
 
 def test_coverage_from_finished_daily_checkpoints_mapped_to_pt() -> None:
     body = dwh_view_body("v_esb_coverage")
-    entities = "entity IN ('sales', 'payment', 'production', 'delivery', 'transfer', 'fin_sold')"
+    # G68 §32.4: + item_journal, transfer_request, delivery_ref; profit_loss TIDAK (slice tahun).
+    entities = (
+        "entity IN ('sales', 'payment', 'production', 'delivery', 'transfer', 'fin_sold', 'item_journal',\n"
+        "                               'transfer_request', 'delivery_ref')"
+    )
     assert body.count(entities) == 2
+    assert "profit_loss" not in body
     assert body.count("status = 'done'") == 2
     # Per brand ('*') -> semua PT brand; per toko -> PT cabang. Tanpa cabang terdaftar -> tidak ada baris.
     assert "scope_key = '*'" in body and "scope_key != '*'" in body

@@ -1,6 +1,6 @@
 # UAT G69 — Penjualan per struk (ESB OMS) di Insight, brand PB
 
-Status: **Draft** (efn-qa-engineer, 25 Nov 2026). Acuan: `docs/04_SERVICE_CONTRACTS.md` §33, ADR-040 §6b, runbook `docs/runbooks/esb-extract.md` §10.
+Status: **Draft** (efn-qa-engineer, 25 Nov 2026). Acuan: `docs/04_SERVICE_CONTRACTS.md` §33, ADR-040 §6c, runbook `docs/runbooks/esb-extract.md` §10.
 Penguji: pemilik bisnis / manajer PB. Dijalankan di **efn-dev atau efn-prod gladi** (OMS di production terkunci kode sampai Q-ESB1, Q-OMS2, Q-OMS3). Repo publik: **jangan menempelkan angka penjualan, nama cabang, atau screenshot nyata ke repo/PR**; catat hasil di berkas terpisah di luar repo.
 
 **Persiapan**
