@@ -168,6 +168,17 @@ describe('PromoService', () => {
     expect(push.sent[0]).toMatchObject({ to: 'ExponentPushToken[abcdefghijklmnop]', title: 'Promo', data: { promo_id: 7 } });
   });
 
+  it('push popup SMD tidak diklaim: Super-App EFN tidak memuat supermarket (keputusan 23 Nov 2026)', async () => {
+    const config = testConfig({ PROMO_ENABLED: 'true', PROMO_PUSH_ENABLED: 'true', PROMO_COMPANIES: 'PB,SMD' });
+    const odoo = new MockOdooPromo();
+    const push = new ConsolePushSender();
+    const svc = new PromoService(config, new FakeDb(), odoo, new MemStorage(), testCipher(config), push);
+    odoo.pushes.set('SMD', [{ id: 9, title: 'Promo SMD', body: 'Isi', link: null }]);
+    expect(await svc.dispatchPush('SMD')).toEqual({ claimed: 0, sent: 0 });
+    expect(odoo.pushes.get('SMD')).toHaveLength(1); // tetap queued, tidak ditandai terkirim
+    expect(push.sent).toHaveLength(0);
+  });
+
   it('normalizePromoImage menolak non-gambar', async () => {
     await expect(normalizePromoImage(Buffer.from('bukan gambar'), 1600)).rejects.toThrow();
   });
