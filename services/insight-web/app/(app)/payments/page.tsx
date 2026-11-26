@@ -37,7 +37,7 @@ import { pctOf, withOther } from '@/lib/vm';
 export const dynamic = 'force-dynamic';
 export const metadata: Metadata = { title: 'Pembayaran' };
 
-interface Kpi { amount_cur: number; amount_prev: number; count_cur: number; count_prev: number; mdr_cur: number; mdr_prev: number }
+interface Kpi { amount_cur: number; amount_prev: number; count_cur: number; count_prev: number; mdr_cur: number; mdr_prev: number; oms_days?: string[] }
 type RawRows = Record<string, unknown>[];
 
 const COLORS: SeriesColor[] = ['c1', 'c2', 'c3', 'c4', 'c5', 'c6'];
@@ -66,6 +66,7 @@ export default async function PaymentsPage({ searchParams }: { searchParams: Sea
 
   const asRaw = (r: Result<RawRows> | null): Result<RawRows> | null => r;
   const kpiSides = mergeSides(esbOn, kpiR, smdOn, asRaw(smSums));
+  const omsDays: string[] = kpiSides.esb?.[0]?.oms_days ?? [];
   const methodSides = mergeSides(esbOn, methodR, smdOn, asRaw(smMatrix));
   const trendSides = mergeSides(esbOn, trendR, smdOn, asRaw(smTrend));
   const branchSides = mergeSides(esbOn, branchR, smdOn, asRaw(smMatrix));
@@ -157,6 +158,11 @@ export default async function PaymentsPage({ searchParams }: { searchParams: Sea
         </p>
       ) : null}
       <SideNote note={kpiSides.note} />
+      {omsDays.length > 0 ? (
+        <p className="notice" role="note">
+          Laporan pembayaran ESB Core gagal untuk {omsDays.map(fmtDayShort).join(', ')}. Hari tersebut memakai ringkasan struk ESB OMS (nominal dan jumlah transaksi sama dengan Core; biaya FOC/waste tidak ada). MDR hari tersebut adalah estimasi dari tarif rata-rata 60 hari terakhir per metode bayar.
+        </p>
+      ) : null}
 
       <Section title="Indikator utama" id="kpi">
         {kpiSides.fail ? (

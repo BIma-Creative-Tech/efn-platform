@@ -123,7 +123,7 @@ def test_store_views_share_source_with_pt_pair() -> None:
 
 def test_store_payment_drops_branch_zero() -> None:
     stmt = _view_stmt("v_esb_store_payment_daily")
-    assert stmt.rstrip().endswith("FROM efn_dwh.v_esb_payment_daily\nWHERE branch_id != 0")
+    assert stmt.rstrip().endswith("FROM efn_dwh.v_esb_payment_daily_fb\nWHERE branch_id != 0")
     # Hanya view ini yang ber-WHERE (wrapper lain = kolom polos dari satu sumber).
     assert strip_comments(ACCESS).count("\nWHERE ") == 1
 

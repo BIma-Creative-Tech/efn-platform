@@ -7840,6 +7840,20 @@ cabang bila view memuat `branch_code`, pola §28.15) lewat `insight-esb-policy.s
 (`ESB_POLICY_VIEWS`, `ESB_POLICY_EXPECTED` naik sesuai jumlah view). `metabase_reader`, text2sql, forecast: **tidak**
 diberi akses di G69. `raw_doc` OMS tidak pernah di-grant ke pembaca mana pun.
 
+### 33.5a Cadangan pembayaran OMS (`init/27-esb-payment-oms-fallback.sql`, 26 Nov 2026)
+
+`/report/sales-payment-summary` ESB Core bisa HTTP 500 permanen untuk hari tertentu (PB 17/18/22/25 Nov 2026: timeout
+server ESB ±33 dtk, `branchID` diabaikan sehingga tidak bisa dipecah). View `efn_dwh.v_esb_payment_daily_fb` =
+`v_esb_payment_daily` (Core, `source='core'`) + untuk (brand, hari) **tanpa** baris Core dan **sebelum** hari berjalan
+WIB: Σ `fact_esb_oms_bill_payment` per cabang × tipe × metode dari struk `is_final = 1` ber-checkpoint (`source='oms'`).
+Core menang otomatis begitu berhasil ditarik. `mdr` baris OMS = **estimasi** (tarif Σmdr/Σamount Core per brand × metode,
+60 hari terakhir; 0 bila tak ada), `net = amount − mdr`. Uji 21 Nov PB: tipe/metode/jumlah/nominal OMS = Core persis;
+OMS tidak memuat baris `OTHER COST` (FOC/WASTE).
+Pembaca: hanya `efn_insight_definer` (wrapper `efn_insight.v_esb_payment_daily` + kolom `source`, dan
+`v_esb_store_payment_daily` tanpa mdr/net). `efn_dwh.v_esb_payment_daily` (Metabase, `mig_rw`) tetap Core murni.
+Definer mendapat `SELECT` pada `fact_esb_oms_bill_payment` (tipe/metode/jumlah saja; kartu/rekening dibuang sebelum
+mart, §33.6); tabel ini tidak pernah dibungkus view `efn_insight`. Insight `/payments` menampilkan catatan hari OMS.
+
 ### 33.6 PDP / PCI
 Dibuang **sebelum** `efn_esb.raw_doc` dan mart, di semua tingkat sarang (`salesPayments[]`, `salesMenus[]`,
 `packages[]`, `extras[]`):
