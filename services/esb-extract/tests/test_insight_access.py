@@ -25,6 +25,7 @@ ACCESS = (CH / "access" / "insight-access.sql").read_text(encoding="utf-8")
 INIT_SH = (CH / "clickhouse-init.sh").read_text(encoding="utf-8")
 ESB_POLICY_SH = (CH / "access" / "insight-esb-policy.sh").read_text(encoding="utf-8")
 DDL26 = (CH / "init" / "26-g69-esb-oms.sql").read_text(encoding="utf-8")
+DDL27 = (CH / "init" / "27-esb-payment-oms-fallback.sql").read_text(encoding="utf-8")
 # G52 §28.15.7 + G53 + YoY 24 Nov 2026 + G67 margin bahan (+3) + G68 §32.7 (+5) + G69 OMS §33.5 (+7): jumlah
 # policy ESB (21 PT + 11 BR); sama dengan ESB_POLICY_EXPECTED di init.
 ESB_POLICY_COUNT = 32
@@ -109,9 +110,9 @@ def strip_comments(sql: str) -> str:
 
 
 def dwh_view_body(name: str) -> str:
-    """Badan view efn_dwh.<name> (tanpa komentar) dari 12/13/19/20/21/22/23/24/25/26."""
+    """Badan view efn_dwh.<name> (tanpa komentar) dari 12/13/19/20/21/22/23/24/25/26/27."""
     header = f"CREATE OR REPLACE VIEW efn_dwh.{name} AS"
-    for ddl in (DDL26, DDL25, DDL24, DDL23, DDL22, DDL21, DDL20, DDL19, DDL13, DDL12):
+    for ddl in (DDL27, DDL26, DDL25, DDL24, DDL23, DDL22, DDL21, DDL20, DDL19, DDL13, DDL12):
         if header in ddl:
             return strip_comments(ddl.split(header, 1)[1].split(";", 1)[0])
     raise AssertionError(f"view efn_dwh.{name} tidak ditemukan")
@@ -173,9 +174,10 @@ def test_aggregate_wrappers_read_agg_tables_with_same_columns_and_row_policy() -
         assert cols == list(agg.columns) == output_columns(agg.source), agg.name
         assert "company_code" in agg.columns and agg.order_by[0] == "company_code"
         assert f"GRANT SELECT ON efn_dwh.{agg.name} TO efn_insight_definer;" in ACCESS
-    # View lain tetap membaca view efn_dwh (payment & movement tidak disentuh).
-    for name in ("v_esb_payment_daily", "v_esb_movement_daily"):
-        assert views[name][1] == f"efn_dwh.{name}", name
+    # View lain tetap membaca view efn_dwh (movement tidak disentuh; payment = gabungan Core + cadangan OMS, init/27).
+    assert views["v_esb_movement_daily"][1] == "efn_dwh.v_esb_movement_daily"
+    assert views["v_esb_payment_daily"][1] == "efn_dwh.v_esb_payment_daily_fb"
+    assert output_columns("v_esb_payment_daily_fb") == [*output_columns("v_esb_payment_daily"), "source"]
     # Tidak ada sumber selain efn_dwh.v_* / efn_dwh.agg_esb_* (mis. build setengah jadi).
     for name, (_cols, source) in views.items():
         assert "_build" not in source, name

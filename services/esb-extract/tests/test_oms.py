@@ -890,7 +890,10 @@ def test_insight_wrappers_and_row_policy_classes() -> None:
     for helper in ("v_esb_oms_line", "v_esb_oms_menu_fin", "v_esb_oms_fin_line"):
         assert f"efn_insight.{helper} " not in ACCESS
     assert "efn_esb.raw_doc" not in re.sub(r"--[^\n]*", "", ACCESS)
-    assert "fact_esb_oms_bill_payment" not in ACCESS
+    # Tabel pembayaran OMS: hanya definer (penutupan rujukan view cadangan pembayaran init/27), tidak pernah dibungkus.
+    pay_grants = re.findall(r"GRANT SELECT ON efn_dwh\.fact_esb_oms_bill_payment TO (\w+);", ACCESS)
+    assert pay_grants == ["efn_insight_definer"]
+    assert "FROM efn_dwh.fact_esb_oms_bill_payment" not in ACCESS
 
 
 # ---------------------------------------------------------------- perbaikan data nyata 25 Nov 2026

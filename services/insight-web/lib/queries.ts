@@ -487,7 +487,8 @@ LIMIT 5000`,
     sumIf(payment_count, sales_date >= {from:Date})         AS count_cur,
     sumIf(payment_count, sales_date <= {prev_to:Date})      AS count_prev,
     toFloat64(sumIf(mdr, sales_date >= {from:Date}))        AS mdr_cur,
-    toFloat64(sumIf(mdr, sales_date <= {prev_to:Date}))     AS mdr_prev
+    toFloat64(sumIf(mdr, sales_date <= {prev_to:Date}))     AS mdr_prev,
+    arraySort(groupUniqArrayIf(toString(sales_date), source = 'oms' AND sales_date >= {from:Date})) AS oms_days
 FROM efn_insight.v_esb_payment_daily
 WHERE ${SALES_RANGE_PREV}
   AND ${PT}

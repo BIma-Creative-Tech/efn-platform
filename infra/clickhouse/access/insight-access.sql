@@ -132,6 +132,11 @@ GRANT SELECT ON efn_dwh.fact_esb_oms_bill TO efn_insight_definer;
 GRANT SELECT ON efn_dwh.fact_esb_oms_bill_line TO efn_insight_definer;
 GRANT SELECT ON efn_dwh.fact_esb_oms_branch_daily TO efn_insight_definer;
 GRANT SELECT ON efn_dwh.dim_esb_oms_menu_fin TO efn_insight_definer;
+-- Cadangan pembayaran OMS (init/27-esb-payment-oms-fallback.sql, docs/04 §33.5a): view gabungan Core+OMS + tabel
+-- pembayaran OMS (hanya tipe/metode/jumlah; nomor kartu/rekening dibuang sebelum mart, SEC-OMS-02). Hanya definer;
+-- wrapper efn_insight.v_esb_payment_daily / v_esb_store_payment_daily membaca view gabungan, bukan tabel ini.
+GRANT SELECT ON efn_dwh.v_esb_payment_daily_fb TO efn_insight_definer;
+GRANT SELECT ON efn_dwh.fact_esb_oms_bill_payment TO efn_insight_definer;
 
 CREATE DATABASE IF NOT EXISTS efn_insight;
 
@@ -150,10 +155,11 @@ CREATE OR REPLACE VIEW efn_insight.v_esb_sales_branch_daily DEFINER = efn_insigh
 SELECT sales_date, brand, company_code, branch_id, branch_name, trx_count, line_count, qty, gross, discount, net, cogs
 FROM efn_dwh.agg_esb_sales_branch_daily;
 
+-- `source` = core | oms (cadangan OMS bila Core gagal untuk hari itu; mdr/net baris oms = ESTIMASI, init/27).
 CREATE OR REPLACE VIEW efn_insight.v_esb_payment_daily DEFINER = efn_insight_definer SQL SECURITY DEFINER AS
 SELECT sales_date, brand, company_code, branch_id, branch_code, branch_name, payment_type, payment_method,
-       payment_count, amount, mdr, net
-FROM efn_dwh.v_esb_payment_daily;
+       payment_count, amount, mdr, net, source
+FROM efn_dwh.v_esb_payment_daily_fb;
 
 CREATE OR REPLACE VIEW efn_insight.v_esb_flow_daily DEFINER = efn_insight_definer SQL SECURITY DEFINER AS
 SELECT day, brand, company_code, branch_id, branch_name, product_code, product_name, ck_prod, ck_out, in_ck,
@@ -205,7 +211,7 @@ FROM efn_dwh.agg_esb_sales_daily;
 -- Baris branch_id = 0 (branchCode tak dikenal) dibuang: tidak pernah milik cabang mana pun (E7).
 CREATE OR REPLACE VIEW efn_insight.v_esb_store_payment_daily DEFINER = efn_insight_definer SQL SECURITY DEFINER AS
 SELECT sales_date, brand, company_code, branch_id, branch_name, payment_type, payment_method, payment_count, amount
-FROM efn_dwh.v_esb_payment_daily
+FROM efn_dwh.v_esb_payment_daily_fb
 WHERE branch_id != 0;
 
 -- company_code = PT cabang TUJUAN, branch_id = cabang tujuan (init/21-g52-insight-fnb.sql).
