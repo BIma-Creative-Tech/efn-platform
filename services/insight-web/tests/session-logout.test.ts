@@ -131,15 +131,41 @@ describe('POST /logout', () => {
   const req = (headers: Record<string, string> = {}) =>
     new Request('https://insight.test/logout', { method: 'POST', headers });
 
-  it('menghapus cookie dan mengalihkan ke /keluar (tanpa Sec-Fetch-Site, same-origin, none)', async () => {
-    const cases: Record<string, string>[] = [{}, { 'sec-fetch-site': 'same-origin' }, { 'sec-fetch-site': 'none' }];
-    for (const h of cases) {
-      const res = await logout(req(h));
+  const withOdooUrl = async (value: string | undefined, fn: () => Promise<void>) => {
+    const rt = globalThis as unknown as { __insightRuntime?: unknown };
+    const saved = process.env.EFN_INSIGHT_ODOO_URL;
+    if (value === undefined) delete process.env.EFN_INSIGHT_ODOO_URL;
+    else process.env.EFN_INSIGHT_ODOO_URL = value;
+    delete rt.__insightRuntime;
+    try {
+      await fn();
+    } finally {
+      if (saved === undefined) delete process.env.EFN_INSIGHT_ODOO_URL;
+      else process.env.EFN_INSIGHT_ODOO_URL = saved;
+      delete rt.__insightRuntime;
+    }
+  };
+
+  it('menghapus cookie dan mengalihkan ke beranda Odoo (tanpa Sec-Fetch-Site, same-origin, none)', async () => {
+    await withOdooUrl('https://erp.efn.test/web?x=1', async () => {
+      const cases: Record<string, string>[] = [{}, { 'sec-fetch-site': 'same-origin' }, { 'sec-fetch-site': 'none' }];
+      for (const h of cases) {
+        const res = await logout(req(h));
+        expect(res.status).toBe(303);
+        expect(res.headers.get('location')).toBe('https://erp.efn.test/odoo');
+        expect(res.headers.get('set-cookie')).toBe(clearCookieHeader());
+        expect(res.headers.get('cache-control')).toBe('no-store');
+      }
+    });
+  });
+
+  it('fallback ke /keluar bila EFN_INSIGHT_ODOO_URL belum diisi', async () => {
+    await withOdooUrl(undefined, async () => {
+      const res = await logout(req());
       expect(res.status).toBe(303);
       expect(res.headers.get('location')).toBe('/keluar');
       expect(res.headers.get('set-cookie')).toBe(clearCookieHeader());
-      expect(res.headers.get('cache-control')).toBe('no-store');
-    }
+    });
   });
 
   it('lintas situs / lintas origin ditolak 403 tanpa menghapus cookie (logout CSRF)', async () => {

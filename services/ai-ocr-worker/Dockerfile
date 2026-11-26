@@ -19,7 +19,8 @@ WORKDIR /app
 # baru. Ganti tanggalnya untuk memaksa layer dibangun ulang. 2026-10-24 (PR #68, Trivy): libbrotli1 1.1.0-2+deb13u1
 # (CVE-2026-111497, dependensi transitif tesseract via libfreetype). 2026-11-24 (PR #160, Trivy): krb5 (libgssapi-krb5-2
 # dkk., CVE-2026-71199/71200/112321/112322/112323/118380/119079) dan zlib1g 1.3.1-1+deb13u1 (CVE-2026-85091).
-ARG APT_REFRESH=2026-11-24
+# 2026-11-26 (PR #171, Trivy): libzstd1 1.5.7+dfsg-1+deb13u1 (CVE-2026-124851).
+ARG APT_REFRESH=2026-11-26
 RUN echo "apt refresh ${APT_REFRESH}" \
     && apt-get update \
     && apt-get upgrade -y --no-install-recommends \
