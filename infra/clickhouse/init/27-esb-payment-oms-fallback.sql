@@ -6,7 +6,7 @@
 -- Insight bolong pada hari itu.
 -- Solusi: untuk (brand, hari) TANPA baris Core, pakai ringkasan OMS sales-head (struk final saja). Uji 21 Nov PB:
 -- tipe, metode, jumlah transaksi dan nominal OMS = Core persis; selisih hanya baris OTHER COST (FOC/WASTE) yang tidak
--- ada di OMS. MDR tidak ada di OMS -> ESTIMASI = tarif rata-rata Core per (brand, metode) 60 hari terakhir (0 bila
+-- ada di OMS. MDR tidak ada di OMS -> ESTIMASI = tarif rata-rata Core per (brand, PT, metode) 60 hari WIB terakhir (0 bila
 -- metode belum pernah muncul di Core). Kolom `source` = 'core' | 'oms' supaya UI bisa menandai estimasi.
 -- Begitu Core berhasil ditarik untuk hari itu, baris OMS hilang otomatis (Core menang). Hari berjalan (WIB) tidak
 -- di-fallback (OMS intraday parsial; sebelumnya pun kosong sampai Core H+1).
@@ -53,12 +53,12 @@ FROM
     ) AS a
     LEFT JOIN
     (
-        SELECT brand, payment_method, toFloat64(sum(mdr)) / toFloat64(sum(amount)) AS mdr_rate
+        SELECT brand, company_code, payment_method, toFloat64(sum(mdr)) / toFloat64(sum(amount)) AS mdr_rate
         FROM efn_dwh.v_esb_payment_daily
-        WHERE sales_date >= today() - 60
-        GROUP BY brand, payment_method
+        WHERE sales_date >= toDate(now('Asia/Jakarta')) - 60
+        GROUP BY brand, company_code, payment_method
         HAVING sum(amount) > 0
-    ) AS r ON r.brand = a.brand AND r.payment_method = a.payment_method
+    ) AS r ON r.brand = a.brand AND r.company_code = a.company_code AND r.payment_method = a.payment_method
 ) AS o
 LEFT JOIN (SELECT brand, branch_id, branch_name FROM efn_dwh.dim_esb_branch FINAL) AS b
     ON b.brand = o.brand AND b.branch_id = o.branch_id;

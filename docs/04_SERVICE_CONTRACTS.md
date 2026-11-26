@@ -7846,7 +7846,7 @@ diberi akses di G69. `raw_doc` OMS tidak pernah di-grant ke pembaca mana pun.
 server ESB ±33 dtk, `branchID` diabaikan sehingga tidak bisa dipecah). View `efn_dwh.v_esb_payment_daily_fb` =
 `v_esb_payment_daily` (Core, `source='core'`) + untuk (brand, hari) **tanpa** baris Core dan **sebelum** hari berjalan
 WIB: Σ `fact_esb_oms_bill_payment` per cabang × tipe × metode dari struk `is_final = 1` ber-checkpoint (`source='oms'`).
-Core menang otomatis begitu berhasil ditarik. `mdr` baris OMS = **estimasi** (tarif Σmdr/Σamount Core per brand × metode,
+Core menang otomatis begitu berhasil ditarik. `mdr` baris OMS = **estimasi** (tarif Σmdr/Σamount Core per brand × PT × metode,
 60 hari terakhir; 0 bila tak ada), `net = amount − mdr`. Uji 21 Nov PB: tipe/metode/jumlah/nominal OMS = Core persis;
 OMS tidak memuat baris `OTHER COST` (FOC/WASTE).
 Pembaca: hanya `efn_insight_definer` (wrapper `efn_insight.v_esb_payment_daily` + kolom `source`, dan

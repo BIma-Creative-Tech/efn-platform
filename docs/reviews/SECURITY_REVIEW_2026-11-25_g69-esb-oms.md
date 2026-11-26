@@ -243,3 +243,13 @@ Wajib sebelum production:
 | SEC-OMS-02 | **Ditutup** | Elemen `salesPayments[]` = whitelist 9 kunci (`oms_transform.PAYMENT_FIELDS`, nilai skalar saja); denylist substring case-insensitive `card`/`verification`/`approval`/`account`/`member`/`phone`/`email` rekursif di seluruh payload struk (di atas `OMS_DROP_KEYS` + L-110). Test: `maskedCardNumber`, `approvalCode`, `customerPhone`, `traceNumber`, `edcRefNo`, objek bersarang di pembayaran, `customerEmail`, `loyaltyAccount`, `MemberTier`, `driverPhoneNo`. |
 | SEC-OMS-03 | **Diterima** (sisa risiko) | Tidak di-refactor sesuai arahan lead. Didokumentasikan di README esb-extract ("Sisa risiko yang diterima"): breaker OMS terpisah dari Core (±2× batas SEC-186), CLI `oms-*` tanpa breaker; mitigasi operasional = perbarui secret lalu restart. Tetap direkomendasikan disatukan sebelum production. |
 | SEC-OMS-04 | **Ditutup** | Pola prodplan L-250: konstanta kode `config.OMS_PROD_UNLOCKED = False` (bukan env) + `check_oms_prod_lock`; production dideteksi dengan konsep yang sudah ada di esb-extract (`tls.is_production`, fail closed: `APP_ENV`/`NODE_ENV` kosong/tidak dikenal = production). `ESB_OMS_ENABLED=true` di production → `OmsSettings.from_env` gagal → proses tidak start. Tanpa env baru. Test parametrik (APP_ENV kosong/production/staging/prod ditolak; dev diterima). docs/04 §33.3 + README diperbarui. Catatan: efn-stg (`staging`) juga terkunci. |
+
+## Addendum 26 Nov 2026: cadangan pembayaran OMS (docs/04 §33.5a)
+
+Pernyataan di ringkasan dan butir 5 bahwa `fact_esb_oms_bill_payment` tidak di-grant ke pembaca mana pun **tidak lagi
+berlaku sepenuhnya**. `efn_insight_definer` (HOST NONE, tidak bisa login) kini mendapat `SELECT` pada tabel ini sebagai
+penutupan rujukan view `efn_dwh.v_esb_payment_daily_fb` (`init/27-esb-payment-oms-fallback.sql`). View hanya
+mengeluarkan tipe/metode/jumlah/nominal per cabang-hari; tabel tidak pernah dibungkus view `efn_insight`, dan
+`metabase_reader`/text2sql/forecast/`mig_rw` tetap tanpa akses. Direview efn-security-reviewer 26 Nov 2026
+(SEC-PF-01..05, docs/agent-reports/efn-security-reviewer.md): tanpa blocker/major; SEC-PF-01 (tarif MDR lintas PT)
+ditutup dengan `company_code` di grup dan join tarif.

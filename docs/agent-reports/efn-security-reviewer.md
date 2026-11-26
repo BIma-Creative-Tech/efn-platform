@@ -120,3 +120,49 @@ Laporan: `docs/reviews/SECURITY_REVIEW_2026-11-25_margin-bahan.md`. **Verdict: b
 - **SEC-MB-04 (Low, pra-ada):** persona `exec` dipakai bersama SM/F&B; peran `fnb_exec`/Finance = revisi `eit` (R-S16), terbuka.
 - **SEC-MB-05 (Info):** `ESB_MARGIN_BRANDS` tanpa `purchase_line` menghentikan `run` saat start (disengaja, terdokumentasi).
 - **SEC-MB-06 (Info) — ditutup:** fakta analisis klien dan nama sub-kategori nyata dihapus dari docs/04 §31.
+
+## 26 Nov 2026 — Cadangan pembayaran OMS (`feat/esb-payment-oms-fallback`, 9a78f4b, worktree efn-platform-payfb)
+
+Lingkup: `infra/clickhouse/init/27-esb-payment-oms-fallback.sql`, `access/insight-access.sql:135-139,158-162,211-215`,
+`access/insight-esb-policy.sh` (tidak berubah), `efn_esb/oms_transform.py` (whitelist), `tests/test_oms.py:893-896`,
+`insight-web/lib/queries.ts:480-495`, `app/(app)/payments/page.tsx:40,69,161-165`, docs/04 §33.5a.
+**Verdict: boleh merge** (tanpa blocker/major; 0 Critical / 0 High / 0 Medium / 2 Low / 3 Info).
+
+Kontrol yang terverifikasi benar:
+- `fact_esb_oms_bill_payment` (init/26:99-121) tidak punya kolom kartu/rekening/kode verifikasi/member; elemen
+  `salesPayments[]` di-whitelist (`oms_transform.py:47-50,122`) + denylist substring SEC-OMS-02. View cadangan hanya
+  memproyeksikan tipe, metode, jumlah, nominal per cabang-hari; `sales_num`, `line_no`, `bank_name` tidak keluar dari view.
+- Grant tabel hanya ke `efn_insight_definer` (HOST NONE, tidak bisa login); `insight_reader` tetap `REVOKE ALL ON efn_dwh.*`;
+  tidak ada wrapper `efn_insight` yang membaca tabel langsung (dijaga test_oms.py:894-896). Metabase/mig/text2sql/forecast
+  tidak mendapat akses (tidak ada grant wildcard `efn_dwh.*`).
+- Row policy tidak dilewati: kedua wrapper tetap nama yang sama dengan policy `efn_insight_scope` — `v_esb_payment_daily` kelas
+  PT, `v_esb_store_payment_daily` kelas BR (insight-esb-policy.sh:30,51); predikat dievaluasi di keluaran wrapper sehingga
+  baris `oms` disaring sama dengan baris `core`. `company_code` dan `branch_id` OMS memakai pemetaan yang sama dengan Core
+  (`company_for(branch_id)`, `branch_ids[code]`; `oms_transform.py:457-462`); cabang tak dikenal -> `branch_id=0` dibuang wrapper
+  toko dan `company_code=''` ditolak predikat.
+- Persona Toko: `v_esb_store_payment_daily` tetap tanpa `mdr`/`net`/`source`; kelas BR membatasi ke `brand:branch_id` di `brs`.
+- `oms_days` dihitung dalam query yang sama (row policy + filter PT/BR yang sama, parameter terikat); teks catatan UI statis,
+  tanggal di-escape React.
+
+Temuan:
+- **SEC-PF-01 (Low):** `init/27:54-61` — tarif estimasi MDR dihitung per `(brand, payment_method)` lintas semua PT. Untuk brand
+  multi-PT (tercatat di SEC-G65 Info / SEC-MB-01) eksekutif PT B melihat `mdr`/`net` baris OMS yang diturunkan dari Σmdr/Σamount
+  Core milik PT A. Kebocoran informasi kecil (rasio campuran, tidak bisa dibalik ke nominal PT A), tetapi melanggar prinsip
+  isolasi PT dan membuat estimasi PT B salah bila kontrak MDR per PT berbeda. Saran: `GROUP BY brand, company_code,
+  payment_method` dan join juga pada `company_code`. Risiko: isolasi multi-company (R-S multi-company, docs/04 §28.15.7).
+- **SEC-PF-02 (Low, PLAUSIBLE):** `init/27:43-51` — subquery `IN`/`NOT IN` (`extract_checkpoint FINAL`, `fact_esb_oms_bill FINAL`,
+  seluruh `v_esb_payment_daily`) dan subquery tarif tidak dibatasi rentang tanggal; filter tanggal wrapper belum tentu
+  di-push ke subquery tersebut. Setiap query /payments dan beranda Toko (`fstore_payment_mix`) berpotensi memindai seluruh
+  histori OMS dengan `FINAL`. Dampak: ketersediaan (batas 30 dtk, 24 query bersamaan berbagi satu user Insight). Saran: ukur
+  `EXPLAIN`/durasi di efn-prod; bila lambat, batasi subquery ke jendela hari tanpa Core atau materialisasi ke tabel agregat.
+- **SEC-PF-03 (Info):** pagar test hanya memeriksa `insight-access.sql`; wrapper di `insight-sm-access.sql` (atau berkas access
+  baru) yang membaca `fact_esb_oms_bill_payment` tidak tertangkap padahal definer kini punya hak. Saran: perluas assert ke semua
+  `infra/clickhouse/access/*.sql`.
+- **SEC-PF-04 (Info):** `docs/reviews/SECURITY_REVIEW_2026-11-25_g69-esb-oms.md:19,199` masih menyatakan tabel ini tidak di-grant
+  ke pembaca mana pun; tambahkan addendum yang merujuk §33.5a.
+- **SEC-PF-05 (Info, integritas):** `mdr`/`net` estimasi bercampur dengan nilai Core di tabel metode/cabang (dan ekspor CSV —
+  belum diverifikasi) tanpa penanda per baris; hanya catatan halaman. Risiko keputusan finansial/rekonsiliasi MDR. Saran:
+  kolom/penanda "estimasi" di tabel dan ekspor. Catatan kecil: jendela tarif memakai `today()` (TZ server), bukan WIB.
+
+Belum terverifikasi: `git show 9a78f4b` tidak dijalankan (tanpa shell; file dibaca dari tree worktree); test/CI tidak dijalankan;
+performa nyata view di ClickHouse 24.8; isi ekspor CSV /payments.
