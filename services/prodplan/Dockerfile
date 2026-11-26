@@ -8,10 +8,11 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1
 
 # Sama dengan esb-extract (PR #90, Trivy): apt + zlib1g ber-CVE dinaikkan eksplisit sampai digest base memuatnya.
+# 2026-11-26 (PR #171, Trivy): libzstd1 1.5.7+dfsg-1+deb13u1 (CVE-2026-124851); digest base terbaru belum memuatnya.
 # checkov:skip=CKV_DOCKER_9: "apt" di baris ini = nama PAKET yang dinaikkan lewat apt-get, bukan perintah apt
 # hadolint ignore=DL3008
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends --only-upgrade apt zlib1g \
+    && apt-get install -y --no-install-recommends --only-upgrade apt zlib1g libzstd1 \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

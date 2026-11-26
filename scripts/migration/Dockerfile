@@ -14,10 +14,11 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 # Pola G41 (PR #90, Trivy image): apt 3.0.4 (CVE-2026-109518) dan zlib1g 1:1.3.dfsg+really1.3.1-1+deb13u1 (CVE-2026-85091)
 # terbit setelah digest base dipin -> dinaikkan eksplisit (hanya paket ber-CVE). Hapus saat digest python:3.12-slim
 # berikutnya sudah memuatnya.
+# 2026-11-26 (PR #171, Trivy): libzstd1 1.5.7+dfsg-1+deb13u1 (CVE-2026-124851); digest base terbaru belum memuatnya.
 # checkov:skip=CKV_DOCKER_9: "apt" di baris ini = nama PAKET yang dinaikkan (CVE-2026-109518) lewat apt-get, bukan perintah apt
 # hadolint ignore=DL3008
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends --only-upgrade apt zlib1g \
+    && apt-get install -y --no-install-recommends --only-upgrade apt zlib1g libzstd1 \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
